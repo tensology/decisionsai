@@ -62,6 +62,28 @@ def _version_for(path: Optional[str], args: list[str] | None = None) -> Optional
         return None
 
 
+def _cursor_auth_ready(path: Optional[str]) -> bool:
+    if os.environ.get("CURSOR_API_KEY"):
+        return True
+    if not path:
+        return False
+    try:
+        result = subprocess.run(
+            [path, "status"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        text = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+        if "not logged in" in text or "authentication required" in text:
+            return False
+        if "logged in" in text or "authenticated" in text:
+            return True
+        return result.returncode == 0 and "login" not in text
+    except Exception:
+        return False
+
+
 def _emit(on_event: Optional[EventCallback], event: dict[str, Any]) -> None:
     if not on_event:
         return
@@ -298,6 +320,22 @@ class CursorBackend(OneShotCliBackend):
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
     )
 
+    def setup_status(self) -> BackendStatus:
+        status = super().setup_status()
+        status.can_receive_remote_handoff = bool(status.ready)
+        status.handoff_method = "one_shot_cli_with_callback"
+        status.reporter_path = os.environ.get(
+            "DECISIONS_CURSOR_REPORTER",
+            os.path.expanduser("~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py"),
+        )
+        if status.ready and not _cursor_auth_ready(status.path):
+            status.ready = False
+            status.state = "auth_required"
+            status.message = "Cursor CLI authentication required. Run cursor-agent login or set CURSOR_API_KEY."
+            status.setup_required = True
+            status.can_receive_remote_handoff = False
+        return status
+
     def _callback_instruction(self, task: ProjectTask) -> str:
         if not task.workflow_id or not task.run_id:
             return ""
@@ -365,6 +403,16 @@ class CodexBackend(OneShotCliBackend):
     setup_instructions = (
         "Install and authenticate Codex CLI, then make sure the codex command is on PATH."
     )
+
+    def setup_status(self) -> BackendStatus:
+        status = super().setup_status()
+        status.can_receive_remote_handoff = bool(status.ready)
+        status.handoff_method = "one_shot_cli_with_callback"
+        status.reporter_path = os.environ.get(
+            "DECISIONS_CODEX_REPORTER",
+            os.path.expanduser("~/plugins/decisions-codex/scripts/report_decisions_event.py"),
+        )
+        return status
 
     def _callback_instruction(self, task: ProjectTask) -> str:
         if not task.workflow_id or not task.run_id:

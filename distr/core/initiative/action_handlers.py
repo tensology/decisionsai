@@ -10,6 +10,11 @@ import asyncio
 from typing import Any
 
 
+def _moved_tickets_message(count: int, target_lane_name: str) -> str:
+    noun = "ticket" if int(count or 0) == 1 else "tickets"
+    return f"Moved {int(count or 0)} {noun} to {target_lane_name}"
+
+
 def execute_initiative_action(
     *,
     action_type: str,
@@ -87,7 +92,22 @@ def move_tickets(payload: dict[str, Any]) -> dict[str, Any]:
                 details=f"Payload: {payload}",
             )
         session.commit()
-    return {"success": True, "message": f"Moved {len(moved)} ticket(s) to {target_lane_name}", "ticket_ids": moved}
+    if moved:
+        try:
+            from distr.gui.web.kanban_events import increment_kanban_updated
+
+            increment_kanban_updated(
+                board_id,
+                event_type="ticket_lane_move",
+                payload={
+                    "board_id": board_id,
+                    "ticket_ids": moved,
+                    "target_lane": target_lane_name,
+                },
+            )
+        except Exception:
+            pass
+    return {"success": True, "message": _moved_tickets_message(len(moved), target_lane_name), "ticket_ids": moved}
 
 
 def start_ticket_workflows(payload: dict[str, Any]) -> dict[str, Any]:

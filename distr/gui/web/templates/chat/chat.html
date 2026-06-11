@@ -3,14 +3,15 @@
 
 {% block title %}Chat{% endblock %}
 
-{% block head_styles %}
+{% block extra_head %}
 <link rel="stylesheet" href="{{ base_path }}/static/css/chat.css">
 {% endblock %}
 
 {% block content %}
+<div class="chat-shell">
 <div class="app-container">
     <!-- Sidebar -->
-    <div class="sidebar" id="sidebar">
+    <aside class="sidebar chat-panel-card" id="sidebar">
         <div class="sidebar-header">
             <button class="new-chat-btn" id="newChatBtn">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -54,24 +55,44 @@
             </div>
             <audio id="ttsPlayerAudio" preload="metadata"></audio>
         </div>
-    </div>
+    </aside>
 
     <!-- Main Content -->
-    <div class="main-content" id="mainContent">
+    <main class="main-content chat-panel-card" id="mainContent">
         <!-- Chat Settings Header (shown when chat is active) -->
         <div class="chat-settings-header" id="chatSettingsHeader" style="display: none;">
             <div class="chat-settings-header-row">
-                <h1 class="chat-settings-title" id="chatTitle">New Chat</h1>
-                <div class="chat-settings-info">
-                    <span class="settings-label">Model:</span>
-                    <span class="settings-value" id="chatProvider">-</span>
-                    <span class="settings-separator">•</span>
-                    <span class="settings-value" id="chatModel">-</span>
-                    <span class="settings-separator" id="voiceSeparator" style="display: none;">•</span>
-                    <span class="settings-label" id="voiceLabel" style="display: none;">Voice:</span>
-                    <span class="settings-value" id="chatVoiceProvider" style="display: none;">-</span>
-                    <span class="settings-separator" id="voiceModelSeparator" style="display: none;">•</span>
-                    <span class="settings-value" id="chatVoiceModel" style="display: none;">-</span>
+                <div class="chat-header-left">
+                    <button type="button" class="header-icon-btn" id="compactChatButton" title="Compact context">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l6-6"/><path d="M10 14l-6 6"/></svg>
+                    </button>
+                    <button type="button" class="header-icon-btn" id="forkChatButton" title="Fork chat">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><path d="M18 6v3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                    </button>
+                    <button type="button" class="context-ring" id="contextRing" title="Estimated context used">
+                        <span id="contextRingValue">0%</span>
+                    </button>
+                    <div class="chat-settings-title-wrap">
+                        <h1 class="chat-settings-title" id="chatTitle" title="New Chat">New Chat</h1>
+                    </div>
+                </div>
+                <div class="chat-settings-controls" id="chatSettingsControls">
+                    <div class="chat-header-control-group" title="LLM for this chat">
+                        <span class="chat-header-control-label">LLM</span>
+                        <select id="headerLlmProvider" class="chat-header-select" aria-label="LLM provider"><option value="">…</option></select>
+                        <select id="headerLlmModel" class="chat-header-select" aria-label="LLM model"><option value="">…</option></select>
+                    </div>
+                    <div class="chat-header-control-group" id="headerVoiceGroup" title="Voice for this chat">
+                        <span class="chat-header-control-label">Voice</span>
+                        <select id="headerVoiceProvider" class="chat-header-select" aria-label="Voice provider"><option value="">…</option></select>
+                        <select id="headerVoiceModel" class="chat-header-select" aria-label="Voice"><option value="">…</option></select>
+                    </div>
+                    <span class="chat-header-save-status" id="headerSettingsStatus" aria-live="polite"></span>
+                    <div class="chat-header-actions">
+                        <button type="button" class="header-icon-btn" id="configureChatButton" title="Configure chat (full panel)">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        </button>
+                    </div>
                 </div>
                 <button type="button" class="header-load-btn" id="headerLoadButton" style="display: none;" title="Load this chat to reply">Load</button>
             </div>
@@ -80,7 +101,7 @@
         <!-- Empty State: same configure fields as New chat modal (shared partial); sidebar opens the modal for parity -->
         <div class="empty-state" id="emptyState">
             <div class="empty-state-content" id="emptyStateSetup">
-                <h1 class="chat-brand"><span class="chat-brand-decisions">Decisions</span><span class="chat-brand-ai">AI</span></h1>
+                <p class="empty-state-kicker">Chat</p>
                 <h2 class="empty-state-setup-title">Setup your Agent</h2>
                 <div id="emptyStateLoader" class="empty-state-loader">
                     <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
@@ -137,15 +158,62 @@
                 <p class="disclaimer">This is a conversational agent. Please understand that most of the responses are read out and created for Text to Speech output.</p>
             </div>
         </div>
-    </div>
+    </main>
+</div>
 </div>
 
 <!-- Chat item context menu (View, Load, Rename, Delete) -->
 <div id="chatContextMenu" class="chat-context-menu" style="display: none;">
     <button type="button" class="chat-context-menu-item flex items-center gap-2" data-action="view"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>View</button>
     <button type="button" class="chat-context-menu-item flex items-center gap-2" data-action="load"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>Load</button>
+    <button type="button" class="chat-context-menu-item flex items-center gap-2" data-action="configure"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33"/></svg>Configure</button>
+    <button type="button" class="chat-context-menu-item flex items-center gap-2" data-action="compact"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 14h6v6M20 10h-6V4M14 10l6-6M10 14l-6 6"/></svg>Compact</button>
+    <button type="button" class="chat-context-menu-item flex items-center gap-2" data-action="fork"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="2" d="M6 3v12"/><circle cx="6" cy="18" r="3"/><path stroke-width="2" d="M18 6v3"/><circle cx="18" cy="6" r="3"/><path stroke-width="2" d="M18 9a9 9 0 0 1-9 9"/></svg>Fork</button>
     <button type="button" class="chat-context-menu-item flex items-center gap-2" data-action="rename"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>Rename</button>
     <button type="button" class="chat-context-menu-item chat-context-menu-item-danger flex items-center gap-2" data-action="delete"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete</button>
+</div>
+
+<!-- Current Chat Configuration Modal -->
+<div class="modal" id="chatConfigModal" style="display: none;">
+    <div class="modal-content chat-config-modal-content">
+        <div class="modal-header">
+            <h2>Configure Chat</h2>
+            <button class="modal-close" id="chatConfigClose">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="chat-config-note">Changes apply to this chat only. If this chat is loaded, the agent hot-swaps to the new settings.</p>
+            <p class="modal-section-label">LLM</p>
+            <div class="modal-row">
+                <div class="form-group">
+                    <label for="chatConfigLlmProvider">Provider</label>
+                    <select id="chatConfigLlmProvider" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="chatConfigLlmModel">Model</label>
+                    <select id="chatConfigLlmModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                </div>
+            </div>
+            <p class="modal-section-label">Voice</p>
+            <div class="modal-row">
+                <div class="form-group">
+                    <label for="chatConfigVoiceProvider">Provider</label>
+                    <select id="chatConfigVoiceProvider" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                </div>
+                <div class="form-group">
+                    <label for="chatConfigVoiceModel">Voice</label>
+                    <select id="chatConfigVoiceModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
+                </div>
+            </div>
+            <p class="chat-config-status" id="chatConfigStatus"></p>
+        </div>
+        <div class="modal-footer">
+            <span class="modal-footer-note">The transcript is not rewritten when settings change.</span>
+            <div class="modal-footer-actions">
+                <button class="btn btn-secondary" id="chatConfigCancel">Cancel</button>
+                <button class="btn btn-primary" id="chatConfigSave">Save</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- New Chat Configuration Modal -->
@@ -336,7 +404,7 @@
             <h3 class="text-lg font-semibold text-white mb-1" id="ollama_download_modal_title">Downloading model</h3>
             <p class="text-[#9ca3af] text-sm mb-4" id="ollama_download_modal_model"></p>
             <div class="flex items-center gap-3 py-4" id="ollama_download_modal_progress">
-                <div class="w-8 h-8 border-2 border-[#565869] border-t-[#10a37f] rounded-full animate-spin flex-shrink-0"></div>
+                <div class="w-8 h-8 border-2 border-[#565869] border-t-[#f97316] rounded-full animate-spin flex-shrink-0"></div>
                 <p class="text-[#ececf1] text-sm" id="ollama_download_modal_status">Starting download...</p>
             </div>
             <div id="ollama_download_modal_done" class="hidden py-2">

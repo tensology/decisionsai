@@ -27,7 +27,7 @@ def test_schedule_to_cron_normalizes_human_time_separators():
 def test_next_run_from_once_iso_returns_requested_datetime():
     from distr.core.workflow.scheduler import _next_run_from_cron
 
-    result = _next_run_from_cron("once:2026-06-02T13:05:00")
+    result = _next_run_from_cron("once:2026-06-02T13:05:00Z")
 
     assert result == datetime(2026, 6, 2, 13, 5, 0)
 

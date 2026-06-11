@@ -43,10 +43,13 @@
         }
         var deleteSvg = "<svg class=\"w-4 h-4 flex-shrink-0\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16\"/></svg>";
         el.innerHTML = filtered.map(function(p) {
-            var inUse = p.in_use ? " <span class=\"text-xs text-[#f97316]\">(in use)</span>" : "";
+            var inUseDot = p.in_use
+                ? "<span class=\"project-in-use-dot w-2 h-2 rounded-full bg-[#f97316] flex-shrink-0\" title=\"In use\" aria-label=\"In use\"></span>"
+                : "";
             var active = currentProjectId === p.id ? " bg-white/10 border-[#f97316]" : " border-transparent hover:bg-white/5";
             return "<div class=\"project-item-wrapper flex items-center gap-1 rounded border" + active + " group focus:outline-none focus:ring-2 focus:ring-[#f97316]/60\" data-id=\"" + p.id + "\" tabindex=\"0\" role=\"option\" aria-selected=\"" + (currentProjectId === p.id ? "true" : "false") + "\">" +
-                "<button type=\"button\" class=\"project-item flex-1 min-w-0 text-left px-3 py-2 text-white text-sm\" data-id=\"" + p.id + "\">" + escapeAttr(p.name || "Untitled") + inUse + "</button>" +
+                "<button type=\"button\" class=\"project-item flex-1 min-w-0 text-left px-3 py-2 text-white text-sm\" data-id=\"" + p.id + "\">" + escapeAttr(p.name || "Untitled") + "</button>" +
+                inUseDot +
                 "<button type=\"button\" class=\"project-item-delete p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/20 flex-shrink-0\" data-id=\"" + p.id + "\" aria-label=\"Delete\">" + deleteSvg + "</button>" +
                 "</div>";
         }).join("");
@@ -180,6 +183,12 @@
                 if (!Array.isArray(data)) data = [];
                 projectsData = data;
                 renderList(data);
+                var params = new URLSearchParams(window.location.search);
+                var requestedId = parseInt(params.get("project_id"), 10);
+                if (requestedId && data.some(function(p) { return p.id === requestedId; })) {
+                    selectProject(requestedId);
+                    return;
+                }
                 var inUse = (data || []).filter(function(p) { return p.in_use; })[0];
                 if (inUse) selectProject(inUse.id);
             })
@@ -964,7 +973,7 @@
                 if (data.board) {
                     statusEl.textContent = "Board: " + data.board.name;
                     var link = document.createElement("a");
-                    link.href = "/kanban/?board_id=" + data.board.id;
+                    link.href = "/tickets/?board_id=" + data.board.id;
                     link.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium no-underline";
                     link.textContent = "Go To Board";
                     actionsEl.appendChild(link);
@@ -2779,18 +2788,30 @@
             return;
         }
 
-        var grid = document.getElementById("startup-terminal-grid");
-        var startBtn = document.getElementById("startup-start-btn");
-        var termBtn = document.getElementById("startup-terminate-all-btn");
-        if (startBtn) startBtn.classList.add("hidden");
-        if (termBtn) termBtn.classList.remove("hidden");
-        if (grid) {
-            grid.classList.remove("hidden");
-            grid.innerHTML = "";
-        }
-
-        commands.forEach(function(cmd, idx) {
-            createStartupTerminal(cmd, idx, TermCtor);
+        apiFetch("/api/projects/" + currentProjectId + "/startup-terminals/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ commands: commands })
+        }).then(function(response) {
+            if (!response || !response.success) {
+                showSnackbar((response && response.message) || "Failed to start startup terminals", "error");
+                return;
+            }
+            if (response.message) {
+                showSnackbar(response.message, response.failed ? "error" : "success");
+            }
+            var sessions = Array.isArray(response.sessions) ? response.sessions : [];
+            if (!sessions.length) return;
+            _projectTerminalState[currentProjectId] = sessions.map(function(session) {
+                return {
+                    processId: session.process_id,
+                    command: session.command || "",
+                    pid: session.pid || null
+                };
+            });
+            reattachProjectTerminals(currentProjectId);
+        }).catch(function(err) {
+            showSnackbar("Failed to start startup terminals: " + (err && err.message ? err.message : ""), "error");
         });
     }
 
@@ -3265,20 +3286,32 @@
             showSnackbar("Select a project first", "error");
             return;
         }
-        
+
         window.DecisionsAPI.confirm({
             title: "Terminate startup terminals",
             message: "Terminate all startup terminals?",
             confirmLabel: "Terminate",
             danger: true,
             onConfirm: function() {
-                // Close all terminals and clear persisted state for this project
-                Object.keys(_startupTerminals).forEach(function(termId) {
-                    closeStartupTerminal(termId);
+                apiFetch("/api/projects/" + currentProjectId + "/startup-terminals/stop", {
+                    method: "POST"
+                }).then(function(response) {
+                    Object.keys(_startupTerminals).forEach(function(termId) {
+                        var termData = _startupTerminals[termId];
+                        if (termData && termData.ws) {
+                            try { termData.ws.onclose = null; termData.ws.close(); } catch (e) {}
+                        }
+                        if (termData && termData.term) {
+                            try { termData.term.dispose(); } catch (e2) {}
+                        }
+                    });
+                    _startupTerminals = {};
+                    delete _projectTerminalState[currentProjectId];
+                    restoreStartupTerminalChrome();
+                    showSnackbar((response && response.message) || "All terminals terminated", "success");
+                }).catch(function(err) {
+                    showSnackbar("Failed to stop startup terminals: " + (err && err.message ? err.message : ""), "error");
                 });
-                delete _projectTerminalState[currentProjectId];
-                restoreStartupTerminalChrome();
-                showSnackbar("All terminals terminated", "success");
             }
         });
     }

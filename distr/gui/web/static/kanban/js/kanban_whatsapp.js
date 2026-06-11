@@ -85,7 +85,7 @@
     }
 
     function waThreadMessagesUrl(sender, limit) {
-        return "/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=" + (limit || 200) + "&sort=desc";
+        return "/api/tickets/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=" + (limit || 200) + "&sort=desc";
     }
 
     function scrollWaThreadToBottom(msgList) {
@@ -134,11 +134,32 @@
 
     function create(deps) {
         var waBoardLinkCandidatesByJid = {};
+        var waBoardLinkedByJid = {};
 
-        function resetWaPersonSelect() {
-            var personSelect = document.getElementById("kb-bm-wa-person-select");
-            if (!personSelect) return;
-            personSelect.innerHTML = '<option value="">Link full chat / group</option>';
+        function syncWaChatSelectLinkedState() {
+            var chatSelect = document.getElementById("kb-bm-wa-chat-select");
+            if (!chatSelect) return;
+            var selected = String(chatSelect.value || "").trim();
+            var firstLinkedJid = "";
+            var linkedValues = {};
+            Array.prototype.forEach.call(chatSelect.options, function(opt) {
+                if (!opt.value) return;
+                var candidate = waBoardLinkCandidatesByJid[opt.value] || {};
+                var baseLabel = candidate.name || opt.value;
+                var isLinked = !!waBoardLinkedByJid[opt.value];
+                opt.textContent = baseLabel;
+                opt.dataset.linked = isLinked ? "1" : "";
+                if (isLinked) {
+                    linkedValues[opt.value] = true;
+                    if (!firstLinkedJid) firstLinkedJid = opt.value;
+                }
+            });
+            if (!selected && firstLinkedJid) chatSelect.value = firstLinkedJid;
+            if (window.KanbanCustomSelect) {
+                var custom = chatSelect._kbCustomSelect || window.KanbanCustomSelect.upgradeById("kb-bm-wa-chat-select", { placeholder: "Select chat..." });
+                if (custom) custom.setLinkedValues(linkedValues);
+                else window.KanbanCustomSelect.refresh(chatSelect);
+            }
         }
 
         function populateWaChatSelect(chats) {
@@ -160,46 +181,21 @@
                 };
                 var opt = document.createElement("option");
                 opt.value = jid;
-                opt.textContent = isGroup ? (name + " (group)") : name;
+                opt.textContent = name;
                 chatSelect.appendChild(opt);
             });
+            syncWaChatSelectLinkedState();
         }
 
         function loadWaGroupPeopleCandidates(selectedChat) {
-            var personSelect = document.getElementById("kb-bm-wa-person-select");
-            if (!personSelect) return Promise.resolve();
-            resetWaPersonSelect();
-            if (!selectedChat || selectedChat.chat_type !== "group" || !selectedChat.phone) {
-                return Promise.resolve();
-            }
-
-            return deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(selectedChat.phone) + "&limit=500").then(function(data) {
-                var members = {};
-                (data.messages || []).forEach(function(msg) {
-                    var phone = String(msg.sender_phone || "").trim();
-                    if (!phone) return;
-                    var name = String(msg.sender_push_name || "").trim() || phone;
-                    members[phone] = name;
-                });
-                Object.keys(members).sort(function(a, b) {
-                    return String(members[a]).localeCompare(String(members[b]));
-                }).forEach(function(phone) {
-                    var opt = document.createElement("option");
-                    opt.value = phone + "@s.whatsapp.net";
-                    opt.textContent = members[phone] + " (" + phone + ")";
-                    personSelect.appendChild(opt);
-                });
-            }).catch(function() {
-                // Keep group-level link option only on error.
-            });
+            return Promise.resolve(selectedChat || null);
         }
 
         function loadWaLinkCandidates(silent) {
-            return deps.apiFetch("/api/kanban/whatsapp/chats?limit=500&offset=0&search=").then(function(chatsData) {
+            return deps.apiFetch("/api/tickets/whatsapp/chats?limit=500&offset=0&search=").then(function(chatsData) {
                 populateWaChatSelect((chatsData && chatsData.chats) || []);
-                resetWaPersonSelect();
+                syncWaChatSelectLinkedState();
             }).catch(function(err) {
-                resetWaPersonSelect();
                 if (!silent) deps.showSnackbar("Failed to load WhatsApp chat list: " + err.message, "error");
             });
         }
@@ -209,7 +205,7 @@
             if (!boardId) { deps.showSnackbar("Select a board"); return; }
             var autoSnapshot = document.getElementById("kb-wa-link-auto").checked;
             var waCtxMenuData = deps.getWaCtxMenuData();
-            deps.apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links", {
+            deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
@@ -247,7 +243,7 @@
             }
             var title = threadName + " - Message";
             var desc = msgText || "WhatsApp message";
-            deps.apiFetch("/api/kanban/whatsapp/linked-board?phone=" + encodeURIComponent(phone)).then(function(linkData) {
+            deps.apiFetch("/api/tickets/whatsapp/linked-board?phone=" + encodeURIComponent(phone)).then(function(linkData) {
                 deps.openTicketFromWhatsApp(phone, title, desc, linkData.board_id || null, [{ id: msgId }]);
             }).catch(function() {
                 deps.openTicketFromWhatsApp(phone, title, desc, null, [{ id: msgId }]);
@@ -258,7 +254,7 @@
             deps.hideWaMsgContextMenu();
             var waMsgCtxData = deps.getWaMsgCtxData();
             if (!waMsgCtxData) return;
-            deps.apiFetch("/api/kanban/whatsapp/messages/" + waMsgCtxData.message_id + "/processed", {
+            deps.apiFetch("/api/tickets/whatsapp/messages/" + waMsgCtxData.message_id + "/processed", {
                 method: "POST"
             }).then(function(r) {
                 if (r.success) {
@@ -279,7 +275,7 @@
             }
             var waMsgCtxData = deps.getWaMsgCtxData();
             if (!waMsgCtxData) return;
-            deps.apiFetch("/api/kanban/whatsapp/messages/" + waMsgCtxData.message_id, {
+            deps.apiFetch("/api/tickets/whatsapp/messages/" + waMsgCtxData.message_id, {
                 method: "DELETE"
             }).then(function(r) {
                 if (r.success) {
@@ -291,91 +287,106 @@
             });
         }
 
-        function loadBoardWaLinks(boardId) {
-            var linksEl = document.getElementById("kb-bm-wa-links");
-            linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Loading...</div>';
-            deps.apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links").then(function(links) {
-                if (!links.length) {
-                    linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">No WhatsApp chats linked</div>';
+        function unlinkAllBoardWaLinks(boardId) {
+            if (!boardId) {
+                waBoardLinkedByJid = {};
+                syncWaChatSelectLinkedState();
+                return Promise.resolve();
+            }
+            return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links").then(function(links) {
+                var removals = (links || []).map(function(link) {
+                    return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links/" + link.id, { method: "DELETE" });
+                });
+                if (!removals.length) {
+                    waBoardLinkedByJid = {};
+                    syncWaChatSelectLinkedState();
                     return;
                 }
-                var html = "";
-                links.forEach(function(l) {
-                    html += '<div class="flex items-center justify-between px-3 py-2 bg-[#152054] rounded border border-white/10">';
-                    html += '<div class="flex items-center gap-2">';
-                    html += '<div class="w-6 h-6 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-[10px] font-bold">' + deps.esc((l.contact_name || l.phone_number || "?").charAt(0).toUpperCase()) + '</div>';
-                    html += '<div>';
-                    html += '<div class="text-sm text-white">' + deps.esc(l.contact_name || l.phone_number) + '</div>';
-                    html += '<div class="text-[10px] text-gray-500">' + deps.esc(l.phone_number) + '</div>';
-                    html += '</div></div>';
-                    html += '<div class="flex items-center gap-2">';
-                    html += '<label class="flex items-center gap-1 cursor-pointer select-none" title="Auto-snapshot new messages as tickets">';
-                    html += '<input type="checkbox" class="accent-[#25D366] w-3 h-3 kb-wa-link-auto-toggle" data-link-id="' + l.id + '" data-board-id="' + boardId + '"' + (l.auto_snapshot ? ' checked' : '') + '>';
-                    html += '<span class="text-[10px] text-gray-500">Auto</span>';
-                    html += '</label>';
-                    html += '<button type="button" class="kb-wa-link-remove text-red-400 hover:text-red-300 text-xs px-1" data-link-id="' + l.id + '" data-board-id="' + boardId + '" title="Unlink">✕</button>';
-                    html += '</div></div>';
-                });
-                linksEl.innerHTML = html;
-                linksEl.querySelectorAll(".kb-wa-link-auto-toggle").forEach(function(el) {
-                    el.addEventListener("change", function() {
-                        var lid = el.dataset.linkId;
-                        var bid = el.dataset.boardId;
-                        deps.apiFetch("/api/kanban/boards/" + bid + "/whatsapp-links/" + lid, {
-                            method: "PATCH",
-                            headers: {"Content-Type": "application/json"},
-                            body: JSON.stringify({ auto_snapshot: el.checked })
-                        });
-                    });
-                });
-                linksEl.querySelectorAll(".kb-wa-link-remove").forEach(function(el) {
-                    el.addEventListener("click", function() {
-                        var lid = el.dataset.linkId;
-                        var bid = el.dataset.boardId;
-                        deps.apiFetch("/api/kanban/boards/" + bid + "/whatsapp-links/" + lid, { method: "DELETE" }).then(function() {
-                            loadBoardWaLinks(bid);
-                        });
-                    });
+                return Promise.all(removals).then(function() {
+                    waBoardLinkedByJid = {};
+                    var chatSelect = document.getElementById("kb-bm-wa-chat-select");
+                    if (chatSelect) chatSelect.value = "";
+                    syncWaChatSelectLinkedState();
                 });
             });
         }
 
-        function addWaLinkFromBoardModal() {
-            var chatSelect = document.getElementById("kb-bm-wa-chat-select");
-            var personSelect = document.getElementById("kb-bm-wa-person-select");
-            var selectedJid = chatSelect ? String(chatSelect.value || "").trim() : "";
-            if (!selectedJid) { deps.showSnackbar("Select a chat or group"); return; }
-            var selectedChat = waBoardLinkCandidatesByJid[selectedJid] || null;
-            if (!selectedChat) { deps.showSnackbar("Invalid chat selection"); return; }
-
-            var personJid = personSelect ? String(personSelect.value || "").trim() : "";
-            var linkJid = personJid || selectedChat.jid;
-            var linkPhone = linkJid.split("@")[0].split(":")[0];
-            var linkName = selectedChat.name;
-            if (personJid && personSelect && personSelect.selectedIndex >= 0) {
-                var pTxt = String(personSelect.options[personSelect.selectedIndex].textContent || "").trim();
-                if (pTxt) linkName = pTxt;
+        function loadBoardWaLinks(boardId) {
+            if (!boardId) {
+                waBoardLinkedByJid = {};
+                syncWaChatSelectLinkedState();
+                return Promise.resolve([]);
             }
-
-            var boardId = deps.getEditingBoardId();
-            if (!boardId) { deps.showSnackbar("Save the board first"); return; }
-
-            deps.apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({
-                    phone_jid: linkJid,
-                    phone_number: linkPhone,
-                    contact_name: linkName,
-                })
-            }).then(function(r) {
-                if (r.success) {
-                    deps.showSnackbar("Linked " + linkName + " to board");
-                    if (chatSelect) chatSelect.value = "";
-                    resetWaPersonSelect();
-                    loadBoardWaLinks(boardId);
-                }
+            return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links").then(function(links) {
+                waBoardLinkedByJid = {};
+                var boardLinkedJid = "";
+                (links || []).forEach(function(l) {
+                    var jid = String(l.phone_jid || "").trim();
+                    if (jid) {
+                        waBoardLinkedByJid[jid] = l;
+                        if (!boardLinkedJid) boardLinkedJid = jid;
+                    }
+                });
+                var chatSelect = document.getElementById("kb-bm-wa-chat-select");
+                if (chatSelect && boardLinkedJid) chatSelect.value = boardLinkedJid;
+                syncWaChatSelectLinkedState();
+                return links || [];
             });
+        }
+
+        function saveSelectedWaLinkForBoard(boardId) {
+            var chatSelect = document.getElementById("kb-bm-wa-chat-select");
+            var selectedJid = chatSelect ? String(chatSelect.value || "").trim() : "";
+            if (!boardId) return Promise.reject(new Error("Save the board before linking WhatsApp"));
+            if (!selectedJid) return unlinkAllBoardWaLinks(boardId).then(function() { return { skipped: true, unlinked: true }; });
+            var selectedChat = waBoardLinkCandidatesByJid[selectedJid] || null;
+            if (!selectedChat) return Promise.reject(new Error("Invalid WhatsApp chat selection"));
+            if (waBoardLinkedByJid[selectedJid]) return Promise.resolve({ skipped: true, linked: true });
+            var linkJid = selectedChat.jid;
+            var linkPhone = selectedChat.phone || linkJid.split("@")[0].split(":")[0];
+            var linkName = selectedChat.name;
+
+            return unlinkAllBoardWaLinks(boardId).then(function() {
+                return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        phone_jid: linkJid,
+                        phone_number: linkPhone,
+                        contact_name: linkName,
+                    })
+                });
+            }).then(function(r) {
+                if (r && r.success) {
+                    waBoardLinkedByJid[linkJid] = {
+                        id: r.id,
+                        board_id: boardId,
+                        phone_jid: linkJid,
+                        phone_number: linkPhone,
+                        contact_name: linkName,
+                    };
+                    syncWaChatSelectLinkedState();
+                }
+                return r;
+            });
+        }
+
+        function addWaLinkFromBoardModal() {
+            var boardId = deps.getEditingBoardId();
+            return saveSelectedWaLinkForBoard(boardId).then(function(r) {
+                if (r && r.unlinked) deps.showSnackbar("WhatsApp chat unlinked from board");
+                else if (r && !r.skipped) deps.showSnackbar("WhatsApp chat linked to board");
+                if (boardId) loadBoardWaLinks(boardId);
+                return r;
+            }).catch(function(err) {
+                deps.showSnackbar(err.message || "Failed to link WhatsApp chat", "error");
+            });
+        }
+
+        function handleBoardWaChatSelectChange(boardId, selectedJid) {
+            if (!boardId) return Promise.resolve();
+            if (!selectedJid) return unlinkAllBoardWaLinks(boardId);
+            return Promise.resolve();
         }
 
         function showWaChatContextMenu(x, y) {
@@ -432,7 +443,7 @@
             var statusEl = document.getElementById("kb-wa-status");
             var state = deps.getWaState();
             if (statusEl) statusEl.textContent = "Clearing server messages...";
-            deps.apiFetch("/api/kanban/whatsapp/relay/clear-messages", { method: "POST" }).then(function(result) {
+            deps.apiFetch("/api/tickets/whatsapp/relay/clear-messages", { method: "POST" }).then(function(result) {
                 if (result && result.success) {
                     deps.showSnackbar("Server messages cleared", "success");
                     state.waSelectedJid = null;
@@ -496,7 +507,7 @@
                 confirmLabel: "Delete",
                 danger: true,
                 onConfirm: function() {
-                    deps.apiFetch("/api/kanban/whatsapp/chat/" + encodeURIComponent(phone), { method: "DELETE" }).then(function(r) {
+                    deps.apiFetch("/api/tickets/whatsapp/chat/" + encodeURIComponent(phone), { method: "DELETE" }).then(function(r) {
                         deps.hideKanbanConfirm();
                         if (r && r.success) {
                             deps.showSnackbar("Deleted " + (r.deleted || "all") + " messages from " + name);
@@ -534,9 +545,9 @@
             if (!waCtxMenuData) return;
             var phone = waCtxMenuData.phone;
             var threadName = waCtxMenuData.name;
-            deps.apiFetch("/api/kanban/whatsapp/linked-board?phone=" + encodeURIComponent(phone)).then(function(linkData) {
+            deps.apiFetch("/api/tickets/whatsapp/linked-board?phone=" + encodeURIComponent(phone)).then(function(linkData) {
                 var boardId = linkData.board_id || null;
-                deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
+                deps.apiFetch("/api/tickets/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
                     var msgs = data.messages || [];
                     if (!msgs.length) { deps.showSnackbar("No messages from " + threadName); return; }
                     var unTicketed = msgs.filter(function(m) { return !deps.waMsgHasLinkedTicket(m); });
@@ -556,7 +567,7 @@
                     deps.openTicketFromWhatsApp(phone, ticketTitle, ticketDesc, boardId, unTicketed);
                 });
             }).catch(function() {
-                deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
+                deps.apiFetch("/api/tickets/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
                     var msgs = data.messages || [];
                     if (!msgs.length) { deps.showSnackbar("No messages from " + threadName); return; }
                     var unTicketed = msgs.filter(function(m) { return !deps.waMsgHasLinkedTicket(m); });
@@ -583,14 +594,14 @@
             if (!state.waSelectedJid) return;
             var phone = state.waSelectedJid;
             var threadName = document.getElementById("kb-wa-thread-title").textContent;
-            deps.apiFetch("/api/kanban/boards").then(function(boards) {
+            deps.apiFetch("/api/tickets/boards").then(function(boards) {
                 var dbBs = boards.filter(function(b) { return b.source === "database"; });
                 if (!dbBs.length) { deps.showSnackbar("No database boards to create ticket in"); return; }
                 var currentBoard = deps.getCurrentBoard();
                 var targetBoard = (currentBoard && currentBoard.source === "database") ? currentBoard.id : dbBs[0].id;
-                return deps.apiFetch("/api/kanban/whatsapp/linked-board?phone=" + encodeURIComponent(phone)).then(function(linkData) {
+                return deps.apiFetch("/api/tickets/whatsapp/linked-board?phone=" + encodeURIComponent(phone)).then(function(linkData) {
                     if (linkData && linkData.board_id) targetBoard = linkData.board_id;
-                    return deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500");
+                    return deps.apiFetch("/api/tickets/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500");
                 }).then(function(data) {
                     if (!data) return;
                     var allMsgs = data.messages || [];
@@ -613,7 +624,7 @@
                     });
                     deps.openTicketFromWhatsApp(phone, ticketTitle, ticketDesc, targetBoard, msgs);
                 }).catch(function() {
-                    return deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
+                    return deps.apiFetch("/api/tickets/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
                         if (!data) return;
                         var allMsgs = data.messages || [];
                         var msgs = deps.collectWaSnapshotMessages(allMsgs);
@@ -672,7 +683,10 @@
             waMsgCtxMarkProcessed: waMsgCtxMarkProcessed,
             waMsgCtxDelete: waMsgCtxDelete,
             loadBoardWaLinks: loadBoardWaLinks,
+            unlinkAllBoardWaLinks: unlinkAllBoardWaLinks,
+            handleBoardWaChatSelectChange: handleBoardWaChatSelectChange,
             addWaLinkFromBoardModal: addWaLinkFromBoardModal,
+            saveSelectedWaLinkForBoard: saveSelectedWaLinkForBoard,
             showWaChatContextMenu: showWaChatContextMenu,
             hideWaChatContextMenu: hideWaChatContextMenu,
             showWaMsgContextMenu: showWaMsgContextMenu,
@@ -690,6 +704,7 @@
             initWhatsApp: initWhatsApp,
             loadWaLinkCandidates: loadWaLinkCandidates,
             loadWaGroupPeopleCandidates: loadWaGroupPeopleCandidates,
+            syncWaChatSelectLinkedState: syncWaChatSelectLinkedState,
         };
     }
 
@@ -713,7 +728,7 @@
         }
 
         function buildWaMediaUrl(msg, format) {
-            var base = "/api/kanban/whatsapp/relay-media/" + encodeURIComponent(msg.id);
+            var base = "/api/tickets/whatsapp/relay-media/" + encodeURIComponent(msg.id);
             var q = [];
             if (format) q.push("format=" + encodeURIComponent(format));
             if (msg && msg.message_id) q.push("wa_key=" + encodeURIComponent(msg.message_id));
@@ -745,7 +760,7 @@
             var chatListEl = document.getElementById("kb-wa-chats");
             var state = deps.getState();
             if (!state.waChats || !state.waChats.length || forceRefresh) el.textContent = "Loading...";
-            var localUrl = "/api/kanban/whatsapp/messages?limit=2000&sort=desc";
+            var localUrl = "/api/tickets/whatsapp/messages?limit=2000&sort=desc";
 
             Promise.all([
                 deps.apiFetch(localUrl).then(function(data) {
@@ -756,7 +771,7 @@
                 }).catch(function() {
                     return fetchFromRelay().catch(function() { return { messages: [] }; });
                 }),
-                deps.apiFetch("/api/kanban/whatsapp/chats?limit=500&offset=0&search=").then(function(chatsData) {
+                deps.apiFetch("/api/tickets/whatsapp/chats?limit=500&offset=0&search=").then(function(chatsData) {
                     var map = {};
                     var allNames = {};
                     var list = (chatsData && chatsData.chats) || [];
@@ -803,7 +818,7 @@
             });
 
             function fetchFromRelay() {
-                return deps.apiFetch("/api/kanban/whatsapp/relay/messages?limit=500").then(function(data) {
+                return deps.apiFetch("/api/tickets/whatsapp/relay/messages?limit=500").then(function(data) {
                     if (data.messages && data.messages.length >= 0) return data;
                     throw new Error("Relay returned no data");
                 });
@@ -1113,15 +1128,15 @@
 
             deps.apiFetch(waThreadMessagesUrl(sender, 200)).then(function(data) {
                 if (data.messages && data.messages.length > 0) return data;
-                return deps.apiFetch("/api/kanban/whatsapp/sync", { method: "POST" }).then(function() {
+                return deps.apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).then(function() {
                     return deps.apiFetch(waThreadMessagesUrl(sender, 200));
                 }).catch(function() {
-                    return deps.apiFetch("/api/kanban/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").catch(function() {
+                    return deps.apiFetch("/api/tickets/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").catch(function() {
                         return { messages: [] };
                     });
                 });
             }).catch(function() {
-                return deps.apiFetch("/api/kanban/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").catch(function() {
+                return deps.apiFetch("/api/tickets/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").catch(function() {
                     return { messages: [] };
                 });
             }).then(function(data) {
@@ -1333,7 +1348,7 @@
                 };
             }
 
-            deps.apiFetch("/api/kanban/whatsapp/send", {
+            deps.apiFetch("/api/tickets/whatsapp/send", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify(payload)
@@ -1440,7 +1455,7 @@
                         filename: deps.getWaVoiceFilename(state.waVoiceRecorder.mimeType || "audio/webm")
                     }
                 };
-                var resp = await deps.apiFetch("/api/kanban/whatsapp/send", {
+                var resp = await deps.apiFetch("/api/tickets/whatsapp/send", {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify(payload)
@@ -1714,7 +1729,7 @@
             }) || getThreadMessageById(msg.id) || msg;
             patchMessageDom(msg.id, pendingMsg);
 
-            deps.apiFetch("/api/kanban/whatsapp/messages/" + encodeURIComponent(msg.id) + "/analyze-media", {
+            deps.apiFetch("/api/tickets/whatsapp/messages/" + encodeURIComponent(msg.id) + "/analyze-media", {
                 method: "POST",
             }).then(function(resp) {
                 if (!resp || resp.success !== true) {

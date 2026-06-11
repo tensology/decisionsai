@@ -65,12 +65,14 @@ class WorkflowOrchestrationMixin:
         """Periodic scheduler tick — fires due scheduled workflows."""
         try:
             from distr.core.workflow.scheduler import (
+                apply_workflow_scheduler_timer_interval,
                 get_due_scheduled_workflows,
                 run_scheduled_workflow,
             )
 
             due = get_due_scheduled_workflows()
-            logger.debug("Workflow scheduler tick: %d workflow(s) due", len(due))
+            if due:
+                logger.debug("Workflow scheduler tick: %d workflow(s) due", len(due))
             for wf in due:
                 workflow_id = wf["id"]
                 logger.info(
@@ -85,6 +87,10 @@ class WorkflowOrchestrationMixin:
                         self._start_workflow_orchestration(wid, rid, steps, wtype)
                     ),
                 )
+            # Recompute the next wake time after runs advance next_run_at (or when idle).
+            apply_workflow_scheduler_timer_interval(
+                getattr(self, "workflow_scheduler_timer", None),
+            )
         except Exception as e:
             logger.error("Workflow scheduler error: %s", e, exc_info=True)
 

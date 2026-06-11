@@ -104,3 +104,101 @@ def ptt_modifier_options() -> List[dict]:
 
 def key_options() -> List[dict]:
     return [{"value": value, "label": label} for value, label in KEY_LABELS.items()]
+
+
+_QT_MODIFIER_MAP = {
+    "control": "Ctrl",
+    "command": "Meta",
+    "option": "Alt",
+    "shift": "Shift",
+}
+
+_QT_KEY_MAP = {
+    "left_arrow": "Left",
+    "right_arrow": "Right",
+    "up_arrow": "Up",
+    "down_arrow": "Down",
+    "left_bracket": "[",
+    "right_bracket": "]",
+    "minus": "-",
+    "plus": "+",
+    "equal": "=",
+    "grave": "`",
+    "comma": ",",
+    "period": ".",
+    "slash": "/",
+    "semicolon": ";",
+    "quote": "'",
+    "backslash": "\\",
+}
+for _fn in range(1, 13):
+    _QT_KEY_MAP[f"f{_fn}"] = f"F{_fn}"
+for _letter in "abcdefghijklmnopqrstuvwxyz":
+    _QT_KEY_MAP[_letter] = _letter.upper()
+
+
+def _modifier_tokens(modifier: str) -> list[str]:
+    return [mod for mod in MODIFIER_ORDER if mod in str(modifier or "").split("_")]
+
+
+def format_shortcut_display(modifier: str, key: str = "") -> str:
+    """Human-readable shortcut label for menus and tooltips."""
+    mod_label = MODIFIER_LABELS.get(modifier)
+    if not mod_label:
+        parts = [_BASE_MODIFIER_LABELS[token] for token in _modifier_tokens(modifier)]
+        mod_label = " + ".join(parts) if parts else ""
+    if not key:
+        return f"{mod_label} (hold)" if mod_label else ""
+    key_label = KEY_LABELS.get(key, key.replace("_", " ").title())
+    return f"{mod_label} + {key_label}" if mod_label else key_label
+
+
+def format_ptt_combo_display(combo_str: str) -> str:
+    """Format a modifier-only push-to-talk combo such as ``option_command``."""
+    modifier = "_".join(_modifier_tokens(str(combo_str or "")))
+    return format_shortcut_display(modifier, "") if modifier else ""
+
+
+def chord_to_qt_sequence(modifier: str, key: str = "") -> str:
+    """Build a ``QKeySequence``-compatible string from stored shortcut fields."""
+    parts = [_QT_MODIFIER_MAP[mod] for mod in _modifier_tokens(modifier) if mod in _QT_MODIFIER_MAP]
+    if key:
+        parts.append(_QT_KEY_MAP.get(key, key.upper()))
+    return "+".join(parts)
+
+
+def format_remote_hotkey_display(remote_hotkey: str | None) -> str:
+    """Human-readable label for a stored remote hotkey string."""
+    combo = parse_remote_hotkey(remote_hotkey)
+    if not combo:
+        return ""
+    return format_shortcut_display(combo[0], combo[1])
+
+
+def parse_remote_hotkey(remote_hotkey: str | None) -> tuple[str, str] | None:
+    """Parse snippet remote hotkey strings like ``ctrl+shift+k`` into chord fields."""
+    aliases = {
+        "ctrl": "control",
+        "control": "control",
+        "alt": "option",
+        "option": "option",
+        "cmd": "command",
+        "command": "command",
+        "meta": "command",
+        "shift": "shift",
+    }
+    parts = [p.strip().lower() for p in str(remote_hotkey or "").replace("_", "+").split("+") if p.strip()]
+    if not parts:
+        return None
+    modifiers: list[str] = []
+    key = ""
+    for part in parts:
+        normalized = aliases.get(part)
+        if normalized:
+            if normalized not in modifiers:
+                modifiers.append(normalized)
+        else:
+            key = part
+    if not modifiers or not key:
+        return None
+    return ("_".join(modifiers), key)

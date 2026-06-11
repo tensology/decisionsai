@@ -25,10 +25,11 @@ class _FakeQuery:
 
 
 class _FakeSession:
-    def __init__(self, *, messages, links, boards):
+    def __init__(self, *, messages, links, boards, ticketed_message_ids=None):
         self.messages = messages
         self.links = links
         self.boards = boards
+        self.ticketed_message_ids = ticketed_message_ids or []
 
     def __enter__(self):
         return self
@@ -44,6 +45,8 @@ class _FakeSession:
             return _FakeQuery(self.links)
         if name == "KanbanBoard":
             return _FakeQuery(self.boards)
+        if name == "KanbanTicket":
+            return _FakeQuery([(mid,) for mid in self.ticketed_message_ids])
         return _FakeQuery([])
 
 
@@ -106,3 +109,81 @@ def test_whatsapp_scan_notifies_fresh_non_work_message(monkeypatch):
     assert proposal["payload"]["source"] == "whatsapp"
     assert proposal["payload"]["latest_sender"] == "Maya"
     assert "just got a WhatsApp message" in proposal["description"]
+
+
+def test_whatsapp_scan_ignores_stale_linked_board_message(monkeypatch):
+    msg = SimpleNamespace(
+        id=55,
+        jid="27820003333@s.whatsapp.net",
+        jid_phone="27820003333",
+        sender_push_name="Old Client",
+        sender_phone="27820003333",
+        sender_jid="27820003333@s.whatsapp.net",
+        text="Please fix the checkout bug.",
+        caption="",
+        media_type="",
+        created_date=datetime.utcnow() - timedelta(days=2),
+        processed=False,
+        snapshot_group=None,
+    )
+    link = SimpleNamespace(board_id=8, phone_number="27820003333", auto_snapshot=False)
+    board = SimpleNamespace(id=8, name="Old Board")
+    monkeypatch.setattr(
+        "distr.core.db.get_session",
+        lambda: _FakeSession(messages=[msg], links=[link], boards=[board]),
+    )
+
+    scan = {"messages": {"whatsapp": [], "telegram": [], "email": []}, "proposals": []}
+    _scan_whatsapp(scan)
+
+    assert scan["messages"]["whatsapp"] == []
+    assert scan["proposals"] == []
+
+
+def test_whatsapp_scan_ignores_already_ticketed_or_snapshot_messages(monkeypatch):
+    now = datetime.utcnow()
+    snapshot_msg = SimpleNamespace(
+        id=56,
+        jid="27820004444@s.whatsapp.net",
+        jid_phone="27820004444",
+        sender_push_name="Ticketed Client",
+        sender_phone="27820004444",
+        sender_jid="27820004444@s.whatsapp.net",
+        text="Please make a ticket for this urgent bug.",
+        caption="",
+        media_type="",
+        created_date=now - timedelta(seconds=30),
+        processed=False,
+        snapshot_group="123_1",
+    )
+    ticketed_msg = SimpleNamespace(
+        id=57,
+        jid="27820004444@s.whatsapp.net",
+        jid_phone="27820004444",
+        sender_push_name="Ticketed Client",
+        sender_phone="27820004444",
+        sender_jid="27820004444@s.whatsapp.net",
+        text="Another urgent ticketed bug.",
+        caption="",
+        media_type="",
+        created_date=now - timedelta(seconds=20),
+        processed=False,
+        snapshot_group=None,
+    )
+    link = SimpleNamespace(board_id=9, phone_number="27820004444", auto_snapshot=False)
+    board = SimpleNamespace(id=9, name="Ticketed Board")
+    monkeypatch.setattr(
+        "distr.core.db.get_session",
+        lambda: _FakeSession(
+            messages=[snapshot_msg, ticketed_msg],
+            links=[link],
+            boards=[board],
+            ticketed_message_ids=[57],
+        ),
+    )
+
+    scan = {"messages": {"whatsapp": [], "telegram": [], "email": []}, "proposals": []}
+    _scan_whatsapp(scan)
+
+    assert scan["messages"]["whatsapp"] == []
+    assert scan["proposals"] == []

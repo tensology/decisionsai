@@ -379,6 +379,13 @@ if __name__ == "__main__":
     except Exception:
         pass
     from distr.app.main import run
-    kill_existing_decisions_processes()
-    print("Starting Decisions...")
+    skip_kill = (
+        "--skip-kill-existing" in sys.argv
+        or os.environ.get("DECISIONS_RESTARTING") == "1"
+    )
+    if skip_kill:
+        print("Starting Decisions (restart launch — skipping duplicate-process cleanup)...")
+    else:
+        kill_existing_decisions_processes()
+        print("Starting Decisions...")
     run()

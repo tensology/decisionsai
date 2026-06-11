@@ -340,12 +340,18 @@ def register_routes(router, templates):
                 if filtered:
                     models = filtered
 
-            # Clean display names
+            # Clean display names and attach context window metadata for UI.
+            from distr.core.services.context_window import context_window_for_model
+
             for m in models:
                 if _is_dict(m) and "name" in m:
                     m["name"] = m["name"].replace(" (tools)", "")
                     while "(free) (free)" in m["name"]:
                         m["name"] = m["name"].replace("(free) (free)", "(free)")
+                if _is_dict(m):
+                    model_id = (m.get("id") or m.get("name") or "").strip()
+                    if model_id and not m.get("context_window"):
+                        m["context_window"] = context_window_for_model(provider, model_id)
 
         return JSONResponse({"models": models})
 

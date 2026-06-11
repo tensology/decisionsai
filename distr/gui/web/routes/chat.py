@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any, Set, Iterable
 from collections import defaultdict
 import logging
 import json
+import re
 import asyncio
 import threading
 from datetime import datetime
@@ -20,7 +21,7 @@ _chat_ws_connections: Dict[int, Set[WebSocket]] = {}
 _chat_ws_lock = threading.Lock()
 
 from distr.core.db import get_session, Chat
-from distr.core.chat import ChatService
+from distr.core.chat import ChatService, record_chat_audit_event
 from distr.core.llm_factory import normalize_provider as _normalize_provider
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
@@ -82,6 +83,7 @@ def _chat_tool_event_messages(chat: Chat) -> List[Dict[str, Any]]:
                     "title": event.get("title") or "Tool executed",
                     "status": event.get("status") or "completed",
                     "result_summary": event.get("result_summary") or "",
+                    "result_detail": event.get("result_detail") or "",
                     "routing_path": event.get("routing_path") or "",
                     "user_text": event.get("user_text") or "",
                     "compact": _is_compact_tool_event(event),
@@ -141,6 +143,350 @@ def _message_sort_key(message: Dict[str, Any]) -> str:
     return ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
 
 
+def _estimate_tokens(text: str) -> int:
+    """Cheap context estimate for UI pressure. Avoids provider tokenizers on hot paths."""
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned:
+        return 0
+    return max(1, int(len(cleaned) / 4))
+
+
+def _context_window_for_model(provider: str, model_name: str) -> int:
+    """Best-effort context window used for the header ring."""
+    from distr.core.services.context_window import context_window_for_model
+
+    return context_window_for_model(provider, model_name)
+
+
+def _context_stats(messages: List[Dict[str, Any]], provider: str, model_name: str) -> Dict[str, Any]:
+    token_estimate = sum(_estimate_tokens(m.get("content") or "") for m in messages)
+    window = _context_window_for_model(provider, model_name)
+    percent = min(100, round((token_estimate / max(window, 1)) * 100))
+    if token_estimate > 0 and percent == 0:
+        percent = 1
+    return {
+        "estimated_tokens": token_estimate,
+        "context_window": window,
+        "percent_used": percent,
+        "message_count": len([m for m in messages if m.get("role") in {"user", "assistant"}]),
+        "auto_compact_threshold": 75,
+    }
+
+
+def _effective_context_messages(
+    messages: List[Dict[str, Any]], checkpoint: Any
+) -> List[Dict[str, Any]]:
+    if not isinstance(checkpoint, dict) or not (checkpoint.get("summary") or "").strip():
+        return messages
+    try:
+        checkpoint_row_id = int(checkpoint.get("chat_row_id") or 0)
+    except (TypeError, ValueError):
+        checkpoint_row_id = 0
+    effective = [{"role": "system", "content": str(checkpoint.get("summary") or "")}]
+    for msg in messages:
+        try:
+            row_id = int(msg.get("chat_row_id") or 0)
+        except (TypeError, ValueError):
+            row_id = 0
+        if row_id and checkpoint_row_id and row_id <= checkpoint_row_id:
+            continue
+        effective.append(msg)
+    return effective
+
+
+def _chat_additional_context(raw: Optional[str]) -> Dict[str, Any]:
+    return _safe_json_obj(raw)
+
+
+def _row_chat_marker(row: Any) -> Optional[Dict[str, Any]]:
+    ctx = _chat_additional_context(getattr(row, "additional_context", None))
+    marker = ctx.get("chat_marker")
+    return marker if isinstance(marker, dict) else None
+
+
+def _legacy_chat_marker_from_response(response: Optional[str]) -> Optional[Dict[str, Any]]:
+    text = (response or "").strip()
+    if text.startswith("Context compacted."):
+        return {"type": "compact", "reason": "manual"}
+    fork_match = re.match(
+        r"^Fork started from compact checkpoint for chat #(\d+)",
+        text,
+    )
+    if fork_match:
+        return {
+            "type": "fork",
+            "source_chat_id": int(fork_match.group(1)),
+            "compacted": True,
+        }
+    return None
+
+
+def _divider_message_from_row(row: Any, marker: Dict[str, Any]) -> Dict[str, Any]:
+    ts = getattr(row, "modified_date", None) or getattr(row, "created_date", None)
+    return {
+        "role": "divider",
+        "timestamp": ts,
+        "chat_row_id": row.id,
+        "divider": dict(marker),
+    }
+
+
+def _append_row_messages(messages: List[Dict[str, Any]], row: Any) -> None:
+    """Turn one chat thread row into user/assistant/divider API messages."""
+    if getattr(row, "is_hidden", False):
+        return
+    marker = _row_chat_marker(row)
+    if not marker and getattr(row, "response", None):
+        marker = _legacy_chat_marker_from_response(row.response)
+    if marker:
+        if marker.get("type") == "compact" and marker.get("hide_in_source_on_fork"):
+            return
+        messages.append(_divider_message_from_row(row, marker))
+        if marker.get("type") in {"compact", "fork"}:
+            return
+    if row.input:
+        messages.append(
+            {
+                "role": "user",
+                "content": row.input,
+                "timestamp": row.created_date if row.created_date else None,
+                "chat_row_id": row.id,
+            }
+        )
+    if row.response:
+        messages.append(
+            {
+                "role": "assistant",
+                "content": row.response,
+                "timestamp": row.modified_date if row.modified_date else None,
+                "chat_row_id": row.id,
+            }
+        )
+
+
+def _thread_rows_for_compaction(session, chat_id: int):
+    from sqlalchemy import text
+
+    thread_query = text("""
+        WITH RECURSIVE chat_thread AS (
+            SELECT id, parent_id, input, response, created_date, modified_date, is_hidden, additional_context
+            FROM chats
+            WHERE id = :root_id
+            UNION ALL
+            SELECT c.id, c.parent_id, c.input, c.response, c.created_date, c.modified_date, c.is_hidden, c.additional_context
+            FROM chats c
+            INNER JOIN chat_thread ct ON c.parent_id = ct.id
+        )
+        SELECT * FROM chat_thread ORDER BY created_date ASC
+    """)
+    return session.execute(thread_query, {"root_id": chat_id}).fetchall()
+
+
+def _messages_from_rows(rows) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    for row in rows:
+        _append_row_messages(messages, row)
+    return messages
+
+
+def _fallback_compact_summary(messages: List[Dict[str, Any]]) -> str:
+    if not messages:
+        return "No prior conversation content."
+    first = messages[:4]
+    last = messages[-8:]
+    lines = [
+        "Conversation checkpoint:",
+        f"- Compacted {len(messages)} visible message(s).",
+    ]
+    if first:
+        lines.append("- Opening context:")
+        for msg in first:
+            lines.append(f"  - {msg.get('role')}: {str(msg.get('content') or '').strip()[:240]}")
+    if last:
+        lines.append("- Most recent context:")
+        for msg in last:
+            lines.append(f"  - {msg.get('role')}: {str(msg.get('content') or '').strip()[:320]}")
+    return "\n".join(lines)
+
+
+def _summarize_chat_with_model(
+    messages: List[Dict[str, Any]],
+    *,
+    provider: str,
+    model_name: str,
+    settings: dict,
+) -> tuple[str, str]:
+    transcript = []
+    for msg in messages[-80:]:
+        role = msg.get("role") or "message"
+        content = str(msg.get("content") or "").strip()
+        if content:
+            transcript.append(f"{role.upper()}: {content}")
+    transcript_text = "\n\n".join(transcript)
+    if not transcript_text:
+        return "No prior conversation content.", "empty"
+    try:
+        import litellm
+        from distr.core.workflow.planning import _litellm_model
+
+        response = litellm.completion(
+            model=_litellm_model((provider or "").strip().lower(), model_name or "", settings),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Create a compact checkpoint for an AI chat. Preserve user goals, "
+                        "decisions, constraints, unresolved work, current settings, and any "
+                        "facts the next agent turn needs. Do not add filler."
+                    ),
+                },
+                {"role": "user", "content": transcript_text[:120_000]},
+            ],
+            max_tokens=1800,
+            temperature=0.2,
+        )
+        summary = (response.choices[0].message.content or "").strip()
+        if summary:
+            return summary, "llm"
+    except Exception:
+        logger.warning("Chat compaction LLM summary failed; using fallback", exc_info=True)
+    return _fallback_compact_summary(messages), "fallback"
+
+
+TITLE_REFRESH_MESSAGE_INTERVAL = 20
+
+
+def _fallback_chat_title(messages: List[Dict[str, Any]]) -> str:
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        text = str(msg.get("content") or "").strip()
+        if text:
+            first_line = text.split("\n", 1)[0].strip()
+            if len(first_line) > 60:
+                return first_line[:57].rstrip() + "..."
+            return first_line
+    return "New Chat"
+
+
+def _suggest_chat_title(
+    messages: List[Dict[str, Any]],
+    *,
+    provider: str,
+    model_name: str,
+    settings: dict,
+) -> str:
+    transcript = []
+    for msg in messages[-40:]:
+        role = msg.get("role") or "message"
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(msg.get("content") or "").strip()
+        if content:
+            transcript.append(f"{role.upper()}: {content[:500]}")
+    transcript_text = "\n\n".join(transcript)
+    if not transcript_text:
+        return "New Chat"
+    try:
+        import litellm
+        from distr.core.workflow.planning import _litellm_model
+
+        response = litellm.completion(
+            model=_litellm_model((provider or "").strip().lower(), model_name or "", settings),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Write a short chat title (4-8 words) that captures the user's current "
+                        "intent. No quotes, no punctuation at the end, no filler."
+                    ),
+                },
+                {"role": "user", "content": transcript_text[:24_000]},
+            ],
+            max_tokens=32,
+            temperature=0.2,
+        )
+        title = (response.choices[0].message.content or "").strip().strip("\"'")
+        title = " ".join(title.split())
+        if title:
+            return title[:80]
+    except Exception:
+        logger.warning("Chat title suggestion failed; using fallback", exc_info=True)
+    return _fallback_chat_title(messages)
+
+
+def _title_auto_meta(additional_context: Dict[str, Any]) -> Dict[str, Any]:
+    raw = additional_context.get("title_auto")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _chat_header_stats_payload(
+    *,
+    root_chat: Chat,
+    messages: List[Dict[str, Any]],
+    provider: str,
+    model_name: str,
+) -> Dict[str, Any]:
+    additional_context = _chat_additional_context(root_chat.additional_context)
+    compact_checkpoint = additional_context.get("compact_checkpoint")
+    context_stats = _context_stats(
+        _effective_context_messages(messages, compact_checkpoint),
+        provider,
+        model_name,
+    )
+    title_auto = _title_auto_meta(additional_context)
+    return {
+        "title": root_chat.title or "New Chat",
+        "context_stats": context_stats,
+        "title_auto": {
+            "manual": bool(title_auto.get("manual")),
+            "last_refresh_message_count": int(title_auto.get("last_refresh_message_count") or 0),
+            "interval": TITLE_REFRESH_MESSAGE_INTERVAL,
+        },
+    }
+
+
+def _maybe_refresh_chat_title(
+    session,
+    root_chat: Chat,
+    messages: List[Dict[str, Any]],
+    *,
+    provider: str,
+    model_name: str,
+    settings: dict,
+    force: bool = False,
+) -> Optional[str]:
+    additional_context = _chat_additional_context(root_chat.additional_context)
+    title_auto = _title_auto_meta(additional_context)
+    if title_auto.get("manual"):
+        return None
+    message_count = len([m for m in messages if m.get("role") in {"user", "assistant"}])
+    last_refresh = int(title_auto.get("last_refresh_message_count") or 0)
+    if not force and message_count - last_refresh < TITLE_REFRESH_MESSAGE_INTERVAL:
+        return None
+    if message_count < 2 and not force:
+        return None
+    new_title = _suggest_chat_title(
+        messages,
+        provider=provider,
+        model_name=model_name,
+        settings=settings,
+    )
+    if not new_title:
+        return None
+    root_chat.title = new_title
+    title_auto = {
+        "manual": False,
+        "last_refresh_message_count": message_count,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    additional_context["title_auto"] = title_auto
+    root_chat.additional_context = json.dumps(additional_context, ensure_ascii=False, default=str)
+    root_chat.modified_date = datetime.utcnow()
+    session.commit()
+    return new_title
+
+
 def _merge_thread_rows_with_tool_and_workflow_events(
     rows: Iterable[Any], root_chat: Chat
 ) -> List[Dict[str, Any]]:
@@ -157,24 +503,7 @@ def _merge_thread_rows_with_tool_and_workflow_events(
 
     messages: List[Dict[str, Any]] = []
     for row in rows:
-        if row.input:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": row.input,
-                    "timestamp": row.created_date if row.created_date else None,
-                    "chat_row_id": row.id,
-                }
-            )
-        if row.response:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": row.response,
-                    "timestamp": row.modified_date if row.modified_date else None,
-                    "chat_row_id": row.id,
-                }
-            )
+        _append_row_messages(messages, row)
         for tm in tools_by_turn.pop(row.id, []):
             messages.append(tm)
 
@@ -196,6 +525,7 @@ class SendMessageRequest(ChatRequestModel):
     """Request to send a message"""
 
     message: str
+    agent_message: Optional[str] = None  # LLM-only text when message is a short display brief
     chat_id: Optional[int] = None  # If None, creates new chat
     speak: Optional[bool] = (
         None  # If True, frontend will play TTS after response (web chat)
@@ -236,6 +566,22 @@ class UpdateChatRequest(ChatRequestModel):
     model_name: Optional[str] = None
     voice_provider: Optional[str] = None
     voice_model: Optional[str] = None
+
+
+class CompactChatRequest(ChatRequestModel):
+    """Request to compact a chat into a Hermes-backed checkpoint."""
+
+    provider: Optional[str] = None
+    model_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class ForkChatRequest(ChatRequestModel):
+    """Request to fork a chat after compacting it."""
+
+    provider: Optional[str] = None
+    model_name: Optional[str] = None
+    title: Optional[str] = None
 
 
 class TTSGenerateRequest(ChatRequestModel):
@@ -534,11 +880,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
                 thread_query = text("""
                     WITH RECURSIVE chat_thread AS (
-                        SELECT id, parent_id, title, input, response, created_date, modified_date, model_name, provider
+                        SELECT id, parent_id, title, input, response, created_date, modified_date, model_name, provider, is_hidden, additional_context
                         FROM chats
                         WHERE id = :root_id
                         UNION ALL
-                        SELECT c.id, c.parent_id, c.title, c.input, c.response, c.created_date, c.modified_date, c.model_name, c.provider
+                        SELECT c.id, c.parent_id, c.title, c.input, c.response, c.created_date, c.modified_date, c.model_name, c.provider, c.is_hidden, c.additional_context
                         FROM chats c
                         INNER JOIN chat_thread ct ON c.parent_id = ct.id
                     )
@@ -594,11 +940,19 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 voice_model_display = _voice_model_to_display_name(
                     voice_provider, voice_model_raw, settings
                 )
+                header_payload = _chat_header_stats_payload(
+                    root_chat=root_chat,
+                    messages=messages,
+                    provider=provider,
+                    model_name=model_name,
+                )
+                additional_context = _chat_additional_context(root_chat.additional_context)
+                compact_checkpoint = additional_context.get("compact_checkpoint")
 
                 return JSONResponse(
                     {
                         "id": root_chat.id,
-                        "title": root_chat.title or "New Chat",
+                        "title": header_payload["title"],
                         "messages": messages,
                         "provider": provider,
                         "model_name": model_name,
@@ -607,6 +961,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         # display label separately for the UI.
                         "voice_model": voice_model_raw,
                         "voice_model_display": voice_model_display,
+                        "context_stats": header_payload["context_stats"],
+                        "title_auto": header_payload["title_auto"],
+                        "compact_checkpoint": compact_checkpoint,
                     }
                 )
         except HTTPException:
@@ -807,6 +1164,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         so the chat row is the source of truth. Also update global settings defaults so the
         next new chat pre-selects these choices."""
         try:
+            response_payload: Dict[str, Any]
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
@@ -814,6 +1172,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 updated = False
                 if request_data.title is not None:
                     chat.title = (request_data.title or "").strip() or None
+                    context = _chat_additional_context(chat.additional_context)
+                    title_auto = _title_auto_meta(context)
+                    title_auto["manual"] = True
+                    title_auto["updated_at"] = datetime.utcnow().isoformat()
+                    context["title_auto"] = title_auto
+                    chat.additional_context = json.dumps(
+                        context, ensure_ascii=False, default=str
+                    )
                     updated = True
                 if request_data.provider is not None:
                     chat.provider = (request_data.provider or "").strip() or None
@@ -832,6 +1198,16 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 if updated:
                     chat.modified_date = datetime.utcnow()
                     session.commit()
+
+                # Read ORM fields before the session closes (avoids DetachedInstanceError).
+                response_payload = {
+                    "id": int(chat.id),
+                    "title": chat.title or "New Chat",
+                    "provider": chat.provider,
+                    "model_name": chat.model_name,
+                    "voice_provider": chat.voice_provider,
+                    "voice_model": chat.voice_model,
+                }
 
             # ── Persist to global settings so next new chat defaults to these choices ──
             try:
@@ -860,10 +1236,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         apply_voice_selection_to_settings,
                     )
 
-                    with get_session() as session:
-                        crow = session.query(Chat).filter(Chat.id == chat_id).first()
-                    vp_eff = ((crow.voice_provider or "") if crow else "").strip()
-                    vm_eff = ((crow.voice_model or "") if crow else "").strip()
+                    vp_eff = (response_payload.get("voice_provider") or "").strip()
+                    vm_eff = (response_payload.get("voice_model") or "").strip()
                     if vp_eff and vm_eff:
                         if apply_voice_selection_to_settings(_sett, vp_eff, vm_eff):
                             _changed = True
@@ -877,21 +1251,340 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             except Exception as e:
                 logger.warning("Update chat: could not persist selections to settings: %s", e)
 
-            return JSONResponse(
-                {
-                    "id": chat.id,
-                    "title": chat.title or "New Chat",
-                    "provider": chat.provider,
-                    "model_name": chat.model_name,
-                    "voice_provider": chat.voice_provider,
-                    "voice_model": chat.voice_model,
-                    "message": "Chat updated",
-                }
-            )
+            return JSONResponse({**response_payload, "message": "Chat updated"})
         except HTTPException:
             raise
         except Exception as e:
             logger.error(f"Failed to update chat: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.get("/chats/{chat_id}/header-stats")
+    async def get_chat_header_stats(chat_id: int):
+        """Lightweight header payload: title + context pressure (for live UI updates)."""
+        try:
+            with get_session() as session:
+                root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
+                if not root_chat:
+                    raise HTTPException(status_code=404, detail="Chat not found")
+                rows = _thread_rows_for_compaction(session, chat_id)
+                messages = _messages_from_rows(rows)
+                settings = load_settings_from_db()
+                provider = (
+                    (root_chat.provider or "").strip()
+                    or settings.get("conversational_llm_provider")
+                    or settings.get("agent_provider")
+                    or "Ollama"
+                )
+                model_name = (
+                    (root_chat.model_name or "").strip()
+                    or settings.get("conversational_llm_model")
+                    or settings.get("agent_model")
+                    or ""
+                )
+                payload = _chat_header_stats_payload(
+                    root_chat=root_chat,
+                    messages=messages,
+                    provider=provider,
+                    model_name=model_name,
+                )
+                return JSONResponse({"id": chat_id, **payload})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Header stats failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.post("/chats/{chat_id}/refresh-title")
+    async def refresh_chat_title(chat_id: int, force: bool = False):
+        """Suggest and persist a short title from recent conversation intent."""
+        try:
+            settings = load_settings_from_db()
+            with get_session() as session:
+                root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
+                if not root_chat:
+                    raise HTTPException(status_code=404, detail="Chat not found")
+                rows = _thread_rows_for_compaction(session, chat_id)
+                messages = _messages_from_rows(rows)
+                provider = (
+                    (root_chat.provider or "").strip()
+                    or settings.get("conversational_llm_provider")
+                    or "Ollama"
+                )
+                model_name = (
+                    (root_chat.model_name or "").strip()
+                    or settings.get("conversational_llm_model")
+                    or settings.get("agent_model")
+                    or ""
+                )
+                new_title = _maybe_refresh_chat_title(
+                    session,
+                    root_chat,
+                    messages,
+                    provider=provider,
+                    model_name=model_name,
+                    settings=settings,
+                    force=bool(force),
+                )
+                payload = _chat_header_stats_payload(
+                    root_chat=root_chat,
+                    messages=messages,
+                    provider=provider,
+                    model_name=model_name,
+                )
+                return JSONResponse(
+                    {
+                        "id": chat_id,
+                        "updated": bool(new_title),
+                        "title": payload["title"],
+                        "context_stats": payload["context_stats"],
+                        "title_auto": payload["title_auto"],
+                    }
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Refresh chat title failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.post("/chats/{chat_id}/compact")
+    async def compact_chat(chat_id: int, request_data: CompactChatRequest):
+        """Create a visible, Hermes-backed compact checkpoint for this chat."""
+        try:
+            settings = load_settings_from_db()
+            with get_session() as session:
+                root = session.query(Chat).filter(Chat.id == chat_id).first()
+                if not root:
+                    raise HTTPException(status_code=404, detail="Chat not found")
+                rows = _thread_rows_for_compaction(session, chat_id)
+                messages = _messages_from_rows(rows)
+                provider = (
+                    (request_data.provider or "").strip()
+                    or (root.provider or "").strip()
+                    or settings.get("conversational_llm_provider")
+                    or "Ollama"
+                )
+                model_name = (
+                    (request_data.model_name or "").strip()
+                    or (root.model_name or "").strip()
+                    or settings.get("conversational_llm_model")
+                    or ""
+                )
+                summary, summary_source = _summarize_chat_with_model(
+                    messages,
+                    provider=provider,
+                    model_name=model_name,
+                    settings=settings,
+                )
+                stats = _context_stats(messages, provider, model_name)
+                compact_reason = (request_data.reason or "manual").strip() or "manual"
+                notice = (
+                    "Context compacted. The agent will use this checkpoint for older "
+                    "conversation state:\n\n"
+                    + summary
+                )
+                checkpoint_row = Chat(
+                    parent_id=root.id,
+                    title=None,
+                    input=None,
+                    response=notice,
+                    provider=root.provider,
+                    model_name=root.model_name,
+                    voice_provider=root.voice_provider,
+                    voice_model=root.voice_model,
+                    additional_context=json.dumps(
+                        {
+                            "chat_marker": {
+                                "type": "compact",
+                                "reason": compact_reason,
+                                "hide_in_source_on_fork": compact_reason == "fork",
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
+                    created_date=datetime.utcnow(),
+                    modified_date=datetime.utcnow(),
+                )
+                session.add(checkpoint_row)
+                session.flush()
+                checkpoint = {
+                    "active": True,
+                    "summary": summary,
+                    "summary_source": summary_source,
+                    "provider": provider,
+                    "model_name": model_name,
+                    "chat_row_id": int(checkpoint_row.id),
+                    "message_count": stats["message_count"],
+                    "estimated_tokens": stats["estimated_tokens"],
+                    "context_window": stats["context_window"],
+                    "percent_used_before": stats["percent_used"],
+                    "created_at": datetime.utcnow().isoformat(),
+                    "reason": compact_reason,
+                }
+                context = _chat_additional_context(root.additional_context)
+                context["compact_checkpoint"] = checkpoint
+                root.additional_context = json.dumps(context, ensure_ascii=False, default=str)
+                root.modified_date = datetime.utcnow()
+                checkpoint_row_id = int(checkpoint_row.id)
+                refreshed_messages = _messages_from_rows(rows) + [
+                    {"role": "assistant", "content": notice, "chat_row_id": checkpoint_row_id}
+                ]
+                _maybe_refresh_chat_title(
+                    session,
+                    root,
+                    refreshed_messages,
+                    provider=provider,
+                    model_name=model_name,
+                    settings=settings,
+                    force=True,
+                )
+                session.commit()
+
+            record_chat_audit_event(
+                chat_id=int(chat_id),
+                chat_row_id=checkpoint_row_id,
+                role="assistant",
+                content=notice,
+            )
+            try:
+                from distr.core.hermes import emit_event
+
+                emit_event(
+                    source="chat",
+                    event_type="chat_context_compacted",
+                    status="checkpoint_created",
+                    summary=f"Chat #{chat_id} compacted into checkpoint row #{checkpoint_row_id}.",
+                    payload={"thread_id": str(chat_id), "chat_id": chat_id, **checkpoint},
+                    evidence={"summary": summary},
+                )
+            except Exception:
+                logger.debug("Hermes compact event failed", exc_info=True)
+            try:
+                from distr.core.signals import signal_manager
+
+                signal_manager.web_load_chat_in_agent_requested.emit(chat_id)
+            except Exception:
+                logger.debug("Compact hot-swap signal failed", exc_info=True)
+            return JSONResponse({"ok": True, "checkpoint": checkpoint})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Compact chat failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.post("/chats/{chat_id}/fork")
+    async def fork_chat(chat_id: int, request_data: ForkChatRequest):
+        """Compact current chat, then create a new chat with the same settings and checkpoint context."""
+        try:
+            compact_result = await compact_chat(
+                chat_id,
+                CompactChatRequest(
+                    provider=request_data.provider,
+                    model_name=request_data.model_name,
+                    reason="fork",
+                ),
+            )
+            compact_payload = json.loads(compact_result.body.decode("utf-8"))
+            checkpoint = compact_payload.get("checkpoint") or {}
+            with get_session() as session:
+                source = session.query(Chat).filter(Chat.id == chat_id).first()
+                if not source:
+                    raise HTTPException(status_code=404, detail="Chat not found")
+                source_title = (source.title or "").strip() or f"Chat #{chat_id}"
+                title = (request_data.title or "").strip() or f"{source_title} fork"
+                fork = Chat(
+                    parent_id=None,
+                    title=title,
+                    input=None,
+                    response=None,
+                    provider=source.provider,
+                    model_name=source.model_name,
+                    voice_provider=source.voice_provider,
+                    voice_model=source.voice_model,
+                    created_date=datetime.utcnow(),
+                    modified_date=datetime.utcnow(),
+                )
+                session.add(fork)
+                session.flush()
+                seed = Chat(
+                    parent_id=fork.id,
+                    title=None,
+                    input=None,
+                    response=None,
+                    provider=fork.provider,
+                    model_name=fork.model_name,
+                    voice_provider=fork.voice_provider,
+                    voice_model=fork.voice_model,
+                    additional_context=json.dumps(
+                        {
+                            "chat_marker": {
+                                "type": "fork",
+                                "source_chat_id": int(chat_id),
+                                "source_title": source_title,
+                                "compacted": True,
+                            }
+                        },
+                        ensure_ascii=False,
+                    ),
+                    created_date=datetime.utcnow(),
+                    modified_date=datetime.utcnow(),
+                )
+                session.add(seed)
+                session.flush()
+                fork_id = int(fork.id)
+                seed_id = int(seed.id)
+                fork.additional_context = json.dumps(
+                    {
+                        "compact_checkpoint": {
+                            **checkpoint,
+                            "source_chat_id": int(chat_id),
+                            "fork_seed": True,
+                            "chat_row_id": seed_id,
+                        }
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+                session.commit()
+
+            record_chat_audit_event(
+                chat_id=fork_id,
+                chat_row_id=seed_id,
+                role="assistant",
+                content=f"Fork started from compact checkpoint for chat #{chat_id}.",
+            )
+            try:
+                from distr.core.hermes import emit_event
+
+                emit_event(
+                    source="chat",
+                    event_type="chat_fork_created",
+                    status="created",
+                    summary=f"Chat #{chat_id} forked into chat #{fork_id}.",
+                    payload={
+                        "source_chat_id": chat_id,
+                        "fork_chat_id": fork_id,
+                        "checkpoint": checkpoint,
+                    },
+                )
+            except Exception:
+                logger.debug("Hermes fork event failed", exc_info=True)
+            try:
+                from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+                current = load_settings_from_db()
+                current["last_chat_id"] = fork_id
+                current["agent_current_chat_id"] = fork_id
+                save_settings_to_db(current)
+                from distr.core.signals import signal_manager
+
+                signal_manager.web_load_chat_in_agent_requested.emit(fork_id)
+            except Exception:
+                logger.debug("Fork hot-swap signal failed", exc_info=True)
+            return JSONResponse({"ok": True, "id": fork_id, "checkpoint": checkpoint})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Fork chat failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
     @router.delete("/chats/{chat_id}")
@@ -1000,9 +1693,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         root.voice_provider,
                         root.voice_model,
                     )
-            message = (getattr(request_data, "message", None) or "").strip()
-            if not message:
+            display_message = (getattr(request_data, "message", None) or "").strip()
+            if not display_message:
                 raise HTTPException(status_code=400, detail="Message is required")
+            agent_message = (
+                getattr(request_data, "agent_message", None) or ""
+            ).strip() or display_message
             speak_val = getattr(request_data, "speak", None)
             # Default True when omitted so TTS plays; only disable when explicitly false
             speak = False if speak_val in (False, "false", "False", 0, "0") else True
@@ -1039,28 +1735,44 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     status_code=400,
                     detail=f"Invalid voice provider: {voice_provider}. Must be one of {valid_voice_providers}",
                 )
-            # NOTE: Do NOT call ChatService.add_user_message() here.
-            # The agent's _ensure_user_message_persisted() handles persistence
-            # when it processes the text input, avoiding duplicate DB rows.
             # NOTE: Do NOT load_settings_from_db/save_settings_to_db here.
             # The agent command handler already sets agent_current_chat_id when
             # processing the hot-swap.  Doing a full settings round-trip on every
             # message adds ~50-100ms of unnecessary SQLite I/O.
             logger.info(
-                "Send-to-agent: chat_id=%s, speak=%s, provider=%s, model=%s, message_len=%s",
+                "Send-to-agent: chat_id=%s, speak=%s, provider=%s, model=%s, display_len=%s, agent_len=%s",
                 chat_id,
                 speak,
                 provider,
                 model_name,
-                len(message),
+                len(display_message),
+                len(agent_message),
             )
             try:
-                from distr.core.signals import signal_manager
-
-                # Emit from server thread; slot runs on main thread (agent command queue lives there)
-                signal_manager.web_send_to_agent_requested.emit(
-                    chat_id, message, speak, provider, model_name
+                from distr.core.kanban.ticket_orchestrator_engagement import (
+                    send_ticket_engagement_to_agent,
                 )
+
+                if agent_message != display_message:
+                    send_ticket_engagement_to_agent(
+                        chat_id,
+                        display_message,
+                        agent_message,
+                        speak=speak,
+                        provider=provider,
+                        model_name=model_name,
+                    )
+                else:
+                    from distr.core.signals import signal_manager
+
+                    signal_manager.web_send_to_agent_requested.emit(
+                        chat_id,
+                        agent_message,
+                        speak,
+                        provider,
+                        model_name,
+                        None,
+                    )
                 logger.info(
                     "Send-to-agent: emitted web_send_to_agent_requested for chat_id=%s",
                     chat_id,

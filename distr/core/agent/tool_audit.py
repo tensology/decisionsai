@@ -33,6 +33,16 @@ def _preview_result(text: Optional[str], limit: int = 220) -> str:
     return one_line[: limit - 3] + "..."
 
 
+def _full_result_for_chat(text: Optional[str], limit: int = 24000) -> str:
+    """Preserve multiline tool output for the chat activity expand view."""
+    if not text:
+        return ""
+    cleaned = str(text).replace("\r\n", "\n").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit] + "\n… [truncated for storage]"
+
+
 def _load_params(raw: Optional[str]) -> Dict[str, Any]:
     if not raw:
         return {}
@@ -122,6 +132,7 @@ def _build_chat_tool_event(
         "tool_name": normalized_tool,
         "title": _preview_result(title, 140) or "Tool executed",
         "result_summary": _preview_result(result, 420),
+        "result_detail": _full_result_for_chat(result),
         "status": normalized_status,
         "timestamp": now,
         "chat_visible": True,

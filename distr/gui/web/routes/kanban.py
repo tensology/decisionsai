@@ -90,7 +90,7 @@ def _ticket_file_payload(ticket_id: int, file_record: KanbanTicketFile) -> dict:
         "id": file_record.id,
         "filename": file_record.filename,
         "description": file_record.description or "",
-        "url": f"/api/kanban/tickets/{int(ticket_id)}/files/{int(file_record.id)}/content",
+        "url": f"/api/tickets/tickets/{int(ticket_id)}/files/{int(file_record.id)}/content",
     }
 
 
@@ -508,6 +508,33 @@ def _whatsapp_snapshot_intake_stats(s, identifiers: List[str], scope: str, since
     return stats
 
 
+def _whatsapp_message_day(message) -> Optional[str]:
+    ts = getattr(message, "whatsapp_timestamp", None)
+    if ts:
+        try:
+            return datetime.utcfromtimestamp(int(ts)).date().isoformat()
+        except Exception:
+            pass
+    created = getattr(message, "created_date", None)
+    if created:
+        try:
+            return created.date().isoformat()
+        except Exception:
+            pass
+    return None
+
+
+def _latest_visible_whatsapp_message_days(messages, *, day_count: int = 2) -> list[str]:
+    days: list[str] = []
+    for message in messages:
+        day = _whatsapp_message_day(message)
+        if day and day not in days:
+            days.append(day)
+        if len(days) >= day_count:
+            break
+    return days
+
+
 def _whatsapp_message_identifier_values(link) -> List[str]:
     raw_identifiers = [
         (getattr(link, "phone_jid", "") or "").strip(),
@@ -536,12 +563,12 @@ def _whatsapp_media_items(messages, enrichment: dict | None = None) -> List[dict
         if getattr(m, "media_type", None):
             enrich = enrichment_by_id.get(int(m.id)) or {}
             wa_key = (getattr(m, "message_id", None) or "").strip()
-            preview_url = f"/api/kanban/whatsapp/relay-media/{int(m.id)}"
+            preview_url = f"/api/tickets/whatsapp/relay-media/{int(m.id)}"
             if wa_key:
                 preview_url += f"?wa_key={quote(wa_key, safe='')}"
             local_url = ""
             if getattr(m, "media_local_path", None):
-                local_url = f"/api/kanban/whatsapp/media?path={quote(os.path.basename(m.media_local_path or ''), safe='')}"
+                local_url = f"/api/tickets/whatsapp/media?path={quote(os.path.basename(m.media_local_path or ''), safe='')}"
             media_items.append({
                 "message_id": m.id,
                 "whatsapp_message_id": wa_key,
@@ -595,7 +622,7 @@ def _resolve_board_whatsapp_snapshot(
         raise HTTPException(400, "The linked WhatsApp chat has no stored phone or JID")
 
     scope = (scope or "new_since_last_ticket").strip().lower()
-    if scope not in ("new_since_last_ticket", "all_unticketed"):
+    if scope not in ("new_since_last_ticket", "all_unticketed", "latest_two_visible_days"):
         scope = "new_since_last_ticket"
     try:
         since_hours = max(0, min(int(since_hours or 48), 24 * 30))
@@ -625,13 +652,20 @@ def _resolve_board_whatsapp_snapshot(
             last_ticketed_at = intake_stats.get("last_ticketed_at")
             if last_ticketed_at:
                 message_query = message_query.filter(WhatsAppMessage.whatsapp_timestamp > last_ticketed_at)
-            elif since_hours > 0:
-                cutoff = int(datetime.utcnow().timestamp()) - (since_hours * 3600)
-                message_query = message_query.filter(WhatsAppMessage.whatsapp_timestamp >= cutoff)
+            else:
+                scope = "latest_two_visible_days"
         messages_desc = message_query.order_by(
             WhatsAppMessage.whatsapp_timestamp.desc(),
             WhatsAppMessage.id.desc(),
         ).limit(limit).all()
+        if scope == "latest_two_visible_days":
+            latest_days = set(_latest_visible_whatsapp_message_days(messages_desc, day_count=2))
+            messages_desc = [
+                message for message in messages_desc
+                if _whatsapp_message_day(message) in latest_days
+            ]
+            intake_stats["scope"] = "latest_two_visible_days"
+            intake_stats["visible_days"] = sorted(latest_days, reverse=True)
         messages = list(reversed(messages_desc))
 
     if not messages:
@@ -731,7 +765,7 @@ def _find_jira_attachment(
 
 def _jira_proxy_src_attr(full_content_url: str) -> str:
     """Frontend (or markdown note) uses this path; proxy adds auth when loading."""
-    return "/api/kanban/external-boards/jira/proxy-image?url=" + quote(full_content_url, safe="")
+    return "/api/tickets/external-boards/jira/proxy-image?url=" + quote(full_content_url, safe="")
 
 
 def _jira_url_should_proxy(url: str) -> bool:
@@ -1377,6 +1411,7 @@ class TodoUpdate(BaseModel):
 
 class CopyToBoard(BaseModel):
     board_id: int
+    lane_id: Optional[int] = None
     title: str
     description: Optional[str] = ""
     priority: Optional[str] = "medium"
@@ -1388,6 +1423,26 @@ class CopyToBoard(BaseModel):
     complexity: Optional[str] = None
 
 
+class LaneTicketCopyItem(BaseModel):
+    title: str
+    description: Optional[str] = ""
+    priority: Optional[str] = "medium"
+    external_source: Optional[str] = None
+    external_id: Optional[str] = None
+    external_url: Optional[str] = None
+    time_estimate: Optional[str] = None
+    time_spent: Optional[str] = None
+    complexity: Optional[str] = None
+
+
+class BulkCopyLaneToBoard(BaseModel):
+    board_id: int
+    lane_id: int
+    linked_project_id: Optional[int] = None
+    linked_workflow_id: Optional[int] = None
+    tickets: List[LaneTicketCopyItem] = Field(default_factory=list)
+
+
 class ExternalBoardRegister(BaseModel):
     name: Optional[str] = None
     default_project_id: Optional[int] = None
@@ -1397,6 +1452,7 @@ class ExternalBoardRegister(BaseModel):
 
 class CopyExternalTicket(BaseModel):
     board_id: int
+    lane_id: Optional[int] = None
     title: str
     description: Optional[str] = ""
     priority: Optional[str] = "medium"
@@ -1466,6 +1522,131 @@ def _invalidate_external_board_detail_cache(provider: str, board_id: str) -> Non
     with _BOARD_DETAIL_LOCK:
         _BOARD_DETAIL_CACHE.pop(key, None)
         _BOARD_DETAIL_REFRESHING.discard(key)
+
+
+def _resolve_local_destination_lane(session, board_id: int, lane_id: Optional[int] = None):
+    """Return (board, lane) for a local database board and optional destination lane."""
+    board = session.query(KanbanBoard).filter_by(id=board_id, source="database").first()
+    if not board:
+        return None, None
+    if lane_id is not None:
+        lane = (
+            session.query(KanbanLane)
+            .filter(KanbanLane.id == lane_id, KanbanLane.board_id == board.id)
+            .first()
+        )
+        if not lane:
+            return board, None
+        return board, lane
+    lane = (
+        session.query(KanbanLane)
+        .filter_by(board_id=board.id)
+        .order_by(KanbanLane.position)
+        .first()
+    )
+    return board, lane
+
+
+def _find_existing_external_copy(session, external_source: Optional[str], external_id: Optional[str]):
+    if not external_source or not external_id:
+        return None
+    existing = (
+        session.query(KanbanTicket)
+        .filter(
+            KanbanTicket.external_source == external_source,
+            KanbanTicket.external_id == external_id,
+        )
+        .order_by(KanbanTicket.id.desc())
+        .first()
+    )
+    if existing:
+        return existing
+    return (
+        session.query(KanbanTicket)
+        .filter(
+            KanbanTicket.source_provider == normalize_source_provider(external_source),
+            KanbanTicket.source_external_id == external_id,
+        )
+        .order_by(KanbanTicket.id.desc())
+        .first()
+    )
+
+
+def _copy_external_ticket_into_lane(
+    session,
+    board: KanbanBoard,
+    dest_lane: KanbanLane,
+    *,
+    title: str,
+    description: str = "",
+    priority: str = "medium",
+    complexity: Optional[str] = None,
+    time_estimate: str = "",
+    time_spent: str = "",
+    external_source: Optional[str] = None,
+    external_id: Optional[str] = None,
+    external_url: Optional[str] = None,
+    linked_project_id: Optional[int] = None,
+    linked_workflow_id: Optional[int] = None,
+    source_chat_id: Optional[int] = None,
+    position: Optional[int] = None,
+    skip_workflow_linked: bool = False,
+) -> dict:
+    """Insert or reuse a copied external ticket on a local lane."""
+    effective_project_id = linked_project_id if linked_project_id is not None else board.default_project_id
+    effective_workflow_id = linked_workflow_id if linked_workflow_id is not None else board.default_workflow_id
+    existing_external_ticket = _find_existing_external_copy(session, external_source, external_id)
+    if existing_external_ticket:
+        if existing_external_ticket.linked_workflow_id:
+            if skip_workflow_linked:
+                return {
+                    "id": existing_external_ticket.id,
+                    "reused": True,
+                    "skipped": True,
+                    "skip_reason": "already_linked_to_workflow",
+                }
+            raise HTTPException(409, "Ticket is already linked to a workflow")
+        existing_external_ticket.linked_workflow_id = effective_workflow_id
+        existing_external_ticket.linked_project_id = (
+            effective_project_id or existing_external_ticket.linked_project_id
+        )
+        if not existing_external_ticket.workflow_queue_position and effective_workflow_id:
+            max_queue_pos = (
+                session.query(KanbanTicket.workflow_queue_position)
+                .filter(KanbanTicket.linked_workflow_id == effective_workflow_id)
+                .order_by(KanbanTicket.workflow_queue_position.desc())
+                .first()
+            )
+            existing_external_ticket.workflow_queue_position = (
+                (max_queue_pos[0] if max_queue_pos and max_queue_pos[0] is not None else -1) + 1
+            )
+        return {"id": existing_external_ticket.id, "reused": True, "skipped": False}
+    if position is None:
+        max_pos = max([t.position for t in dest_lane.tickets], default=-1)
+        position = max_pos + 1
+    ticket = KanbanTicket(
+        lane_id=dest_lane.id,
+        title=title,
+        description=description or "",
+        priority=priority or "medium",
+        complexity=normalize_ticket_complexity(complexity) if complexity else infer_ticket_complexity(title, description or ""),
+        time_estimate=time_estimate or "",
+        time_spent=time_spent or "",
+        position=position,
+        external_source=external_source,
+        external_id=external_id,
+        external_url=external_url,
+        source_provider=normalize_source_provider(external_source) or None,
+        source_external_id=external_id,
+        source_url=external_url,
+        source_label=external_source,
+        linked_workflow_id=effective_workflow_id,
+        linked_project_id=effective_project_id,
+        source_chat_id=source_chat_id,
+    )
+    session.add(ticket)
+    session.flush()
+    return {"id": ticket.id, "reused": False, "skipped": False}
 
 
 def _external_board_detail_fetch_worker(provider: str, board_id: str, key: str) -> None:
@@ -1930,6 +2111,27 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
     return response_data
 
 
+def _external_board_activity_iso(value: datetime | None) -> str | None:
+    if not value:
+        return None
+    return value.isoformat() + "Z"
+
+
+def _sort_external_board_list(boards: list[dict]) -> list[dict]:
+    """Configured external boards first (most recently touched), then untouched boards by name."""
+    configured = [b for b in boards if b.get("local_id")]
+    unconfigured = [b for b in boards if not b.get("local_id")]
+    configured.sort(
+        key=lambda b: (
+            b.get("modified_date") or "",
+            (b.get("name") or "").lower(),
+        ),
+        reverse=True,
+    )
+    unconfigured.sort(key=lambda b: (b.get("name") or "").lower())
+    return configured + unconfigured
+
+
 def create_routes():
     router = APIRouter()
 
@@ -1964,7 +2166,7 @@ def create_routes():
         p.write_text(json.dumps(device))
         return device
 
-    @router.post("/kanban/boards/{board_id}/use")
+    @router.post("/tickets/boards/{board_id}/use")
     async def set_board_in_use(board_id: int):
         """Set this board as the active/in-use board. Only one board can be in_use at a time.
         If the board has a linked project, returns a prompt to activate it."""
@@ -1992,7 +2194,7 @@ def create_routes():
 
     # ── Boards ──
 
-    @router.get("/kanban/boards")
+    @router.get("/tickets/boards")
     async def list_boards(include_archived: bool = False):
         with get_session() as s:
             query = s.query(KanbanBoard)
@@ -2020,7 +2222,7 @@ def create_routes():
                 })
             return JSONResponse(result)
 
-    @router.post("/kanban/boards")
+    @router.post("/tickets/boards")
     async def create_board(payload: BoardCreate):
         with get_session() as s:
             board = KanbanBoard(name=payload.name, description=payload.description or "", source="database")
@@ -2031,7 +2233,7 @@ def create_routes():
             s.flush()
             return JSONResponse({"success": True, "id": board.id})
 
-    @router.put("/kanban/boards/{board_id}")
+    @router.put("/tickets/boards/{board_id}")
     async def update_board(board_id: int, payload: BoardUpdate):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
@@ -2068,7 +2270,7 @@ def create_routes():
                         s.commit()
             return JSONResponse({"success": True})
 
-    @router.delete("/kanban/boards/{board_id}")
+    @router.delete("/tickets/boards/{board_id}")
     async def delete_board(board_id: int):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
@@ -2077,7 +2279,7 @@ def create_routes():
             s.delete(board)
             return JSONResponse({"success": True})
 
-    @router.post("/kanban/boards/{board_id}/archive")
+    @router.post("/tickets/boards/{board_id}/archive")
     async def archive_board(board_id: int):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
@@ -2086,7 +2288,7 @@ def create_routes():
             board.archived = True
             return JSONResponse({"success": True})
 
-    @router.post("/kanban/boards/{board_id}/unarchive")
+    @router.post("/tickets/boards/{board_id}/unarchive")
     async def unarchive_board(board_id: int):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
@@ -2095,7 +2297,7 @@ def create_routes():
             board.archived = False
             return JSONResponse({"success": True})
 
-    @router.post("/kanban/boards/reorder")
+    @router.post("/tickets/boards/reorder")
     async def reorder_boards(payload: dict):
         """Reorder boards. Expects {"order": [id1, id2, ...]}"""
         order = payload.get("order", [])
@@ -2108,7 +2310,7 @@ def create_routes():
                     board.position = pos
             return JSONResponse({"success": True})
 
-    @router.get("/kanban/boards/{board_id}")
+    @router.get("/tickets/boards/{board_id}")
     async def get_board(board_id: int):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
@@ -2172,7 +2374,7 @@ def create_routes():
                 "whatsapp_links": [{"id": l.id, "phone_number": l.phone_number, "contact_name": l.contact_name, "auto_snapshot": l.auto_snapshot or False} for l in whatsapp_links],
             })
 
-    @router.get("/kanban/boards/{board_id}/activity")
+    @router.get("/tickets/boards/{board_id}/activity")
     async def board_activity(board_id: int, event_limit: int = 50, rule_limit: int = 20):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard, board_id)
@@ -2186,7 +2388,7 @@ def create_routes():
             logger.error("Board activity failed: %s", e, exc_info=True)
             raise HTTPException(500, str(e))
 
-    @router.patch("/kanban/boards/{board_id}/learned-rules/{rule_id}")
+    @router.patch("/tickets/boards/{board_id}/learned-rules/{rule_id}")
     async def update_board_learned_rule(board_id: int, rule_id: int, payload: dict):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard, board_id)
@@ -2209,7 +2411,7 @@ def create_routes():
             logger.error("Update learned rule failed: %s", e, exc_info=True)
             raise HTTPException(500, str(e))
 
-    @router.post("/kanban/boards/{board_id}/learned-rules/{rule_id}/promote")
+    @router.post("/tickets/boards/{board_id}/learned-rules/{rule_id}/promote")
     async def promote_board_learned_rule(board_id: int, rule_id: int, payload: dict | None = None):
         payload = payload or {}
         category = str(payload.get("category") or "general").strip().lower() or "general"
@@ -2230,7 +2432,7 @@ def create_routes():
 
     # ── Tickets ──
 
-    @router.post("/kanban/tickets")
+    @router.post("/tickets/tickets")
     async def create_ticket(payload: TicketCreate):
         with get_session() as s:
             lane = orm_get_by_id(s, KanbanLane,payload.lane_id)
@@ -2260,7 +2462,7 @@ def create_routes():
             _emit_ticket_channel_intake(ticket, board=board)
             return JSONResponse({"success": True, "id": ticket.id, "lane_id": ticket.lane_id})
 
-    @router.get("/kanban/tickets/{ticket_id}")
+    @router.get("/tickets/tickets/{ticket_id}")
     async def get_ticket(ticket_id: int):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -2323,7 +2525,7 @@ def create_routes():
                 "source_chat_id": t.source_chat_id,
             })
 
-    @router.get("/kanban/workflows/{workflow_id}/tickets")
+    @router.get("/tickets/workflows/{workflow_id}/tickets")
     async def get_workflow_tickets(workflow_id: int):
         """Return local tickets allocated to a workflow without starting it."""
         from distr.core.db.projects import Project
@@ -2391,7 +2593,7 @@ def create_routes():
                 for t, lane, board in rows
             ])
 
-    @router.put("/kanban/workflows/{workflow_id}/tickets/reorder")
+    @router.put("/tickets/workflows/{workflow_id}/tickets/reorder")
     async def reorder_workflow_tickets(workflow_id: int, payload: WorkflowTicketReorder):
         """Persist queue order for tickets already allocated to this workflow."""
         with get_session() as s:
@@ -2401,7 +2603,7 @@ def create_routes():
                     t.workflow_queue_position = pos
             return JSONResponse({"success": True})
 
-    @router.delete("/kanban/workflows/{workflow_id}/tickets/{ticket_id}")
+    @router.delete("/tickets/workflows/{workflow_id}/tickets/{ticket_id}")
     async def remove_workflow_ticket(workflow_id: int, ticket_id: int):
         """Remove a queued ticket from a workflow when it has no active run."""
         from distr.core.db.workflow import AutoWorkflowRun
@@ -2425,7 +2627,7 @@ def create_routes():
             t.workflow_queue_position = 0
             return JSONResponse({"success": True})
 
-    @router.get("/kanban/tickets/{ticket_id}/audit-entries")
+    @router.get("/tickets/tickets/{ticket_id}/audit-entries")
     async def get_ticket_audit_entries(ticket_id: int):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
@@ -2458,7 +2660,7 @@ def create_routes():
                 }
             )
 
-    @router.get("/kanban/tickets/{ticket_id}/execution-sessions")
+    @router.get("/tickets/tickets/{ticket_id}/execution-sessions")
     async def get_ticket_execution_sessions(ticket_id: int):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
@@ -2471,7 +2673,7 @@ def create_routes():
             "sessions": list_execution_sessions_for_ticket(ticket_id),
         })
 
-    @router.get("/kanban/workflows/{workflow_id}/execution-sessions")
+    @router.get("/tickets/workflows/{workflow_id}/execution-sessions")
     async def get_workflow_execution_sessions(workflow_id: int, limit: int = 50, active_only: bool = False):
         from distr.core.db.workflow import AutoWorkflow
         with get_session() as s:
@@ -2490,7 +2692,7 @@ def create_routes():
         })
 
 
-    @router.get("/kanban/tickets/{ticket_id}/audit-report")
+    @router.get("/tickets/tickets/{ticket_id}/audit-report")
     async def get_ticket_audit_report(ticket_id: int):
         def _parse_iso(iso_value: Optional[str]):
             if not iso_value:
@@ -2615,7 +2817,7 @@ def create_routes():
                 }
             )
 
-    @router.delete("/kanban/tickets/{ticket_id}/audit-report")
+    @router.delete("/tickets/tickets/{ticket_id}/audit-report")
     async def clear_ticket_audit_report(ticket_id: int):
         """Clear report-tab data by deleting audit history entries for a ticket."""
         with get_session() as s:
@@ -2636,7 +2838,7 @@ def create_routes():
                 }
             )
 
-    @router.put("/kanban/tickets/{ticket_id}")
+    @router.put("/tickets/tickets/{ticket_id}")
     async def update_ticket(ticket_id: int, payload: TicketUpdate):
         if not _is_valid_time_tracking_value(payload.time_estimate):
             raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
@@ -2710,7 +2912,7 @@ def create_routes():
             )
             return JSONResponse({"success": True})
 
-    @router.put("/kanban/tickets/{ticket_id}/move")
+    @router.put("/tickets/tickets/{ticket_id}/move")
     async def move_ticket(ticket_id: int, payload: TicketMove):
         notify_ctx = None
         with get_session() as s:
@@ -2759,7 +2961,7 @@ def create_routes():
                 logger.debug("move_ticket: chat notify failed", exc_info=True)
         return JSONResponse({"success": True})
 
-    @router.delete("/kanban/tickets/{ticket_id}")
+    @router.delete("/tickets/tickets/{ticket_id}")
     async def delete_ticket(ticket_id: int):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -2786,7 +2988,7 @@ def create_routes():
 
     # ── Ticket Files ──
 
-    @router.post("/kanban/tickets/{ticket_id}/files")
+    @router.post("/tickets/tickets/{ticket_id}/files")
     async def upload_ticket_file(ticket_id: int, file: UploadFile = File(...)):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -2804,7 +3006,7 @@ def create_routes():
             s.flush()
             return JSONResponse({"success": True, **_ticket_file_payload(ticket_id, rec)})
 
-    @router.post("/kanban/tickets/{ticket_id}/attach-file")
+    @router.post("/tickets/tickets/{ticket_id}/attach-file")
     async def attach_existing_file(ticket_id: int, payload: dict):
         """Attach an existing file (e.g. WhatsApp media) to a ticket by path."""
         with get_session() as s:
@@ -2826,7 +3028,7 @@ def create_routes():
             s.flush()
             return JSONResponse({"success": True, **_ticket_file_payload(ticket_id, rec)})
 
-    @router.post("/kanban/tickets/{ticket_id}/attach-whatsapp-media")
+    @router.post("/tickets/tickets/{ticket_id}/attach-whatsapp-media")
     async def attach_whatsapp_media(ticket_id: int, request: Request):
         """Attach WhatsApp media from a message to a ticket."""
         body = await request.json()
@@ -2875,7 +3077,7 @@ def create_routes():
             })
 
 
-    @router.get("/kanban/tickets/{ticket_id}/files/{file_id}/content")
+    @router.get("/tickets/tickets/{ticket_id}/files/{file_id}/content")
     async def view_ticket_file(ticket_id: int, file_id: int):
         """Serve a ticket attachment for inline preview or browser download."""
         with get_session() as s:
@@ -2895,7 +3097,7 @@ def create_routes():
             )
 
 
-    @router.delete("/kanban/tickets/{ticket_id}/files/{file_id}")
+    @router.delete("/tickets/tickets/{ticket_id}/files/{file_id}")
     async def delete_ticket_file(ticket_id: int, file_id: int):
         with get_session() as s:
             f = s.query(KanbanTicketFile).filter_by(id=file_id, ticket_id=ticket_id).first()
@@ -2911,7 +3113,7 @@ def create_routes():
 
     # ── Ticket Links ──
 
-    @router.post("/kanban/tickets/{ticket_id}/links")
+    @router.post("/tickets/tickets/{ticket_id}/links")
     async def add_ticket_link(ticket_id: int, payload: LinkCreate):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -2922,7 +3124,7 @@ def create_routes():
             s.flush()
             return JSONResponse({"success": True, "id": link.id})
 
-    @router.delete("/kanban/tickets/{ticket_id}/links/{link_id}")
+    @router.delete("/tickets/tickets/{ticket_id}/links/{link_id}")
     async def delete_ticket_link(ticket_id: int, link_id: int):
         with get_session() as s:
             link = s.query(KanbanTicketLink).filter_by(id=link_id, ticket_id=ticket_id).first()
@@ -2933,7 +3135,7 @@ def create_routes():
 
     # ── Ticket Todos ──
 
-    @router.post("/kanban/tickets/{ticket_id}/todos")
+    @router.post("/tickets/tickets/{ticket_id}/todos")
     async def add_ticket_todo(ticket_id: int, payload: TodoCreate):
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -2945,7 +3147,7 @@ def create_routes():
             s.flush()
             return JSONResponse({"success": True, "id": todo.id})
 
-    @router.put("/kanban/tickets/{ticket_id}/todos/{todo_id}")
+    @router.put("/tickets/tickets/{ticket_id}/todos/{todo_id}")
     async def update_ticket_todo(ticket_id: int, todo_id: int, payload: TodoUpdate):
         with get_session() as s:
             todo = s.query(KanbanTicketTodo).filter_by(id=todo_id, ticket_id=ticket_id).first()
@@ -2957,7 +3159,7 @@ def create_routes():
                 todo.done = payload.done
             return JSONResponse({"success": True})
 
-    @router.delete("/kanban/tickets/{ticket_id}/todos/{todo_id}")
+    @router.delete("/tickets/tickets/{ticket_id}/todos/{todo_id}")
     async def delete_ticket_todo(ticket_id: int, todo_id: int):
         with get_session() as s:
             todo = s.query(KanbanTicketTodo).filter_by(id=todo_id, ticket_id=ticket_id).first()
@@ -2968,22 +3170,21 @@ def create_routes():
 
     # ── Copy external ticket to local board ──
 
-    @router.post("/kanban/tickets/copy-to-board")
+    @router.post("/tickets/tickets/copy-to-board")
     async def copy_ticket_to_board(payload: CopyToBoard):
         if not _is_valid_time_tracking_value(payload.time_estimate):
             raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
         if not _is_valid_time_tracking_value(payload.time_spent):
             raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
         with get_session() as s:
-            board = s.query(KanbanBoard).filter_by(id=payload.board_id, source="database").first()
+            board, dest_lane = _resolve_local_destination_lane(s, payload.board_id, payload.lane_id)
             if not board:
                 raise HTTPException(404, "Database board not found")
-            first_lane = s.query(KanbanLane).filter_by(board_id=board.id).order_by(KanbanLane.position).first()
-            if not first_lane:
-                raise HTTPException(400, "Board has no lanes")
-            max_pos = max([t.position for t in first_lane.tickets], default=-1)
+            if not dest_lane:
+                raise HTTPException(404, "Lane not found on board")
+            max_pos = max([t.position for t in dest_lane.tickets], default=-1)
             ticket = KanbanTicket(
-                lane_id=first_lane.id, title=payload.title,
+                lane_id=dest_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
                 complexity=normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(payload.title, payload.description or ""),
                 time_estimate=(payload.time_estimate or ""),
@@ -3009,7 +3210,7 @@ def create_routes():
             s.flush()
             return JSONResponse({"success": True, "id": ticket.id})
 
-    @router.post("/kanban/tickets/copy-external-to-board")
+    @router.post("/tickets/tickets/copy-external-to-board")
     async def copy_external_ticket_to_board(payload: CopyExternalTicket):
         """Copy an external (Trello/Jira) ticket to a local board and optionally send to project/CLI."""
         if not _is_valid_time_tracking_value(payload.time_estimate):
@@ -3050,74 +3251,32 @@ def create_routes():
                         s.flush()
                 if not board:
                     raise HTTPException(404, "Database board not found")
-            first_lane = s.query(KanbanLane).filter_by(board_id=board.id).order_by(KanbanLane.position).first()
-            if not first_lane:
-                raise HTTPException(400, "Board has no lanes")
-            max_pos = max([t.position for t in first_lane.tickets], default=-1)
-            effective_project_id = (
-                payload.linked_project_id if payload.linked_project_id is not None else board.default_project_id
-            )
-            effective_workflow_id = (
-                payload.linked_workflow_id if payload.linked_workflow_id is not None else board.default_workflow_id
-            )
-            existing_external_ticket = None
-            if payload.external_source and payload.external_id:
-                existing_external_ticket = (
-                    s.query(KanbanTicket)
-                    .filter(
-                        KanbanTicket.external_source == payload.external_source,
-                        KanbanTicket.external_id == payload.external_id,
-                    )
-                    .order_by(KanbanTicket.id.desc())
-                    .first()
-                )
-                if not existing_external_ticket:
-                    existing_external_ticket = (
-                        s.query(KanbanTicket)
-                        .filter(
-                            KanbanTicket.source_provider == normalize_source_provider(payload.external_source),
-                            KanbanTicket.source_external_id == payload.external_id,
-                        )
-                        .order_by(KanbanTicket.id.desc())
-                        .first()
-                    )
-            if existing_external_ticket:
-                if existing_external_ticket.linked_workflow_id:
-                    raise HTTPException(409, "Ticket is already linked to a workflow")
-                existing_external_ticket.linked_workflow_id = effective_workflow_id
-                existing_external_ticket.linked_project_id = effective_project_id or existing_external_ticket.linked_project_id
-                if not existing_external_ticket.workflow_queue_position:
-                    max_queue_pos = (
-                        s.query(KanbanTicket.workflow_queue_position)
-                        .filter(KanbanTicket.linked_workflow_id == effective_workflow_id)
-                        .order_by(KanbanTicket.workflow_queue_position.desc())
-                        .first()
-                    )
-                    existing_external_ticket.workflow_queue_position = (
-                        (max_queue_pos[0] if max_queue_pos and max_queue_pos[0] is not None else -1) + 1
-                    )
-                return JSONResponse({"success": True, "id": existing_external_ticket.id, "reused": True})
-            ticket = KanbanTicket(
-                lane_id=first_lane.id, title=payload.title,
-                description=payload.description or "", priority=payload.priority or "medium",
-                complexity=normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(payload.title, payload.description or ""),
-                time_estimate=(payload.time_estimate or ""),
-                time_spent=(payload.time_spent or ""),
-                position=max_pos + 1,
+            board, dest_lane = _resolve_local_destination_lane(s, board.id, payload.lane_id)
+            if not dest_lane:
+                raise HTTPException(404, "Lane not found on board")
+            copy_result = _copy_external_ticket_into_lane(
+                s,
+                board,
+                dest_lane,
+                title=payload.title,
+                description=payload.description or "",
+                priority=payload.priority or "medium",
+                complexity=payload.complexity,
+                time_estimate=payload.time_estimate or "",
+                time_spent=payload.time_spent or "",
                 external_source=payload.external_source,
                 external_id=payload.external_id,
                 external_url=payload.external_url,
-                source_provider=normalize_source_provider(payload.external_source) or None,
-                source_external_id=payload.external_id,
-                source_url=payload.external_url,
-                source_label=payload.external_source,
-                linked_workflow_id=effective_workflow_id,
-                linked_project_id=effective_project_id,
+                linked_project_id=payload.linked_project_id,
+                linked_workflow_id=payload.linked_workflow_id,
                 source_chat_id=payload.source_chat_id,
             )
-            s.add(ticket)
-            s.flush()
-            result = {"success": True, "id": ticket.id}
+            ticket = s.query(KanbanTicket).filter_by(id=copy_result["id"]).first()
+            result = {
+                "success": True,
+                "id": copy_result["id"],
+                "reused": copy_result.get("reused", False),
+            }
 
             # Auto-send to project if requested
             if payload.auto_send_to_project:
@@ -3253,7 +3412,72 @@ def create_routes():
 
             return JSONResponse(result)
 
-    @router.post("/kanban/external-boards/{provider}/{ext_board_id}/register")
+    @router.post("/tickets/tickets/bulk-copy-to-board")
+    async def bulk_copy_lane_to_board(payload: BulkCopyLaneToBoard):
+        """Copy multiple external tickets into one lane on a local board."""
+        if not payload.tickets:
+            return JSONResponse({"copied": 0, "reused": 0, "skipped": 0, "errors": []})
+        with get_session() as s:
+            board, dest_lane = _resolve_local_destination_lane(s, payload.board_id, payload.lane_id)
+            if not board:
+                raise HTTPException(404, "Database board not found")
+            if not dest_lane:
+                raise HTTPException(404, "Lane not found on board")
+            max_pos = max([t.position for t in dest_lane.tickets], default=-1)
+            copied = 0
+            reused = 0
+            skipped = 0
+            errors: list[str] = []
+            for idx, item in enumerate(payload.tickets):
+                if not _is_valid_time_tracking_value(item.time_estimate):
+                    errors.append(f"Ticket {idx + 1}: invalid time_estimate")
+                    continue
+                if not _is_valid_time_tracking_value(item.time_spent):
+                    errors.append(f"Ticket {idx + 1}: invalid time_spent")
+                    continue
+                try:
+                    copy_result = _copy_external_ticket_into_lane(
+                        s,
+                        board,
+                        dest_lane,
+                        title=item.title,
+                        description=item.description or "",
+                        priority=item.priority or "medium",
+                        complexity=item.complexity,
+                        time_estimate=item.time_estimate or "",
+                        time_spent=item.time_spent or "",
+                        external_source=item.external_source,
+                        external_id=item.external_id,
+                        external_url=item.external_url,
+                        linked_project_id=payload.linked_project_id,
+                        linked_workflow_id=payload.linked_workflow_id,
+                        position=max_pos + 1 + idx,
+                        skip_workflow_linked=True,
+                    )
+                except HTTPException as exc:
+                    errors.append(f"Ticket {idx + 1}: {exc.detail}")
+                    continue
+                except Exception as exc:
+                    errors.append(f"Ticket {idx + 1}: {exc}")
+                    continue
+                if copy_result.get("skipped"):
+                    skipped += 1
+                elif copy_result.get("reused"):
+                    reused += 1
+                else:
+                    copied += 1
+            return JSONResponse(
+                {
+                    "copied": copied,
+                    "reused": reused,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "board_id": board.id,
+                    "lane_id": dest_lane.id,
+                }
+            )
+
+    @router.post("/tickets/external-boards/{provider}/{ext_board_id}/register")
     async def register_external_board(provider: str, ext_board_id: str, payload: ExternalBoardRegister):
         """Create or update a local KanbanBoard record for an external (Trello/Jira) board configuration."""
         if provider not in ("trello", "jira"):
@@ -3296,7 +3520,7 @@ def create_routes():
 
     # ── Create tickets on external boards (Trello / Jira) ──
 
-    @router.post("/kanban/external-boards/{provider}/{ext_board_id}/create-ticket")
+    @router.post("/tickets/external-boards/{provider}/{ext_board_id}/create-ticket")
     async def create_external_ticket(provider: str, ext_board_id: str, payload: ExternalTicketCreate):
         """Create a ticket (card/issue) on an external Trello or Jira board."""
         if provider not in ("trello", "jira"):
@@ -3408,7 +3632,7 @@ def create_routes():
 
         raise HTTPException(400, "Unsupported provider")
 
-    @router.put("/kanban/external-boards/{provider}/{board_id}/move-ticket")
+    @router.put("/tickets/external-boards/{provider}/{board_id}/move-ticket")
     async def move_external_board_ticket(provider: str, board_id: str, payload: ExternalBoardMoveTicket):
         """Move/reorder a ticket on Trello (list + pos) or Jira (workflow transition into target column)."""
         if provider not in ("trello", "jira"):
@@ -3632,7 +3856,7 @@ def create_routes():
             raise HTTPException(move_fail_http[0], move_fail_http[1])
         raise HTTPException(404, "No valid Jira account found")
 
-    @router.post("/kanban/external-boards/{provider}/{ext_ticket_id}/attach")
+    @router.post("/tickets/external-boards/{provider}/{ext_ticket_id}/attach")
     async def attach_to_external_ticket(provider: str, ext_ticket_id: str, file: UploadFile = File(...)):
         """Upload a file attachment to a Trello card or Jira issue."""
         if provider not in ("trello", "jira"):
@@ -3693,7 +3917,7 @@ def create_routes():
 
         raise HTTPException(400, "Unsupported provider")
 
-    @router.get("/kanban/external-boards/{provider}/proxy-image")
+    @router.get("/tickets/external-boards/{provider}/proxy-image")
     async def proxy_external_image(provider: str, url: str = ""):
         """Proxy an external image URL that requires authentication (Jira attachments)."""
         loop = asyncio.get_running_loop()
@@ -3708,7 +3932,7 @@ def create_routes():
 
     # ── Linkable entities (for linking tickets to workflows/projects/etc.) ──
 
-    @router.get("/kanban/linkable")
+    @router.get("/tickets/linkable")
     async def get_linkable_entities():
         """Return lists of workflows, projects, actions for linking.
 
@@ -3731,7 +3955,7 @@ def create_routes():
 
     # ── External boards (Trello / Jira) ──
 
-    @router.get("/kanban/external-boards")
+    @router.get("/tickets/external-boards")
     async def get_external_boards():
         """Fetch Trello and Jira boards from connected accounts, enriched with local config."""
         trello_boards = []
@@ -3765,6 +3989,8 @@ def create_routes():
                     default_project = projects.get(b.default_project_id)
                     local_configs[key] = {
                         "local_id": b.id,
+                        "has_local_config": True,
+                        "modified_date": _external_board_activity_iso(b.modified_date),
                         "default_project_id": b.default_project_id,
                         **_project_context_payload(default_project, "default"),
                         "default_workflow_id": b.default_workflow_id,
@@ -3823,9 +4049,36 @@ def create_routes():
                         logger.warning("Jira board fetch failed: %s", e)
         except Exception as e:
             logger.warning("External board fetch error: %s", e)
-        return JSONResponse({"trello": trello_boards, "jira": jira_boards})
+        return JSONResponse({
+            "trello": _sort_external_board_list(trello_boards),
+            "jira": _sort_external_board_list(jira_boards),
+        })
 
-    @router.get("/kanban/external-boards/{provider}/{board_id}/local-config")
+    @router.post("/tickets/external-boards/{provider}/{ext_board_id}/touch")
+    async def touch_external_board(provider: str, ext_board_id: str):
+        """Record recent activity for a configured external board (sidebar ordering)."""
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        with get_session() as s:
+            board = (
+                s.query(KanbanBoard)
+                .filter(
+                    KanbanBoard.source == provider,
+                    KanbanBoard.external_board_id == ext_board_id,
+                )
+                .first()
+            )
+            if not board:
+                return JSONResponse({"success": False})
+            board.modified_date = datetime.utcnow()
+            s.flush()
+            return JSONResponse({
+                "success": True,
+                "local_id": board.id,
+                "modified_date": _external_board_activity_iso(board.modified_date),
+            })
+
+    @router.get("/tickets/external-boards/{provider}/{board_id}/local-config")
     async def get_external_board_local_config(provider: str, board_id: str):
         """Return local DB config for an external board without remote API calls."""
         if provider not in ("trello", "jira"):
@@ -3893,7 +4146,7 @@ def create_routes():
                 )
         return out
 
-    @router.get("/kanban/external-boards/{provider}/{board_id}")
+    @router.get("/tickets/external-boards/{provider}/{board_id}")
     async def get_external_board_detail(
         provider: str,
         board_id: str,
@@ -3932,9 +4185,104 @@ def create_routes():
         loading = {"name": "", "url": "", "lanes": [], "can_create_ticket": True, "cache_ready": False}
         return JSONResponse(_merge_external_board_local_config(provider, board_id, loading))
 
+    class EngageOrchestratorRequest(BaseModel):
+        chat_id: int
+        ticket: dict
+        is_local: bool = True
+        board_id: Optional[int] = None
+        local_board_id: Optional[int] = None
+        source: str = "database"
+        board_name: str = ""
+
+    @router.post("/tickets/tickets/engage-orchestrator")
+    async def engage_ticket_orchestrator(body: EngageOrchestratorRequest):
+        """Send a ticket to the chat orchestrator with a brief visible line and a hidden agent prompt."""
+        chat_id = int(body.chat_id)
+        if chat_id < 1:
+            raise HTTPException(400, "chat_id is required")
+
+        board_data: dict = {}
+        local_board_id = body.local_board_id or body.board_id
+        if local_board_id:
+            with get_session() as s:
+                board = orm_get_by_id(s, KanbanBoard, int(local_board_id))
+                if board:
+                    board_data = {
+                        "name": board.name or "",
+                        "default_project_id": board.default_project_id,
+                    }
+                    if board.default_project_id:
+                        project = orm_get_by_id(s, Project, board.default_project_id)
+                        if project:
+                            board_data["default_project_name"] = project.name or ""
+                            board_data["default_project_folder"] = project.folder_location or ""
+
+        from distr.core.kanban.ticket_orchestrator_engagement import (
+            activate_engagement_context,
+            build_orchestrator_messages,
+            emit_ticket_engagement_memory_event,
+            send_ticket_engagement_to_agent,
+        )
+
+        board_data = activate_engagement_context(
+            local_board_id=int(local_board_id) if local_board_id else None,
+            ticket=body.ticket,
+            board_data=board_data,
+        )
+        board_label = body.board_name or board_data.get("name") or board_data.get("activated_board_name") or ""
+
+        display_message, agent_message = build_orchestrator_messages(
+            body.ticket,
+            is_local=bool(body.is_local),
+            board_label=board_label,
+            source=(body.source or "database").strip() or "database",
+            board_data=board_data,
+        )
+        try:
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+            settings = load_settings_from_db()
+            settings["last_chat_id"] = chat_id
+            settings["agent_current_chat_id"] = chat_id
+            save_settings_to_db(settings)
+
+            project_id = (
+                body.ticket.get("linked_project_id")
+                or board_data.get("activated_project_id")
+                or board_data.get("default_project_id")
+            )
+            emit_ticket_engagement_memory_event(
+                ticket=body.ticket,
+                is_local=bool(body.is_local),
+                board_id=int(local_board_id) if local_board_id else None,
+                project_id=int(project_id) if project_id else None,
+                display_message=display_message,
+            )
+
+            send_ticket_engagement_to_agent(
+                chat_id,
+                display_message,
+                agent_message,
+                speak=True,
+                board_label=board_label,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            logger.exception("engage-orchestrator failed chat_id=%s", chat_id)
+            raise HTTPException(500, "Could not send ticket to orchestrator") from exc
+
+        return JSONResponse(
+            {
+                "sent": True,
+                "chat_id": chat_id,
+                "display_message": display_message,
+            }
+        )
+
     # ── Send ticket to project (.tickets folder) ──
 
-    @router.post("/kanban/tickets/{ticket_id}/send-to-project")
+    @router.post("/tickets/tickets/{ticket_id}/send-to-project")
     async def send_ticket_to_project(ticket_id: int):
         """Create a .tickets/ticket_*.md file in the linked project's folder from a Ticket Board ticket."""
         logger.info("send-to-project: request ticket_id=%s", ticket_id)
@@ -4117,7 +4465,7 @@ source: kanban_ticket_{t.id}
 
     # ── Send ticket to CLI ──
 
-    @router.post("/kanban/tickets/{ticket_id}/send-to-workflow")
+    @router.post("/tickets/tickets/{ticket_id}/send-to-workflow")
     async def send_ticket_to_workflow(ticket_id: int, payload: SendToWorkflowRequest):
         """Start the selected/default workflow for a ticket."""
         from distr.core.workflow.service import start_workflow_run
@@ -4192,7 +4540,7 @@ source: kanban_ticket_{t.id}
             "run_id": run_result.get("run_id"),
         })
 
-    @router.get("/kanban/tickets/{ticket_id}/active-run")
+    @router.get("/tickets/tickets/{ticket_id}/active-run")
     async def get_ticket_active_run(ticket_id: int):
         """Return the active workflow run for a ticket, or {active: false} if none."""
         from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep, AutoWorkflow as _WF
@@ -4298,7 +4646,7 @@ source: kanban_ticket_{t.id}
         )
         return decision.to_route_dict()
 
-    @router.get("/kanban/tickets/{ticket_id}/cli-context")
+    @router.get("/tickets/tickets/{ticket_id}/cli-context")
     async def get_ticket_cli_context(ticket_id: int):
         """Return the resolved project/backend context and generated CLI instruction for a ticket."""
         with get_session() as s:
@@ -4326,7 +4674,7 @@ source: kanban_ticket_{t.id}
                 **get_backend_statuses(active_backend),
             })
 
-    @router.post("/kanban/tickets/{ticket_id}/send-to-cli")
+    @router.post("/tickets/tickets/{ticket_id}/send-to-cli")
     async def send_ticket_to_cli(ticket_id: int, payload: Optional[SendToCliRequest] = None):
         """Send a ticket's instruction to the selected project coding backend."""
 
@@ -4419,7 +4767,7 @@ source: kanban_ticket_{t.id}
 
     # ── WhatsApp ↔ Board Integration ──
 
-    @router.get("/kanban/boards/{board_id}/whatsapp-links")
+    @router.get("/tickets/boards/{board_id}/whatsapp-links")
     async def get_whatsapp_links(board_id: int):
         """Get WhatsApp phone numbers linked to this board."""
         from distr.core.db import WhatsAppPhoneLink
@@ -4434,7 +4782,7 @@ source: kanban_ticket_{t.id}
                 "auto_snapshot": l.auto_snapshot or False,
             } for l in links])
 
-    @router.post("/kanban/boards/{board_id}/whatsapp-snapshot-ticket")
+    @router.post("/tickets/boards/{board_id}/whatsapp-snapshot-ticket")
     async def create_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
         """Create a board ticket from the unticketed messages in its linked WhatsApp chat."""
         link_id = payload.get("link_id")
@@ -4566,7 +4914,7 @@ source: kanban_ticket_{t.id}
                 "quality": quality,
             })
 
-    @router.post("/kanban/boards/{board_id}/whatsapp-snapshot-preview")
+    @router.post("/tickets/boards/{board_id}/whatsapp-snapshot-preview")
     async def preview_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
         """Preview the unticketed WhatsApp messages that would become a board ticket."""
         link_id = payload.get("link_id")
@@ -4649,7 +4997,7 @@ source: kanban_ticket_{t.id}
                 "intake_stats": intake_stats,
             })
 
-    @router.post("/kanban/boards/{board_id}/whatsapp-links")
+    @router.post("/tickets/boards/{board_id}/whatsapp-links")
     async def add_whatsapp_link(board_id: int, payload: dict):
         """Link a WhatsApp phone number to this board."""
         from distr.core.db import WhatsAppPhoneLink
@@ -4672,7 +5020,7 @@ source: kanban_ticket_{t.id}
             s.flush()
             return JSONResponse({"success": True, "id": link.id})
 
-    @router.delete("/kanban/boards/{board_id}/whatsapp-links/{link_id}")
+    @router.delete("/tickets/boards/{board_id}/whatsapp-links/{link_id}")
     async def delete_whatsapp_link(board_id: int, link_id: int):
         """Unlink a WhatsApp phone number from this board."""
         from distr.core.db import WhatsAppPhoneLink
@@ -4683,7 +5031,7 @@ source: kanban_ticket_{t.id}
             s.delete(link)
             return JSONResponse({"success": True})
 
-    @router.patch("/kanban/boards/{board_id}/whatsapp-links/{link_id}")
+    @router.patch("/tickets/boards/{board_id}/whatsapp-links/{link_id}")
     async def update_whatsapp_link(board_id: int, link_id: int, payload: dict):
         """Update a WhatsApp link (e.g. toggle auto_snapshot)."""
         from distr.core.db import WhatsAppPhoneLink
@@ -4697,7 +5045,7 @@ source: kanban_ticket_{t.id}
                 link.contact_name = payload["contact_name"]
             return JSONResponse({"success": True})
 
-    @router.get("/kanban/whatsapp/messages")
+    @router.get("/tickets/whatsapp/messages")
     async def get_whatsapp_messages(jid_phone: str = "", limit: int = 50, offset: int = 0, unprocessed_only: bool = False, sort: str = "asc"):
         """Get WhatsApp messages stored in the local database."""
         try:
@@ -4718,21 +5066,23 @@ source: kanban_ticket_{t.id}
             logger.error(f"WhatsApp message query error: {e}")
             return JSONResponse({"messages": [], "total": 0, "error": str(e)})
 
-    @router.post("/kanban/whatsapp/sync")
+    @router.post("/tickets/whatsapp/sync")
     async def sync_whatsapp_messages():
         """Sync messages from the relay server into the local DB."""
         try:
-            from PyQt6.QtWidgets import QApplication
-            app = QApplication.instance()
-            wa_manager = getattr(app, "whatsapp_manager", None) if app else None
-            if not wa_manager:
-                return JSONResponse({"synced": 0, "error": "WhatsApp not connected"})
-            result = wa_manager.sync_from_relay(mark_processed=False)
-            return JSONResponse(result)
+            from distr.core.kanban.whatsapp_relay_sync import (
+                announce_whatsapp_sync,
+                sync_whatsapp_from_relay,
+            )
+
+            result = sync_whatsapp_from_relay(mark_processed=False)
+            announce_whatsapp_sync(result)
+            status = 500 if result.get("error") and not int(result.get("synced") or 0) else 200
+            return JSONResponse(result, status_code=status)
         except Exception as e:
             logger.error(f"WhatsApp sync error: {e}")
             return JSONResponse({"synced": 0, "error": str(e)}, status_code=500)
-    @router.get("/kanban/whatsapp/linked-board")
+    @router.get("/tickets/whatsapp/linked-board")
     async def get_whatsapp_linked_board(phone: str):
         """Return the board linked to this WhatsApp phone number, if any."""
         with get_session() as s:
@@ -4747,7 +5097,7 @@ source: kanban_ticket_{t.id}
 
 
 
-    @router.post("/kanban/whatsapp/compose-ticket")
+    @router.post("/tickets/whatsapp/compose-ticket")
     async def compose_whatsapp_ticket(request: Request):
         """Use the configured LLM to compose a detailed, actionable ticket from WhatsApp messages, voice transcriptions, and media."""
         body = await request.json()
@@ -4886,7 +5236,7 @@ DESCRIPTION: [your full description here]"""
         load_or_create_device_identity=_load_or_create_device_identity,
     )
 
-    @router.websocket("/kanban/ws/boards")
+    @router.websocket("/tickets/ws/boards")
     async def kanban_boards_websocket(websocket: WebSocket):
         """WebSocket stream for realtime board/ticket/workflow check-in updates."""
         origin = websocket.headers.get("origin")

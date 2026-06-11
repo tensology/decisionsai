@@ -196,10 +196,18 @@
             }).then(function() { sel.disabled = false; });
         }
 
+        function ensureBoardModalCustomSelects() {
+            if (!window.KanbanCustomSelect) return;
+            window.KanbanCustomSelect.upgradeById("kb-board-def-workflow", { placeholder: "None", emptyLabel: "None" });
+            window.KanbanCustomSelect.upgradeById("kb-board-def-project", { placeholder: "None", emptyLabel: "None" });
+            window.KanbanCustomSelect.upgradeById("kb-bm-wa-chat-select", { placeholder: "Select chat...", emptyLabel: "Select chat..." });
+        }
+
         function loadBoardDefaults(data) {
-            deps.apiFetch("/api/kanban/linkable").then(function(ld) {
-                deps.populateSelect("kb-board-def-workflow", ld.workflows, "id", "title", data ? data.default_workflow_id : null);
-                deps.populateSelect("kb-board-def-project", ld.projects, "id", "name", data ? data.default_project_id : null);
+            deps.apiFetch("/api/tickets/linkable").then(function(ld) {
+                deps.populateSelect("kb-board-def-workflow", ld.workflows, "id", "title", data ? data.default_workflow_id : null, { emptyLabel: "None" });
+                deps.populateSelect("kb-board-def-project", ld.projects, "id", "name", data ? data.default_project_id : null, { emptyLabel: "None" });
+                ensureBoardModalCustomSelects();
             }).catch(function() {});
         }
 
@@ -225,8 +233,8 @@
                 populateBoardModal(currentBoardData);
             } else if (boardId) {
                 Promise.all([
-                    deps.apiFetch("/api/kanban/boards/" + boardId),
-                    deps.apiFetch("/api/kanban/boards").catch(function() { return []; }),
+                    deps.apiFetch("/api/tickets/boards/" + boardId),
+                    deps.apiFetch("/api/tickets/boards").catch(function() { return []; }),
                 ]).then(function(results) {
                     var data = results[0] || {};
                     var list = Array.isArray(results[1]) ? results[1] : [];
@@ -241,11 +249,8 @@
                 colorHex.textContent = "#f97316";
                 loadBoardDefaults(null);
             }
+            ensureBoardModalCustomSelects();
             if (boardId) deps.loadBoardWaLinks(boardId);
-            else {
-                var waLinksEl = document.getElementById("kb-bm-wa-links");
-                if (waLinksEl) waLinksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Save the board first to link WhatsApp chats</div>';
-            }
             document.getElementById("kb-board-modal").classList.remove("hidden");
             if (typeof injectInfoIcons === "function") injectInfoIcons();
         }
@@ -253,7 +258,7 @@
         function openExternalBoardConfigModal(provider, extBoardId) {
             Promise.all([
                 deps.getExternalBoards(false).catch(function() { return { trello: [], jira: [] }; }),
-                deps.apiFetch("/api/kanban/external-boards/" + provider + "/" + encodeURIComponent(extBoardId) + "/local-config")
+                deps.apiFetch("/api/tickets/external-boards/" + provider + "/" + encodeURIComponent(extBoardId) + "/local-config")
                     .catch(function() { return {}; })
             ]).then(function(results) {
                 var extData = results[0] || { trello: [], jira: [] };
@@ -278,11 +283,8 @@
                 });
                 window._extBoardConfig = { provider: provider, extBoardId: extBoardId };
                 switchBoardModalTab("details");
+                ensureBoardModalCustomSelects();
                 if (localCfg.local_id) deps.loadBoardWaLinks(localCfg.local_id);
-                else {
-                    var waLinksEl = document.getElementById("kb-bm-wa-links");
-                    if (waLinksEl) waLinksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Save this external board config first, then link WhatsApp chats.</div>';
-                }
                 document.getElementById("kb-board-modal").classList.remove("hidden");
             }).catch(function(e) {
                 deps.showSnackbar("Failed to load external board config: " + e.message, "error");
@@ -303,9 +305,15 @@
         }
 
         function closeBoardModal() {
+            if (window.KanbanCustomSelect) window.KanbanCustomSelect.closeAll();
             document.getElementById("kb-board-modal").classList.add("hidden");
             deps.setEditingBoardId(null);
             window._extBoardConfig = null;
+        }
+
+        function saveSelectedBoardWaLink(boardId) {
+            if (!deps.saveSelectedBoardWaLink || !boardId) return Promise.resolve({ skipped: true });
+            return deps.saveSelectedBoardWaLink(boardId);
         }
 
         function saveBoardModal() {
@@ -317,9 +325,11 @@
                     default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value, 10) || 0,
                     color: document.getElementById("kb-board-modal-color").value || "",
                 };
-                deps.apiFetch("/api/kanban/external-boards/" + extCfg.provider + "/" + encodeURIComponent(extCfg.extBoardId) + "/register", {
+                deps.apiFetch("/api/tickets/external-boards/" + extCfg.provider + "/" + encodeURIComponent(extCfg.extBoardId) + "/register", {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(extPayload)
+                }).then(function(data) {
+                    return saveSelectedBoardWaLink(data && data.id).then(function() { return data; });
                 }).then(function() {
                     deps.showSnackbar("External board configured");
                     window._extBoardConfig = null;
@@ -343,9 +353,11 @@
 
             if (deps.getEditingBoardId()) {
                 var boardId = deps.getEditingBoardId();
-                deps.apiFetch("/api/kanban/boards/" + boardId, {
+                deps.apiFetch("/api/tickets/boards/" + boardId, {
                     method: "PUT", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
+                }).then(function() {
+                    return saveSelectedBoardWaLink(boardId);
                 }).then(function() {
                     deps.showSnackbar("Board updated");
                     closeBoardModal();
@@ -354,11 +366,11 @@
                     if (currentBoard && currentBoard.id === boardId) deps.selectBoard("database", boardId);
                 }).catch(function(e) { deps.showSnackbar("Failed: " + e.message, "error"); });
             } else {
-                deps.apiFetch("/api/kanban/boards", {
+                deps.apiFetch("/api/tickets/boards", {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ name: payload.name, description: payload.description })
                 }).then(function(data) {
-                    return deps.apiFetch("/api/kanban/boards/" + data.id, {
+                    return deps.apiFetch("/api/tickets/boards/" + data.id, {
                         method: "PUT", headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             default_workflow_id: payload.default_workflow_id,
@@ -366,6 +378,8 @@
                             color: payload.color,
                         })
                     }).then(function() { return data; });
+                }).then(function(data) {
+                    return saveSelectedBoardWaLink(data.id).then(function() { return data; });
                 }).then(function(data) {
                     deps.showSnackbar("Board created");
                     closeBoardModal();
@@ -384,7 +398,7 @@
         }
 
         function deleteBoardById(boardId, errorPrefix) {
-            return deps.apiFetch("/api/kanban/boards/" + boardId, { method: "DELETE" }).then(function() {
+            return deps.apiFetch("/api/tickets/boards/" + boardId, { method: "DELETE" }).then(function() {
                 deps.showSnackbar("Board deleted");
                 var currentBoard = deps.getCurrentBoard();
                 if (currentBoard && String(currentBoard.id) === String(boardId)) {
@@ -514,7 +528,7 @@
             var newName = prompt("Rename board:", board ? board.name : "");
             if (!newName || !newName.trim()) { hideBoardContextMenu(); return; }
             hideBoardContextMenu();
-            deps.apiFetch("/api/kanban/boards/" + boardId, {
+            deps.apiFetch("/api/tickets/boards/" + boardId, {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: newName.trim() })
             }).then(function() {
@@ -536,7 +550,7 @@
             var boardId = deps.getCtxMenuBoardId();
             if (!boardId) return;
             hideBoardContextMenu();
-            deps.apiFetch("/api/kanban/boards/" + boardId + "/archive", { method: "POST" }).then(function() {
+            deps.apiFetch("/api/tickets/boards/" + boardId + "/archive", { method: "POST" }).then(function() {
                 deps.showSnackbar("Board archived");
                 var currentBoard = deps.getCurrentBoard();
                 if (currentBoard && currentBoard.id === boardId) {
@@ -562,7 +576,7 @@
             var boardId = deps.getCtxMenuBoardId();
             if (!boardId) return;
             hideBoardContextMenu();
-            deps.apiFetch("/api/kanban/boards/" + boardId + "/use", { method: "POST" }).then(function(data) {
+            deps.apiFetch("/api/tickets/boards/" + boardId + "/use", { method: "POST" }).then(function(data) {
                 deps.showSnackbar("Board set as active");
                 deps.loadBoards(true);
                 if (data && data.linked_project) {
@@ -630,6 +644,11 @@
             document.getElementById("kb-edit-board").addEventListener("click", function() {
                 deps.handleEditBoardClick();
             });
+            document.querySelectorAll(".kb-view-toggle").forEach(function(btn) {
+                btn.addEventListener("click", function() {
+                    if (deps.setBoardViewMode) deps.setBoardViewMode(btn.dataset.view);
+                });
+            });
             document.getElementById("kb-delete-board").addEventListener("click", deleteBoard);
             document.querySelectorAll(".kb-bm-tab").forEach(function(btn) {
                 btn.addEventListener("click", function() { switchBoardModalTab(btn.dataset.tab); });
@@ -637,6 +656,7 @@
         }
 
         function bindBoardModal() {
+            ensureBoardModalCustomSelects();
             document.getElementById("kb-board-modal-cancel").addEventListener("click", closeBoardModal);
             document.getElementById("kb-board-modal-x").addEventListener("click", closeBoardModal);
             document.getElementById("kb-board-modal-save").addEventListener("click", saveBoardModal);

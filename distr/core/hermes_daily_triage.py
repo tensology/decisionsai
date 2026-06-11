@@ -36,6 +36,14 @@ TRIAGE_BUCKETS = {
 }
 
 
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if int(count or 0) == 1 else (plural or f"{singular}s")
+
+
+def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{int(count or 0)} {_plural(int(count or 0), singular, plural)}"
+
+
 def build_daily_triage(
     *,
     work_scan: dict[str, Any] | None,
@@ -206,8 +214,8 @@ def _candidates_from_messages(source: str, messages: list[dict[str, Any]]) -> li
         _candidate(
             source=source,
             action_type="create_ticket",
-            title=f"{len(work_messages)} {source} message(s) may need ticketing",
-            question=f"{sender} has work-looking {source} message(s). Should I create a ticket or attach them to an existing one?",
+            title=f"{_count_phrase(len(work_messages), f'{source} message')} may need ticketing",
+            question=f"{sender} has {_count_phrase(len(work_messages), f'work-looking {source} message')}. Should I create a ticket or attach them to an existing one?",
             evidence=[_clip(preview, 240)] if preview else [],
             payload={"message_ids": [m.get("id") for m in work_messages[:8]], "source": source},
             confidence=0.62,

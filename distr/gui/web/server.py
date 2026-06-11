@@ -122,7 +122,8 @@ def create_app() -> FastAPI:
     _mount_static(app, "/docs/static/js", static_dir / "docs" / "js", "docs_js")
     _mount_static(app, "/irc/static/css", static_dir / "irc" / "css", "irc_css")
     _mount_static(app, "/irc/static/js", static_dir / "irc" / "js", "irc_js")
-    _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js")
+    _mount_static(app, "/tickets/static/js", static_dir / "kanban" / "js", "tickets_js")
+    _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js_legacy")
     _mount_static(app, "/automations/static/js", static_dir / "automations" / "js", "automations_js")
     _mount_static(app, "/actions/static/js", static_dir / "actions" / "js", "actions_js")
     _mount_static(app, "/snippets/static/js", static_dir / "snippets" / "js", "snippets_js")
@@ -145,7 +146,7 @@ def create_app() -> FastAPI:
             path = request.url.path
             if any(path.startswith(p) for p in [
                 "/board/", "/settings/static/", "/chat/static/", "/docs/static/",
-                "/kanban/static/", "/automations/static/", "/actions/static/", "/workflows/static/",
+                "/tickets/static/", "/kanban/static/", "/automations/static/", "/actions/static/", "/workflows/static/",
                 "/skills/static/", "/projects/static/", "/oauth/static/",
                 "/static/shared/",
             ]):
@@ -155,6 +156,17 @@ def create_app() -> FastAPI:
             return response
     
     app.add_middleware(NoCacheMiddleware)
+
+    @app.middleware("http")
+    async def legacy_kanban_api_alias(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/api/kanban"):
+            scope = request.scope
+            scope["path"] = "/api/tickets" + path[len("/api/kanban"):]
+            raw_path = scope.get("raw_path")
+            if isinstance(raw_path, (bytes, bytearray)):
+                scope["raw_path"] = scope["path"].encode("latin-1")
+        return await call_next(request)
 
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
@@ -770,13 +782,21 @@ def create_app() -> FastAPI:
         return RedirectResponse(url="/workflows/", status_code=302)
 
     # Ticket Board
+    @app.get("/tickets/", response_class=HTMLResponse)
+    async def tickets_page(request: Request):
+        return page_templates.TemplateResponse(request, "kanban/kanban.html", _template_context(request, "/tickets"))
+
+    @app.get("/tickets", response_class=HTMLResponse)
+    async def tickets_redirect():
+        return RedirectResponse(url="/tickets/", status_code=302)
+
     @app.get("/kanban/", response_class=HTMLResponse)
-    async def kanban_page(request: Request):
-        return page_templates.TemplateResponse(request, "kanban/kanban.html", _template_context(request, "/kanban"))
+    async def kanban_legacy_page_redirect():
+        return RedirectResponse(url="/tickets/", status_code=302)
 
     @app.get("/kanban", response_class=HTMLResponse)
-    async def kanban_redirect():
-        return RedirectResponse(url="/kanban/", status_code=302)
+    async def kanban_legacy_redirect():
+        return RedirectResponse(url="/tickets/", status_code=302)
 
     try:
         from distr.gui.web.routes.kanban import create_routes as create_kanban_routes

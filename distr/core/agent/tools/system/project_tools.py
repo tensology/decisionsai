@@ -698,13 +698,10 @@ class OpenAndStartProjectTool(BaseTool):
                 if startup_instructions:
                     commands = _parse_startup_command_lines(startup_instructions)
                     if commands:
-                        started, failed, diagnostics = _start_inapp_terminals(project.id, folder_location, commands)
-                        response = f"PROJECT ACTIVATED: {project.name}\n"
-                        response += f"Started or queued {started} terminal(s) for the Projects panel."
-                        if failed:
-                            response += f" ({failed} failed.)"
-                        if diagnostics:
-                            response += "\n\nStartup command results:\n" + _format_startup_diagnostics(diagnostics)
+                        from distr.core.project_startup_terminals import start_project_startup_terminals
+
+                        result = start_project_startup_terminals(project.id, announce=True)
+                        response = f"PROJECT ACTIVATED: {project.name}\n{result.message}"
                         return response
 
                 return f"PROJECT ACTIVATED: {project.name}\nNo startup instructions configured."
@@ -1717,18 +1714,10 @@ class StartProjectTool(BaseTool):
             if not _parse_startup_command_lines(startup_instructions):
                 return f"Project '{project['name']}' startup instructions have no runnable commands (add one shell command per line, or remove # comments only)."
 
-            folder_location = project['folder_location']
-            commands = _parse_startup_command_lines(startup_instructions)
-            started, failed, diagnostics = _start_inapp_terminals(project_id=project['id'],
-                                                                  folder=folder_location,
-                                                                  commands=commands)
-            response = f"PROJECT STARTED: {project['name']}\n"
-            response += f"Started or queued {started} terminal(s) for the Projects panel."
-            if failed:
-                response += f" ({failed} failed.)"
-            if diagnostics:
-                response += "\n\nStartup command results:\n" + _format_startup_diagnostics(diagnostics)
-            return response
+            from distr.core.project_startup_terminals import start_project_startup_terminals
+
+            result = start_project_startup_terminals(project['id'], announce=True)
+            return f"PROJECT STARTED: {project['name']}\n{result.message}"
 
         except Exception as e:
             logger.error(f"Error in start_project tool: {e}", exc_info=True)

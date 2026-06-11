@@ -475,6 +475,37 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 if gw_tool.name not in retrieved_names:
                     retrieved.append(gw_tool)
                     retrieved_names.add(gw_tool.name)
+            delegated_source_keywords = ("telegram", "remote", "desktop", "browser", "phone")
+            delegated_work_keywords = (
+                "pdf",
+                "document",
+                "attachment",
+                "file",
+                "scope",
+                "plan",
+                "prep",
+                "prepare",
+                "http://",
+                "https://",
+                "website",
+                "web page",
+                "playwright",
+                "browseruse",
+                "browser use",
+                "screenshot",
+                "click",
+            )
+            delegated_handoff_keywords = ("codex", "cursor", "handoff", "implement", "report back")
+            wants_delegated_plan = (
+                any(k in qlow for k in delegated_source_keywords)
+                and any(k in qlow for k in workspace_exposure_keywords + delegated_work_keywords)
+                and any(k in qlow for k in delegated_handoff_keywords + ("mouse", "keyboard", "copy", "paste"))
+            )
+            if wants_delegated_plan and "hermes_delegated_workflow" in self._tools_dict:
+                delegated_tool = self._tools_dict["hermes_delegated_workflow"]
+                if delegated_tool.name not in retrieved_names:
+                    retrieved.append(delegated_tool)
+                    retrieved_names.add(delegated_tool.name)
             return retrieved + sticky
         except Exception as e:
             logger.debug("_get_filtered_tools fallback: %s", e)
@@ -549,12 +580,18 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             logger.warning("Could not determine username: %s", e)
             return "User"
 
-    def _ensure_user_message_persisted(self, text: str) -> Optional[int]:
+    def _ensure_user_message_persisted(
+        self, text: str, *, skip: bool = False
+    ) -> Optional[int]:
         """Ensure the user message is persisted to the current chat.
 
         NOTE: Does NOT auto-create chats. The web route should create chats
         explicitly before sending messages.
         """
+        if skip:
+            if getattr(self, "chat_manager", None):
+                return self.chat_manager.get_current_chat()
+            return None
         if not getattr(self, "chat_manager", None) or not (text or "").strip():
             return None
         current_chat_id = self.chat_manager.get_current_chat()
@@ -1007,6 +1044,20 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if reflection:
                 content = f"{content}\n\n{reflection}"
 
+        if chat_id:
+            try:
+                from distr.core.chat import get_compact_checkpoint_prompt
+
+                checkpoint_prompt = get_compact_checkpoint_prompt(chat_id)
+                if checkpoint_prompt:
+                    content = f"{content}\n\n{checkpoint_prompt}"
+            except Exception as e:
+                logger.debug(
+                    "%s: compact checkpoint prompt skipped: %s",
+                    self._get_provider_name(),
+                    e,
+                )
+
         return {"role": "system", "content": content}
 
     @staticmethod
@@ -1217,7 +1268,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
     async def process_chat_input(self, text: str, is_telegram: bool = False,
                                   uploaded_image_path: str = None, speaker_enabled=None,
-                                  telegram_input_type: str = None):
+                                  telegram_input_type: str = None,
+                                  skip_user_persist: bool = False):
         """Process text input from chat window. Unified for all providers."""
         self._cancelled = False
         if hasattr(self, '_generation_requested_at'):
@@ -1260,7 +1312,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 except Exception as e:
                     logger.warning("Could not verify chat provider: %s", e)
 
-        self._ensure_user_message_persisted(text)
+        self._ensure_user_message_persisted(text, skip=skip_user_persist)
 
         # Handle vision input
         from distr.core.agent.services.llm.image_utils import (

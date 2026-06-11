@@ -866,28 +866,28 @@ WORKFLOWS:
   additional context before continuing.
 
 KANBAN BOARDS:
-  GET    /api/kanban/boards              → List all boards
-  POST   /api/kanban/boards              → Create board (body: name, description)
-  GET    /api/kanban/boards/<id>         → Get board with lanes and tickets
-  PUT    /api/kanban/boards/<id>         → Update board (body: name, description, default_project_id, agent settings, etc.)
-  DELETE /api/kanban/boards/<id>         → Delete board and all tickets
-  POST   /api/kanban/tickets             → Create ticket (body: lane_id, title, description, priority)
-  GET    /api/kanban/tickets/<id>        → Get ticket details (files, links, todos)
-  PUT    /api/kanban/tickets/<id>        → Update ticket (body: title, description, priority, lane_id, linked_project_id, etc.)
-  PUT    /api/kanban/tickets/<id>/move   → Move ticket to lane (body: lane_id, position)
-  DELETE /api/kanban/tickets/<id>        → Delete ticket
-  POST   /api/kanban/tickets/<id>/files  → Upload file to ticket (multipart form)
-  DELETE /api/kanban/tickets/<id>/files/<fid> → Delete ticket file
-  POST   /api/kanban/tickets/<id>/links  → Add link (body: title, url)
-  DELETE /api/kanban/tickets/<id>/links/<lid> → Delete link
-  POST   /api/kanban/tickets/<id>/todos  → Add todo (body: text)
-  PUT    /api/kanban/tickets/<id>/todos/<tid> → Update todo (body: text, done)
-  DELETE /api/kanban/tickets/<id>/todos/<tid> → Delete todo
-  POST   /api/kanban/tickets/<id>/send-to-project → Send ticket to linked project (.tickets folder)
-  POST   /api/kanban/tickets/copy-to-board → Copy external ticket to local board (body: board_id, title, description)
-  GET    /api/kanban/linkable            → Get linkable entities (workflows, projects, snippets, actions)
-  GET    /api/kanban/external-boards     → Get Trello/Jira boards from connected accounts
-  GET    /api/kanban/external-boards/<provider>/<board_id> → Get external board detail (read-only)
+  GET    /api/tickets/boards              → List all boards
+  POST   /api/tickets/boards              → Create board (body: name, description)
+  GET    /api/tickets/boards/<id>         → Get board with lanes and tickets
+  PUT    /api/tickets/boards/<id>         → Update board (body: name, description, default_project_id, agent settings, etc.)
+  DELETE /api/tickets/boards/<id>         → Delete board and all tickets
+  POST   /api/tickets/tickets             → Create ticket (body: lane_id, title, description, priority)
+  GET    /api/tickets/tickets/<id>        → Get ticket details (files, links, todos)
+  PUT    /api/tickets/tickets/<id>        → Update ticket (body: title, description, priority, lane_id, linked_project_id, etc.)
+  PUT    /api/tickets/tickets/<id>/move   → Move ticket to lane (body: lane_id, position)
+  DELETE /api/tickets/tickets/<id>        → Delete ticket
+  POST   /api/tickets/tickets/<id>/files  → Upload file to ticket (multipart form)
+  DELETE /api/tickets/tickets/<id>/files/<fid> → Delete ticket file
+  POST   /api/tickets/tickets/<id>/links  → Add link (body: title, url)
+  DELETE /api/tickets/tickets/<id>/links/<lid> → Delete link
+  POST   /api/tickets/tickets/<id>/todos  → Add todo (body: text)
+  PUT    /api/tickets/tickets/<id>/todos/<tid> → Update todo (body: text, done)
+  DELETE /api/tickets/tickets/<id>/todos/<tid> → Delete todo
+  POST   /api/tickets/tickets/<id>/send-to-project → Send ticket to linked project (.tickets folder)
+  POST   /api/tickets/tickets/copy-to-board → Copy external ticket to local board (body: board_id, title, description)
+  GET    /api/tickets/linkable            → Get linkable entities (workflows, projects, snippets, actions)
+  GET    /api/tickets/external-boards     → Get Trello/Jira boards from connected accounts
+  GET    /api/tickets/external-boards/<provider>/<board_id> → Get external board detail (read-only)
 
 MODELS & VOICES:
   GET    /api/models                         → Get default LLM model

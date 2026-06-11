@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 import numpy as np
-import os
 import io
 import time
 
@@ -14,6 +13,7 @@ from distr.core.agent.libs import (
     AudioSegment, PYDUB_AVAILABLE
 )
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+from distr.core.agent.services.tts.elevenlabs_config import ELEVENLABS_TTS_MODEL_ID
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ class ElevenLabsTTSService(TTSService):
                 audio_stream = self.client.text_to_speech.convert(
                     text=text,
                     voice_id=self.voice_id,
-                    model_id="eleven_multilingual_v2",
+                    model_id=ELEVENLABS_TTS_MODEL_ID,
                     output_format="mp3_44100_128",
                     voice_settings={
                         "stability": self._stability,

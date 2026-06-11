@@ -50,7 +50,7 @@ class HintOverlay(QWidget):
     Small transparent overlay that shows keyboard shortcut hints below the circle.
     """
 
-    def __init__(self, text="Esc to stop  ·  Space to pause", parent=None):
+    def __init__(self, text="Esc to stop  ·  Ctrl+Space to pause", parent=None):
         super().__init__(parent)
         self._text = text
         self.setWindowFlags(
@@ -110,7 +110,7 @@ class CountdownOverlay(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
 
-        self._hint = HintOverlay("Esc to stop  ·  Space to pause")
+        self._hint = HintOverlay("Esc to stop  ·  Ctrl+Space to pause")
 
     def start(self):
         """Position on the mouse's current screen and begin countdown."""
@@ -201,7 +201,7 @@ class PauseOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedSize(CIRCLE_SIZE, CIRCLE_SIZE)
 
-        self._hint = HintOverlay("Esc to stop  ·  Space to resume")
+        self._hint = HintOverlay("Esc to stop  ·  Ctrl+Space to resume")
 
     def show_on_cursor_screen(self):
         """Center on the screen where the mouse cursor currently is."""

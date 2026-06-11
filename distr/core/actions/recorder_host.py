@@ -229,6 +229,7 @@ class ActionRecorderHost(QObject):
                 self.current_action_id = action_id
                 logger.info(f"[RECORDER_HOST] Recording started, filename={result}")
                 signal_manager.action_recording_started.emit(action_id)
+                speak_text_directly_event_queue("Recording started.")
                 self._start_recording_key_listener()
             else:
                 logger.error(f"[RECORDER_HOST] Failed to start recording: {result}")
@@ -474,38 +475,18 @@ class ActionRecorderHost(QObject):
             logger.error(f"[RECORDER_HOST] pynput key listener failed: {e}", exc_info=True)
 
     def _start_macos_recording_key_listener(self):
-        """macOS NSEvent-based key listener — avoids pynput crashes."""
+        """macOS NSEvent-based key listener — global + local so Escape works when focused."""
         try:
-            from AppKit import NSEvent, NSKeyDownMask
-            try:
-                from Quartz.CoreGraphics import kVK_Escape, kVK_Space
-            except ImportError:
-                kVK_Escape = 53
-                kVK_Space = 49
+            from distr.core.actions.key_monitor import MacEscapeMonitor
 
-            NSControlKeyMask = 1 << 18  # NSEventModifierFlagControl
-
-            def handler(event):
-                try:
-                    kc = event.keyCode()
-                    flags = event.modifierFlags()
-                    if kc == kVK_Escape or kc == 53:
-                        logger.info("[RECORDER_HOST] Escape pressed during recording (macOS)")
-                        QTimer.singleShot(0, self._escape_stop_recording)
-                    elif (kc == kVK_Space or kc == 49) and (flags & NSControlKeyMask):
-                        logger.info("[RECORDER_HOST] Ctrl+Space pressed during recording (macOS)")
-                        QTimer.singleShot(0, self._toggle_pause_recording)
-                except Exception as e:
-                    logger.error(f"[RECORDER_HOST] macOS key handler error: {e}")
-                return event
-
-            self._key_listener = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-                NSKeyDownMask, handler
+            self._key_listener = MacEscapeMonitor(
+                on_escape=lambda: QTimer.singleShot(0, self._escape_stop_recording),
+                on_ctrl_space=lambda: QTimer.singleShot(0, self._toggle_pause_recording),
             )
-            logger.info("[RECORDER_HOST] Started Escape/Ctrl+Space key listener (macOS NSEvent)")
-        except ImportError as e:
-            logger.warning(f"[RECORDER_HOST] PyObjC not available: {e}")
-            self._key_listener = None
+            if self._key_listener.start():
+                logger.info("[RECORDER_HOST] Started Escape/Ctrl+Space key listener (macOS)")
+            else:
+                self._key_listener = None
         except Exception as e:
             logger.error(f"[RECORDER_HOST] macOS key listener failed: {e}", exc_info=True)
             self._key_listener = None
@@ -516,8 +497,7 @@ class ActionRecorderHost(QObject):
             if self._key_listener:
                 if sys.platform == 'darwin':
                     try:
-                        from AppKit import NSEvent
-                        NSEvent.removeMonitor_(self._key_listener)
+                        self._key_listener.stop()
                     except Exception as e:
                         logger.warning(f"[RECORDER_HOST] Error removing macOS monitor: {e}")
                 else:
@@ -568,6 +548,52 @@ class ActionRecorderHost(QObject):
             speak_text_directly_event_queue("Resumed")
             if self._pause_overlay:
                 self._pause_overlay.dismiss()
+
+    def cancel_recorded_action(self, action_id: int) -> bool:
+        """Delete a freshly recorded action and discard its recording file."""
+        recording_filename = None
+        try:
+            with get_session() as session:
+                action = session.query(Action).get(action_id)
+                if not action:
+                    self.waiting_for_action_name_id = None
+                    return False
+                recording_filename = (action.recording_filename or "").strip() or None
+                session.delete(action)
+                session.commit()
+
+            if recording_filename:
+                recording_path = Path(RECORDINGS_DIR) / recording_filename
+                if recording_path.exists():
+                    recording_path.unlink()
+            else:
+                action_id_str = str(action_id)
+                try:
+                    for candidate in Path(RECORDINGS_DIR).glob("*.json"):
+                        if action_id_str in candidate.name:
+                            candidate.unlink(missing_ok=True)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to clean up recording files for cancelled action %s: %s",
+                        action_id,
+                        exc,
+                    )
+
+            self.waiting_for_action_name_id = None
+            signal_manager.action_recording_cancelled.emit(action_id)
+            try:
+                from distr.gui.web.workflow_events import increment_workflow_updated
+
+                increment_workflow_updated()
+            except Exception:
+                pass
+            speak_text_directly_event_queue("Action cancelled.")
+            logger.info("Cancelled recorded action %s", action_id)
+            return True
+        except Exception as exc:
+            logger.error("Failed to cancel recorded action %s: %s", action_id, exc, exc_info=True)
+            self.waiting_for_action_name_id = None
+            return False
 
     def _on_set_action_name(self, action_id: int, name: str):
         """Update action title and trigger words from voice/web."""

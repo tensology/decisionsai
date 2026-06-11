@@ -615,11 +615,23 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception as _memory_compaction_err:
             logger.debug("Hermes memory compaction skipped: %s", _memory_compaction_err)
 
-        # Workflow scheduler: check for due scheduled workflows every minute
+        # Workflow scheduler: adaptive poll interval (idle when nothing scheduled, faster only for sub-minute schedules)
+        from distr.core.workflow.scheduler import apply_workflow_scheduler_timer_interval
+        from distr.gui.web.workflow_events import register_workflow_updated_callback
+
         self.workflow_scheduler_timer = QTimer()
         self.workflow_scheduler_timer.timeout.connect(self._run_workflow_scheduled)
-        self.workflow_scheduler_timer.start(60000)  # 60 seconds
-        logger.info("Started Workflow scheduler (interval: 60 seconds)")
+
+        def _sync_workflow_scheduler_timer():
+            previous_ms = self.workflow_scheduler_timer.interval()
+            interval_ms = apply_workflow_scheduler_timer_interval(self.workflow_scheduler_timer)
+            if interval_ms != previous_ms:
+                logger.info("Workflow scheduler poll interval set to %d ms", interval_ms)
+
+        register_workflow_updated_callback(_sync_workflow_scheduler_timer)
+        scheduler_interval_ms = apply_workflow_scheduler_timer_interval(self.workflow_scheduler_timer)
+        self.workflow_scheduler_timer.start(scheduler_interval_ms)
+        logger.info("Started Workflow scheduler (interval: %d ms)", scheduler_interval_ms)
 
         # Workflow orchestration: run steps in sequence, wait for completion, retry on failure
         self._workflow_orchestrations: dict[int, dict] = {}
@@ -682,11 +694,16 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 signal_manager.set_action_name.emit(action_id, chosen)
                 return
 
-            # If user cancels or leaves blank, keep existing title and clear waiting state.
+            if not ok:
+                if hasattr(self, "recorder_host") and self.recorder_host:
+                    self.recorder_host.cancel_recorded_action(action_id)
+                return
+
+            # OK with blank text: keep the auto-generated title when one exists.
             if current_title:
                 signal_manager.set_action_name.emit(action_id, current_title)
             elif hasattr(self, "recorder_host") and self.recorder_host:
-                self.recorder_host.waiting_for_action_name_id = None
+                self.recorder_host.cancel_recorded_action(action_id)
         except Exception as e:
             logger.error("Failed to show action naming popup: %s", e, exc_info=True)
     

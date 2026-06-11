@@ -49,7 +49,7 @@ def _seed_kanban_workflow_flow() -> tuple[int, str, str]:
     board_name = f"E2E TEST PROJECT {stamp}"
     ticket_title = f"E2E ticket {stamp}"
 
-    # POST /api/kanban/tickets is auth-gated in this environment; seed ticket via DB with retry.
+    # POST /api/tickets/tickets is auth-gated in this environment; seed ticket via DB with retry.
     for _ in range(8):
         try:
             with get_session() as s:
@@ -107,13 +107,13 @@ def _seed_kanban_workflow_flow() -> tuple[int, str, str]:
 
 def test_kanban_send_to_workflow_modal_and_status(page):
     try:
-        urllib.request.urlopen(f"{BASE_URL}/kanban/", timeout=3)
+        urllib.request.urlopen(f"{BASE_URL}/tickets/", timeout=3)
     except Exception as exc:
         pytest.skip(f"Web server not reachable at {BASE_URL}: {exc}")
 
     board_id, board_name, ticket_title = _seed_kanban_workflow_flow()
 
-    page.goto(f"{BASE_URL}/kanban/", wait_until="domcontentloaded", timeout=30000)
+    page.goto(f"{BASE_URL}/tickets/", wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(2500)
     local_tab = page.locator("#kb-src-local")
     if local_tab.count() > 0:
@@ -137,10 +137,7 @@ def test_kanban_send_to_workflow_modal_and_status(page):
             break
         page.wait_for_timeout(250)
     assert card.count() > 0
-    card.click()
-    page.wait_for_timeout(700)
-
-    send_btn = page.locator("#kb-modal-act-workflow")
+    send_btn = card.locator(".kb-act-workflow")
     assert send_btn.count() > 0
     send_btn.click()
     page.wait_for_timeout(500)

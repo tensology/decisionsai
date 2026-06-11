@@ -2,7 +2,7 @@
 """
 Property 10: Hourly frequency validation rejects out-of-range hours
 
-For any list of integers submitted as kanban_agent_hours via PUT /api/kanban/settings
+For any list of integers submitted as kanban_agent_hours via PUT /api/tickets/settings
 where kanban_agent_frequency is 'hourly', if any integer is outside the range [0, 23],
 the API should return a 422 status code. If all integers are within [0, 23], the API
 should return a success response.
@@ -89,14 +89,14 @@ class TestHourlyValidationProperty:
         **Validates: Requirements 10.5, 10.6**
 
         For any list of integers where at least one value is outside [0, 23],
-        PUT /api/kanban/settings should return a 422 status code.
+        PUT /api/tickets/settings should return a 422 status code.
         """
         app, mock_load, mock_save, store = _make_test_client()
 
         with patch("distr.gui.web.routes.kanban.load_settings_from_db", side_effect=mock_load), \
              patch("distr.gui.web.routes.kanban.save_settings_to_db", side_effect=mock_save):
             client = TestClient(app)
-            resp = client.put("/api/kanban/settings", json={
+            resp = client.put("/api/tickets/settings", json={
                 "kanban_agent_hours": hours,
             })
 
@@ -111,14 +111,14 @@ class TestHourlyValidationProperty:
         **Validates: Requirements 10.5, 10.6**
 
         For any list of integers where all values are within [0, 23],
-        PUT /api/kanban/settings should return a success response (200).
+        PUT /api/tickets/settings should return a success response (200).
         """
         app, mock_load, mock_save, store = _make_test_client()
 
         with patch("distr.gui.web.routes.kanban.load_settings_from_db", side_effect=mock_load), \
              patch("distr.gui.web.routes.kanban.save_settings_to_db", side_effect=mock_save):
             client = TestClient(app)
-            resp = client.put("/api/kanban/settings", json={
+            resp = client.put("/api/tickets/settings", json={
                 "kanban_agent_hours": hours,
             })
 

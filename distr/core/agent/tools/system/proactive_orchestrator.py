@@ -112,7 +112,11 @@ class ProactiveOrchestratorTool(BaseTool):
 
     def _build_daily_plan_result(self, *, format: str = "summary") -> dict[str, Any]:
         from distr.core.initiative.context import ContextAssembler
-        from distr.core.initiative.planners import generate_planner_markdown, tts_excerpt_from_markdown
+        from distr.core.initiative.planners import (
+            build_planner_orchestration_actions,
+            generate_planner_markdown,
+            tts_excerpt_from_markdown,
+        )
 
         try:
             from distr.core.settings import load_settings_from_db
@@ -131,12 +135,19 @@ class ProactiveOrchestratorTool(BaseTool):
             "mention which source each important item came from."
         )
         markdown, date_info = generate_planner_markdown("day", settings, bundle, instruction)
+        orchestration_actions = build_planner_orchestration_actions(bundle, scope="day")
+        orchestration_results = self._execute_orchestration_actions(
+            orchestration_actions,
+            settings=settings,
+        )
         spoken = tts_excerpt_from_markdown(markdown, max_len=650) or "I built your plan for today."
         return {
             "success": True,
             "action": "daily_plan",
             "spoken_summary": spoken,
             "markdown": markdown,
+            "orchestration_actions": orchestration_actions,
+            "orchestration_results": orchestration_results,
             "date_info": date_info,
             "source_summary": {
                 "chat_messages": len(getattr(bundle, "chat_history", []) or []),
@@ -156,6 +167,44 @@ class ProactiveOrchestratorTool(BaseTool):
                 ),
             },
         }
+
+    def _execute_orchestration_actions(self, actions: list[dict[str, Any]], *, settings: dict[str, Any]) -> list[dict[str, Any]]:
+        if not actions:
+            return []
+        from distr.core.initiative.action_handlers import execute_initiative_action
+
+        results: list[dict[str, Any]] = []
+        for action in actions:
+            action_type = str(action.get("action_type") or "").strip()
+            payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+            if action_type == "ticket_lane_move" and not settings.get("initiative_allow_ticket_lane_moves", False):
+                results.append({
+                    "action_type": action_type,
+                    "success": False,
+                    "message": "Queued by the planner but not executed because ticket lane moves need approval in Initiative settings.",
+                    "payload": payload,
+                })
+                continue
+            try:
+                result = execute_initiative_action(
+                    action_type=action_type,
+                    description=str(action.get("description") or ""),
+                    payload=payload,
+                    draft=str(action.get("draft") or ""),
+                    settings=settings,
+                )
+                if isinstance(result, dict):
+                    results.append({"action_type": action_type, **result})
+                else:
+                    results.append({"action_type": action_type, "success": True, "message": str(result)})
+            except Exception as exc:
+                results.append({
+                    "action_type": action_type,
+                    "success": False,
+                    "message": str(exc),
+                    "payload": payload,
+                })
+        return results
 
     async def _arun(
         self,

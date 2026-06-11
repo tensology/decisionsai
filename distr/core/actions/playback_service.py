@@ -309,38 +309,18 @@ class ActionPlaybackService(QObject):
             logger.error(f"[ACTION PLAYBACK SERVICE] Error starting key listener: {e}", exc_info=True)
     
     def _start_macos_escape_listener(self):
-        """Start macOS-specific key listener using NSEvent global monitor"""
+        """Start macOS key listener — global + local so Escape works when DecisionsAI is focused."""
         try:
-            from AppKit import NSEvent, NSKeyDownMask
-            try:
-                from Quartz.CoreGraphics import kVK_Escape, kVK_Space
-            except ImportError:
-                kVK_Escape = 53
-                kVK_Space = 49
-            
-            NSControlKeyMask = 1 << 18  # NSEventModifierFlagControl
+            from distr.core.actions.key_monitor import MacEscapeMonitor
 
-            def handler(event):
-                try:
-                    key_code = event.keyCode()
-                    flags = event.modifierFlags()
-                    if key_code == kVK_Escape or key_code == 53:
-                        logger.info("[ACTION PLAYBACK SERVICE] Escape pressed (macOS) - stopping playback")
-                        QTimer.singleShot(0, self._stop_playback)
-                    elif (key_code == kVK_Space or key_code == 49) and (flags & NSControlKeyMask):
-                        logger.info("[ACTION PLAYBACK SERVICE] Ctrl+Space pressed (macOS) - toggling pause")
-                        QTimer.singleShot(0, self._toggle_pause_playback)
-                except Exception as e:
-                    logger.error(f"[ACTION PLAYBACK SERVICE] Error in macOS key handler: {e}")
-                return event
-            
-            self.escape_listener = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-                NSKeyDownMask, handler
+            self.escape_listener = MacEscapeMonitor(
+                on_escape=lambda: QTimer.singleShot(0, self._stop_playback),
+                on_ctrl_space=lambda: QTimer.singleShot(0, self._toggle_pause_playback),
             )
-            logger.info("[ACTION PLAYBACK SERVICE] Started macOS Escape/Ctrl+Space key listener using NSEvent")
-        except ImportError as e:
-            logger.warning(f"[ACTION PLAYBACK SERVICE] PyObjC not available for macOS key listener: {e}")
-            self.escape_listener = None
+            if self.escape_listener.start():
+                logger.info("[ACTION PLAYBACK SERVICE] Started macOS Escape/Ctrl+Space key listener")
+            else:
+                self.escape_listener = None
         except Exception as e:
             logger.error(f"[ACTION PLAYBACK SERVICE] Error starting macOS key listener: {e}", exc_info=True)
             self.escape_listener = None
@@ -352,8 +332,7 @@ class ActionPlaybackService(QObject):
                 import sys
                 if sys.platform == 'darwin':
                     try:
-                        from AppKit import NSEvent
-                        NSEvent.removeMonitor_(self.escape_listener)
+                        self.escape_listener.stop()
                         logger.info("[ACTION PLAYBACK SERVICE] Stopped macOS key listener")
                     except Exception as e:
                         logger.warning(f"[ACTION PLAYBACK SERVICE] Error removing macOS monitor: {e}")

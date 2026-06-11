@@ -70,6 +70,8 @@ def test_generate_planner_markdown_uses_scope_specific_system_prompt():
     messages = call_kw["messages"]
     assert messages[0]["role"] == "system"
     assert "day-planning assistant" in messages[0]["content"].lower()
+    assert "Current first" in messages[0]["content"]
+    assert "Telegram voice note" in messages[0]["content"]
     user = messages[1]["content"]
     assert "Custom instruction from task row." in user
 
@@ -123,6 +125,8 @@ def test_morning_brief_prompt_demands_specific_next_action():
     messages = fake_litellm.completion.call_args.kwargs["messages"]
     assert "daily check-in orchestrator" in messages[0]["content"].lower()
     assert "Needs Your Call" in messages[0]["content"]
+    assert "Today's Outcomes" in messages[0]["content"]
+    assert "Telegram" in messages[0]["content"]
     assert "Hermes" not in messages[0]["content"]
     assert "work_scan" in messages[1]["content"]
 
@@ -164,3 +168,258 @@ def test_generate_planner_markdown_falls_back_when_llms_fail():
     assert "ClickUp" in md
     assert "Promote the ready ticket" in md
     assert "Planner LLM fallback was used" in md
+
+
+def test_fallback_day_plan_is_outcome_driven_and_tts_clean():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(side_effect=RuntimeError("provider unavailable"))
+    bundle = ContextBundle(
+        current_datetime="2026-06-11T07:00:00Z",
+        work_scan={
+            "connected_sources": [
+                {"label": "WhatsApp", "connected": True},
+                {"label": "Jira", "connected": True},
+            ],
+            "boards": [
+                {
+                    "name": "Player1Sport",
+                    "lanes": [
+                        {"name": "Backlog", "ticket_count": 5},
+                        {"name": "Current", "ticket_count": 1},
+                    ],
+                }
+            ],
+            "proposals": [
+                {
+                    "description": "Player1Sport has 5 backlog items that should be promoted into Current."
+                }
+            ],
+        },
+        stuck_tasks=[{"title": "RelightSA quote is waiting for a decision."}],
+        unfinished_workflows=[{"name": "Merrypak WhatsApp intake"}],
+    )
+    settings = {
+        "conversational_llm_provider": "openai",
+        "conversational_llm_model": "o4-mini",
+    }
+
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        md, date_info = planners.generate_planner_markdown(
+            "day", settings, bundle, "Build an outcome-driven daily plan."
+        )
+
+    spoken = planners.tts_excerpt_from_markdown(md)
+    assert date_info.get("period") == "day"
+    assert "## Outcome for Today" in md
+    assert "Player1Sport" in md
+    assert "Choose the Player1Sport outcome" in md
+    assert "item(s)" not in md
+    assert "lane(s)" not in md
+    assert "ticket(s)" not in md
+    assert "(s)" not in spoken
+
+
+def test_fallback_day_plan_prioritizes_current_before_backlog_for_telegram():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(side_effect=RuntimeError("provider unavailable"))
+    bundle = ContextBundle(
+        current_datetime="2026-06-11T07:00:00Z",
+        work_scan={
+            "connected_sources": [
+                {"label": "Telegram", "connected": True},
+                {"label": "Gmail", "connected": True},
+                {"label": "Slack", "connected": True},
+            ],
+            "boards": [
+                {
+                    "name": "Player1Sport",
+                    "lanes": [
+                        {
+                            "name": "Current",
+                            "ticket_count": 1,
+                            "tickets": [
+                                {
+                                    "title": "Publish match-day booking flow",
+                                    "description_preview": "Finish the booking flow so clubs can reserve player slots today.",
+                                    "priority": "high",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Backlog",
+                            "ticket_count": 2,
+                            "tickets": [
+                                {"title": "Rewrite old team copy", "priority": "low"},
+                                {"title": "Tidy admin filters", "priority": "medium"},
+                            ],
+                        },
+                    ],
+                }
+            ],
+            "proposals": [
+                {
+                    "description": "Gmail: coach asked whether the booking flow will be ready today.",
+                    "payload": {"source": "gmail", "confidence": 0.8},
+                },
+                {
+                    "description": "Slack: player onboarding is blocked until booking is stable.",
+                    "payload": {"source": "slack", "confidence": 0.8},
+                },
+            ],
+        },
+    )
+
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        md, _ = planners.generate_planner_markdown("day", {}, bundle, "Plan my Telegram morning brief.")
+
+    spoken = planners.tts_excerpt_from_markdown(md, max_len=650)
+    assert "Publish match-day booking flow" in md
+    assert "Rewrite old team copy" not in md.split("## Outcome for Today", 1)[1].split("##", 1)[0]
+    assert "Gmail" in md
+    assert "Slack" in md
+    assert "Telegram" in md
+    assert "move " not in spoken.lower()
+    assert len(spoken) <= 650
+
+
+def test_fallback_day_plan_pulls_backlog_outcomes_when_current_is_empty():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(side_effect=RuntimeError("provider unavailable"))
+    bundle = ContextBundle(
+        current_datetime="2026-06-11T07:00:00Z",
+        work_scan={
+            "connected_sources": [{"label": "WhatsApp", "connected": True}],
+            "boards": [
+                {
+                    "name": "RelightSA",
+                    "lanes": [
+                        {"name": "Current", "ticket_count": 0, "tickets": []},
+                        {
+                            "name": "Backlog",
+                            "ticket_count": 2,
+                            "tickets": [
+                                {
+                                    "title": "Send client quote decision",
+                                    "description_preview": "Quote approval is blocking the installation schedule.",
+                                    "priority": "critical",
+                                },
+                                {
+                                    "title": "Clean up project notes",
+                                    "description_preview": "Low urgency admin cleanup.",
+                                    "priority": "low",
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+            "proposals": [
+                {
+                    "description": "WhatsApp: client is waiting for the quote decision.",
+                    "payload": {"source": "whatsapp", "confidence": 0.9},
+                }
+            ],
+        },
+    )
+
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        md, _ = planners.generate_planner_markdown("day", {}, bundle, "Plan my Telegram morning brief.")
+
+    assert "Send client quote decision" in md
+    assert "Clean up project notes" not in md.split("## Outcome for Today", 1)[1].split("##", 1)[0]
+    assert "Current is empty" in md
+    assert "WhatsApp" in md
+
+
+def test_day_plan_builds_orchestration_actions_for_implied_lane_moves():
+    bundle = ContextBundle(
+        current_datetime="2026-06-11T07:00:00Z",
+        work_scan={
+            "boards": [
+                {
+                    "id": 22,
+                    "name": "RelightSA",
+                    "lanes": [
+                        {"name": "Current", "ticket_count": 0, "tickets": []},
+                        {
+                            "name": "Backlog",
+                            "ticket_count": 2,
+                            "tickets": [
+                                {
+                                    "id": 501,
+                                    "title": "Send client quote decision",
+                                    "description_preview": "Quote approval is blocking installation.",
+                                    "priority": "critical",
+                                },
+                                {
+                                    "id": 502,
+                                    "title": "Clean up notes",
+                                    "priority": "low",
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+
+    actions = planners.build_planner_orchestration_actions(bundle, scope="day")
+
+    assert actions == [
+        {
+            "action_type": "ticket_lane_move",
+            "description": "Make 'Send client quote decision' current for today's RelightSA outcome.",
+            "payload": {
+                "board_id": 22,
+                "ticket_ids": [501],
+                "target_lane": "Current",
+                "source": "planner_orchestration",
+                "confidence": 0.74,
+                "risk_level": "low",
+            },
+        }
+    ]
+
+
+def test_fallback_week_plan_builds_weekly_arc_not_ticket_dump():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(side_effect=RuntimeError("provider unavailable"))
+    bundle = ContextBundle(
+        current_datetime="2026-06-11T07:00:00Z",
+        work_scan={
+            "connected_sources": [{"label": "Gmail", "connected": True}],
+            "boards": [
+                {
+                    "name": "DecisionsAI",
+                    "lanes": [
+                        {
+                            "name": "Current",
+                            "ticket_count": 1,
+                            "tickets": [
+                                {
+                                    "title": "Make Hermes weekly planning useful in Telegram",
+                                    "description_preview": "The assistant should plan the week from boards and connected messages.",
+                                    "priority": "high",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        unfinished_workflows=[{"name": "Daily Plan automation"}],
+    )
+
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        md, date_info = planners.generate_planner_markdown("week", {}, bundle, "Plan the week.")
+
+    assert date_info.get("period") == "week"
+    assert "## Week Outcome" in md
+    assert "Make Hermes weekly planning useful in Telegram" in md
+    assert "## This Week" in md
+    assert "ticket dump" not in md.lower()

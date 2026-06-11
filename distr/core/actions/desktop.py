@@ -158,6 +158,71 @@ def open_file_menu():
         pyautogui.hotkey('alt', 'f')
 
 
+_OWN_APP_NAME_PARTS = (
+    "decisions",
+    "python",
+    "pyqt",
+    "qtwebengine",
+    "electron",
+)
+
+_last_external_frontmost_app: str | None = None
+_last_external_frontmost_at: float = 0.0
+_EXTERNAL_FRONTMOST_MAX_AGE_SEC = 120.0
+
+
+def is_own_app_name(app_name: str | None) -> bool:
+    """Return True when *app_name* looks like this Decisions process."""
+    cleaned = (app_name or "").strip().lower()
+    if not cleaned:
+        return False
+    if any(part in cleaned for part in _OWN_APP_NAME_PARTS):
+        return True
+    if platform.system() == "Darwin" and APPKIT_AVAILABLE:
+        try:
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            bundle_id = (app.bundleIdentifier() or "").strip().lower() if app else ""
+            if bundle_id and ("decisions" in bundle_id or bundle_id.startswith("org.python")):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def remember_frontmost_app_if_external() -> str | None:
+    """Remember the current foreground app when it is not Decisions."""
+    global _last_external_frontmost_app, _last_external_frontmost_at
+    current = (get_frontmost_app_name() or "").strip()
+    if not current or is_own_app_name(current):
+        return _last_external_frontmost_app
+    _last_external_frontmost_app = current
+    _last_external_frontmost_at = time.time()
+    return current
+
+
+def get_remembered_external_frontmost_app(max_age_sec: float | None = None) -> str | None:
+    """Return the last non-Decisions foreground app if it was seen recently."""
+    if not _last_external_frontmost_app:
+        return None
+    age_limit = _EXTERNAL_FRONTMOST_MAX_AGE_SEC if max_age_sec is None else max_age_sec
+    if age_limit > 0 and (time.time() - _last_external_frontmost_at) > age_limit:
+        return None
+    return _last_external_frontmost_app
+
+
+def activate_app(app_name: str) -> bool:
+    """Bring *app_name* to the foreground using platform-native focus."""
+    cleaned = (app_name or "").strip()
+    if not cleaned:
+        return False
+    try:
+        _platform_open(cleaned)
+        return True
+    except Exception as exc:
+        logger.warning("activate_app failed for %r: %s", cleaned, exc)
+        return False
+
+
 def get_frontmost_app_name() -> str | None:
     """Return the current foreground app name when the platform supports it."""
     system = platform.system()

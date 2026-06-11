@@ -521,19 +521,19 @@ def create_routes(base_path: str = "") -> APIRouter:
                 "endpoints": [
                     {
                         "method": "GET",
-                        "path": "/api/kanban/boards",
+                        "path": "/api/tickets/boards",
                         "summary": "List all boards",
                         "description": "Returns all Ticket boards.",
-                        "curl": f'curl -s {base}/api/kanban/boards',
+                        "curl": f'curl -s {base}/api/tickets/boards',
                         "body": None,
                         "response_example": '[{"id": 1, "name": "My Board", "description": "..."}]',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/kanban/boards",
+                        "path": "/api/tickets/boards",
                         "summary": "Create a board",
                         "description": "Creates a new Ticket board with default lanes (To Do, In Progress, Done).",
-                        "curl": f"""curl -s -X POST {base}/api/kanban/boards \\
+                        "curl": f"""curl -s -X POST {base}/api/tickets/boards \\
   -H 'Content-Type: application/json' \\
   -d '{{"name": "Sprint Board", "description": "Current sprint"}}'""",
                         "body": {
@@ -544,20 +544,20 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "GET",
-                        "path": "/api/kanban/boards/{board_id}",
+                        "path": "/api/tickets/boards/{board_id}",
                         "summary": "Get board with lanes and tickets",
                         "description": "Returns a board with all its lanes and tickets.",
-                        "curl": f'curl -s {base}/api/kanban/boards/1',
+                        "curl": f'curl -s {base}/api/tickets/boards/1',
                         "params": [{"name": "board_id", "type": "int", "required": True, "description": "Board ID"}],
                         "body": None,
                         "response_example": '{"id": 1, "name": "My Board", "lanes": [{"id": 1, "name": "To Do", "tickets": [...]}]}',
                     },
                     {
                         "method": "PUT",
-                        "path": "/api/kanban/boards/{board_id}",
+                        "path": "/api/tickets/boards/{board_id}",
                         "summary": "Update a board",
                         "description": "Update board name, description, default project, or agent settings.",
-                        "curl": f"""curl -s -X PUT {base}/api/kanban/boards/1 \\
+                        "curl": f"""curl -s -X PUT {base}/api/tickets/boards/1 \\
   -H 'Content-Type: application/json' \\
   -d '{{"name": "Updated Board"}}'""",
                         "params": [{"name": "board_id", "type": "int", "required": True, "description": "Board ID"}],
@@ -570,20 +570,20 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/kanban/boards/{board_id}",
+                        "path": "/api/tickets/boards/{board_id}",
                         "summary": "Delete a board",
                         "description": "Permanently deletes a board and all its tickets.",
-                        "curl": f'curl -s -X DELETE {base}/api/kanban/boards/1',
+                        "curl": f'curl -s -X DELETE {base}/api/tickets/boards/1',
                         "params": [{"name": "board_id", "type": "int", "required": True, "description": "Board ID"}],
                         "body": None,
                         "response_example": '{"success": true}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/kanban/tickets",
+                        "path": "/api/tickets/tickets",
                         "summary": "Create a ticket",
                         "description": "Creates a new ticket in a lane.",
-                        "curl": f"""curl -s -X POST {base}/api/kanban/tickets \\
+                        "curl": f"""curl -s -X POST {base}/api/tickets/tickets \\
   -H 'Content-Type: application/json' \\
   -d '{{"lane_id": 1, "title": "Fix login bug", "description": "Users cannot log in", "priority": "high"}}'""",
                         "body": {
@@ -596,20 +596,20 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "GET",
-                        "path": "/api/kanban/tickets/{ticket_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}",
                         "summary": "Get ticket details",
                         "description": "Returns ticket with files, links, and todos.",
-                        "curl": f'curl -s {base}/api/kanban/tickets/1',
+                        "curl": f'curl -s {base}/api/tickets/tickets/1',
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
                         "body": None,
                         "response_example": '{"id": 1, "title": "Fix login bug", "files": [], "links": [], "todos": []}',
                     },
                     {
                         "method": "PUT",
-                        "path": "/api/kanban/tickets/{ticket_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}",
                         "summary": "Update a ticket",
                         "description": "Update ticket title, description, priority, lane, or linked project.",
-                        "curl": f"""curl -s -X PUT {base}/api/kanban/tickets/1 \\
+                        "curl": f"""curl -s -X PUT {base}/api/tickets/tickets/1 \\
   -H 'Content-Type: application/json' \\
   -d '{{"title": "Updated title", "priority": "critical"}}'""",
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
@@ -624,10 +624,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "PUT",
-                        "path": "/api/kanban/tickets/{ticket_id}/move",
+                        "path": "/api/tickets/tickets/{ticket_id}/move",
                         "summary": "Move ticket to lane",
                         "description": "Move a ticket to a different lane and optionally set position.",
-                        "curl": f"""curl -s -X PUT {base}/api/kanban/tickets/1/move \\
+                        "curl": f"""curl -s -X PUT {base}/api/tickets/tickets/1/move \\
   -H 'Content-Type: application/json' \\
   -d '{{"lane_id": 2, "position": 0}}'""",
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
@@ -639,30 +639,30 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/kanban/tickets/{ticket_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}",
                         "summary": "Delete a ticket",
                         "description": "Permanently deletes a ticket.",
-                        "curl": f'curl -s -X DELETE {base}/api/kanban/tickets/1',
+                        "curl": f'curl -s -X DELETE {base}/api/tickets/tickets/1',
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
                         "body": None,
                         "response_example": '{"success": true}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/kanban/tickets/{ticket_id}/files",
+                        "path": "/api/tickets/tickets/{ticket_id}/files",
                         "summary": "Upload file to ticket",
                         "description": "Attach a file to a ticket (multipart form upload).",
-                        "curl": f'curl -s -X POST {base}/api/kanban/tickets/1/files -F "file=@screenshot.png"',
+                        "curl": f'curl -s -X POST {base}/api/tickets/tickets/1/files -F "file=@screenshot.png"',
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
                         "body": None,
                         "response_example": '{"id": 1, "filename": "screenshot.png"}',
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/kanban/tickets/{ticket_id}/files/{file_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}/files/{file_id}",
                         "summary": "Delete ticket file",
                         "description": "Remove an attached file from a ticket.",
-                        "curl": f'curl -s -X DELETE {base}/api/kanban/tickets/1/files/1',
+                        "curl": f'curl -s -X DELETE {base}/api/tickets/tickets/1/files/1',
                         "params": [
                             {"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"},
                             {"name": "file_id", "type": "int", "required": True, "description": "File ID"},
@@ -672,10 +672,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "POST",
-                        "path": "/api/kanban/tickets/{ticket_id}/links",
+                        "path": "/api/tickets/tickets/{ticket_id}/links",
                         "summary": "Add link to ticket",
                         "description": "Add a URL link to a ticket.",
-                        "curl": f"""curl -s -X POST {base}/api/kanban/tickets/1/links \\
+                        "curl": f"""curl -s -X POST {base}/api/tickets/tickets/1/links \\
   -H 'Content-Type: application/json' \\
   -d '{{"title": "GitHub Issue", "url": "https://github.com/org/repo/issues/42"}}'""",
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
@@ -687,10 +687,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/kanban/tickets/{ticket_id}/links/{link_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}/links/{link_id}",
                         "summary": "Delete ticket link",
                         "description": "Remove a link from a ticket.",
-                        "curl": f'curl -s -X DELETE {base}/api/kanban/tickets/1/links/1',
+                        "curl": f'curl -s -X DELETE {base}/api/tickets/tickets/1/links/1',
                         "params": [
                             {"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"},
                             {"name": "link_id", "type": "int", "required": True, "description": "Link ID"},
@@ -700,10 +700,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "POST",
-                        "path": "/api/kanban/tickets/{ticket_id}/todos",
+                        "path": "/api/tickets/tickets/{ticket_id}/todos",
                         "summary": "Add todo to ticket",
                         "description": "Add a checklist item to a ticket.",
-                        "curl": f"""curl -s -X POST {base}/api/kanban/tickets/1/todos \\
+                        "curl": f"""curl -s -X POST {base}/api/tickets/tickets/1/todos \\
   -H 'Content-Type: application/json' \\
   -d '{{"text": "Write unit tests"}}'""",
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
@@ -714,10 +714,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "PUT",
-                        "path": "/api/kanban/tickets/{ticket_id}/todos/{todo_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}/todos/{todo_id}",
                         "summary": "Update todo",
                         "description": "Update a todo's text or toggle its done state.",
-                        "curl": f"""curl -s -X PUT {base}/api/kanban/tickets/1/todos/1 \\
+                        "curl": f"""curl -s -X PUT {base}/api/tickets/tickets/1/todos/1 \\
   -H 'Content-Type: application/json' \\
   -d '{{"done": true}}'""",
                         "params": [
@@ -732,10 +732,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/kanban/tickets/{ticket_id}/todos/{todo_id}",
+                        "path": "/api/tickets/tickets/{ticket_id}/todos/{todo_id}",
                         "summary": "Delete todo",
                         "description": "Remove a checklist item from a ticket.",
-                        "curl": f'curl -s -X DELETE {base}/api/kanban/tickets/1/todos/1',
+                        "curl": f'curl -s -X DELETE {base}/api/tickets/tickets/1/todos/1',
                         "params": [
                             {"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"},
                             {"name": "todo_id", "type": "int", "required": True, "description": "Todo ID"},
@@ -745,10 +745,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "POST",
-                        "path": "/api/kanban/tickets/{ticket_id}/send-to-project",
+                        "path": "/api/tickets/tickets/{ticket_id}/send-to-project",
                         "summary": "Send ticket to project",
                         "description": "Export ticket as a markdown file to the linked project's .tickets folder.",
-                        "curl": f'curl -s -X POST {base}/api/kanban/tickets/1/send-to-project',
+                        "curl": f'curl -s -X POST {base}/api/tickets/tickets/1/send-to-project',
                         "params": [{"name": "ticket_id", "type": "int", "required": True, "description": "Ticket ID"}],
                         "body": None,
                         "response_example": '{"success": true, "path": "/path/to/.tickets/fix-login-bug.md"}',

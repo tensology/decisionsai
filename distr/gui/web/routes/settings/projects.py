@@ -1990,6 +1990,54 @@ def register_routes(router, templates):
         sessions = get_startup_sessions_for_project(project_id, purpose="startup")
         return JSONResponse({"sessions": sessions})
 
+    @router.post("/projects/{project_id}/startup-terminals/start")
+    async def start_project_startup_terminals_api(project_id: int, request: Request):
+        """Start all startup terminals for a project and speak a short confirmation."""
+        from distr.core.project_startup_terminals import start_project_startup_terminals
+        from distr.core.terminal import get_startup_sessions_for_project
+
+        body = {}
+        if request.headers.get("content-type", "").startswith("application/json"):
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+        commands = body.get("commands")
+        if isinstance(commands, list):
+            commands = [str(command).strip() for command in commands if str(command).strip()]
+        else:
+            commands = None
+
+        result = start_project_startup_terminals(
+            project_id,
+            commands=commands,
+            announce=True,
+        )
+        sessions = get_startup_sessions_for_project(project_id, purpose="startup")
+        return JSONResponse({
+            "success": result.success,
+            "message": result.message,
+            "speak_message": result.speak_message,
+            "action": result.action,
+            "started": result.started,
+            "failed": result.failed,
+            "sessions": sessions,
+        })
+
+    @router.post("/projects/{project_id}/startup-terminals/stop")
+    async def stop_project_startup_terminals_api(project_id: int):
+        """Stop all startup terminals for a project and speak a short confirmation."""
+        from distr.core.project_startup_terminals import stop_project_startup_terminals
+
+        result = stop_project_startup_terminals(project_id, announce=True)
+        return JSONResponse({
+            "success": result.success,
+            "message": result.message,
+            "speak_message": result.speak_message,
+            "action": result.action,
+            "stopped": result.stopped,
+        })
+
     @router.get("/projects/{project_id}/shell-terminal")
     async def get_project_shell_terminal(project_id: int):
         """Return alive interactive shell terminal sessions for this project."""
@@ -2153,7 +2201,6 @@ def register_routes(router, templates):
         import asyncio
         from distr.core.settings import load_settings_from_db
         from distr.core.llm_factory import create_stream
-        from distr.core.signals import signal_manager
         from distr.core.db import get_session as db_session
         from distr.core.db.projects import Project
         from distr.core.project_cli_backends import get_backend
@@ -2251,10 +2298,12 @@ def register_routes(router, templates):
             logger.error(f"Terminal overview executor failed: {e}", exc_info=True)
             summary = f"Error: {str(e)[:200]}"
 
-        # Speak the summary aloud
+        # Speak the summary aloud (web thread -> agent event queue -> Qt main thread)
         try:
+            from distr.core.signals import speak_text_directly_event_queue
+
             logger.info(f"Terminal overview: speaking {len(summary)} chars")
-            signal_manager.speak_text_directly.emit(summary)
+            speak_text_directly_event_queue(summary)
         except Exception as e:
             logger.warning(f"Failed to speak terminal overview: {e}", exc_info=True)
 

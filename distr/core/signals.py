@@ -114,9 +114,10 @@ class SignalManager(QObject):
     set_speaker_enabled = pyqtSignal(bool)
 
     # Web routes -> main thread
-    web_send_to_agent_requested = pyqtSignal(int, str, bool, object, object)
+    web_send_to_agent_requested = pyqtSignal(int, str, bool, object, object, object)
     web_create_chat_emits_requested = pyqtSignal(int, str, bool, object, object, object, object)
     web_load_chat_in_agent_requested = pyqtSignal(int)
+    web_load_chat_and_process_requested = pyqtSignal(int, str, bool, bool)
 
     # EULA
     eula_accepted = pyqtSignal()
@@ -133,6 +134,7 @@ class SignalManager(QObject):
     stop_action_recording = pyqtSignal()             # Request to stop recording
     waiting_for_action_name = pyqtSignal(int)
     set_action_name = pyqtSignal(int, str)
+    action_recording_cancelled = pyqtSignal(int)
 
     # Action signals
     action_created = pyqtSignal(int)
@@ -286,6 +288,9 @@ def speak_text_directly_event_queue(text: str):
         _last_speak_text = message
         _last_speak_ts = now
     if _agent_event_queue:
+        # Always route through the queue when registered. FastAPI/web routes run on a
+        # background thread where direct Qt signal emits are unreliable; the main
+        # process drains the queue on the Qt thread and emits speak_text_directly there.
         try:
             _agent_event_queue.put(('speak_text_directly', {'text': message}), block=False)
             return

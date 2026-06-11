@@ -42,6 +42,37 @@ WORK_KEYWORDS = {
 }
 
 
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if int(count or 0) == 1 else (plural or f"{singular}s")
+
+
+def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{int(count or 0)} {_plural(int(count or 0), singular, plural)}"
+
+
+def _is_current_unhandled_whatsapp_message(
+    row: Any,
+    *,
+    now: datetime,
+    ticketed_message_ids: set[int],
+    linked_board: bool,
+) -> bool:
+    if bool(getattr(row, "processed", False)):
+        return False
+    if str(getattr(row, "snapshot_group", "") or "").strip():
+        return False
+    try:
+        if int(getattr(row, "id", 0) or 0) in ticketed_message_ids:
+            return False
+    except Exception:
+        pass
+    created = getattr(row, "created_date", None)
+    if not created:
+        return False
+    freshness_window = timedelta(hours=12 if linked_board else 3)
+    return created >= now - freshness_window
+
+
 def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
     scan = {
         "boards": [],
@@ -265,7 +296,7 @@ def _scan_external_boards(scan: dict[str, Any]) -> None:
         if total:
             scan["proposals"].append({
                 "action_type": "board_triage",
-                "description": f"{board_row['name']} ({provider}) has {total} fetched item(s) available for review.",
+                "description": f"{board_row['name']} ({provider}) has {_count_phrase(total, 'fetched item')} available for review.",
                 "payload": {
                     "source": provider,
                     "board_id": board_row["id"],
@@ -303,8 +334,8 @@ def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
         scan["proposals"].append({
             "action_type": "ticket_lane_move",
             "description": (
-                f"{board['name']} has {len(backlog.get('tickets') or [])} backlog item(s) "
-                f"that could be promoted into {current_name}."
+                f"{board['name']} has {_count_phrase(len(backlog.get('tickets') or []), 'backlog item')} "
+                f"that should move into {current_name}."
             ),
             "payload": {
                 "board_id": board["id"],
@@ -346,7 +377,7 @@ def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
 
 def _scan_whatsapp(scan: dict[str, Any]) -> None:
     from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink, get_session
-    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.kanban import KanbanBoard, KanbanTicket
 
     now = datetime.utcnow()
     cutoff = now - timedelta(days=7)
@@ -377,6 +408,13 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                 board_meta[link.board_id] = {
                     "name": board.name or f"Board {board.id}",
                 }
+        ticketed_message_ids = set()
+        for row in session.query(KanbanTicket).filter(KanbanTicket.whatsapp_message_id.isnot(None)).all():
+            value = getattr(row, "whatsapp_message_id", None)
+            if value is None and isinstance(row, (tuple, list)) and row:
+                value = row[0]
+            if value is not None:
+                ticketed_message_ids.add(int(value))
 
         work_like = []
         grouped: dict[str, dict[str, Any]] = {}
@@ -388,6 +426,13 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             link = link_by_phone.get(phone)
             linked_board = board_meta.get(link.board_id) if link else None
             linked_whatsapp_enabled = bool(linked_board)
+            if not _is_current_unhandled_whatsapp_message(
+                row,
+                now=now,
+                ticketed_message_ids=ticketed_message_ids,
+                linked_board=linked_whatsapp_enabled,
+            ):
+                continue
             is_work_related = _looks_work_related(text)
             item = {
                 "id": row.id,
@@ -446,12 +491,12 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             board_name = chosen.get("linked_board_name") or ""
             if board_name:
                 description = (
-                    f"{count} WhatsApp message(s) arrived from {chosen['latest_sender'] or chosen['jid_phone']} "
+                    f"{_count_phrase(count, 'WhatsApp message')} arrived from {chosen['latest_sender'] or chosen['jid_phone']} "
                     f"and the chat is linked to board '{board_name}'. Ask whether to snapshot them into tickets."
                 )
             elif chosen["work_related_count"] > 0:
                 description = (
-                    f"{count} recent WhatsApp message(s) from {chosen['latest_sender'] or chosen['jid_phone']} "
+                    f"{_count_phrase(count, 'recent WhatsApp message')} from {chosen['latest_sender'] or chosen['jid_phone']} "
                     "look work-related and may need ticketing or follow-up."
                 )
             else:
@@ -513,7 +558,7 @@ def _scan_telegram(scan: dict[str, Any]) -> None:
         if work_like:
             scan["proposals"].append({
                 "action_type": "message_triage",
-                "description": f"{len(work_like)} recent Telegram group message(s) look work-related and may need review.",
+                "description": f"{_count_phrase(len(work_like), 'recent Telegram group message')} look work-related and may need review.",
                 "payload": {
                     "source": "telegram",
                     "message_ids": [m["id"] for m in work_like[:5]],
@@ -682,7 +727,7 @@ def _scan_slack(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
         scan["proposals"].append({
             "action_type": "message_triage",
             "description": (
-                f"{len(work_like)} recent Slack message(s) look work-related. "
+                f"{_count_phrase(len(work_like), 'recent Slack message')} look work-related. "
                 f"Top channel: {chosen['channel_name']}."
             ),
             "payload": {
@@ -803,7 +848,7 @@ def _scan_discord(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
         scan["proposals"].append({
             "action_type": "message_triage",
             "description": (
-                f"{len(work_like)} recent Discord message(s) look work-related. "
+                f"{_count_phrase(len(work_like), 'recent Discord message')} look work-related. "
                 f"Top channel: {chosen['channel_name']}."
             ),
             "payload": {
@@ -872,7 +917,7 @@ def _scan_monday(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
     if items:
         scan["proposals"].append({
             "action_type": "task_triage",
-            "description": f"{len(items)} Monday item(s) look work-related. Top item: {items[0]['name']}",
+            "description": f"{_count_phrase(len(items), 'Monday item')} look work-related. Top item: {items[0]['name']}",
             "payload": {
                 "source": "monday",
                 "item_ids": [item["id"] for item in items[:8] if item.get("id")],

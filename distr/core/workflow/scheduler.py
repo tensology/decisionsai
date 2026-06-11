@@ -12,10 +12,18 @@ import time as _time
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Callable
 
+from sqlalchemy import func
+
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 
 logger = logging.getLogger(__name__)
+
+# Qt scheduler timer bounds — keep wakeups light unless a sub-minute schedule needs them.
+SCHEDULER_POLL_MIN_MS = 2000
+SCHEDULER_POLL_DEFAULT_MS = 60_000
+SCHEDULER_POLL_IDLE_MS = 300_000
+SCHEDULER_POLL_MAX_MS = 300_000
 
 # Preset schedules -> cron (default times)
 SCHEDULE_PRESETS = {
@@ -25,6 +33,161 @@ SCHEDULE_PRESETS = {
     "daily": "0 9 * * *",        # 9am daily
     "weekly": "0 9 * * 1",       # Monday 9am
 }
+
+
+def parse_interval_schedule(schedule_time: Optional[str]) -> tuple[int, str] | None:
+    """Decode interval schedules stored as ``15:minutes`` or ``30:seconds``."""
+    raw = str(schedule_time or "").strip().lower()
+    if not raw or ":" not in raw:
+        return None
+    value_raw, unit_raw = raw.split(":", 1)
+    try:
+        value = max(1, int(value_raw.strip()))
+    except ValueError:
+        return None
+    unit = unit_raw.strip()
+    if unit.startswith("sec"):
+        return value, "seconds"
+    return value, "minutes"
+
+
+def interval_timedelta(value: int, unit: str) -> timedelta:
+    if str(unit or "").strip().lower().startswith("sec"):
+        return timedelta(seconds=max(1, int(value)))
+    return timedelta(minutes=max(1, int(value)))
+
+
+def next_run_for_interval(
+    value: int,
+    unit: str,
+    from_dt: Optional[datetime] = None,
+    *,
+    allow_current_window: bool = False,
+) -> datetime:
+    base = from_dt or datetime.utcnow()
+    if allow_current_window:
+        base = base - timedelta(seconds=1)
+    return base + interval_timedelta(value, unit)
+
+
+def parse_once_run_at_as_utc(raw: str) -> Optional[datetime]:
+    """Parse a one-time schedule timestamp for UTC storage/comparison.
+
+  ``datetime-local`` values from the automation UI are naive local wall-clock
+  times. Explicit ``Z`` or offset suffixes are treated as absolute UTC/offset
+  timestamps.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        from datetime import timezone
+
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed - _utc_offset()
+
+
+def normalize_once_run_at_storage(raw: str) -> str:
+    """Normalize a one-time run-at value to UTC ISO for persistence."""
+    parsed = parse_once_run_at_as_utc(raw)
+    if not parsed:
+        return str(raw or "").strip()
+    return parsed.replace(microsecond=0).isoformat() + "Z"
+
+
+def once_run_at_for_datetime_local_input(stored: str) -> str:
+    """Convert a stored one-time run-at value to ``datetime-local`` input text."""
+    parsed = parse_once_run_at_as_utc(stored)
+    if not parsed:
+        return str(stored or "").strip().replace("Z", "")
+    local = parsed + _utc_offset()
+    return local.replace(second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M")
+
+
+def get_minimum_schedule_interval_seconds(*, subminute_only: bool = False) -> Optional[int]:
+    """Return the smallest active interval schedule in seconds, if any."""
+    minimum: int | None = None
+    with get_session() as session:
+        rows = (
+            session.query(AutoWorkflow.schedule_time)
+            .filter(
+                AutoWorkflow.schedule_enabled == True,  # noqa: E712
+                AutoWorkflow.schedule_preset == "interval",
+            )
+            .all()
+        )
+    for (schedule_time,) in rows:
+        parsed = parse_interval_schedule(schedule_time)
+        if not parsed:
+            continue
+        value, unit = parsed
+        if subminute_only and unit != "seconds":
+            continue
+        seconds = value if unit == "seconds" else value * 60
+        minimum = seconds if minimum is None else min(minimum, seconds)
+    return minimum
+
+
+def get_seconds_until_next_due_workflow() -> Optional[float]:
+    """Seconds until the next enabled scheduled workflow is due, or None if none."""
+    now = datetime.utcnow()
+    with get_session() as session:
+        next_at = (
+            session.query(func.min(AutoWorkflow.next_run_at))
+            .filter(
+                AutoWorkflow.schedule_enabled == True,  # noqa: E712
+                AutoWorkflow.schedule_preset.isnot(None),
+                AutoWorkflow.next_run_at.isnot(None),
+            )
+            .scalar()
+        )
+    if next_at is None:
+        return None
+    return (next_at - now).total_seconds()
+
+
+def get_workflow_scheduler_interval_ms() -> int:
+    """Choose a low-overhead Qt timer interval based on active schedules.
+
+    - No enabled schedules: idle (5 min).
+    - Sub-minute interval schedules: poll at ~1/3 of the interval (min 2s, max 10s).
+    - Everything else: sleep toward the next due time instead of hammering every second.
+    """
+    subminute = get_minimum_schedule_interval_seconds(subminute_only=True)
+    if subminute is not None and subminute < 60:
+        return max(
+            SCHEDULER_POLL_MIN_MS,
+            min((subminute * 1000) // 3, 10_000),
+        )
+
+    seconds_until_due = get_seconds_until_next_due_workflow()
+    if seconds_until_due is None:
+        return SCHEDULER_POLL_IDLE_MS
+    if seconds_until_due <= 0:
+        return SCHEDULER_POLL_MIN_MS
+    if seconds_until_due <= 120:
+        return max(SCHEDULER_POLL_MIN_MS, int(seconds_until_due * 1000))
+    if seconds_until_due <= 3600:
+        return max(15_000, min(int(seconds_until_due * 500), SCHEDULER_POLL_MAX_MS))
+    return SCHEDULER_POLL_MAX_MS
+
+
+def apply_workflow_scheduler_timer_interval(timer: Any) -> int:
+    """Sync a Qt timer with the tightest active schedule interval."""
+    interval_ms = get_workflow_scheduler_interval_ms()
+    if timer is not None and hasattr(timer, "interval") and hasattr(timer, "setInterval"):
+        if timer.interval() != interval_ms:
+            timer.setInterval(interval_ms)
+    return interval_ms
 
 
 def normalize_schedule_time(value: Optional[str], *, default: str = "09:00") -> str:
@@ -84,6 +247,16 @@ def schedule_to_cron(
                     return f"{m} {h} * * 1"
             except (ValueError, IndexError):
                 pass
+    if s == "interval":
+        parsed = parse_interval_schedule(schedule_time)
+        if not parsed:
+            return None
+        value, unit = parsed
+        if unit == "seconds":
+            return f"interval:{value}:seconds"
+        if 1 <= value <= 59:
+            return f"*/{value} * * * *"
+        return f"interval:{value}:minutes"
     if s in {"15min", "15m"}:
         return SCHEDULE_PRESETS["15min"]
     if s in {"30min", "30m"}:
@@ -206,10 +379,24 @@ def _next_run_from_cron(
         if not raw:
             return None
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+            return parse_once_run_at_as_utc(raw)
         except Exception as e:
             logger.warning("Could not parse one-time schedule %r: %s", raw, e)
             return None
+    if (cron_expr or "").strip().lower().startswith("interval:"):
+        parts = (cron_expr or "").strip().split(":")
+        if len(parts) >= 3:
+            try:
+                value = max(1, int(parts[1]))
+            except ValueError:
+                return None
+            unit = parts[2]
+            return next_run_for_interval(
+                value,
+                unit,
+                from_dt,
+                allow_current_window=allow_current_minute,
+            )
     try:
         from croniter import croniter
         offset = _utc_offset()
@@ -462,6 +649,15 @@ def _scheduled_action_preflight(workflow: AutoWorkflow) -> str | None:
     return None
 
 
+def _notify_automation_schedule_changed() -> None:
+    try:
+        from distr.gui.web.workflow_events import increment_workflow_updated
+
+        increment_workflow_updated()
+    except Exception:
+        logger.debug("Automation schedule UI notify failed", exc_info=True)
+
+
 def run_scheduled_workflow(
     workflow_id: int,
     on_start_orchestration: Optional[Callable] = None,
@@ -476,9 +672,17 @@ def run_scheduled_workflow(
     """
     from distr.core.workflow.service import start_workflow_run
 
+    now = datetime.utcnow()
     with get_session() as session:
         wf = session.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf or not wf.schedule_enabled:
+            return False
+        if not wf.next_run_at or wf.next_run_at > now:
+            logger.debug(
+                "Workflow scheduler: workflow %d is no longer due (next_run_at=%s)",
+                workflow_id,
+                wf.next_run_at,
+            )
             return False
 
         if not wf.steps:
@@ -510,6 +714,8 @@ def run_scheduled_workflow(
 
         # Advance next_run_at immediately so the scheduler doesn't re-fire
         _advance_next_run(wf)
+        wf.modified_date = datetime.utcnow()
+        notify_schedule_ui = scheduled_automation is not None
         direct_result = _execute_direct_scheduled_action(wf)
         if direct_result is not None:
             ok, message = direct_result
@@ -522,8 +728,12 @@ def run_scheduled_workflow(
                 timing=timing_metadata,
             )
             session.commit()
+            if notify_schedule_ui:
+                _notify_automation_schedule_changed()
             return True
         session.commit()
+        if notify_schedule_ui:
+            _notify_automation_schedule_changed()
 
     if scheduled_automation is not None:
         try:
@@ -601,11 +811,25 @@ def run_scheduled_workflow(
 
 def _advance_next_run(workflow: AutoWorkflow) -> None:
     """Set next_run_at from schedule configuration."""
-    if str(workflow.schedule_preset or "").strip().lower() == "once":
+    preset = str(workflow.schedule_preset or "").strip().lower()
+    if preset == "once":
         workflow.schedule_enabled = False
         workflow.next_run_at = None
         workflow.last_run_at = datetime.utcnow()
         return
+    if preset == "interval":
+        parsed = parse_interval_schedule(workflow.schedule_time)
+        if parsed:
+            value, unit = parsed
+            base = datetime.utcnow()
+            workflow.next_run_at = base + interval_timedelta(value, unit)
+            if workflow.next_run_at:
+                logger.debug(
+                    "Workflow scheduler: next interval run for workflow %d at %s",
+                    workflow.id,
+                    workflow.next_run_at,
+                )
+            return
     cron = schedule_to_cron(
         workflow.schedule_preset,
         workflow.schedule_time,
@@ -615,8 +839,19 @@ def _advance_next_run(workflow: AutoWorkflow) -> None:
     if not cron:
         workflow.next_run_at = None
         return
-    base = workflow.last_run_at or datetime.utcnow()
-    next_run = _next_run_from_cron(cron, base, workflow.schedule_timezone)
+    # Always schedule from the moment we just fired. Using last_run_at here can
+    # leave next_run_at in the past (e.g. daily 09:00 fired at 09:05) and cause
+    # the scheduler to dispatch the same automation again on the next poll.
+    now = datetime.utcnow()
+    next_run = _next_run_from_cron(cron, now, workflow.schedule_timezone)
+    guard = 0
+    while next_run and next_run <= now and guard < 8:
+        next_run = _next_run_from_cron(
+            cron,
+            next_run + timedelta(seconds=1),
+            workflow.schedule_timezone,
+        )
+        guard += 1
     workflow.next_run_at = next_run
     if next_run:
         logger.debug("Workflow scheduler: next run for workflow %d at %s", workflow.id, next_run)

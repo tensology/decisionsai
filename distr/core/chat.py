@@ -36,6 +36,57 @@ def _normalize_provider(provider: Optional[str]) -> str:
     return _PROVIDER_NORMALIZE.get(key, provider.strip())
 
 
+def _json_loads_obj(raw: Optional[str]) -> dict:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _thread_root_chat_id(session, chat_id: int) -> int:
+    root_query = text("""
+        WITH RECURSIVE parents(id, parent_id) AS (
+            SELECT id, parent_id FROM chats WHERE id = :start_id
+            UNION ALL
+            SELECT c.id, c.parent_id FROM chats c JOIN parents p ON c.id = p.parent_id
+        )
+        SELECT id FROM parents WHERE parent_id IS NULL
+    """)
+    root_result = session.execute(root_query, {"start_id": chat_id}).fetchone()
+    return int(root_result[0]) if root_result else int(chat_id)
+
+
+def get_compact_checkpoint_prompt(chat_id: Optional[int]) -> str:
+    """Compact summary block for agent system prompts (fork + compact flows)."""
+    if not chat_id:
+        return ""
+    try:
+        with get_session() as session:
+            root_id = _thread_root_chat_id(session, int(chat_id))
+            root = session.get(Chat, root_id)
+            if not root:
+                return ""
+            additional_context = _json_loads_obj(getattr(root, "additional_context", None))
+            checkpoint = additional_context.get("compact_checkpoint")
+            if not isinstance(checkpoint, dict) or checkpoint.get("active") is False:
+                return ""
+            summary = str(checkpoint.get("summary") or "").strip()
+            if not summary:
+                return ""
+            return (
+                "Chat compact checkpoint. Use this as the durable prior "
+                "conversation state instead of reconstructing the older "
+                "raw transcript:\n\n"
+                + summary
+            )
+    except Exception:
+        logger.debug("get_compact_checkpoint_prompt failed for chat %s", chat_id, exc_info=True)
+        return ""
+
+
 def _title_from_question(question: str, max_len: int = 50) -> str:
     if not question or not question.strip():
         return "New Chat"
@@ -368,16 +419,17 @@ class ChatService:
             chat = session.get(Chat, chat_id)
             if not chat:
                 return []
-            root_query = text("""
-                WITH RECURSIVE parents(id, parent_id) AS (
-                    SELECT id, parent_id FROM chats WHERE id = :start_id
-                    UNION ALL
-                    SELECT c.id, c.parent_id FROM chats c JOIN parents p ON c.id = p.parent_id
-                )
-                SELECT id FROM parents WHERE parent_id IS NULL
-            """)
-            root_result = session.execute(root_query, {"start_id": chat_id}).fetchone()
-            root_id = root_result[0] if root_result else chat_id
+            root_id = _thread_root_chat_id(session, chat_id)
+            root = session.get(Chat, root_id)
+            additional_context = _json_loads_obj(getattr(root, "additional_context", None))
+            checkpoint = additional_context.get("compact_checkpoint")
+            checkpoint_row_id = None
+            if isinstance(checkpoint, dict) and checkpoint.get("active") is not False:
+                try:
+                    checkpoint_row_id = int(checkpoint.get("chat_row_id") or 0) or None
+                except (TypeError, ValueError):
+                    checkpoint_row_id = None
+
             thread_query = text("""
                 WITH RECURSIVE chat_tree(id, parent_id, input, response, is_hidden, created_date) AS (
                     SELECT id, parent_id, input, response, is_hidden, created_date
@@ -386,11 +438,16 @@ class ChatService:
                     SELECT c.id, c.parent_id, c.input, c.response, c.is_hidden, c.created_date
                     FROM chats c JOIN chat_tree ct ON c.parent_id = ct.id
                 )
-                SELECT input, response, is_hidden FROM chat_tree ORDER BY created_date
+                SELECT id, input, response, is_hidden FROM chat_tree ORDER BY created_date
             """)
             rows = session.execute(thread_query, {"root_id": root_id}).fetchall()
             messages = []
+            checkpoint_prompt = get_compact_checkpoint_prompt(root_id)
+            if checkpoint_prompt:
+                messages.append({"role": "system", "content": checkpoint_prompt})
             for row in rows:
+                if checkpoint_row_id is not None and int(row.id or 0) <= checkpoint_row_id:
+                    continue
                 if row.input:
                     messages.append({"role": "user", "content": row.input})
                 if row.response:

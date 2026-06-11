@@ -2,7 +2,7 @@
 """
 Property 9: BoardUpdate model does not accept agent fields
 
-For any PUT request to /api/kanban/boards/{board_id} containing agent-related fields
+For any PUT request to /api/tickets/boards/{board_id} containing agent-related fields
 (agent_enabled, agent_frequency, agent_time, agent_days, agent_monthly_day,
 agent_orchestrator_provider, agent_orchestrator_model, agent_coder_provider,
 agent_coder_model, agent_sub_provider, agent_sub_model, agent_source_lane,
@@ -99,7 +99,7 @@ class TestBoardUpdateIgnoresAgentFieldsProperty:
         """
         **Validates: Requirements 10.3**
 
-        For any PUT to /api/kanban/boards/{board_id} containing agent fields,
+        For any PUT to /api/tickets/boards/{board_id} containing agent fields,
         those fields should be ignored and the board's agent columns remain unchanged.
         """
         # Fixed initial agent column values on the board

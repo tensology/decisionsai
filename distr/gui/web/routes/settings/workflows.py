@@ -208,6 +208,19 @@ class WorkflowPlanRequest(BaseModel):
     chat_id: Optional[int] = None
 
 
+class ProjectOpsPlanRequest(BaseModel):
+    instruction: str
+    board_id: Optional[int] = None
+
+
+class ProjectOpsExecuteRequest(BaseModel):
+    instruction: str
+    route: str
+    board_id: Optional[int] = None
+    ticket_id: Optional[int] = None
+    approved: bool = True
+
+
 class WorkflowGenerateStepsRequest(BaseModel):
     instruction: str
 
@@ -824,6 +837,68 @@ def register_routes(router, templates):
             return JSONResponse(get_workflow(wf_id))
         except Exception as e:
             logger.error("Workflow plan failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/{workflow_id}/project-context")
+    async def workflow_project_context(workflow_id: int, board_id: Optional[int] = None):
+        """Return active project, board, queue, and execution status for the ops harness."""
+        try:
+            from distr.core.workflow.project_ops import gather_project_ops_context
+
+            return JSONResponse(gather_project_ops_context(workflow_id=workflow_id, board_id=board_id))
+        except Exception as e:
+            logger.error("Workflow project context failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/ops/plan")
+    async def workflow_project_ops_plan(workflow_id: int, data: ProjectOpsPlanRequest):
+        """Classify a project outcome instruction and return a short execution plan."""
+        try:
+            from distr.core.workflow.project_ops import (
+                build_execution_plan,
+                classify_project_instruction,
+                gather_project_ops_context,
+                suggest_skills_for_route,
+            )
+
+            context = gather_project_ops_context(workflow_id=workflow_id, board_id=data.board_id)
+            classification = classify_project_instruction(data.instruction)
+            route = classification.get("route") or "clarification"
+            context["skills_hint"] = suggest_skills_for_route(route, data.instruction)
+            plan = build_execution_plan(
+                data.instruction,
+                route=route,
+                classification=classification,
+                context=context,
+            )
+            return JSONResponse(plan)
+        except Exception as e:
+            logger.error("Workflow project ops plan failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/ops/execute")
+    async def workflow_project_ops_execute(workflow_id: int, data: ProjectOpsExecuteRequest):
+        """Execute an approved project operations plan."""
+        if not data.approved:
+            return JSONResponse({"detail": "Approval is required before execution."}, status_code=400)
+        try:
+            from distr.core.workflow.project_ops import execute_project_ops_plan
+
+            result = execute_project_ops_plan(
+                workflow_id=workflow_id,
+                instruction=data.instruction,
+                route=data.route,
+                board_id=data.board_id,
+                ticket_id=data.ticket_id,
+            )
+            status_code = 200
+            if result.get("status") == "failed":
+                status_code = 400
+            elif result.get("status") == "needs_input":
+                status_code = 422
+            return JSONResponse(result, status_code=status_code)
+        except Exception as e:
+            logger.error("Workflow project ops execute failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.get("/workflows/version")

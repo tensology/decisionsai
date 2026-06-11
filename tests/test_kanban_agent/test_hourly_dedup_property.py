@@ -3,7 +3,7 @@
 Property 4: Hourly settings deduplication on save
 
 For any list of hour integers (possibly containing duplicates), after saving via the
-PUT /api/kanban/settings endpoint and loading back via GET, the returned
+PUT /api/tickets/settings endpoint and loading back via GET, the returned
 kanban_agent_hours list should contain no duplicate values and should be a subset of
 the original values (preserving only unique entries in [0, 23]).
 
@@ -82,7 +82,7 @@ class TestHourlyDeduplicationProperty:
         **Validates: Requirements 1.5**
 
         For any list of valid hour integers (possibly containing duplicates),
-        after saving via PUT /api/kanban/settings and loading back via GET,
+        after saving via PUT /api/tickets/settings and loading back via GET,
         the returned kanban_agent_hours list should contain no duplicate values
         and should be a subset of the original values.
         """
@@ -93,7 +93,7 @@ class TestHourlyDeduplicationProperty:
             client = TestClient(app)
 
             # Save hours via PUT
-            put_resp = client.put("/api/kanban/settings", json={
+            put_resp = client.put("/api/tickets/settings", json={
                 "kanban_agent_hours": hours,
             })
             assert put_resp.status_code == 200, (
@@ -101,7 +101,7 @@ class TestHourlyDeduplicationProperty:
             )
 
             # Load back via GET
-            get_resp = client.get("/api/kanban/settings")
+            get_resp = client.get("/api/tickets/settings")
             assert get_resp.status_code == 200
 
         returned_hours = get_resp.json()["kanban_agent_hours"]

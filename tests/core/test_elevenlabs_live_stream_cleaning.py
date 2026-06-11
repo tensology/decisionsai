@@ -71,11 +71,11 @@ def test_elevenlabs_provider_speed_stays_unity_when_transport_handles_playback_s
     service._style = 0.25
     service._use_speaker_boost = True
 
-    captured_voice_settings = {}
+    captured_request = {}
 
     class FakeTextToSpeech:
         def convert(self, **kwargs):
-            captured_voice_settings.update(kwargs["voice_settings"])
+            captured_request.update(kwargs)
             return [b"fake mp3"]
 
     class FakeClient:
@@ -99,4 +99,5 @@ def test_elevenlabs_provider_speed_stays_unity_when_transport_handles_playback_s
 
     assert sample_rate == 44100
     assert len(audio) == 4
-    assert captured_voice_settings["speed"] == 1.0
+    assert captured_request["model_id"] == "eleven_flash_v2_5"
+    assert captured_request["voice_settings"]["speed"] == 1.0

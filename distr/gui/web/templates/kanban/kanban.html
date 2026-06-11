@@ -9,33 +9,173 @@
 .kb-lane { min-width: 260px; max-width: none; flex: 1 1 320px; }
 .kb-lane-body { min-height: 80px; }
 /* Drag states */
-.kb-card.dragging { opacity: 0.4; }
-.kb-lane-body.drag-over { background: color-mix(in srgb, var(--kb-accent, #f97316) 8%, transparent); border: 1px dashed var(--kb-accent, #f97316); border-radius: 0.5rem; }
-/* Priority badges */
-.kb-pri-critical { background: #dc2626; }
-.kb-pri-high { background: #ea580c; }
-.kb-pri-medium { background: #ca8a04; }
-.kb-pri-low { background: #16a34a; }
-.kb-complexity-numeral {
-    min-width: 1.7rem;
-    height: 1.25rem;
-    padding: 0 0.35rem;
-    border: 1px solid rgba(255,255,255,0.18);
-    border-radius: 0.25rem;
+.kb-card.dragging,
+.kb-ticket-list-row.dragging { opacity: 0.4; }
+.kb-lane-body.drag-over,
+.kb-ticket-list-section.drag-over .kb-ticket-list-section-head,
+.kb-ticket-list-section.drag-over .kb-ticket-list-section-body,
+.kb-ticket-list-section-body.drag-over,
+.kb-ticket-list-section-head.drag-over { background: color-mix(in srgb, var(--kb-accent, #f97316) 8%, transparent); border: 1px dashed var(--kb-accent, #f97316); border-radius: 0.5rem; }
+/* Priority + complexity metric badges */
+.kb-metric-badge {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #d7dcff;
-    background: rgba(255,255,255,0.06);
+    min-width: 1.55rem;
+    height: 1.25rem;
+    padding: 0 0.35rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    box-sizing: border-box;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.04em;
     line-height: 1;
+    white-space: nowrap;
+}
+.kb-complexity-numeral.kb-metric-badge {
+    letter-spacing: 0.04em;
+}
+.kb-pri-critical { background: #dc2626; border-color: #991b1b; color: #ffffff; }
+.kb-pri-high { background: #ea580c; border-color: #c2410c; color: #ffffff; }
+.kb-pri-medium { background: #ca8a04; border-color: #a16207; color: #ffffff; }
+.kb-pri-low { background: #16a34a; border-color: #15803d; color: #ffffff; }
+.kb-cx-low { background: #1e40af; border-color: #1e3a8a; color: #eff6ff; }
+.kb-cx-medium { background: #92400e; border-color: #78350f; color: #fff7ed; }
+.kb-cx-high { background: #800020; border-color: #5c0018; color: #ffe4e8; }
+/* Board modal bespoke dropdowns */
+.kb-custom-select { position: relative; width: 100%; min-width: 0; }
+.kb-custom-select-native {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.kb-custom-select-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0.375rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: #152054;
+    color: #ffffff;
+    font-size: 0.75rem;
+    line-height: 1.25rem;
+    text-align: left;
+    cursor: pointer;
+}
+.kb-custom-select-trigger:hover { border-color: rgba(255,255,255,0.35); }
+.kb-custom-select-trigger:focus { outline: none; border-color: #f97316; }
+.kb-custom-select-trigger.is-placeholder .kb-custom-select-label { color: #9ca3af; }
+.kb-custom-select-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kb-custom-select-chevron {
+    flex-shrink: 0;
+    color: #9ca3af;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.kb-custom-select-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    max-height: 240px;
+    overflow-y: auto;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: #1a1f3a;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.45);
+    padding: 0.25rem;
+}
+.kb-custom-select-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: #e5e7eb;
+    font-size: 0.75rem;
+    text-align: left;
+    cursor: pointer;
+}
+.kb-custom-select-option:hover,
+.kb-custom-select-option.is-selected {
+    background: rgba(249,115,22,0.14);
+    color: #ffffff;
+}
+.kb-custom-select-option-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kb-custom-select-linked-dot {
+    flex-shrink: 0;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    background: #25D366;
 }
 /* Modal overlay */
 .kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; }
 .kb-modal-overlay:not(.hidden) { display: flex; }
 .kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 700px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+.kb-ticket-meta-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    align-items: flex-start;
+}
+.kb-ticket-meta-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1 1 130px;
+    max-width: 100%;
+}
+.kb-ticket-meta-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #9ca3af;
+    line-height: 1.2;
+}
+.kb-ticket-meta-value {
+    font-size: 12px;
+    color: #e5e7eb;
+    line-height: 1.4;
+    min-width: 0;
+}
+.kb-ticket-meta-value--truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kb-ticket-meta-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
 /* Source icons in sidebar */
 .kb-src-icon { width: 16px; height: 16px; display: inline-block; border-radius: 3px; margin-right: 6px; flex-shrink: 0; }
 .kb-src-db { background: #f97316; }
@@ -45,6 +185,42 @@
 .kb-copy-btn { opacity: 0; transition: opacity 0.15s; }
 .kb-card:hover .kb-copy-btn { opacity: 1; }
 /* Board item in sidebar */
+.kb-board-item-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 4px 2px 0;
+    border-radius: 6px;
+    font-size: 0.875rem;
+}
+.kb-board-item-wrapper:hover { background: rgba(255,255,255,0.07); }
+.kb-board-item-wrapper.active { background: rgba(249,115,22,0.2); }
+.kb-board-item-wrapper.active .kb-board-item-main { color: #f97316; }
+.kb-board-item-wrapper:focus { outline: 2px solid rgba(249,115,22,0.55); outline-offset: 0; }
+.kb-board-item-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 6px 8px 6px 12px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.kb-board-item-delete {
+    flex-shrink: 0;
+    padding: 6px;
+    border-radius: 4px;
+    color: #9ca3af;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.kb-board-item-delete:hover { color: #f87171; background: rgba(239,68,68,0.2); }
 .kb-board-item { cursor: pointer; padding: 8px 12px; border-radius: 6px; display: flex; align-items: center; font-size: 0.875rem; }
 .kb-board-item:hover { background: rgba(255,255,255,0.07); }
 .kb-board-item.active { background: rgba(249,115,22,0.2); color: #f97316; }
@@ -52,6 +228,36 @@
 .kb-card:hover { border-color: var(--kb-accent, #f97316) !important; opacity: 0.85; }
 /* Disabled copy button */
 .kb-copy-btn.disabled { opacity: 0.3 !important; cursor: not-allowed; }
+/* Copy entire lane to local board */
+.kb-lane-copy-all {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #9ca3af;
+    background: transparent;
+    flex-shrink: 0;
+}
+.kb-lane-copy-all:hover { color: #f97316; border-color: rgba(249,115,22,0.45); background: rgba(249,115,22,0.08); }
+.kb-lane-whatsapp-snapshot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(37, 211, 102, 0.4);
+    color: #25D366;
+    background: rgba(37, 211, 102, 0.1);
+    flex-shrink: 0;
+}
+.kb-lane-whatsapp-snapshot:hover { background: rgba(37, 211, 102, 0.2); border-color: rgba(37, 211, 102, 0.55); }
+.kb-lane-whatsapp-snapshot svg { width: 0.85rem; height: 0.85rem; }
+.kb-ticket-list-section-head-row { margin-bottom: 4px; }
+.kb-ticket-list-section-head-row .kb-ticket-list-section-head { margin-bottom: 0; }
 /* Card action buttons row */
 .kb-card-actions {
     opacity: 1;
@@ -95,7 +301,7 @@
     white-space: nowrap;
 }
 .kb-card-action-btn:hover { color: #ffffff; filter: brightness(1.08); }
-.kb-card-action-btn .kb-act-label { display: inline; }
+.kb-card-action-btn .kb-act-label { display: none; }
 .kb-act-copy { background: rgba(59,130,246,0.28); }
 .kb-act-agent { background: rgba(249,115,22,0.32); border-color: rgba(249,115,22,0.55); }
 .kb-act-cli { background: rgba(249,115,22,0.30); }
@@ -123,6 +329,182 @@
 }
 /* Disabled card action buttons */
 .kb-card-actions button:disabled { opacity: 0.45 !important; filter: grayscale(0.2); }
+.kb-board-actions { align-self: stretch; display: flex; align-items: stretch; gap: 10px; }
+.kb-board-action-cluster { display: inline-flex; align-items: center; gap: 12px; }
+.kb-board-icon-btn { min-width: 34px; height: 34px; padding: 7px 8px; border-radius: 7px; }
+.kb-board-divider { width: 1px; align-self: stretch; background: rgba(255,255,255,0.20); margin: -12px 2px; }
+.kb-view-toggle-group { align-self: stretch; display: inline-flex; align-items: stretch; gap: 4px; margin: -12px 0; }
+.kb-view-toggle {
+    min-width: 44px;
+    padding: 8px 16px;
+    border-bottom: 2px solid transparent;
+    color: #9ca3af;
+}
+.kb-view-toggle svg { display: block; width: 18px; height: 18px; flex-shrink: 0; }
+.kb-view-toggle:hover { color: #ffffff; background: rgba(255,255,255,0.05); }
+.kb-view-toggle.active { color: #ffffff; border-bottom-color: var(--kb-accent, #f97316); background: transparent; }
+.kb-ticket-list-section { margin-bottom: 4px; }
+.kb-ticket-list-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin: 0 0 4px;
+    padding: 6px 4px;
+    border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    border-radius: 0;
+    background: transparent;
+    color: #e5e7eb;
+    cursor: pointer;
+    text-align: left;
+}
+.kb-ticket-list-section-head:hover { color: #ffffff; background: rgba(255,255,255,0.04); }
+.kb-ticket-list-chevron {
+    flex-shrink: 0;
+    color: #9ca3af;
+    transition: transform 0.15s ease;
+}
+.kb-ticket-list-section--expanded .kb-ticket-list-chevron { transform: rotate(90deg); color: #e5e7eb; }
+.kb-ticket-list-section-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.kb-ticket-list-section-count {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #6b7280;
+}
+.kb-ticket-list-section-body { padding-top: 2px; padding-bottom: 4px; }
+.kb-ticket-list-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 6px 10px;
+    background: #1a1f3a;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.kb-ticket-list-row:hover { border-color: color-mix(in srgb, var(--kb-accent, #f97316) 60%, transparent); }
+.kb-ticket-list-prefix {
+    flex: 0 0 108px;
+    width: 108px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.kb-ticket-list-drag-handle {
+    flex: 0 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    color: #6b7280;
+    cursor: grab;
+    touch-action: none;
+}
+.kb-ticket-list-drag-handle--static {
+    flex: 0 0 14px;
+    width: 14px;
+    cursor: default;
+    visibility: hidden;
+}
+.kb-ticket-list-row.dragging .kb-ticket-list-drag-handle { cursor: grabbing; }
+.kb-ticket-list-badges {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+}
+.kb-ticket-list-badges .kb-metric-badge.kb-complexity-numeral {
+    flex: 0 0 1.45rem;
+    min-width: 1.45rem;
+    width: 1.45rem;
+    padding: 0;
+}
+.kb-ticket-list-badges .kb-metric-badge:not(.kb-complexity-numeral) {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 3.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.kb-ticket-list-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 10px;
+    align-items: center;
+    overflow: hidden;
+}
+.kb-ticket-list-content--no-desc {
+    grid-template-columns: auto;
+}
+.kb-ticket-list-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    line-height: 1.35;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.kb-ticket-list-badges .kb-metric-badge {
+    height: 1.1rem;
+    font-size: 9px;
+}
+.kb-ticket-list-desc {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #9ca3af;
+}
+.kb-ticket-list-desc-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 2rem;
+    white-space: nowrap;
+}
+.kb-ticket-list-desc--marquee .kb-ticket-list-desc-track {
+    animation: kbListDescMarquee var(--kb-marquee-duration, 12s) linear infinite;
+}
+.kb-ticket-list-desc--marquee:hover .kb-ticket-list-desc-track,
+.kb-ticket-list-desc--marquee:focus-within .kb-ticket-list-desc-track {
+    animation-play-state: paused;
+}
+@keyframes kbListDescMarquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+.kb-ticket-list-actions {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-left: auto;
+}
+.kb-ticket-list-row .kb-card-action-btn {
+    padding: 3px 5px;
+    border-radius: 5px;
+    font-size: 10px;
+    gap: 4px;
+}
+.kb-ticket-list-row .kb-card-action-btn svg { width: 12px; height: 12px; }
+.kb-ticket-list-row .kb-act-label { display: none; }
 /* Scrollbar for lanes container */
 .kb-lanes-wrap::-webkit-scrollbar { height: 8px; }
 .kb-lanes-wrap::-webkit-scrollbar-track { background: transparent; }
@@ -302,21 +684,29 @@
                         <h2 id="kb-board-title" class="text-lg font-semibold text-white"></h2>
                         <span id="kb-board-source-badge" class="text-xs px-2 py-0.5 rounded"></span>
                     </div>
-                    <div class="flex items-center gap-2" id="kb-board-actions">
+                    <div class="kb-board-actions" id="kb-board-actions">
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
-                        <button type="button" id="kb-refresh-boards" class="inline-flex h-9 w-9 items-center justify-center rounded text-gray-300 hover:bg-white/10 hover:text-white transition-colors" title="Re-sync external boards" aria-label="Re-sync external boards">
-                            <svg class="kb-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5 9a7 7 0 0111.95-2.05L20 9M19 15a7 7 0 01-11.95 2.05L4 15" />
-                            </svg>
-                        </button>
-                        <button type="button" id="kb-edit-board" class="inline-flex h-9 w-9 items-center justify-center rounded text-gray-300 hover:bg-white/10 hover:text-white transition-colors" title="Configure board" aria-label="Configure board"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span id="kb-edit-board-label" class="sr-only">Configure</span></button>
-                        <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
+                        <div class="kb-view-toggle-group" role="group" aria-label="Board view">
+                            <button type="button" id="kb-view-list" class="kb-view-toggle active inline-flex items-center justify-center transition-colors" title="List view" aria-label="List view" data-view="list"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h10"/><path d="M9 12h10"/><path d="M9 18h10"/><path d="M5 6h.01"/><path d="M5 12h.01"/><path d="M5 18h.01"/></svg></button>
+                            <button type="button" id="kb-view-kanban" class="kb-view-toggle inline-flex items-center justify-center transition-colors" title="Kanban view" aria-label="Kanban view" data-view="kanban"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="4.5" height="16" rx="1"/><rect x="10.25" y="4" width="4.5" height="10" rx="1"/><rect x="16.5" y="4" width="3.5" height="13" rx="1"/></svg></button>
+                        </div>
+                        <div class="kb-board-divider" aria-hidden="true"></div>
+                        <div class="kb-board-action-cluster">
+                            <button type="button" id="kb-refresh-boards" class="hidden inline-flex kb-board-icon-btn items-center justify-center text-gray-300 hover:bg-white/10 hover:text-white transition-colors" title="Re-sync external boards" aria-label="Re-sync external boards">
+                                <svg class="kb-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5 9a7 7 0 0111.95-2.05L20 9M19 15a7 7 0 01-11.95 2.05L4 15" />
+                                </svg>
+                            </button>
+                            <button type="button" id="kb-edit-board" class="inline-flex kb-board-icon-btn items-center justify-center text-gray-300 hover:bg-white/10 hover:text-white transition-colors" title="Edit board" aria-label="Edit board"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg><span id="kb-edit-board-label" class="sr-only">Edit</span></button>
+                            <button type="button" id="kb-add-ticket" class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20 hover:border-white/40 transition-colors" title="Add ticket" aria-label="Add ticket"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg><span id="kb-add-ticket-label" class="sr-only">Add ticket</span></button>
+                        </div>
                         <button type="button" id="kb-delete-board" class="hidden"></button>
                     </div>
                 </div>
                 <!-- Lanes -->
                 <div class="flex-1 overflow-x-auto overflow-y-auto p-4 kb-lanes-wrap">
                     <div id="kb-lanes" class="flex gap-4 h-full"></div>
+                    <div id="kb-ticket-list" class="hidden min-w-[760px] space-y-3"></div>
                 </div>
             </div>
             <!-- WhatsApp message thread view -->
@@ -471,8 +861,8 @@
         <div style="min-height: 320px;">
             <!-- Details tab -->
             <div id="kb-tm-tab-details" class="kb-tm-pane p-6 space-y-4">
-                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30">
-                    <!-- Populated dynamically for external tickets (single row: source, members, labels, reporter) -->
+                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30 kb-ticket-meta-grid">
+                    <!-- Populated dynamically for external tickets -->
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Title</label>
@@ -493,9 +883,8 @@
                     </div>
                 </div>
                 <p class="text-xs text-gray-500">Format: Jira-style duration values like <code>30m</code>, <code>2h</code>, <code>1d 3h</code>, or <code>1w 2d 4h 30m</code>.</p>
-                <div id="kb-modal-source-meta" class="hidden p-3 bg-[#152054] border border-white/10 rounded">
-                    <div class="text-xs text-gray-500 mb-1">Source</div>
-                    <div id="kb-modal-source-meta-body" class="text-xs text-gray-300 space-y-1"></div>
+                <div id="kb-modal-source-meta" class="hidden mb-3 p-3 bg-[#152054] border border-white/10 rounded">
+                    <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid"></div>
                 </div>
             </div>
             <!-- Links tab -->
@@ -581,32 +970,10 @@
                 </div>
             </div>
         </div>
-        <!-- Modal footer -->
-        <div class="flex justify-between items-center px-6 pb-5 pt-2 border-t border-white/20">
-            <div class="flex items-center gap-4" id="kb-modal-actions">
-                <button type="button" id="kb-modal-act-copy" class="text-gray-400 hover:text-white transition-colors" title="Copy title and description" aria-label="Copy title and description">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-discuss" class="text-gray-400 hover:text-[#c4b5fd] transition-colors" title="Send to Orchestrator" aria-label="Send to Orchestrator">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-cli" class="text-gray-400 hover:text-orange-400 transition-colors" title="Run with Cursor/Codex" aria-label="Run with Cursor/Codex">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-project" class="text-gray-400 hover:text-blue-400 transition-colors" title="Send to Project" aria-label="Send to Project">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-workflow" class="text-gray-400 hover:text-sky-400 transition-colors" title="Send to Workflow" aria-label="Send to Workflow">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>
-                </button>
-                <button type="button" id="kb-modal-transfer-ext" class="hidden text-gray-400 hover:text-green-400 transition-colors" title="Copy to local board" aria-label="Copy to local board">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                </button>
-            </div>
-            <div class="flex gap-2">
-                <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
-                <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
-            </div>
+        <!-- Modal footer (local tickets only) -->
+        <div id="kb-modal-footer" class="flex justify-end items-center gap-2 px-6 pb-5 pt-2 border-t border-white/20">
+            <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
+            <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
         </div>
     </div>
 </div>
@@ -643,12 +1010,21 @@
 
 <!-- Copy to board modal -->
 <div id="kb-copy-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
-    <div class="kb-modal p-6" style="width: 400px;">
-        <h3 class="text-lg font-semibold text-white mb-4">Copy to Board</h3>
-        <p class="text-sm text-gray-400 mb-3">Select a database board to copy this ticket into:</p>
-        <select id="kb-copy-board-select" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none mb-4">
-            <option value="">No boards available</option>
-        </select>
+    <div class="kb-modal p-6" style="width: 420px;">
+        <h3 id="kb-copy-modal-title" class="text-lg font-semibold text-white mb-2">Copy to local board</h3>
+        <p id="kb-copy-modal-hint" class="text-sm text-gray-400 mb-4">Choose a local board and lane.</p>
+        <div class="mb-4">
+            <label for="kb-copy-board-select" class="block text-sm text-gray-400 mb-1">Board</label>
+            <select id="kb-copy-board-select" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                <option value="">No boards available</option>
+            </select>
+        </div>
+        <div class="mb-4">
+            <label for="kb-copy-lane-select" class="block text-sm text-gray-400 mb-1">Lane</label>
+            <select id="kb-copy-lane-select" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                <option value="">Select a board first</option>
+            </select>
+        </div>
         <div class="flex justify-end gap-2">
             <button type="button" id="kb-copy-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
             <button type="button" id="kb-copy-confirm" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Copy</button>
@@ -806,26 +1182,18 @@
             </div>
             <div class="border-t border-white/10 pt-4">
                 <h4 class="text-xs text-gray-400 uppercase tracking-wide mb-2">WhatsApp</h4>
-                <p class="text-xs text-gray-500 mb-3">Link chats or people to this board. For groups, select the group and optionally a specific participant.</p>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                        <label class="text-xs text-gray-500">Chat / Group</label>
-                        <select id="kb-bm-wa-chat-select" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
-                            <option value="">Select chat...</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-xs text-gray-500">Person in Group (optional)</label>
-                        <select id="kb-bm-wa-person-select" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
-                            <option value="">Link full chat / group</option>
-                        </select>
+                <p class="text-xs text-gray-500 mb-3">Choose the WhatsApp chat this board should listen to. The link is saved with the board.</p>
+                <div>
+                    <label class="text-xs text-gray-500">Chat Group</label>
+                    <div class="flex items-center gap-2 min-w-0">
+                        <div id="kb-bm-wa-chat-select-wrap" class="w-full min-w-0">
+                            <select id="kb-bm-wa-chat-select" class="w-full min-w-0">
+                                <option value="">Select chat...</option>
+                            </select>
+                        </div>
+                        <button type="button" id="kb-bm-wa-refresh-candidates" class="shrink-0 px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh List</button>
                     </div>
                 </div>
-                <div class="mt-3 flex items-center gap-2">
-                    <button type="button" id="kb-bm-wa-refresh-candidates" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh List</button>
-                    <button type="button" id="kb-bm-wa-add-btn" class="px-3 py-1.5 rounded bg-[#25D366] text-white text-xs hover:bg-[#1da851]">+ Link to Board</button>
-                </div>
-                <div id="kb-bm-wa-links" class="space-y-2 mt-3"></div>
             </div>
         </div>
         <!-- Footer -->
@@ -843,9 +1211,10 @@
 {% block extra_scripts %}
 <script src="/static/shared/js/api.js"></script>
 <script src="/static/settings/js/llms.js"></script>
-<script src="/kanban/static/js/kanban_board.js"></script>
-<script src="/kanban/static/js/kanban_ticket.js"></script>
-<script src="/kanban/static/js/kanban_whatsapp.js"></script>
-<script src="/kanban/static/js/kanban.js"></script>
+<script src="/tickets/static/js/kanban_custom_select.js"></script>
+<script src="/tickets/static/js/kanban_board.js"></script>
+<script src="/tickets/static/js/kanban_ticket.js"></script>
+<script src="/tickets/static/js/kanban_whatsapp.js"></script>
+<script src="/tickets/static/js/kanban.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 {% endblock %}

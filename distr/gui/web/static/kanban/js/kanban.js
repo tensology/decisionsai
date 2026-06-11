@@ -10,7 +10,7 @@
     /** Loaded ticket's source_chat_id (null = unset); used to avoid overwriting on save. */
     var modalTicketSourceChatId = null;
     var sendWorkflowContext = null;
-    var copyTicketData = null;     // { title, description } for copy modal
+    var copyModalState = null;     // { mode: 'single'|'lane', ... } for copy modal
     var ctxMenuBoardId = null;     // board id for context menu
     var waChats = [];
     var waSelectedJid = null;
@@ -40,6 +40,7 @@
     var kbBoardWS = null;
     var kbBoardWSReconnectTimer = null;
     var kbBoardRefreshTimer = null;
+    var kbBoardViewMode = "list";
     var waTicketComposeInFlight = false;
     var waSidebarChatListMode = false;
     var waSelectedChatPhones = {};
@@ -51,6 +52,21 @@
     var esc = commonUtils.esc;
     var waMsgHasLinkedTicket = waHelpers.waMsgHasLinkedTicket;
     var waIsMessageSelectable = waHelpers.waIsMessageSelectable;
+    try {
+        var bootParams = new URLSearchParams(window.location.search);
+        var bootView = (bootParams.get("view") || "").toLowerCase();
+        if (bootView === "kanban" || bootView === "list") {
+            kbBoardViewMode = bootView;
+            localStorage.setItem("kb_board_view_mode", kbBoardViewMode);
+        } else {
+            var savedBoardView = localStorage.getItem("kb_board_view_mode");
+            if (savedBoardView === "kanban" || savedBoardView === "list") {
+                kbBoardViewMode = savedBoardView;
+            }
+        }
+    } catch (e) {
+        kbBoardViewMode = "list";
+    }
     function updateWaThreadSelectToggleUi() {
         var toggleBtn = document.getElementById("kb-wa-thread-select-toggle");
         if (!toggleBtn) return;
@@ -183,7 +199,7 @@
     }
     var waDownloadJsonFile = waHelpers.waDownloadJsonFile;
     function waExportMessagesForPhones(phones, label) {
-        apiFetch("/api/kanban/whatsapp/messages?limit=100000").then(function(data) {
+        apiFetch("/api/tickets/whatsapp/messages?limit=100000").then(function(data) {
             var all = data.messages || [];
             var msgs = phones && phones.length ? all.filter(function(m) {
                 var jp = String(m.jid_phone || "");
@@ -213,7 +229,7 @@
                 return;
             }
             var p = phones[i++];
-            apiFetch("/api/kanban/whatsapp/chat/" + encodeURIComponent(p), { method: "DELETE" }).then(function() { next(); }).catch(function() { next(); });
+            apiFetch("/api/tickets/whatsapp/chat/" + encodeURIComponent(p), { method: "DELETE" }).then(function() { next(); }).catch(function() { next(); });
         }
         next();
     }
@@ -298,7 +314,7 @@
         if (fileInput) fileInput.value = "";
     }
     function syncAndRefreshThreadAfterSend() {
-        apiFetch("/api/kanban/whatsapp/sync", { method: "POST" }).finally(function() {
+        apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).finally(function() {
             loadWhatsAppChats(true);
             scheduleWaThreadRefresh(250);
         });
@@ -349,7 +365,7 @@
 
     function fetchWaWsAuthBundle() {
         var phones = collectWaPhonesForSubscription();
-        return apiFetch("/api/kanban/whatsapp/ws-auth", {
+        return apiFetch("/api/tickets/whatsapp/ws-auth", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
@@ -486,7 +502,7 @@
     }
 
     function deleteLocalBoardById(boardId) {
-        return apiFetch("/api/kanban/boards/" + boardId, { method: "DELETE" }).then(function() {
+        return apiFetch("/api/tickets/boards/" + boardId, { method: "DELETE" }).then(function() {
             showSnackbar("Board deleted");
             if (currentBoard && String(currentBoard.id) === String(boardId)) {
                 clearSelectedBoardSurface();
@@ -497,11 +513,10 @@
         });
     }
 
-    function confirmDeleteCurrentLocalBoard() {
-        if (!currentBoard || currentBoard.source !== "database" || !currentBoard.id) return;
-        var boardId = currentBoard.id;
+    function confirmDeleteLocalBoardById(boardId) {
+        if (!boardId) return;
         var board = findLocalBoardById(boardId);
-        var name = (board && board.name) || (currentBoardData && currentBoardData.name) || "this board";
+        var name = (board && board.name) || (currentBoardData && String(currentBoard.id) === String(boardId) ? currentBoardData.name : "") || "this board";
         showKanbanConfirm({
             title: "Delete board",
             message: 'Delete board "' + name + '" and all its tickets? This cannot be undone.',
@@ -512,6 +527,11 @@
                 deleteLocalBoardById(boardId);
             },
         });
+    }
+
+    function confirmDeleteCurrentLocalBoard() {
+        if (!currentBoard || currentBoard.source !== "database" || !currentBoard.id) return;
+        confirmDeleteLocalBoardById(currentBoard.id);
     }
 
     function shouldOpenSelectedBoardDeleteConfirm(e) {
@@ -576,6 +596,7 @@
         selectBoard: selectBoard,
         loadBoards: loadBoards,
         loadBoardWaLinks: loadBoardWaLinks,
+        saveSelectedBoardWaLink: function(boardId) { return waManagement.saveSelectedWaLinkForBoard(boardId); },
         populateSelect: populateSelect,
         getAgentProviders: function() { return _agentProviders; },
         setAgentProviders: function(providers) { _agentProviders = providers || []; },
@@ -592,6 +613,7 @@
         renderExternalBoards: renderExternalBoards,
         resetExternalCache: function() { _externalCache = null; _externalCacheTime = 0; },
         addTicket: addTicket,
+        setBoardViewMode: setBoardViewMode,
         onEnterMessagesTab: function() {
             if (waChats.length) {
                 var hasSelected = waSelectedJid && waChats.some(function(chat) { return chat.sender === waSelectedJid; });
@@ -662,6 +684,7 @@
         isMessagesPanelVisible: isMessagesPanelVisible,
         waThreadDeleteHotkeyIgnored: function() { return waManagement.waThreadDeleteHotkeyIgnored(); },
         switchSidebarTab: switchSidebarTab,
+        applySidebarTabFromUrl: applySidebarTabFromUrl,
         bindWhatsAppUiHandlers: bindWhatsAppUiHandlers,
         startWhatsAppBootstrap: startWhatsAppBootstrap,
     });
@@ -671,6 +694,7 @@
         esc: esc,
         dedupeThreadMessages: dedupeThreadMessages,
         switchSidebarTab: switchSidebarTab,
+        applySidebarTabFromUrl: applySidebarTabFromUrl,
         updateTabBarVisibility: boardSettings.updateTabBarVisibility,
         updateWaThreadSelectToggleUi: updateWaThreadSelectToggleUi,
         updateWaSidebarFooterUi: updateWaSidebarFooterUi,
@@ -742,6 +766,7 @@
     });
     var ticketActions = window.KanbanTicketActions.create({
         apiFetch: apiFetch,
+        esc: esc,
         showSnackbar: showSnackbar,
         stripHtml: stripHtml,
         mergeSourceChatIntoPayload: commonUtils.mergeSourceChatIntoPayload,
@@ -751,8 +776,8 @@
         getCurrentBoard: function() { return currentBoard; },
         getCurrentBoardData: function() { return currentBoardData; },
         getDbBoards: function() { return dbBoards; },
-        getCopyTicketData: function() { return copyTicketData; },
-        setCopyTicketData: function(v) { copyTicketData = v; },
+        getCopyModalState: function() { return copyModalState; },
+        setCopyModalState: function(v) { copyModalState = v; },
     });
     var externalTicketModal = window.KanbanExternalTicketModal.create({
         apiFetch: apiFetch,
@@ -782,14 +807,55 @@
     var BOARDS_CACHE_TTL = 60000; // 1 minute (local boards change often)
     var EXTERNAL_CACHE_TTL = 300000; // 5 minutes (external boards are slower + less volatile)
 
+    function sortExternalBoardsForSidebar(boards) {
+        if (!Array.isArray(boards)) return [];
+        var configured = boards.filter(function(b) { return b && b.local_id; });
+        var unconfigured = boards.filter(function(b) { return b && !b.local_id; });
+        configured.sort(function(a, b) {
+            var aStamp = String(a.modified_date || "");
+            var bStamp = String(b.modified_date || "");
+            if (aStamp !== bStamp) return aStamp < bStamp ? 1 : -1;
+            return String(a.name || "").toLowerCase().localeCompare(String(b.name || "").toLowerCase());
+        });
+        unconfigured.sort(function(a, b) {
+            return String(a.name || "").toLowerCase().localeCompare(String(b.name || "").toLowerCase());
+        });
+        return configured.concat(unconfigured);
+    }
+
+    function touchExternalBoardActivity(source, boardId) {
+        if (source !== "trello" && source !== "jira") return Promise.resolve();
+        return apiFetch("/api/tickets/external-boards/" + source + "/" + encodeURIComponent(boardId) + "/touch", { method: "POST" })
+            .then(function(res) {
+                if (!res || !res.success || !_externalCache) return;
+                var list = _externalCache[source];
+                if (!Array.isArray(list)) return;
+                var board = list.filter(function(b) { return String(b.id) === String(boardId); })[0];
+                if (!board) return;
+                if (res.modified_date) board.modified_date = res.modified_date;
+                if (res.local_id) {
+                    board.local_id = res.local_id;
+                    board.has_local_config = true;
+                }
+                list = sortExternalBoardsForSidebar(list);
+                _externalCache[source] = list;
+                renderExternalBoards(source === "trello" ? "kb-trello-boards" : "kb-jira-boards", list, source);
+            })
+            .catch(function() {});
+    }
+
     function getExternalBoards(forceRefresh) {
         var now = Date.now();
         var stale = forceRefresh || !_externalCache || (now - _externalCacheTime > EXTERNAL_CACHE_TTL);
         if (!stale && _externalCache) {
             return Promise.resolve(_externalCache);
         }
-        return apiFetch("/api/kanban/external-boards").then(function(data) {
-            _externalCache = data || { trello: [], jira: [] };
+        return apiFetch("/api/tickets/external-boards").then(function(data) {
+            data = data || { trello: [], jira: [] };
+            _externalCache = {
+                trello: sortExternalBoardsForSidebar(data.trello || []),
+                jira: sortExternalBoardsForSidebar(data.jira || []),
+            };
             _externalCacheTime = Date.now();
             return _externalCache;
         });
@@ -801,7 +867,7 @@
         var externalStale = forceRefresh || !_externalCache || (now - _externalCacheTime > EXTERNAL_CACHE_TTL);
 
         var boardsPromise = boardsStale
-            ? apiFetch("/api/kanban/boards").then(function(boards) {
+            ? apiFetch("/api/tickets/boards").then(function(boards) {
                 _boardsCache = boards;
                 _boardsCacheTime = Date.now();
                 return boards;
@@ -813,18 +879,30 @@
             renderSidebarBoards(boards);
 
             // Auto-select: URL param > localStorage > first board
-            if (!currentBoard && dbBoards.length) {
+            if (!currentBoard) {
                 var params = new URLSearchParams(window.location.search);
-                var urlBoardId = parseInt(params.get("board_id"), 10);
-                if (urlBoardId && dbBoards.some(function(b) { return b.id === urlBoardId; })) {
-                    selectBoard("database", urlBoardId);
+                var urlView = (params.get("view") || "").toLowerCase();
+                if (urlView === "list" || urlView === "kanban") {
+                    kbBoardViewMode = urlView;
+                    try { localStorage.setItem("kb_board_view_mode", kbBoardViewMode); } catch (e) {}
+                }
+                var urlSource = (params.get("source") || "").toLowerCase();
+                var urlBoardIdRaw = (params.get("board_id") || "").trim();
+                var urlBoardUrl = (params.get("board_url") || "").trim();
+                if ((urlSource === "jira" || urlSource === "trello") && urlBoardIdRaw) {
+                    selectBoard(urlSource, urlBoardIdRaw, urlBoardUrl);
                 } else {
-                    var last = null;
-                    try { last = JSON.parse(localStorage.getItem("kb_last_selected")); } catch (e) {}
-                    if (last && last.source === "database" && dbBoards.some(function(b) { return b.id === last.id; })) {
-                        selectBoard(last.source, last.id);
-                    } else {
-                        selectBoard("database", dbBoards[0].id);
+                    var urlBoardId = parseInt(urlBoardIdRaw, 10);
+                    if (urlBoardId && dbBoards.some(function(b) { return b.id === urlBoardId; })) {
+                        selectBoard("database", urlBoardId);
+                    } else if (dbBoards.length) {
+                        var last = null;
+                        try { last = JSON.parse(localStorage.getItem("kb_last_selected")); } catch (e) {}
+                        if (last && last.source === "database" && dbBoards.some(function(b) { return b.id === last.id; })) {
+                            selectBoard(last.source, last.id);
+                        } else {
+                            selectBoard("database", dbBoards[0].id);
+                        }
                     }
                 }
             }
@@ -866,19 +944,28 @@
 
     function focusFirstBoardInActiveSource() {
         var containerId = activeSourceTab === "trello" ? "kb-trello-boards" : (activeSourceTab === "jira" ? "kb-jira-boards" : "kb-db-boards");
-        var first = document.querySelector("#" + containerId + " .kb-board-item");
+        var selector = containerId === "kb-db-boards" ? ".kb-board-item-wrapper" : ".kb-board-item";
+        var first = document.querySelector("#" + containerId + " " + selector);
         if (first) first.focus();
     }
 
     function getActiveBoardRows() {
         var containerId = activeSourceTab === "trello" ? "kb-trello-boards" : (activeSourceTab === "jira" ? "kb-jira-boards" : "kb-db-boards");
-        return Array.prototype.slice.call(document.querySelectorAll("#" + containerId + " .kb-board-item"));
+        var selector = containerId === "kb-db-boards" ? ".kb-board-item-wrapper" : ".kb-board-item";
+        return Array.prototype.slice.call(document.querySelectorAll("#" + containerId + " " + selector));
     }
+
+    function getBoardRowFromEventTarget(target) {
+        if (!target || !target.closest) return null;
+        return target.closest(".kb-board-item-wrapper") || target.closest(".kb-board-item");
+    }
+
+    var boardDeleteIconSvg = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
 
     function focusBoardRowByOffset(offset) {
         var rows = getActiveBoardRows();
         if (!rows.length) return;
-        var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".kb-board-item") : null;
+        var active = getBoardRowFromEventTarget(document.activeElement);
         var idx = rows.indexOf(active);
         if (idx < 0 && currentBoard) {
             idx = rows.findIndex(function(row) {
@@ -911,23 +998,20 @@
                 if (next) next.focus();
                 return;
             }
-            if (e.target && e.target.closest && e.target.closest(".kb-board-item")) {
+            var boardRow = getBoardRowFromEventTarget(e.target);
+            if (boardRow) {
                 if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                     e.preventDefault();
                     focusBoardRowByOffset(e.key === "ArrowDown" ? 1 : -1);
                 } else if (e.key === "Enter") {
-                    var row = e.target.closest(".kb-board-item");
-                    if (row) {
-                        e.preventDefault();
-                        selectBoard(row.dataset.boardSource || "database", row.dataset.boardId, row.dataset.boardUrl || "");
-                    }
+                    if (e.target && e.target.closest && e.target.closest(".kb-board-item-delete")) return;
+                    e.preventDefault();
+                    selectBoard(boardRow.dataset.boardSource || "database", boardRow.dataset.boardId, boardRow.dataset.boardUrl || "");
                 } else if (e.key === "Delete") {
-                    var delRow = e.target.closest(".kb-board-item");
-                    if (delRow && (delRow.dataset.boardSource || "database") === "database") {
-                        e.preventDefault();
-                        selectBoard("database", delRow.dataset.boardId);
-                        setTimeout(confirmDeleteCurrentLocalBoard, 0);
-                    }
+                    if (isAnyKanbanModalOpen()) return;
+                    if ((boardRow.dataset.boardSource || "database") !== "database") return;
+                    e.preventDefault();
+                    confirmDeleteLocalBoardById(boardRow.dataset.boardId);
                 }
             }
         });
@@ -940,44 +1024,80 @@
         if (search) db = db.filter(function(b) { return b.name.toLowerCase().indexOf(search) >= 0; });
         container.innerHTML = db.length ? "" : '<p class="text-xs text-gray-500 italic">No boards yet</p>';
         db.forEach(function(b) {
-            var div = document.createElement("div");
-            div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? " active" : "");
-            div.draggable = true;
-            div.dataset.boardId = b.id;
-            div.dataset.boardSource = "database";
-            div.tabIndex = 0;
-            div.setAttribute("role", "option");
-            div.setAttribute("aria-selected", currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? "true" : "false");
-            var inUseTag = b.in_use ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#f97316;color:#fff;margin-left:4px;flex-shrink:0">IN USE</span>' : '';
-            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + inUseTag;
-            div.onclick = function() { selectBoard("database", b.id); };
-            div.onfocus = function() { if (!currentBoard || currentBoard.id !== b.id || currentBoard.source !== "database") selectBoard("database", b.id); };
-            div.ondblclick = function() { boardSettings.openBoardModal(b.id); };
-            div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
-            div.ondragend = function() { div.classList.remove("dragging"); };
-            div.ondragover = function(e) { e.preventDefault(); div.style.borderTop = "2px solid #f97316"; };
-            div.ondragleave = function() { div.style.borderTop = ""; };
-            div.ondrop = function(e) {
+            var wrapper = document.createElement("div");
+            var isActive = currentBoard && currentBoard.id === b.id && currentBoard.source === "database";
+            wrapper.className = "kb-board-item-wrapper text-gray-300" + (isActive ? " active" : "");
+            wrapper.draggable = true;
+            wrapper.dataset.boardId = b.id;
+            wrapper.dataset.boardSource = "database";
+            wrapper.tabIndex = 0;
+            wrapper.setAttribute("role", "option");
+            wrapper.setAttribute("aria-selected", isActive ? "true" : "false");
+            var inUseDot = b.in_use
+                ? '<span class="kb-board-in-use-dot w-2 h-2 rounded-full bg-[#f97316] flex-shrink-0" title="In use" aria-label="In use"></span>'
+                : "";
+            wrapper.innerHTML =
+                '<button type="button" class="kb-board-item-main">' +
+                    '<span class="kb-src-icon" style="background:' + esc(b.color || "#f97316") + '"></span>' +
+                    '<span class="flex-1 truncate">' + esc(b.name) + "</span>" +
+                "</button>" +
+                inUseDot +
+                '<button type="button" class="kb-board-item-delete" aria-label="Delete board">' + boardDeleteIconSvg + "</button>";
+            var mainBtn = wrapper.querySelector(".kb-board-item-main");
+            var deleteBtn = wrapper.querySelector(".kb-board-item-delete");
+            if (mainBtn) {
+                mainBtn.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    selectBoard("database", b.id);
+                });
+            }
+            if (deleteBtn) {
+                deleteBtn.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    confirmDeleteLocalBoardById(b.id);
+                });
+            }
+            wrapper.addEventListener("focus", function() {
+                if (!currentBoard || currentBoard.id !== b.id || currentBoard.source !== "database") {
+                    selectBoard("database", b.id);
+                }
+            });
+            wrapper.addEventListener("dblclick", function(e) {
+                if (e.target && e.target.closest && e.target.closest(".kb-board-item-delete")) return;
+                boardSettings.openBoardModal(b.id);
+            });
+            wrapper.addEventListener("dragstart", function(e) {
+                if (e.target && e.target.closest && e.target.closest(".kb-board-item-delete")) {
+                    e.preventDefault();
+                    return;
+                }
+                e.dataTransfer.setData("text/plain", "board:" + b.id);
+                wrapper.classList.add("dragging");
+            });
+            wrapper.addEventListener("dragend", function() { wrapper.classList.remove("dragging"); });
+            wrapper.addEventListener("dragover", function(e) { e.preventDefault(); wrapper.style.borderTop = "2px solid #f97316"; });
+            wrapper.addEventListener("dragleave", function() { wrapper.style.borderTop = ""; });
+            wrapper.addEventListener("drop", function(e) {
                 e.preventDefault();
-                div.style.borderTop = "";
+                wrapper.style.borderTop = "";
                 var data = e.dataTransfer.getData("text/plain");
                 if (!data.startsWith("board:")) return;
                 var draggedId = parseInt(data.split(":")[1], 10);
                 if (draggedId === b.id) return;
-                // Reorder: collect current order, move dragged before drop target
                 var items = container.querySelectorAll("[data-board-id]");
                 var order = [];
                 items.forEach(function(el) { order.push(parseInt(el.dataset.boardId, 10)); });
                 order = order.filter(function(id) { return id !== draggedId; });
                 var dropIdx = order.indexOf(b.id);
                 order.splice(dropIdx, 0, draggedId);
-                apiFetch("/api/kanban/boards/reorder", {
+                apiFetch("/api/tickets/boards/reorder", {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ order: order })
                 }).then(function() { loadBoards(true); }).catch(function() {});
-            };
-            div.oncontextmenu = function(e) { e.preventDefault(); boardSettings.showBoardContextMenu(e, b.id); };
-            container.appendChild(div);
+            });
+            wrapper.addEventListener("contextmenu", function(e) { e.preventDefault(); boardSettings.showBoardContextMenu(e, b.id); });
+            container.appendChild(wrapper);
         });
     }
 
@@ -998,6 +1118,7 @@
             container.innerHTML = '<p class="text-xs text-gray-500 italic">No ' + source + ' account connected</p>';
             return;
         }
+        boards = sortExternalBoardsForSidebar(boards);
         var search = (document.getElementById("kb-search").value || "").toLowerCase();
         var filtered = search ? boards.filter(function(b) { return b.name.toLowerCase().indexOf(search) >= 0; }) : boards;
         container.innerHTML = filtered.length ? "" : '<p class="text-xs text-gray-500 italic">No matching boards</p>';
@@ -1111,8 +1232,8 @@
 
         if (source === "database") {
             var boardPromise = Promise.all([
-                apiFetch("/api/kanban/boards/" + id),
-                apiFetch("/api/kanban/boards").catch(function() { return []; }),
+                apiFetch("/api/tickets/boards/" + id),
+                apiFetch("/api/tickets/boards").catch(function() { return []; }),
             ]).then(function(results) {
                 var data = results[0] || {};
                 currentBoardData = data;
@@ -1132,10 +1253,11 @@
             loadBoards(); // uses cache, just re-renders sidebar active state
             return boardPromise;
         } else {
+            touchExternalBoardActivity(source, id);
             var externalPromise = (function fetchExtBoard(attempt) {
                 attempt = attempt || 0;
                 var forceQ = opts.forceRefresh && attempt === 0 ? "?force_refresh=1" : "";
-                return apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(id) + forceQ).then(function(data) {
+                return apiFetch("/api/tickets/external-boards/" + source + "/" + encodeURIComponent(id) + forceQ).then(function(data) {
                     currentBoardData = data;
                     if (data.cache_ready === false && attempt < 90) {
                         if (!keepMessagesVisible) {
@@ -1184,26 +1306,31 @@
         }
 
         var addTicketBtn = document.getElementById("kb-add-ticket");
+        var addTicketLabel = document.getElementById("kb-add-ticket-label");
         if (!isLocal) {
             var canCreateExternal = data.can_create_ticket !== false;
             addTicketBtn.style.display = canCreateExternal ? "" : "none";
-            addTicketBtn.textContent = "+ Create Ticket";
+            if (addTicketLabel) addTicketLabel.textContent = "Create ticket";
             addTicketBtn.title = canCreateExternal
                 ? ("Create a ticket on this " + (currentBoard.source === 'trello' ? 'Trello' : 'Jira') + " board")
                 : "You do not have permission to create tickets on this board";
-            addTicketBtn.setAttribute("aria-label", addTicketBtn.textContent);
+            addTicketBtn.setAttribute("aria-label", "Create ticket");
         } else {
             addTicketBtn.style.display = "";
-            addTicketBtn.textContent = "+ Add Ticket";
+            if (addTicketLabel) addTicketLabel.textContent = "Add ticket";
             addTicketBtn.title = "Add ticket";
             addTicketBtn.setAttribute("aria-label", "Add ticket");
         }
-        // Configure button stays icon-only in the header; title/aria-label carry the text.
+        var refreshBtn = document.getElementById("kb-refresh-boards");
+        if (refreshBtn) {
+            refreshBtn.classList.toggle("hidden", isLocal);
+        }
+        // Edit button stays icon-only in the header; title/aria-label carry the text.
         var editBtn = document.getElementById("kb-edit-board");
         var editLabel = document.getElementById("kb-edit-board-label");
         editBtn.style.display = "";
-        if (editLabel) editLabel.textContent = "Configure";
-        editBtn.title = isLocal ? "Configure board settings" : "Configure this external board";
+        if (editLabel) editLabel.textContent = "Edit";
+        editBtn.title = isLocal ? "Edit board settings" : "Edit this external board";
         editBtn.setAttribute("aria-label", editBtn.title);
         // Delete button — hidden from header (available in right-click context menu)
         document.getElementById("kb-delete-board").style.display = "none";
@@ -1223,15 +1350,47 @@
             currentBoard._localId = data.local_id;
         }
 
-        renderLanes(data.lanes || [], isLocal, data);
+        renderBoardTickets(data.lanes || [], isLocal, data);
+    }
+
+    function updateBoardViewButtons() {
+        document.querySelectorAll(".kb-view-toggle").forEach(function(btn) {
+            var active = btn.dataset.view === kbBoardViewMode;
+            btn.classList.toggle("active", active);
+            btn.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+    }
+
+    function setBoardViewMode(mode) {
+        kbBoardViewMode = mode === "list" ? "list" : "kanban";
+        try { localStorage.setItem("kb_board_view_mode", kbBoardViewMode); } catch (e) {}
+        updateBoardViewButtons();
+        if (currentBoardData && currentBoard) {
+            renderBoardTickets(currentBoardData.lanes || [], currentBoard.source === "database", currentBoardData);
+        }
+    }
+
+    function renderBoardTickets(lanes, isLocal, boardData) {
+        var lanesEl = document.getElementById("kb-lanes");
+        var listEl = document.getElementById("kb-ticket-list");
+        updateBoardViewButtons();
+        if (kbBoardViewMode === "list") {
+            lanesEl.classList.add("hidden");
+            listEl.classList.remove("hidden");
+            renderTicketList(lanes, isLocal, boardData);
+            return;
+        }
+        listEl.classList.add("hidden");
+        lanesEl.classList.remove("hidden");
+        renderLanes(lanes, isLocal, boardData);
     }
 
     function refreshCurrentBoardRealtime() {
         if (!currentBoard || currentBoard.source !== "database") return;
         var boardId = currentBoard.id;
         Promise.all([
-            apiFetch("/api/kanban/boards/" + boardId),
-            apiFetch("/api/kanban/boards").catch(function() { return []; }),
+            apiFetch("/api/tickets/boards/" + boardId),
+            apiFetch("/api/tickets/boards").catch(function() { return []; }),
         ]).then(function(results) {
             if (!currentBoard || currentBoard.source !== "database" || currentBoard.id !== boardId) return;
             var data = results[0] || {};
@@ -1251,7 +1410,7 @@
     function connectKanbanBoardWS() {
         if (kbBoardWS && (kbBoardWS.readyState === WebSocket.OPEN || kbBoardWS.readyState === WebSocket.CONNECTING)) return;
         var proto = location.protocol === "https:" ? "wss:" : "ws:";
-        var url = proto + "//" + location.host + "/api/kanban/ws/boards";
+        var url = proto + "//" + location.host + "/api/tickets/ws/boards";
         try {
             kbBoardWS = new WebSocket(url);
         } catch (e) {
@@ -1302,6 +1461,61 @@
         kbBoardWS.onerror = function() {};
     }
 
+    function bindLaneCopyAllButton(rootEl, lane) {
+        if (!rootEl || !lane) return;
+        var btn = rootEl.querySelector(".kb-lane-copy-all");
+        if (!btn) return;
+        btn.addEventListener("click", function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openCopyLaneModal(lane);
+        });
+    }
+
+    function bindLaneWhatsappSnapshotButton(rootEl) {
+        if (!rootEl) return;
+        var btn = rootEl.querySelector(".kb-lane-whatsapp-snapshot");
+        if (!btn) return;
+        btn.addEventListener("click", function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openBoardWhatsappSnapshotFromLane(btn);
+        });
+    }
+
+    function laneWhatsappIntakeLink(lane, boardData, isLocal) {
+        if (!isLocal || !lane || !boardData) return null;
+        var links = Array.isArray(boardData.whatsapp_links) ? boardData.whatsapp_links : [];
+        var link = links.filter(function(item) { return item && item.id; })[0] || null;
+        if (!link) return null;
+        var lanes = Array.isArray(boardData.lanes) ? boardData.lanes : [];
+        var firstLanePosition = lanes.length ? lanes[0].position : 0;
+        var laneName = String(lane.name || "").toLowerCase();
+        var isIntakeLane = laneName === "backlog" || laneName.indexOf("backlog") >= 0 || lane.position === firstLanePosition;
+        return isIntakeLane ? link : null;
+    }
+
+    function laneHeaderToolsHtml(lane, isLocal, boardData) {
+        var count = (lane.tickets || []).length;
+        var copyBtn = (!isLocal && count > 0 && ticketActions.laneCopyAllButtonHtml)
+            ? ticketActions.laneCopyAllButtonHtml("Copy all in " + (lane.name || "column") + " to local board")
+            : "";
+        var waLink = laneWhatsappIntakeLink(lane, boardData, isLocal);
+        var waBtn = (waLink && ticketActions.laneWhatsappSnapshotButtonHtml)
+            ? ticketActions.laneWhatsappSnapshotButtonHtml({
+                boardId: boardData && boardData.id,
+                linkId: waLink.id,
+                laneId: lane.id,
+                laneName: lane.name || "",
+                boardName: (boardData && boardData.name) || "",
+                linkPhone: waLink.phone_number || "",
+                tooltip: "Create ticket from linked WhatsApp messages",
+            })
+            : "";
+        return '<div class="flex items-center gap-1.5 flex-shrink-0">' + copyBtn + waBtn +
+            '<span class="text-xs text-gray-500">' + count + "</span></div>";
+    }
+
     function renderLanes(lanes, isLocal, boardData) {
         var container = document.getElementById("kb-lanes");
         container.innerHTML = "";
@@ -1309,9 +1523,11 @@
         lanes.forEach(function(lane) {
             var col = document.createElement("div");
             col.className = "kb-lane flex flex-col bg-[#152054]/50 rounded-lg border border-white/10";
-            col.innerHTML = '<div class="px-3 py-2 border-b border-white/10 flex items-center justify-between">' +
-                '<span class="text-sm font-medium text-gray-300">' + esc(lane.name) + '</span>' +
-                '<span class="text-xs text-gray-500">' + (lane.tickets || []).length + '</span></div>';
+            col.innerHTML = '<div class="px-3 py-2 border-b border-white/10 flex items-center justify-between gap-2">' +
+                '<span class="text-sm font-medium text-gray-300 truncate">' + esc(lane.name) + "</span>" +
+                laneHeaderToolsHtml(lane, isLocal, boardData) + "</div>";
+            bindLaneCopyAllButton(col, lane);
+            bindLaneWhatsappSnapshotButton(col);
             var body = document.createElement("div");
             body.className = "kb-lane-body flex-1 p-2 space-y-2 overflow-y-auto";
             body.dataset.laneId = lane.id;
@@ -1335,6 +1551,250 @@
         });
     }
 
+    function listLaneExpandedStorageKey() {
+        if (!currentBoard || currentBoard.id == null) return null;
+        var source = currentBoard.source || "database";
+        return "kb_list_lane_expanded_" + source + "_" + String(currentBoard.id);
+    }
+
+    function resolveDefaultListExpandedLaneId(lanes) {
+        if (!lanes || !lanes.length) return null;
+        var currentLane = lanes.find(function(lane) {
+            return String(lane.name || "").trim().toLowerCase() === "current";
+        });
+        if (currentLane && currentLane.id != null) return String(currentLane.id);
+        return lanes[0].id != null ? String(lanes[0].id) : null;
+    }
+
+    function getSavedListExpandedLaneId(lanes) {
+        var key = listLaneExpandedStorageKey();
+        if (key) {
+            try {
+                var saved = localStorage.getItem(key);
+                if (saved === "__none__") return null;
+                if (saved && lanes.some(function(lane) { return String(lane.id) === String(saved); })) {
+                    return String(saved);
+                }
+            } catch (e) {}
+        }
+        return resolveDefaultListExpandedLaneId(lanes);
+    }
+
+    function saveListExpandedLaneId(laneId) {
+        var key = listLaneExpandedStorageKey();
+        if (!key) return;
+        try {
+            if (laneId == null || laneId === "") {
+                localStorage.setItem(key, "__none__");
+            } else {
+                localStorage.setItem(key, String(laneId));
+            }
+        } catch (e) {}
+    }
+
+    function listLaneChevronSvg() {
+        return '<svg class="kb-ticket-list-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>';
+    }
+
+    function initVisibleListRowMarquees(rootEl) {
+        (rootEl || document).querySelectorAll(".kb-ticket-list-section--expanded .kb-ticket-list-row").forEach(function(row) {
+            ticketUi.initListRowMarquee(row);
+        });
+    }
+
+    function setListLaneExpanded(container, laneId) {
+        if (!container) return;
+        var expandedId = laneId != null && laneId !== "" ? String(laneId) : "";
+        container.querySelectorAll(".kb-ticket-list-section").forEach(function(section) {
+            var isExpanded = expandedId && String(section.dataset.laneId) === expandedId;
+            section.classList.toggle("kb-ticket-list-section--expanded", isExpanded);
+            var head = section.querySelector(".kb-ticket-list-section-head");
+            var body = section.querySelector(".kb-ticket-list-section-body");
+            if (head) head.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+            if (body) body.hidden = !isExpanded;
+        });
+        if (expandedId) {
+            var active = container.querySelector('.kb-ticket-list-section[data-lane-id="' + expandedId + '"]');
+            if (active) initVisibleListRowMarquees(active);
+        }
+    }
+
+    function listLaneDropPosition(bodyEl) {
+        if (!bodyEl) return 0;
+        return bodyEl.querySelectorAll(".kb-ticket-list-row, .kb-card").length;
+    }
+
+    function moveTicketToLane(ticketId, laneId, bodyEl) {
+        var laneIdNum = parseInt(laneId, 10);
+        if (!isFinite(ticketId) || !isFinite(laneIdNum)) return;
+        apiFetch("/api/tickets/tickets/" + ticketId + "/move", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lane_id: laneIdNum, position: listLaneDropPosition(bodyEl) }),
+        }).then(function() {
+            if (currentBoard && currentBoard.source === "database") {
+                selectBoard("database", currentBoard.id);
+            }
+        }).catch(function(e) { showSnackbar("Move failed: " + e.message, "error"); });
+    }
+
+    function moveExternalTicketToLane(ticketId, targetLaneId, bodyEl) {
+        var src = currentBoard && currentBoard.source;
+        if (src !== "trello" && src !== "jira") return;
+        var bid = currentBoard.id;
+        apiFetch("/api/tickets/external-boards/" + src + "/" + encodeURIComponent(bid) + "/move-ticket", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ticket_id: String(ticketId),
+                target_lane_id: String(targetLaneId),
+                position: listLaneDropPosition(bodyEl),
+            }),
+        }).then(function() {
+            selectBoard(src, bid, currentBoard.extUrl || "");
+        }).catch(function(e) { showSnackbar("Move failed: " + e.message, "error"); });
+    }
+
+    function bindListLaneDropTargets(container, isLocal) {
+        container.querySelectorAll(".kb-ticket-list-section").forEach(function(section) {
+            var laneId = section.dataset.laneId;
+            if (!laneId) return;
+            var body = section.querySelector(".kb-ticket-list-section-body");
+            var head = section.querySelector(".kb-ticket-list-section-head");
+
+            function markDragOver(el) {
+                if (!el) return;
+                el.classList.add("drag-over");
+                section.classList.add("drag-over");
+            }
+
+            function clearDragOver(el) {
+                if (!el) return;
+                el.classList.remove("drag-over");
+                if (!section.querySelector(".drag-over")) {
+                    section.classList.remove("drag-over");
+                }
+            }
+
+            function handleDragOver(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+                markDragOver(e.currentTarget);
+            }
+
+            function handleDragLeave(e) {
+                var el = e.currentTarget;
+                if (el.contains(e.relatedTarget)) return;
+                clearDragOver(el);
+            }
+
+            function handleDrop(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                clearDragOver(e.currentTarget);
+                section.classList.remove("drag-over");
+                var ticketId = e.dataTransfer.getData("text/plain");
+                if (!ticketId) return;
+                var sourceLaneId = e.dataTransfer.getData("application/x-kanban-source-lane");
+                if (sourceLaneId && String(sourceLaneId) === String(laneId)) return;
+                if (isLocal) {
+                    var tid = parseInt(ticketId, 10);
+                    if (!isFinite(tid)) return;
+                    moveTicketToLane(tid, laneId, body);
+                } else {
+                    moveExternalTicketToLane(ticketId, laneId, body);
+                }
+            }
+
+            [section, head, body].forEach(function(el) {
+                if (!el) return;
+                el.addEventListener("dragenter", handleDragOver);
+                el.addEventListener("dragover", handleDragOver);
+                el.addEventListener("dragleave", handleDragLeave);
+                el.addEventListener("drop", handleDrop);
+            });
+        });
+    }
+
+    function bindListLaneAccordion(container) {
+        container.querySelectorAll(".kb-ticket-list-section-head").forEach(function(head) {
+            head.addEventListener("click", function() {
+                var section = head.closest(".kb-ticket-list-section");
+                if (!section) return;
+                var laneId = section.dataset.laneId;
+                if (!laneId) return;
+                if (section.classList.contains("kb-ticket-list-section--expanded")) {
+                    setListLaneExpanded(container, null);
+                    saveListExpandedLaneId(null);
+                    return;
+                }
+                setListLaneExpanded(container, laneId);
+                saveListExpandedLaneId(laneId);
+            });
+        });
+    }
+
+    function renderTicketList(lanes, isLocal, boardData) {
+        var container = document.getElementById("kb-ticket-list");
+        container.innerHTML = "";
+        var expandedLaneId = getSavedListExpandedLaneId(lanes);
+        lanes.forEach(function(lane) {
+            var tickets = lane.tickets || [];
+            if (window.KanbanTicketUi && window.KanbanTicketUi.compareTicketsForListView) {
+                tickets = tickets.slice().sort(window.KanbanTicketUi.compareTicketsForListView);
+            }
+            var laneId = lane.id != null ? String(lane.id) : "";
+            var isExpanded = expandedLaneId && laneId === String(expandedLaneId);
+            var section = document.createElement("section");
+            section.className = "kb-ticket-list-section" + (isExpanded ? " kb-ticket-list-section--expanded" : "");
+            section.dataset.laneId = laneId;
+            var boardData = currentBoardData || {};
+            var laneCopyBtn = (!isLocal && tickets.length > 0 && ticketActions.laneCopyAllButtonHtml)
+                ? ticketActions.laneCopyAllButtonHtml("Copy all in " + (lane.name || "column") + " to local board")
+                : "";
+            var waLink = laneWhatsappIntakeLink(lane, boardData, isLocal);
+            var laneWaBtn = (waLink && ticketActions.laneWhatsappSnapshotButtonHtml)
+                ? ticketActions.laneWhatsappSnapshotButtonHtml({
+                    boardId: boardData.id,
+                    linkId: waLink.id,
+                    laneId: lane.id,
+                    laneName: lane.name || "",
+                    boardName: boardData.name || "",
+                    linkPhone: waLink.phone_number || "",
+                    tooltip: "Create ticket from linked WhatsApp messages",
+                })
+                : "";
+            section.innerHTML =
+                '<div class="kb-ticket-list-section-head-row flex items-center gap-1">' +
+                    '<button type="button" class="kb-ticket-list-section-head flex-1 min-w-0" aria-expanded="' + (isExpanded ? "true" : "false") + '">' +
+                        listLaneChevronSvg() +
+                        '<span class="kb-ticket-list-section-title">' + esc(lane.name) + "</span>" +
+                        '<span class="kb-ticket-list-section-count">' + tickets.length + "</span>" +
+                    "</button>" +
+                    laneCopyBtn +
+                    laneWaBtn +
+                "</div>";
+            bindLaneCopyAllButton(section, lane);
+            bindLaneWhatsappSnapshotButton(section);
+            var body = document.createElement("div");
+            body.className = "kb-ticket-list-section-body space-y-1";
+            body.hidden = !isExpanded;
+            if (!tickets.length) {
+                body.innerHTML = '<div class="px-3 py-2 text-xs text-gray-500 italic border border-dashed border-white/10 rounded">No tickets</div>';
+            } else {
+                tickets.forEach(function(ticket) {
+                    body.appendChild(ticketUi.createTicketListRow(ticket, isLocal, boardData));
+                });
+            }
+            section.appendChild(body);
+            container.appendChild(section);
+        });
+        bindListLaneAccordion(container);
+        bindListLaneDropTargets(container, isLocal);
+        initVisibleListRowMarquees(container);
+    }
+
     /** Push a local ticket to CLI (with confirmation and spinners). */
     function pushTicketToCli(ticketId, btnEl) {
         showKanbanConfirm({
@@ -1347,7 +1807,7 @@
                     btnEl.classList.add("text-orange-400");
                     btnEl.disabled = true;
                 }
-                apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-cli", { method: "POST" })
+                apiFetch("/api/tickets/tickets/" + ticketId + "/send-to-cli", { method: "POST" })
                     .then(function(r) {
                         showSnackbar(r.message || "Sent to CLI");
                         _pollCliStatus(ticketId, btnEl);
@@ -1378,7 +1838,7 @@
         var payload = {};
         if (backendId) payload.backend_id = backendId;
         showSnackbar(backendId ? ("Sending ticket to " + backendId + "…") : "Sending ticket to agent…", "info");
-        return apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-cli", {
+        return apiFetch("/api/tickets/tickets/" + ticketId + "/send-to-cli", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -1408,7 +1868,7 @@
             btnEl.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
         }
         showSnackbar("Sending ticket #" + ticketId + " to project...", "info");
-        apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-project", { method: "POST" })
+        apiFetch("/api/tickets/tickets/" + ticketId + "/send-to-project", { method: "POST" })
             .then(function(r) {
                 showSnackbar(r.message || "Sent to project");
             })
@@ -1475,7 +1935,7 @@
         }
         commonUtils.mergeSourceChatIntoPayload(payload);
 
-        apiFetch("/api/kanban/tickets/copy-external-to-board", {
+        apiFetch("/api/tickets/tickets/copy-external-to-board", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         }).then(function(r) {
@@ -1699,26 +2159,36 @@
         }
         var src = currentBoard && currentBoard.source ? currentBoard.source : "database";
         var boardLabel = (currentBoardData && currentBoardData.name) ? currentBoardData.name : "";
-        var starting = buildTicketDiscussionStartingQuestion(ticket, !!isLocal, boardLabel, src, currentBoardData || {});
-        var targetChatId = null;
+        var localBoardId = null;
+        if (currentBoard) {
+            if (src === "database" && currentBoard.id != null) {
+                localBoardId = currentBoard.id;
+            } else if (currentBoardData && currentBoardData.local_id) {
+                localBoardId = currentBoardData.local_id;
+            } else if (currentBoard._localId) {
+                localBoardId = currentBoard._localId;
+            }
+        }
         _ticketDiscussInFlight = true;
         showSnackbar("Sending ticket to the orchestrator…", "info");
         resolveChatIdForTicketDiscuss()
             .then(function (chatId) {
-                targetChatId = chatId;
-                return apiFetch("/api/chats/" + chatId + "/load-in-agent", { method: "POST" }).then(function () {
-                    return apiFetch("/api/chats/" + chatId + "/send-to-agent", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ message: starting, speak: true }),
-                    });
+                return apiFetch("/api/tickets/tickets/engage-orchestrator", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        chat_id: chatId,
+                        ticket: ticket,
+                        is_local: !!isLocal,
+                        local_board_id: localBoardId,
+                        source: src,
+                        board_name: boardLabel,
+                    }),
                 });
             })
-            .then(function () {
-                showSnackbar("Ticket sent to the orchestrator", "success");
-                if (targetChatId) {
-                    window.location.href = "/chat/?id=" + encodeURIComponent(String(targetChatId));
-                }
+            .then(function (res) {
+                var brief = (res && res.display_message) ? res.display_message : "Ticket sent to the orchestrator";
+                showSnackbar(brief, "success");
             })
             .catch(function (e) {
                 showSnackbar("Could not reach the agent: " + (e && e.message ? e.message : String(e)), "error");
@@ -1823,7 +2293,7 @@
      * Skips the dragged card in the same lane so reordering within a lane is not always "append".
      */
     function computeTicketDropPosition(bodyEl, ticketId, clientY) {
-        var cards = Array.prototype.slice.call(bodyEl.querySelectorAll(".kb-card"));
+        var cards = Array.prototype.slice.call(bodyEl.querySelectorAll(".kb-card, .kb-ticket-list-row"));
         var dragEl = null;
         for (var i = 0; i < cards.length; i++) {
             if (cards[i].dataset.ticketId === String(ticketId)) {
@@ -1845,8 +2315,8 @@
     function moveTicket(ticketId, laneId, bodyEl, clientY) {
         var position = typeof clientY === "number"
             ? computeTicketDropPosition(bodyEl, ticketId, clientY)
-            : bodyEl.querySelectorAll(".kb-card").length;
-        apiFetch("/api/kanban/tickets/" + ticketId + "/move", {
+            : bodyEl.querySelectorAll(".kb-card, .kb-ticket-list-row").length;
+        apiFetch("/api/tickets/tickets/" + ticketId + "/move", {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ lane_id: laneId, position: position })
         }).then(function() { selectBoard("database", currentBoard.id); })
@@ -1860,8 +2330,8 @@
         var bid = currentBoard.id;
         var position = typeof clientY === "number"
             ? computeTicketDropPosition(bodyEl, String(ticketId), clientY)
-            : bodyEl.querySelectorAll(".kb-card").length;
-        apiFetch("/api/kanban/external-boards/" + src + "/" + encodeURIComponent(bid) + "/move-ticket", {
+            : bodyEl.querySelectorAll(".kb-card, .kb-ticket-list-row").length;
+        apiFetch("/api/tickets/external-boards/" + src + "/" + encodeURIComponent(bid) + "/move-ticket", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1884,7 +2354,7 @@
         switchTicketTab("details");
         // Reset modal to local-ticket mode
         resetTicketModalForLocal();
-        apiFetch("/api/kanban/tickets/" + ticketId).then(function(t) {
+        apiFetch("/api/tickets/tickets/" + ticketId).then(function(t) {
             document.getElementById("kb-modal-ticket-title").value = t.title || "";
             document.getElementById("kb-modal-ticket-desc").value = t.description || "";
             document.getElementById("kb-modal-ticket-estimate").value = t.time_estimate || "";
@@ -1898,7 +2368,6 @@
             loadModalAuditReport(ticketId, t.audit_entries || []);
             loadLinkableEntities(t);
             modalTicketSourceChatId = t.source_chat_id != null ? t.source_chat_id : null;
-            setModalProjectActionState(!!(t.linked_project_id || (currentBoardData && currentBoardData.default_project_id)));
             // Hide external metadata section for local tickets
             var extMeta = document.getElementById("kb-modal-external-meta");
             if (extMeta) extMeta.classList.add("hidden");
@@ -1907,7 +2376,7 @@
     }
 
     function loadModalAuditReport(ticketId, fallbackEntries) {
-        apiFetch("/api/kanban/tickets/" + ticketId + "/audit-report")
+        apiFetch("/api/tickets/tickets/" + ticketId + "/audit-report")
             .then(function(report) {
                 renderModalAuditEntries(report.entries || []);
                 renderModalAuditSummary(report);
@@ -1929,7 +2398,7 @@
             danger: true,
             onConfirm: function() {
                 hideKanbanConfirm();
-                apiFetch("/api/kanban/tickets/" + modalTicketId + "/audit-report", { method: "DELETE" })
+                apiFetch("/api/tickets/tickets/" + modalTicketId + "/audit-report", { method: "DELETE" })
                     .then(function(res) {
                         var deleted = Number((res && res.deleted_entries) || 0);
                         showSnackbar("Report cleared" + (deleted ? " (" + deleted + " entries)" : ""));
@@ -2085,34 +2554,16 @@
             btn.classList.remove("opacity-50", "cursor-not-allowed");
             btn.disabled = false;
         });
-        document.getElementById("kb-modal-save").classList.remove("hidden");
-        document.getElementById("kb-modal-delete").classList.remove("hidden");
-        var transferBtn = document.getElementById("kb-modal-transfer-ext");
-        if (transferBtn) transferBtn.classList.add("hidden");
-        setModalProjectActionState(true);
+        var modalFooter = document.getElementById("kb-modal-footer");
+        if (modalFooter) modalFooter.classList.remove("hidden");
         // Clear todos input
         var todoInput = document.getElementById("kb-modal-todo-input");
         if (todoInput) todoInput.readOnly = false;
     }
 
-    function setModalProjectActionState(enabled) {
-        var canPush = !!enabled;
-        var cliBtn = document.getElementById("kb-modal-act-cli");
-        var projectBtn = document.getElementById("kb-modal-act-project");
-        if (cliBtn) {
-            cliBtn.classList.toggle("hidden", !canPush);
-            cliBtn.disabled = false;
-            cliBtn.classList.remove("opacity-40", "cursor-not-allowed");
-            cliBtn.title = "Run with Cursor/Codex";
-            cliBtn.setAttribute("aria-label", cliBtn.title);
-        }
-        if (projectBtn) {
-            projectBtn.classList.toggle("hidden", !canPush);
-            projectBtn.disabled = false;
-            projectBtn.classList.remove("opacity-40", "cursor-not-allowed");
-            projectBtn.title = "Send to Project";
-            projectBtn.setAttribute("aria-label", projectBtn.title);
-        }
+    function ticketMetaField(label, valueHtml) {
+        return '<div class="kb-ticket-meta-field"><div class="kb-ticket-meta-label">' + esc(label) +
+            '</div><div class="kb-ticket-meta-value">' + valueHtml + "</div></div>";
     }
 
     function setPriorityButtons(pri) {
@@ -2151,14 +2602,19 @@
             return;
         }
         var rows = [];
-        rows.push("<div><span class=\"text-gray-500\">Provider:</span> " + esc(source) + "</div>");
-        if (ticket.source_contact) rows.push("<div><span class=\"text-gray-500\">Contact:</span> " + esc(ticket.source_contact) + "</div>");
+        rows.push(ticketMetaField("Provider", esc(source)));
+        if (ticket.source_contact) rows.push(ticketMetaField("Contact", esc(ticket.source_contact)));
         if (ticket.source_external_id || ticket.external_id || ticket.whatsapp_message_wa_id) {
-            rows.push("<div><span class=\"text-gray-500\">ID:</span> " + esc(ticket.source_external_id || ticket.external_id || ticket.whatsapp_message_wa_id) + "</div>");
+            rows.push(ticketMetaField("ID", esc(ticket.source_external_id || ticket.external_id || ticket.whatsapp_message_wa_id)));
         }
-        if (ticket.source_thread_id) rows.push("<div><span class=\"text-gray-500\">Thread:</span> " + esc(ticket.source_thread_id) + "</div>");
+        if (ticket.source_thread_id) rows.push(ticketMetaField("Thread", esc(ticket.source_thread_id)));
         var url = ticket.source_url || ticket.external_url || "";
-        if (url) rows.push('<div><a href="' + esc(url) + '" target="_blank" class="text-[#f97316] hover:underline">Open source</a></div>');
+        if (url) {
+            rows.push(ticketMetaField(
+                "Source",
+                '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer" class="text-[#f97316] hover:underline">Open source</a>'
+            ));
+        }
         body.innerHTML = rows.join("");
         box.classList.remove("hidden");
     }
@@ -2194,7 +2650,7 @@
             if (linkCid != null) payload.source_chat_id = linkCid;
         }
         if (!payload.title) { showSnackbar("Title is required", "error"); return; }
-        apiFetch("/api/kanban/tickets/" + modalTicketId, {
+        apiFetch("/api/tickets/tickets/" + modalTicketId, {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         }).then(function() {
@@ -2213,7 +2669,7 @@
             danger: true,
             onConfirm: function() {
                 hideKanbanConfirm();
-                apiFetch("/api/kanban/tickets/" + tid, { method: "DELETE" }).then(function() {
+                apiFetch("/api/tickets/tickets/" + tid, { method: "DELETE" }).then(function() {
                     showSnackbar("Ticket deleted");
                     closeTicketModal();
                     reloadCurrentDatabaseBoard();
@@ -2224,7 +2680,7 @@
 
     function sendTicketToProject() {
         if (!modalTicketId) return;
-        apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
+        apiFetch("/api/tickets/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
             .then(function(data) {
                 showSnackbar("Ticket sent to project: " + (data.project_name || ""));
             })
@@ -2276,7 +2732,7 @@
         var targetTicketId = sendWorkflowContext.ticket && sendWorkflowContext.ticket.id ? sendWorkflowContext.ticket.id : null;
         if (sendWorkflowContext.isLocal) {
             showSnackbar("Sending ticket to workflow...");
-            apiFetch("/api/kanban/tickets/" + sendWorkflowContext.ticket.id + "/send-to-workflow", {
+            apiFetch("/api/tickets/tickets/" + sendWorkflowContext.ticket.id + "/send-to-workflow", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ workflow_id: workflowId }),
@@ -2324,7 +2780,7 @@
 
     function showRunPopover(badgeEl, ticketId) {
         _closeRunPopover();
-        apiFetch("/api/kanban/tickets/" + ticketId + "/active-run").then(function(data) {
+        apiFetch("/api/tickets/tickets/" + ticketId + "/active-run").then(function(data) {
             if (!data || !data.active) {
                 showSnackbar("No active run found for this ticket");
                 return;
@@ -2451,7 +2907,7 @@
         };
         hintEl.textContent = defaults.hint;
         selectEl.innerHTML = '<option value="">Select workflow...</option>';
-        apiFetch("/api/kanban/linkable").then(function(data) {
+        apiFetch("/api/tickets/linkable").then(function(data) {
             var workflows = (data && data.workflows) || [];
             workflows.forEach(function(wf) {
                 var opt = document.createElement("option");
@@ -2522,6 +2978,10 @@
         return ticketActions.openCopyModal(ticket);
     }
 
+    function openCopyLaneModal(lane) {
+        return ticketActions.openCopyLaneModal(lane);
+    }
+
     function closeCopyModal() {
         return ticketActions.closeCopyModal();
     }
@@ -2546,6 +3006,24 @@
         return boardSettings.switchSidebarTab(tab);
     }
 
+    function applySidebarTabFromUrl() {
+        if (boardSettings.getSidebarTabFromUrl() !== "messages") {
+            return false;
+        }
+        var tabMessages = document.getElementById("kb-tab-messages");
+        if (tabMessages) {
+            tabMessages.classList.remove("hidden");
+            boardSettings.updateTabBarVisibility();
+        }
+        // Only switch panels when not already on Messages. switchSidebarTab runs
+        // onEnterMessagesTab → loadWhatsAppChats; re-calling it after every fetch
+        // caused an infinite reload loop while ?tab=messages was active.
+        if (!isMessagesPanelVisible()) {
+            switchSidebarTab("messages");
+        }
+        return true;
+    }
+
     function loadWhatsAppChats(forceRefresh) {
         return waRuntime.loadWhatsAppChats(forceRefresh);
     }
@@ -2553,7 +3031,7 @@
     function syncFromRelay() {
         var el = document.getElementById("kb-wa-status");
         el.textContent = "Syncing from server...";
-        apiFetch("/api/kanban/whatsapp/sync", { method: "POST" }).then(function(result) {
+        apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).then(function(result) {
             var newCount = Number(result && result.synced) || 0;
             if (newCount > 0) {
                 showSnackbar("Synced " + newCount + " new message" + (newCount !== 1 ? "s" : "") + " from server", "success");
@@ -2651,7 +3129,7 @@
         return waManagement.waThreadDeleteHotkeyIgnored();
     }
 
-    /** Confirm and DELETE /api/kanban/whatsapp/chat/:phone — full thread wipe (shared by sidebar menu, thread header, message menu in selection mode). */
+    /** Confirm and DELETE /api/tickets/whatsapp/chat/:phone — full thread wipe (shared by sidebar menu, thread header, message menu in selection mode). */
     function waRunDeleteChatConfirm(phone, displayName) {
         return waManagement.waRunDeleteChatConfirm(phone, displayName);
     }
@@ -2672,6 +3150,18 @@
         return externalTicketModal.openTicketFromWhatsApp(phone, title, description, boardId, msgs);
     }
 
+    function openBoardWhatsappSnapshotFromLane(btn) {
+        if (!btn) return;
+        return externalTicketModal.openBoardWhatsappSnapshotTicket({
+            boardId: btn.dataset.boardId,
+            linkId: btn.dataset.linkId,
+            laneId: btn.dataset.laneId,
+            laneName: btn.dataset.laneName,
+            boardName: btn.dataset.boardName,
+            linkPhone: btn.dataset.linkPhone,
+        });
+    }
+
     function openWaLinkModal(chatData) {
         var modal = document.getElementById("kb-wa-link-modal");
         var phoneEl = document.getElementById("kb-wa-link-phone");
@@ -2680,7 +3170,7 @@
         phoneEl.textContent = (chatData.name || "") + " (" + chatData.phone + ")";
 
         // Populate board dropdown
-        apiFetch("/api/kanban/boards").then(function(boards) {
+        apiFetch("/api/tickets/boards").then(function(boards) {
             boardSelect.innerHTML = '<option value="">Select a board...</option>';
             boards.forEach(function(b) {
                 var selected = (currentBoard && currentBoard.id === b.id) ? " selected" : "";
@@ -2720,7 +3210,7 @@
                 confirmLabel: "Delete all",
                 danger: true,
                 onConfirm: function() {
-                    apiFetch("/api/kanban/whatsapp/chats", { method: "DELETE" }).then(function(resp) {
+                    apiFetch("/api/tickets/whatsapp/chats", { method: "DELETE" }).then(function(resp) {
                         hideKanbanConfirm();
                         waSidebarChatListMode = false;
                         waSelectedChatPhones = {};
@@ -2882,23 +3372,20 @@
         });
 
         // Board modal: WhatsApp links (inside Advanced)
-        document.getElementById("kb-bm-wa-add-btn").addEventListener("click", waManagement.addWaLinkFromBoardModal);
         var waChatSelect = document.getElementById("kb-bm-wa-chat-select");
         if (waChatSelect) {
             waChatSelect.addEventListener("change", function() {
                 var sel = String(waChatSelect.value || "").trim();
-                if (!sel) {
-                    waManagement.loadWaGroupPeopleCandidates(null);
-                    return;
-                }
-                var selectedOpt = waChatSelect.options[waChatSelect.selectedIndex];
-                var isGroup = selectedOpt && /\(group\)$/i.test(String(selectedOpt.textContent || "").trim());
+                var boardId = editingBoardId;
                 var selectedChat = {
                     jid: sel,
                     phone: sel.split("@")[0].split(":")[0],
-                    chat_type: isGroup ? "group" : "private",
+                    chat_type: sel.indexOf("@g.us") >= 0 ? "group" : "private",
                 };
-                waManagement.loadWaGroupPeopleCandidates(selectedChat);
+                waManagement.handleBoardWaChatSelectChange(boardId, sel).then(function() {
+                    waManagement.syncWaChatSelectLinkedState();
+                    waManagement.loadWaGroupPeopleCandidates(selectedChat);
+                });
             });
         }
         var waRefreshCandidatesBtn = document.getElementById("kb-bm-wa-refresh-candidates");
@@ -2906,6 +3393,9 @@
             waRefreshCandidatesBtn.addEventListener("click", function() {
                 waManagement.loadWaLinkCandidates();
             });
+        }
+        if (window.KanbanCustomSelect) {
+            window.KanbanCustomSelect.upgradeById("kb-bm-wa-chat-select", { placeholder: "Select chat...", emptyLabel: "Select chat..." });
         }
         waManagement.loadWaLinkCandidates(true);
     }
@@ -2930,6 +3420,7 @@
                 document.getElementById("kb-tab-messages").classList.remove("hidden");
                 boardSettings.updateTabBarVisibility();
             }
+            applySidebarTabFromUrl();
             loadWhatsAppChats();
         });
 
@@ -2941,7 +3432,7 @@
             if (waAutoSyncBusy) return;
             if (!isMessagesPanelVisible()) return;
             waAutoSyncBusy = true;
-            apiFetch("/api/kanban/whatsapp/sync", { method: "POST" }).then(function(result) {
+            apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).then(function(result) {
                 var synced = Number(result && result.synced) || 0;
                 if (synced > 0) {
                     loadWhatsAppChats(true);
@@ -3004,7 +3495,7 @@
                         var preview = msg.text ? msg.text.substring(0, 50) : (msg.media_type ? "📎 " + msg.media_type : "");
                         showSnackbar("WhatsApp: " + who + " — " + preview, "success");
                         // Ensure relay events are persisted into local DB before UI refresh.
-                        apiFetch("/api/kanban/whatsapp/sync", { method: "POST" }).finally(function() {
+                        apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).finally(function() {
                         loadWhatsAppChats(true);
                         if (waSelectedJid && (waSelectedJid === msg.jid_phone || waSelectedJid === msg.sender_phone)) {
                                 refreshWaThreadIfOpen();
@@ -3048,13 +3539,8 @@
     function init() {
         // Reset overlays on startup so kanban always loads into board workspace.
         hideAllKanbanModals();
-        // Apply sidebar tab from URL before any initial board rendering to avoid tab flicker.
-        var initialSidebarTab = boardSettings.getSidebarTabFromUrl();
-        // Don't auto-switch to messages on init — WhatsApp may not be available,
-        // and hiding the board view causes a blank screen. Only auto-switch if WA is already known connected.
-        if (initialSidebarTab === "messages" && waConnected) {
-            switchSidebarTab("messages");
-        }
+        // Apply sidebar tab from URL before board auto-select so list view stays on Messages.
+        applySidebarTabFromUrl();
 
         // Board sidebar
         document.getElementById("kb-add-board").addEventListener("click", function() { boardSettings.openBoardModal(null); });
@@ -3077,91 +3563,6 @@
         document.getElementById("kb-modal-delete").addEventListener("click", deleteTicket);
         var clearReportBtn = document.getElementById("kb-modal-clear-report");
         if (clearReportBtn) clearReportBtn.addEventListener("click", clearModalAuditReport);
-        // Modal action buttons (copy, CLI, send-to-project, transfer)
-        document.getElementById("kb-modal-act-copy").addEventListener("click", function() {
-            if (modalTicketId) {
-                // Local ticket
-                apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
-                    var text = t.title + (t.description ? "\n\n" + t.description : "");
-                    if (t.files && t.files.length) {
-                        text += "\n\nAttachments:\n" + t.files.map(function(f) { return "- " + (f.download_url || f.url); }).join("\n");
-                    }
-                    navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
-                });
-            } else if (window._extTicketData) {
-                // External ticket
-                var ext = window._extTicketData;
-                var text = ext.title + (ext.description ? "\n\n" + stripHtml(ext.description) : "");
-                if (ext.media && ext.media.length) {
-                    text += "\n\nAttachments:\n" + ext.media.map(function(m) { return "- " + (m.url || m.download_url || ""); }).join("\n");
-                }
-                navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
-            }
-        });
-        document.getElementById("kb-modal-act-cli").addEventListener("click", function() {
-            if (this.disabled) return;
-            if (modalTicketId) {
-                pushTicketToCli(modalTicketId, document.getElementById("kb-modal-act-cli"));
-            } else if (window._extTicketData) {
-                copyAndPushExternalTicket(window._extTicketData, window._extTicketSource, 'cli');
-            }
-        });
-        document.getElementById("kb-modal-act-project").addEventListener("click", function() {
-            if (this.disabled) return;
-            var btn = this;
-            if (modalTicketId) {
-                btn.dataset.prevHtml = btn.innerHTML;
-                btn.disabled = true;
-                btn.classList.add("opacity-70", "cursor-not-allowed");
-                btn.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
-                showSnackbar("Sending ticket to project...", "info");
-                apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
-                    .then(function(r) { showSnackbar("Sent to project: " + (r.project_name || "")); })
-                    .catch(function(e) { showSnackbar("Error: " + e.message, "error"); })
-                    .finally(function() {
-                        btn.innerHTML = btn.dataset.prevHtml || btn.innerHTML;
-                        btn.classList.remove("opacity-70", "cursor-not-allowed");
-                        btn.disabled = false;
-                    });
-            } else if (window._extTicketData) {
-                showSnackbar("Copying ticket and sending to project...", "info");
-                copyAndPushExternalTicket(window._extTicketData, window._extTicketSource, 'project');
-            }
-        });
-        document.getElementById("kb-modal-act-workflow").addEventListener("click", function() {
-            if (modalTicketId) {
-                apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
-                    openSendWorkflowModal(t, "database");
-                }).catch(function(e) {
-                    showSnackbar("Failed to load ticket: " + e.message, "error");
-                });
-            } else if (window._extTicketData) {
-                openSendWorkflowModal(window._extTicketData, window._extTicketSource);
-            }
-        });
-        var modalDiscussBtn = document.getElementById("kb-modal-act-discuss");
-        if (modalDiscussBtn) {
-            modalDiscussBtn.addEventListener("click", function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (modalTicketId) {
-                    startTicketDiscussion(getModalTicketSnapshotForDiscuss(), true);
-                } else if (window._extTicketData) {
-                    startTicketDiscussion(window._extTicketData, false);
-                }
-            });
-        }
-        // Transfer/copy button (external tickets)
-        var transferBtn = document.getElementById("kb-modal-transfer-ext");
-        if (transferBtn) transferBtn.addEventListener("click", function() {
-            if (window._extTicketData) {
-                openCopyModal(window._extTicketData);
-                closeTicketModal();
-            }
-        });
-        document.getElementById("kb-ticket-modal").addEventListener("click", function(e) {
-        });
-
         // Priority buttons
         document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
             btn.addEventListener("click", function() { setPriorityButtons(btn.dataset.pri); });
@@ -3169,14 +3570,6 @@
 
         // Links
         document.getElementById("kb-modal-add-link").addEventListener("click", addLink);
-        var ticketProjectSelect = document.getElementById("kb-modal-link-project");
-        if (ticketProjectSelect) {
-            ticketProjectSelect.addEventListener("change", function() {
-                var explicitProject = parseInt(ticketProjectSelect.value, 10) || null;
-                var boardProject = currentBoardData && currentBoardData.default_project_id;
-                setModalProjectActionState(!!(explicitProject || boardProject));
-            });
-        }
         document.getElementById("kb-modal-link-url").addEventListener("keydown", function(e) {
             if (e.key === "Enter") addLink();
         });
@@ -3238,6 +3631,9 @@
         // Copy modal
         document.getElementById("kb-copy-cancel").addEventListener("click", closeCopyModal);
         document.getElementById("kb-copy-confirm").addEventListener("click", confirmCopy);
+        document.getElementById("kb-copy-board-select").addEventListener("change", function() {
+            ticketActions.onCopyBoardChanged();
+        });
         document.getElementById("kb-copy-modal").addEventListener("click", function(e) {
         });
 

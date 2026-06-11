@@ -124,15 +124,23 @@ def resolve_current_agent_chat_id(settings: dict[str, Any] | None = None) -> int
         return None
 
 
-def emit_to_agent_chat(chat_id: int, prompt: str, speak: bool = True) -> None:
+def emit_to_agent_chat(
+    chat_id: int,
+    prompt: str,
+    speak: bool = True,
+    *,
+    skip_user_persist: bool = False,
+) -> None:
     from distr.core.signals import signal_manager
 
+    options = {"skip_user_persist": True} if skip_user_persist else None
     signal_manager.web_send_to_agent_requested.emit(
         int(chat_id),
         prompt,
         bool(speak),
         None,
         None,
+        options,
     )
 
 
@@ -230,7 +238,12 @@ def dispatch_automation_to_current_chat(
         summary = "Automation needs an active agent chat before it can run."
     elif emit_signal:
         try:
-            emit_to_agent_chat(int(target_chat_id), prompt, bool(speak))
+            emit_to_agent_chat(
+                int(target_chat_id),
+                prompt,
+                bool(speak),
+                skip_user_persist=True,
+            )
         except Exception as exc:
             logger.debug("Automation chat dispatch failed", exc_info=True)
             status = "failed"
@@ -246,6 +259,22 @@ def dispatch_automation_to_current_chat(
         chat_id=target_chat_id,
         schedule_metadata=schedule_metadata,
     )
+
+    if workflow_run_id and target_chat_id and status == "dispatched":
+        try:
+            from distr.core.workflow.chat_trace import record_chat_workflow_event
+
+            record_chat_workflow_event(
+                int(target_chat_id),
+                "automation_run",
+                status="running",
+                workflow_id=int(automation["workflow_id"]) if automation.get("workflow_id") else None,
+                workflow_name=str(automation.get("name") or "Untitled Automation"),
+                run_id=int(workflow_run_id),
+                summary=instruction,
+            )
+        except Exception:
+            logger.debug("Automation chat action card failed", exc_info=True)
 
     dispatched_event_id = event_fn(
         automation=automation,

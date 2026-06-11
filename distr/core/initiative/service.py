@@ -1316,6 +1316,7 @@ class InitiativeService:
         """Surface pending drafts as chat messages when a chat starts."""
         from distr.core.initiative.tiers import PermissionTier
 
+        self._draft_queue.expire_old()
         drafts = self._draft_queue.get_all()
         if not drafts:
             return
@@ -1326,6 +1327,13 @@ class InitiativeService:
         current_chat = self.chat_manager.get_current_chat()
         if not current_chat:
             return
+        if not self._chat_is_initiative_approval_context(current_chat):
+            logger.debug(
+                "InitiativeService: not surfacing %d pending draft(s) into unrelated chat_id=%s",
+                len(drafts),
+                current_chat,
+            )
+            return
         for draft in drafts:
             tier_label = PermissionTier(draft.permission_tier).name
             msg = (
@@ -1334,6 +1342,56 @@ class InitiativeService:
                 "Say approve or reject, or manage it in Settings → Initiative."
             )
             self.chat_manager.add_assistant_message(current_chat, msg)
+
+    def _chat_is_initiative_approval_context(self, chat_id: int) -> bool:
+        """Return true only when surfacing Initiative approvals fits the active chat."""
+        chat_manager = self.chat_manager
+        if not chat_manager:
+            return False
+
+        text_parts: list[str] = []
+        try:
+            getter = getattr(chat_manager, "get_chat_title", None)
+            if callable(getter):
+                text_parts.append(str(getter(chat_id) or ""))
+        except Exception:
+            pass
+        try:
+            history_getter = getattr(chat_manager, "get_chat_history", None)
+            if callable(history_getter):
+                history = history_getter(chat_id) or []
+                for item in list(history)[-6:]:
+                    if isinstance(item, dict):
+                        role = str(item.get("role") or item.get("sender") or "").lower()
+                        if role and role not in {"user", "human"}:
+                            continue
+                        text_parts.append(str(item.get("content") or item.get("message") or item.get("text") or ""))
+                    else:
+                        role = str(getattr(item, "role", "") or getattr(item, "sender", "")).lower()
+                        if role and role not in {"user", "human"}:
+                            continue
+                        text_parts.append(str(getattr(item, "content", "") or getattr(item, "message", "") or getattr(item, "text", "") or ""))
+        except Exception:
+            pass
+
+        combined = " ".join(part for part in text_parts if part).lower()
+        if not combined:
+            return False
+        explicit_phrases = (
+            "initiative",
+            "pending approval",
+            "pending approvals",
+            "pending action",
+            "pending actions",
+            "approval queue",
+            "what needs approval",
+            "show approvals",
+            "show pending",
+            "hermes triage",
+            "hermes decisions",
+            "standup decisions",
+        )
+        return any(phrase in combined for phrase in explicit_phrases)
 
     def _draft_and_ask(
         self, action: ProposedAction, settings: dict, tier=None

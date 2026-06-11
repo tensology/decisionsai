@@ -22,7 +22,6 @@ from distr.gui.oracle.lifecycle import LifecycleMixin
 from distr.gui.oracle.render_strategy import create_renderer, RenderStrategy
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtWidgets import QApplication
-import hashlib
 import logging
 import os
 import platform
@@ -1298,6 +1297,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         self._global_ptt_listener.refresh()
         logger.info("[HOTKEY] Shortcut settings changed; live listener state refreshed")
+        if hasattr(self, "update_menu"):
+            self.update_menu()
 
     def _is_global_ptt_hotkey_enabled(self) -> bool:
         try:
@@ -1661,31 +1662,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     @staticmethod
     def _snippet_remote_hotkey_to_global_combo(remote_hotkey: str | None) -> tuple[str, str] | None:
-        aliases = {
-            "ctrl": "control",
-            "control": "control",
-            "alt": "option",
-            "option": "option",
-            "cmd": "command",
-            "command": "command",
-            "meta": "command",
-            "shift": "shift",
-        }
-        parts = [p.strip().lower() for p in str(remote_hotkey or "").replace("_", "+").split("+") if p.strip()]
-        if not parts:
-            return None
-        modifiers = []
-        key = ""
-        for part in parts:
-            normalized = aliases.get(part)
-            if normalized:
-                if normalized not in modifiers:
-                    modifiers.append(normalized)
-            else:
-                key = part
-        if not modifiers or not key:
-            return None
-        return ("_".join(modifiers), key)
+        from distr.core.hotkeys import parse_remote_hotkey
+
+        return parse_remote_hotkey(remote_hotkey)
 
     def _get_skin_shortcut_order(self) -> list[str]:
         try:
@@ -1765,10 +1744,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 return
             self._paste_snippet_by_hotkey(snippet_id)
 
-    def _paste_snippet_by_hotkey(self, snippet_id: int) -> None:
+    def _paste_snippet_by_hotkey(self, snippet_id: int, *, restore_focus: bool = False) -> None:
         try:
             from distr.core.db import Snippet
             from distr.core.agent.tools.clipboard.clipboard_actions import set_clipboard_content
+            from distr.core.actions.desktop import (
+                activate_app,
+                get_remembered_external_frontmost_app,
+            )
 
             with get_session() as session:
                 snippet = session.query(Snippet).filter(Snippet.id == snippet_id).first()
@@ -1779,12 +1762,21 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             if not set_clipboard_content(text):
                 logger.warning("[HOTKEY] Failed to write snippet %s to clipboard", snippet_id)
                 return
+            if restore_focus:
+                target_app = get_remembered_external_frontmost_app()
+                if target_app:
+                    activate_app(target_app)
+                    time.sleep(0.18)
             import pyautogui
 
             modifier = "command" if platform.system() == "Darwin" else "ctrl"
             time.sleep(0.08)
             pyautogui.hotkey(modifier, "v")
-            logger.info("[HOTKEY] Pasted snippet %s via global hotkey", snippet_id)
+            logger.info(
+                "[HOTKEY] Pasted snippet %s via %s",
+                snippet_id,
+                "tray menu" if restore_focus else "global hotkey",
+            )
         except Exception as exc:
             logger.warning("[HOTKEY] Failed to paste snippet %s: %s", snippet_id, exc, exc_info=True)
 
@@ -2303,27 +2295,15 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Update Oracle menu with chat info"""
         if self._updating_menu:
             return
-        
+
         try:
             self._updating_menu = True
             logger.debug(f"Oracle: Updating menu with chat ID: {chat_id}")
-            if chat_id:
-                # Convert chat_id to string and create MD5 hash
-                chat_id_str = str(chat_id)
-                md5_hash = hashlib.md5(chat_id_str.encode()).hexdigest()
-                # Take first 6 characters of the hash
-                short_hash = md5_hash[:6]
-                # Update the shared menu item
-                text = f"Chat: #{short_hash}"
-                if self.chat_id_menu_item:
-                    self.chat_id_menu_item.setText(text)
-                    # Force menu update
-                    self.menu.update()
-                    if self.tray_icon and self.tray_icon.contextMenu():
-                        self.tray_icon.contextMenu().update()
-            else:
-                if self.chat_id_menu_item:
-                    self.chat_id_menu_item.setText("No active chat")
+            self._update_chat_id_display(chat_id)
+            if self.menu:
+                self.menu.update()
+            if self.tray_icon and self.tray_icon.contextMenu():
+                self.tray_icon.contextMenu().update()
         finally:
             self._updating_menu = False
 

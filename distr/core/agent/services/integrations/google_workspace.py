@@ -22,8 +22,30 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 import base64
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def _walk_gmail_parts(part: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Flatten Gmail MIME parts, including nested multipart children."""
+    parts: List[Dict[str, Any]] = []
+    stack = list(part.get('parts') or [])
+    while stack:
+        current = stack.pop(0)
+        parts.append(current)
+        children = current.get('parts') or []
+        if children:
+            stack[0:0] = children
+    return parts
+
+
+def _safe_attachment_filename(filename: str) -> str:
+    """Return a filesystem-safe attachment filename while preserving extension."""
+    name = os.path.basename(filename or "").strip() or "attachment"
+    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name)
+    name = name.strip(" .")
+    return name or "attachment"
 
 
 class GoogleWorkspaceConnector:
@@ -329,10 +351,11 @@ class GoogleWorkspaceConnector:
         # Parse email data
         headers = {h['name']: h['value'] for h in result.get('payload', {}).get('headers', [])}
         body = ""
+        attachments: List[Dict[str, Any]] = []
         
         payload = result.get('payload', {})
         if 'parts' in payload:
-            for part in payload['parts']:
+            for part in _walk_gmail_parts(payload):
                 if part.get('mimeType') == 'text/plain':
                     data = part.get('body', {}).get('data', '')
                     if data:
@@ -341,6 +364,16 @@ class GoogleWorkspaceConnector:
                     data = part.get('body', {}).get('data', '')
                     if data:
                         body = base64.urlsafe_b64decode(data).decode('utf-8')
+                filename = part.get('filename') or ''
+                attachment_id = part.get('body', {}).get('attachmentId')
+                if filename and attachment_id:
+                    attachments.append({
+                        'message_id': message_id,
+                        'attachment_id': attachment_id,
+                        'filename': filename,
+                        'mime_type': part.get('mimeType', ''),
+                        'size': part.get('body', {}).get('size', 0),
+                    })
         else:
             data = payload.get('body', {}).get('data', '')
             if data:
@@ -355,8 +388,41 @@ class GoogleWorkspaceConnector:
             'date': headers.get('Date', ''),
             'snippet': result.get('snippet', ''),
             'body': body,
-            'labels': result.get('labelIds', [])
+            'labels': result.get('labelIds', []),
+            'attachments': attachments,
         }
+
+    def download_email_attachment(
+        self,
+        message_id: str,
+        attachment_id: str,
+        filename: str,
+        destination_dir: str,
+    ) -> Optional[str]:
+        """Download a Gmail attachment to ``destination_dir`` and return its path."""
+        if not self._ensure_valid_token():
+            return None
+        if not message_id or not attachment_id or not filename:
+            logger.error("download_email_attachment missing required arguments")
+            return None
+
+        safe_name = _safe_attachment_filename(filename)
+        dest_dir = Path(destination_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}"
+        result = self._make_request('GET', url)
+        if not result or not result.get('data'):
+            return None
+        data = str(result.get('data') or '')
+        padding = "=" * (-len(data) % 4)
+        try:
+            raw = base64.urlsafe_b64decode((data + padding).encode("ascii"))
+        except Exception as exc:
+            logger.error("Failed to decode Gmail attachment %s: %s", attachment_id, exc, exc_info=True)
+            return None
+        path = dest_dir / safe_name
+        path.write_bytes(raw)
+        return str(path)
     
     def send_email(self, to: str, subject: str, body: str, body_type: str = 'plain', cc: Optional[str] = None, bcc: Optional[str] = None) -> bool:
         """Send email via Gmail"""
@@ -1241,4 +1307,3 @@ class GoogleWorkspaceConnector:
         html = '<p>' + html + '</p>'
         
         return html
-

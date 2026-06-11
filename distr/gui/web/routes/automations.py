@@ -56,6 +56,15 @@ def _utcnow() -> datetime:
     return datetime.utcnow().replace(microsecond=0)
 
 
+def _notify_automation_data_changed() -> None:
+    try:
+        from distr.gui.web.workflow_events import increment_workflow_updated
+
+        increment_workflow_updated()
+    except Exception:
+        pass
+
+
 def _iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() + "Z" if value else None
 
@@ -103,10 +112,22 @@ def _workflow_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
     schedule = schedule if isinstance(schedule, dict) else {}
     kind = str(schedule.get("kind") or schedule.get("frequency") or "daily").strip().lower()
     if kind in {"15m", "15min"}:
-        kind = "15min"
+        kind = "interval"
+        schedule = {
+            **schedule,
+            "kind": "interval",
+            "interval": schedule.get("interval") or 15,
+            "interval_unit": schedule.get("interval_unit") or "minutes",
+        }
     if kind in {"30m", "30min"}:
-        kind = "30min"
-    if kind not in {"once", "15min", "30min", "hourly", "daily", "weekly"}:
+        kind = "interval"
+        schedule = {
+            **schedule,
+            "kind": "interval",
+            "interval": schedule.get("interval") or 30,
+            "interval_unit": schedule.get("interval_unit") or "minutes",
+        }
+    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly"}:
         kind = "daily"
     time_value = str(schedule.get("time") or "09:00")
     if kind in {"daily", "weekly"}:
@@ -121,13 +142,38 @@ def _workflow_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
         if not run_at:
             raise HTTPException(422, "Run-at time is required for one-time automations")
         try:
-            datetime.fromisoformat(run_at.replace("Z", "+00:00"))
+            from distr.core.workflow.scheduler import normalize_once_run_at_storage, parse_once_run_at_as_utc
+
+            parsed = parse_once_run_at_as_utc(run_at)
+            if not parsed:
+                raise ValueError(f"Invalid run-at time: {run_at!r}")
+            run_at = normalize_once_run_at_storage(run_at)
         except ValueError as exc:
-            raise HTTPException(422, f"Invalid run-at time: {run_at!r}") from exc
+            raise HTTPException(422, str(exc)) from exc
+    interval_value = 15
+    interval_unit = "minutes"
+    if kind == "interval":
+        try:
+            interval_value = max(1, int(schedule.get("interval") or schedule.get("interval_value") or 15))
+        except (TypeError, ValueError):
+            if strict:
+                raise HTTPException(422, "Interval must be a positive number") from None
+            interval_value = 15
+        interval_unit = str(schedule.get("interval_unit") or "minutes").strip().lower()
+        if interval_unit.startswith("sec"):
+            interval_unit = "seconds"
+        else:
+            interval_unit = "minutes"
+        if strict and interval_unit == "seconds" and interval_value > 86400:
+            raise HTTPException(422, "Interval cannot exceed 86400 seconds")
+        if strict and interval_unit == "minutes" and interval_value > 1440:
+            raise HTTPException(422, "Interval cannot exceed 1440 minutes")
     return {
         "kind": kind,
         "time": time_value,
         "run_at": run_at,
+        "interval": interval_value,
+        "interval_unit": interval_unit,
         "days": str(schedule.get("days") or schedule.get("schedule_days") or "1"),
         "timezone": str(schedule.get("timezone") or ""),
     }
@@ -135,11 +181,23 @@ def _workflow_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
 
 def _compute_next_run(schedule: dict[str, Any]) -> datetime | None:
     try:
-        from distr.core.workflow.scheduler import _next_run_from_cron, schedule_to_cron
+        from distr.core.workflow.scheduler import _next_run_from_cron, next_run_for_interval, schedule_to_cron
 
+        if schedule.get("kind") == "interval":
+            return next_run_for_interval(
+                int(schedule.get("interval") or 15),
+                str(schedule.get("interval_unit") or "minutes"),
+                _utcnow(),
+                allow_current_window=True,
+            )
+        schedule_time = schedule.get("time")
+        if schedule.get("kind") == "once":
+            schedule_time = schedule.get("run_at")
+        elif schedule.get("kind") == "interval":
+            schedule_time = f"{schedule.get('interval')}:{schedule.get('interval_unit')}"
         cron = schedule_to_cron(
             schedule.get("kind"),
-            schedule.get("run_at") if schedule.get("kind") == "once" else schedule.get("time"),
+            schedule_time,
             schedule.get("timezone"),
             schedule.get("days"),
         )
@@ -152,7 +210,12 @@ def _apply_schedule(workflow: AutoWorkflow, schedule: dict[str, Any]) -> None:
     schedule = _workflow_schedule(schedule, strict=True)
     workflow.schedule_enabled = workflow.status == "active"
     workflow.schedule_preset = schedule["kind"]
-    workflow.schedule_time = schedule.get("run_at") if schedule["kind"] == "once" else schedule.get("time")
+    if schedule["kind"] == "once":
+        workflow.schedule_time = schedule.get("run_at")
+    elif schedule["kind"] == "interval":
+        workflow.schedule_time = f"{schedule.get('interval')}:{schedule.get('interval_unit')}"
+    else:
+        workflow.schedule_time = schedule.get("time")
     workflow.schedule_days = schedule.get("days") or "1"
     workflow.schedule_timezone = schedule.get("timezone") or None
     workflow.schedule_cron = None
@@ -167,9 +230,14 @@ def _first_instruction_step(workflow: AutoWorkflow) -> AutoWorkflowStep | None:
 
 
 def _serialize_automation(workflow: AutoWorkflow) -> dict[str, Any]:
+    from distr.core.workflow.scheduler import once_run_at_for_datetime_local_input
+
     marker = _json_config(workflow.context_rules)
     schedule = _workflow_schedule(marker.get("schedule") if isinstance(marker.get("schedule"), dict) else {})
     step = _first_instruction_step(workflow)
+    run_at_display = schedule.get("run_at") or ""
+    if schedule.get("kind") == "once" and run_at_display:
+        run_at_display = once_run_at_for_datetime_local_input(run_at_display)
     return {
         "id": _automation_id(workflow.id),
         "workflow_id": workflow.id,
@@ -181,7 +249,9 @@ def _serialize_automation(workflow: AutoWorkflow) -> dict[str, Any]:
         "schedule": {
             "kind": schedule["kind"],
             "time": schedule.get("time") or "09:00",
-            "run_at": schedule.get("run_at") or "",
+            "run_at": run_at_display,
+            "interval": schedule.get("interval") or 15,
+            "interval_unit": schedule.get("interval_unit") or "minutes",
             "days": schedule.get("days") or "1",
             "timezone": schedule.get("timezone") or "",
         },
@@ -328,6 +398,7 @@ def create_routes() -> APIRouter:
             db.add(step)
             db.commit()
             db.refresh(workflow)
+            _notify_automation_data_changed()
             return JSONResponse({"success": True, "automation": _serialize_automation(workflow)})
 
     @router.get("/automations/due")
@@ -387,6 +458,7 @@ def create_routes() -> APIRouter:
             workflow.modified_date = _utcnow()
             db.commit()
             db.refresh(workflow)
+            _notify_automation_data_changed()
             return JSONResponse({"success": True, "automation": _serialize_automation(workflow)})
 
     @router.post("/automations/{automation_id}/pause")
@@ -398,6 +470,7 @@ def create_routes() -> APIRouter:
             workflow.modified_date = _utcnow()
             db.commit()
             db.refresh(workflow)
+            _notify_automation_data_changed()
             return JSONResponse({"success": True, "automation": _serialize_automation(workflow)})
 
     @router.post("/automations/{automation_id}/resume")
@@ -409,6 +482,7 @@ def create_routes() -> APIRouter:
             workflow.modified_date = _utcnow()
             db.commit()
             db.refresh(workflow)
+            _notify_automation_data_changed()
             return JSONResponse({"success": True, "automation": _serialize_automation(workflow)})
 
     @router.delete("/automations/{automation_id}")
@@ -429,6 +503,7 @@ def create_routes() -> APIRouter:
                 ).delete(synchronize_session=False)
             db.delete(workflow)
             db.commit()
+        _notify_automation_data_changed()
         return JSONResponse({"success": True})
 
     @router.post("/automations/{automation_id}/run")

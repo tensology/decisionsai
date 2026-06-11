@@ -113,6 +113,84 @@ def test_old_style_readout_is_compact(monkeypatch, tmp_path):
     assert "Draft:" not in sent
 
 
+def test_surface_draft_queue_does_not_pollute_unrelated_chat(tmp_path):
+    svc = _service(tmp_path)
+    now = datetime.now(tz=timezone.utc)
+    svc._draft_queue.add(DraftEntry(
+        id="hermes-7",
+        action_type="hermes_triage_candidate",
+        description="Player1Sport (jira) has 53 fetched item(s) available for review.",
+        draft="Decision draft",
+        reason="Hermes standup",
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+    ))
+    chat_manager = MagicMock()
+    chat_manager.get_current_chat.return_value = 42
+    chat_manager.get_chat_title.return_value = "Board header and list view buttons"
+    chat_manager.get_chat_history.return_value = [
+        {"role": "user", "content": "change board buttons/list view"},
+    ]
+    svc.chat_manager = chat_manager
+
+    svc._surface_draft_queue(42)
+
+    chat_manager.add_assistant_message.assert_not_called()
+
+
+def test_surface_draft_queue_allows_explicit_initiative_chat(tmp_path):
+    svc = _service(tmp_path)
+    now = datetime.now(tz=timezone.utc)
+    svc._draft_queue.add(DraftEntry(
+        id="hermes-7",
+        action_type="hermes_triage_candidate",
+        description="Player1Sport (jira) has 53 fetched item(s) available for review.",
+        draft="Decision draft",
+        reason="Hermes standup",
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+    ))
+    chat_manager = MagicMock()
+    chat_manager.get_current_chat.return_value = 42
+    chat_manager.get_chat_title.return_value = "Initiative approvals"
+    chat_manager.get_chat_history.return_value = [
+        {"role": "user", "content": "what needs approval"},
+    ]
+    svc.chat_manager = chat_manager
+
+    svc._surface_draft_queue(42)
+
+    sent = chat_manager.add_assistant_message.call_args.args[1]
+    assert "Pending approval:" in sent
+    assert "hermes-7" in sent
+
+
+def test_surface_draft_queue_expires_stale_approvals_before_chat_surface(tmp_path):
+    svc = _service(tmp_path)
+    now = datetime.now(tz=timezone.utc)
+    svc._draft_queue.add(DraftEntry(
+        id="hermes-old",
+        action_type="hermes_triage_candidate",
+        description="Old Jira review should not resurface.",
+        draft="Decision draft",
+        reason="Hermes standup",
+        created_at=(now - timedelta(days=3)).isoformat(),
+        expires_at=(now - timedelta(minutes=1)).isoformat(),
+    ))
+    chat_manager = MagicMock()
+    chat_manager.get_current_chat.return_value = 42
+    chat_manager.get_chat_title.return_value = "Initiative approvals"
+    chat_manager.get_chat_history.return_value = [
+        {"role": "user", "content": "what needs approval"},
+    ]
+    svc.chat_manager = chat_manager
+
+    svc._surface_draft_queue(42)
+
+    chat_manager.add_assistant_message.assert_not_called()
+    assert svc._draft_queue.get_by_id("hermes-old") is None
+
+
 def test_hermes_triage_reply_approves_first_candidate(monkeypatch, tmp_path):
     from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 
@@ -160,6 +238,44 @@ def test_hermes_triage_reply_approves_first_candidate(monkeypatch, tmp_path):
     sent = handler.send_to_telegram.call_args.args[0]
     assert "Approved:" in sent
     assert "Roland" in sent
+
+
+def test_hermes_triage_reply_approves_all_with_clean_plural_wording(monkeypatch, tmp_path):
+    from distr.core.integrations.telegram.messages import TelegramMessagesMixin
+
+    now = datetime.now(tz=timezone.utc)
+    queue = DraftQueue(path=str(tmp_path / "drafts.json"))
+    for draft_id in ("hermes-one", "hermes-two"):
+        queue.add(DraftEntry(
+            id=draft_id,
+            action_type="hermes_triage_candidate",
+            description="Create a ticket?",
+            draft="Decision draft",
+            reason="Hermes standup",
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(hours=1)).isoformat(),
+            execute_payload={"kind": "hermes_triage_ack", "candidate": {"id": draft_id}},
+        ))
+    monkeypatch.setattr(
+        "distr.core.initiative.draft_queue.DraftQueue",
+        lambda: queue,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "distr.core.initiative.draft_execute.approve_draft_in_queue",
+        lambda q, draft_id: q.remove(draft_id),
+        raising=False,
+    )
+
+    handler = TelegramMessagesMixin()
+    handler.send_to_telegram = MagicMock()
+
+    handled = handler._handle_initiative_draft_command("approve all")
+
+    assert handled is True
+    sent = handler.send_to_telegram.call_args.args[0]
+    assert sent == "Approved 2 pending items."
+    assert "item(s)" not in sent
 
 
 def test_hermes_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):

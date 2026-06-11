@@ -210,6 +210,7 @@ def _get_tool_definitions(
         ("ConvertDocumentTool", {}),
         # Google Workspace
         ("GoogleWorkspaceTool", {}),
+        ("HermesDelegatedWorkflowTool", {}),
         # Markdown to Google Doc
         ("MarkdownToGoogleDocTool", {}),
         # Upload DOC/DOCX to Google Doc
@@ -514,6 +515,7 @@ TOOL_REGISTRY = {
     "OpenAndStartProjectTool": ("system.project_tools", "OpenAndStartProjectTool"),
     # integrations/
     "GoogleWorkspaceTool":     ("integrations.google_workspace_tool", "GoogleWorkspaceTool"),
+    "HermesDelegatedWorkflowTool": ("integrations.hermes_delegated_workflow", "HermesDelegatedWorkflowTool"),
     "MarkdownToGoogleDocTool": ("integrations.markdown_to_google_doc", "MarkdownToGoogleDocTool"),
     "UploadDocToGoogleTool":   ("integrations.upload_doc_to_google", "UploadDocToGoogleTool"),
     "SendFileToTelegramTool":  ("integrations.send_file_to_telegram", "SendFileToTelegramTool"),
@@ -655,6 +657,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "for many events in one call, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week), "
         "Google Drive, Google Docs. Use create_calendar_events_batch for multi-day protocols and bulk slots when "
         "Google is connected."
+    ),
+    "HermesDelegatedWorkflowTool": (
+        "Plan and record complex delegated remote workflows from Telegram, desktop, or chat: email/document intake, "
+        "attachment scoping, browser/desktop actions, Codex/Cursor handoff, roadblocks, approvals, and resumable execution."
     ),
     "MarkdownToGoogleDocTool": "Convert Markdown content from the clipboard into a formatted Google Doc and open it in the browser.",
     "UploadDocToGoogleTool": "Upload a local DOC or DOCX file to Google Drive as a Google Doc.",

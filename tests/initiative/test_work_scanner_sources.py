@@ -1,4 +1,8 @@
-from distr.core.initiative.work_scanner import _connected_work_sources, _scan_advanced_work_connectors
+from distr.core.initiative.work_scanner import (
+    _add_board_proposals,
+    _connected_work_sources,
+    _scan_advanced_work_connectors,
+)
 
 
 def test_connected_work_sources_include_saved_work_connectors():
@@ -22,6 +26,29 @@ def test_connected_work_sources_include_saved_work_connectors():
     assert by_provider["slack_app"]["label"] == "Slack"
     assert by_provider["discord_bot"]["label"] == "Discord"
     assert "openai" not in by_provider
+
+
+def test_board_proposals_use_spoken_clean_plural_wording():
+    scan = {"proposals": []}
+    _add_board_proposals(
+        scan,
+        {
+            "id": 1,
+            "name": "Player1Sport",
+            "source_lane": "Current",
+            "lanes": [
+                {
+                    "name": "Backlog",
+                    "tickets": [{"id": 10}, {"id": 11}, {"id": 12}, {"id": 13}, {"id": 14}],
+                },
+                {"name": "Current", "tickets": []},
+            ],
+        },
+    )
+
+    description = scan["proposals"][0]["description"]
+    assert description == "Player1Sport has 5 backlog items that should move into Current."
+    assert "item(s)" not in description
 
 
 def test_advanced_work_connectors_scan_slack_clickup_and_monday(monkeypatch):

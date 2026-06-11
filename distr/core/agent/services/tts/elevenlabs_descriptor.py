@@ -13,6 +13,7 @@ import os
 import re
 from typing import Any, Optional
 
+from distr.core.agent.services.tts.elevenlabs_config import ELEVENLABS_TTS_MODEL_ID
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,7 @@ class ElevenLabsDescriptor(TTSProviderDescriptor):
             audio_stream = client.text_to_speech.convert(
                 text=text,
                 voice_id=resolved_voice,
-                model_id="eleven_multilingual_v2",
+                model_id=ELEVENLABS_TTS_MODEL_ID,
                 output_format="mp3_44100_128",
                 voice_settings={
                     "stability": stability,

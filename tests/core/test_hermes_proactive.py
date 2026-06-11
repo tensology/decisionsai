@@ -238,8 +238,117 @@ def test_proactive_orchestrator_tool_builds_daily_plan_from_context(monkeypatch)
     assert '"action": "daily_plan"' in result
     assert '"work_scan_sources"' in result
     assert captured["scope"] == "day"
-    assert "WhatsApp" in captured["instruction"]
-    assert captured["bundle"].work_scan["gmail"]["messages"] == 1
+
+
+def test_proactive_orchestrator_daily_plan_executes_implied_actions(monkeypatch):
+    from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+
+    executed = []
+
+    def fake_build(self, settings):
+        return SimpleNamespace(
+            chat_history=[],
+            kanban_summary=[],
+            scheduled_sessions=[],
+            unfinished_workflows=[],
+            skills=[],
+            developer_context={},
+            work_scan={
+                "boards": [
+                    {
+                        "id": 22,
+                        "name": "RelightSA",
+                        "lanes": [
+                            {"name": "Current", "ticket_count": 0, "tickets": []},
+                            {
+                                "name": "Backlog",
+                                "ticket_count": 1,
+                                "tickets": [{"id": 501, "title": "Send quote", "priority": "critical"}],
+                            },
+                        ],
+                    }
+                ]
+            },
+            memory_user="",
+            memory_long_term="",
+        )
+
+    def fake_execute(**kwargs):
+        executed.append(kwargs)
+        return {"success": True, "message": "Moved 1 ticket to Current", "ticket_ids": [501]}
+
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {"initiative_allow_ticket_lane_moves": True})
+    monkeypatch.setattr("distr.core.initiative.context.ContextAssembler.build", fake_build)
+    monkeypatch.setattr(
+        "distr.core.initiative.planners.generate_planner_markdown",
+        lambda scope, settings, bundle, instruction: ("## Outcome for Today\n- RelightSA: finish Send quote today.", {"period": "day"}),
+    )
+    monkeypatch.setattr(
+        "distr.core.initiative.planners.tts_excerpt_from_markdown",
+        lambda markdown, max_len=650: "RelightSA: finish Send quote today.",
+    )
+    monkeypatch.setattr("distr.core.initiative.action_handlers.execute_initiative_action", fake_execute)
+
+    result_text = ProactiveOrchestratorTool()._run(action="daily_plan", format="json")
+    result = json.loads(result_text)
+
+    assert result["orchestration_results"][0]["message"] == "Moved 1 ticket to Current"
+    assert executed[0]["action_type"] == "ticket_lane_move"
+    assert executed[0]["payload"]["ticket_ids"] == [501]
+
+
+def test_proactive_orchestrator_daily_plan_respects_lane_move_permission(monkeypatch):
+    from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+
+    def fake_build(self, settings):
+        return SimpleNamespace(
+            chat_history=[],
+            kanban_summary=[],
+            scheduled_sessions=[],
+            unfinished_workflows=[],
+            skills=[],
+            developer_context={},
+            work_scan={
+                "boards": [
+                    {
+                        "id": 22,
+                        "name": "RelightSA",
+                        "lanes": [
+                            {"name": "Current", "ticket_count": 0, "tickets": []},
+                            {
+                                "name": "Backlog",
+                                "ticket_count": 1,
+                                "tickets": [{"id": 501, "title": "Send quote", "priority": "critical"}],
+                            },
+                        ],
+                    }
+                ]
+            },
+            memory_user="",
+            memory_long_term="",
+        )
+
+    def fail_execute(**kwargs):
+        raise AssertionError("planner should not execute lane moves without permission")
+
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {"initiative_allow_ticket_lane_moves": False})
+    monkeypatch.setattr("distr.core.initiative.context.ContextAssembler.build", fake_build)
+    monkeypatch.setattr(
+        "distr.core.initiative.planners.generate_planner_markdown",
+        lambda scope, settings, bundle, instruction: ("## Outcome for Today\n- RelightSA: finish Send quote today.", {"period": "day"}),
+    )
+    monkeypatch.setattr(
+        "distr.core.initiative.planners.tts_excerpt_from_markdown",
+        lambda markdown, max_len=650: "RelightSA: finish Send quote today.",
+    )
+    monkeypatch.setattr("distr.core.initiative.action_handlers.execute_initiative_action", fail_execute)
+
+    result_text = ProactiveOrchestratorTool()._run(action="daily_plan", format="json")
+    result = json.loads(result_text)
+
+    assert result["orchestration_actions"][0]["action_type"] == "ticket_lane_move"
+    assert result["orchestration_results"][0]["success"] is False
+    assert "need approval" in result["orchestration_results"][0]["message"]
 
 
 def test_project_activity_includes_project_events_validations_and_rules(tmp_path, monkeypatch):

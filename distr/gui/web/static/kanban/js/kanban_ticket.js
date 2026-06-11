@@ -108,12 +108,36 @@
             return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300 font-medium">' + deps.esc(source) + "</span>";
         }
 
+        function metricTipHtml(tooltip, innerHtml) {
+            var tip = tooltip || "";
+            return '<span class="kb-card-action-tip" data-tooltip="' + deps.esc(tip) + '" tabindex="0">' + innerHtml + "</span>";
+        }
+
+        function formatMetricLabel(kind, value) {
+            var level = (value || "medium").toLowerCase();
+            return kind + ": " + level.charAt(0).toUpperCase() + level.slice(1);
+        }
+
+        function buildPriorityBadge(priority) {
+            var pri = (priority || "medium").toLowerCase();
+            if (pri !== "critical" && pri !== "high" && pri !== "low") pri = "medium";
+            var priClass = "kb-pri-" + pri;
+            return metricTipHtml(
+                formatMetricLabel("Priority", pri),
+                '<span class="kb-metric-badge ' + priClass + '" aria-label="' + deps.esc(formatMetricLabel("Priority", pri)) + '">' + deps.esc(pri) + "</span>"
+            );
+        }
+
         function buildComplexityBadge(complexity) {
             var level = (complexity || "medium").toLowerCase();
+            if (level !== "low" && level !== "high") level = "medium";
             var numeral = "II";
             if (level === "low") numeral = "I";
             if (level === "high") numeral = "III";
-            return '<span class="kb-complexity-numeral" title="Complexity: ' + deps.esc(level) + '" aria-label="Complexity ' + deps.esc(level) + '">' + numeral + "</span>";
+            return metricTipHtml(
+                formatMetricLabel("Complexity", level),
+                '<span class="kb-metric-badge kb-complexity-numeral kb-cx-' + level + '" aria-label="' + deps.esc(formatMetricLabel("Complexity", level)) + '">' + numeral + "</span>"
+            );
         }
 
         function buildExternalLink(ticketUrl, source) {
@@ -158,13 +182,14 @@
             var disabled = !!config.disabled;
             var stateClass = disabled ? "text-gray-700 cursor-not-allowed" : "text-white";
             var tooltip = config.tooltip || "";
-            return '<span class="kb-card-action-tip">' +
-                '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" title="' + tooltip + '" aria-label="' + tooltip + '"' + (disabled ? " disabled" : "") + ">" +
+            return '<span class="kb-card-action-tip" data-tooltip="' + deps.esc(tooltip) + '">' +
+                '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" aria-label="' + deps.esc(tooltip) + '"' + (disabled ? " disabled" : "") + ">" +
                 config.iconSvg + "</button></span>";
         }
 
         function buildActionRow(opts) {
-            var leftActions = [
+            opts = opts || {};
+            var primaryActions = [
                 actionButtonHtml({
                     keyClass: "kb-act-copy",
                     tooltip: "Copy title and description",
@@ -175,18 +200,18 @@
                     tooltip: "Send to Orchestrator",
                     disabled: false,
                     nativeTooltip: true,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg><span class="kb-act-label">Agent</span>',
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>',
                 }),
                 actionButtonHtml({
                     keyClass: "kb-act-cli",
                     tooltip: "Run with Cursor/Codex",
-                    hidden: !opts.hasProject,
+                    hidden: opts.layout === "list" || !opts.hasProject,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
                 }),
                 actionButtonHtml({
                     keyClass: "kb-act-project",
                     tooltip: "Send to Project",
-                    hidden: !opts.hasProject,
+                    hidden: opts.layout === "list" || !opts.hasProject,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
                 }),
                 actionButtonHtml({
@@ -207,8 +232,41 @@
                 hidden: !opts.canDelete,
                 iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>',
             });
-            return '<div class="kb-card-actions-left">' + leftActions.join("") + "</div>" +
+            if (opts.layout === "list") {
+                return primaryActions.join("") + deleteAction;
+            }
+            return '<div class="kb-card-actions-left">' + primaryActions.join("") + "</div>" +
                 '<div class="kb-card-actions-right">' + deleteAction + "</div>";
+        }
+
+        function initListRowMarquee(row) {
+            var desc = row.querySelector(".kb-ticket-list-desc");
+            if (!desc || desc.dataset.marqueeInit === "done") return;
+            var track = desc.querySelector(".kb-ticket-list-desc-track");
+            if (!track) {
+                desc.classList.add("kb-ticket-list-desc--empty");
+                desc.dataset.marqueeInit = "done";
+                return;
+            }
+            var first = track.querySelector("span");
+            if (!first) return;
+            var text = (first.textContent || "").trim();
+            if (!text) {
+                desc.classList.add("kb-ticket-list-desc--empty");
+                desc.dataset.marqueeInit = "done";
+                return;
+            }
+            requestAnimationFrame(function() {
+                if (desc.dataset.marqueeInit === "done") return;
+                if (track.scrollWidth <= desc.clientWidth + 1) return;
+                desc.dataset.marqueeInit = "done";
+                desc.classList.add("kb-ticket-list-desc--marquee");
+                var clone = first.cloneNode(true);
+                clone.setAttribute("aria-hidden", "true");
+                track.appendChild(clone);
+                var duration = Math.max(10, Math.round(track.scrollWidth / 40));
+                track.style.setProperty("--kb-marquee-duration", duration + "s");
+            });
         }
 
         function deleteLocalTicket(ticket) {
@@ -220,7 +278,7 @@
                 danger: true,
                 onConfirm: function() {
                     deps.hideKanbanConfirm();
-                    deps.apiFetch("/api/kanban/tickets/" + ticket.id, { method: "DELETE" }).then(function() {
+                    deps.apiFetch("/api/tickets/tickets/" + ticket.id, { method: "DELETE" }).then(function() {
                         deps.showSnackbar("Ticket deleted");
                         deps.reloadCurrentDatabaseBoard();
                     }).catch(function(e) {
@@ -228,6 +286,83 @@
                     });
                 },
             });
+        }
+
+        function bindTicketActions(rootEl, ticket, isLocal, hasProject) {
+            var currentBoard = deps.getCurrentBoard();
+            rootEl.addEventListener("click", function(e) {
+                if (e.target.closest(".kb-card-actions") || e.target.closest(".kb-ticket-list-actions") || e.target.closest(".kb-ticket-list-drag-handle") || e.target.closest(".kb-ticket-list-badges") || e.target.closest("a")) return;
+                if (isLocal) deps.openTicketModal(ticket.id);
+                else openExternalTicketModal(ticket, currentBoard.source);
+            });
+            var agentBtn = rootEl.querySelector(".kb-act-agent");
+            if (agentBtn) {
+                agentBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deps.startTicketDiscussion(ticket, isLocal);
+                });
+                agentBtn.addEventListener("contextmenu", function(e) {
+                    showAgentMenu(e, ticket, isLocal, agentBtn, { hasProject: hasProject });
+                });
+            }
+            var copyBtn = rootEl.querySelector(".kb-act-copy");
+            if (copyBtn) {
+                copyBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    copyTicketToClipboard(ticket);
+                });
+            }
+            var cliBtn = rootEl.querySelector(".kb-act-cli");
+            if (cliBtn) {
+                cliBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (isLocal) deps.pushTicketToCli(ticket.id, cliBtn);
+                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "cli", null, "", cliBtn);
+                });
+            }
+            var projectBtn = rootEl.querySelector(".kb-act-project");
+            if (projectBtn) {
+                projectBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
+                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project", null, "", projectBtn);
+                });
+            }
+            var workflowBtn = rootEl.querySelector(".kb-act-workflow");
+            if (workflowBtn) {
+                workflowBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deps.openSendWorkflowModal(ticket, isLocal ? "database" : currentBoard.source);
+                });
+            }
+            var transferBtn = rootEl.querySelector(".kb-act-transfer");
+            if (transferBtn) {
+                transferBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deps.openCopyModal(ticket);
+                });
+            }
+            var deleteBtn = rootEl.querySelector(".kb-act-delete");
+            if (deleteBtn) {
+                deleteBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deleteLocalTicket(ticket);
+                });
+            }
+            var wfBadge = rootEl.querySelector(".kb-wf-status-badge");
+            if (wfBadge && wfBadge.tagName === "BUTTON" && isLocal && typeof deps.showRunPopover === "function") {
+                wfBadge.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    deps.showRunPopover(wfBadge, ticket.id);
+                });
+            }
         }
 
         function buildCardMarkup(opts) {
@@ -241,7 +376,7 @@
             });
             return '<div class="flex items-start justify-between gap-2">' +
                 '<span class="text-[14px] font-medium text-white leading-snug flex-1">' + deps.esc(opts.title) + "</span>" +
-                '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + complexityBadge + '<span class="' + opts.priorityClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium">' + deps.esc(opts.priority) + "</span>" + (opts.workflowStatusBadgeHtml || "") + extLinkHtml + "</div>" +
+                '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + complexityBadge + buildPriorityBadge(opts.priority) + (opts.workflowStatusBadgeHtml || "") + extLinkHtml + "</div>" +
                 "</div>" +
                 (opts.description ? '<p class="text-xs text-gray-400 mt-2 mb-1 leading-relaxed line-clamp-2">' + deps.esc(opts.description) + "</p>" : "") +
                 (opts.labelsHtml || "") + (opts.membersHtml || "") + (opts.timeHtml || "") + (opts.mediaHtml || "") +
@@ -262,8 +397,8 @@
                 var imgUrl = m.url;
                 var thumbUrl = m.thumbnail || m.url;
                 if (source === "jira" && imgUrl) {
-                    imgUrl = "/api/kanban/external-boards/jira/proxy-image?url=" + encodeURIComponent(imgUrl);
-                    thumbUrl = m.thumbnail ? "/api/kanban/external-boards/jira/proxy-image?url=" + encodeURIComponent(m.thumbnail) : imgUrl;
+                    imgUrl = "/api/tickets/external-boards/jira/proxy-image?url=" + encodeURIComponent(imgUrl);
+                    thumbUrl = m.thumbnail ? "/api/tickets/external-boards/jira/proxy-image?url=" + encodeURIComponent(m.thumbnail) : imgUrl;
                 }
                 if (mtype === "image" && thumbUrl) {
                     html += '<div class="flex items-start gap-2 p-2 bg-[#152054] rounded border border-white/10">';
@@ -297,6 +432,11 @@
                     '<span class="flex-1 ' + (todo.done ? "line-through text-gray-500" : "text-gray-300") + '">' + deps.esc(todo.text) + "</span>";
                 container.appendChild(row);
             });
+        }
+
+        function ticketMetaField(label, valueHtml) {
+            return '<div class="kb-ticket-meta-field"><div class="kb-ticket-meta-label">' + deps.esc(label) +
+                '</div><div class="kb-ticket-meta-value">' + valueHtml + "</div></div>";
         }
 
         function openExternalTicketModal(ticket, source) {
@@ -355,61 +495,40 @@
             if (metaContainer) {
                 var rowParts = [];
                 if (ticket.url) {
-                    rowParts.push(
-                        '<div class="flex items-center gap-1.5 flex-shrink-0"><span class="text-gray-500">Source</span>' +
-                        '<a href="' + deps.esc(ticket.url) + '" target="_blank" rel="noopener noreferrer" class="text-[#f97316] hover:underline whitespace-nowrap">Open in ' +
-                        deps.esc(source.charAt(0).toUpperCase() + source.slice(1)) + "</a></div>"
-                    );
+                    var sourceLabel = source.charAt(0).toUpperCase() + source.slice(1);
+                    rowParts.push(ticketMetaField(
+                        "Source",
+                        '<a href="' + deps.esc(ticket.url) + '" target="_blank" rel="noopener noreferrer" class="text-[#f97316] hover:underline">Open in ' +
+                        deps.esc(sourceLabel) + "</a>"
+                    ));
                 }
                 if (ticket.members && ticket.members.length) {
-                    rowParts.push(
-                        '<div class="flex items-center gap-1.5 min-w-0 max-w-[220px]"><span class="text-gray-500 flex-shrink-0">Members</span>' +
-                        '<span class="text-gray-200 truncate" title="' + deps.esc(ticket.members.join(", ")) + '">' +
-                        ticket.members.map(deps.esc).join(", ") + "</span></div>"
-                    );
+                    var membersText = ticket.members.map(deps.esc).join(", ");
+                    rowParts.push(ticketMetaField(
+                        "Members",
+                        '<span class="kb-ticket-meta-value--truncate" title="' + deps.esc(ticket.members.join(", ")) + '">' +
+                        membersText + "</span>"
+                    ));
                 }
                 if (ticket.labels && ticket.labels.length) {
-                    rowParts.push(
-                        '<div class="flex items-center gap-1.5 flex-wrap min-w-0"><span class="text-gray-500 flex-shrink-0">Labels</span>' +
-                        '<span class="flex flex-wrap gap-1">' +
+                    rowParts.push(ticketMetaField(
+                        "Labels",
+                        '<span class="kb-ticket-meta-labels">' +
                         ticket.labels.map(function(lb) {
                             return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 whitespace-nowrap">' + deps.esc(lb) + "</span>";
                         }).join("") +
-                        "</span></div>"
-                    );
+                        "</span>"
+                    ));
                 }
                 if (ticket.reporter) {
-                    rowParts.push(
-                        '<div class="flex items-center gap-1.5 flex-shrink-0"><span class="text-gray-500">Reporter</span>' +
-                        '<span class="text-gray-200">' + deps.esc(ticket.reporter) + "</span></div>"
-                    );
+                    rowParts.push(ticketMetaField("Reporter", deps.esc(ticket.reporter)));
                 }
-                metaContainer.innerHTML =
-                    '<div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">' + rowParts.join("") + "</div>";
-                metaContainer.classList.remove("hidden");
+                metaContainer.innerHTML = rowParts.join("");
+                metaContainer.classList.toggle("hidden", !rowParts.length);
             }
 
-            document.getElementById("kb-modal-transfer-ext").classList.remove("hidden");
-            document.getElementById("kb-modal-save").classList.add("hidden");
-            document.getElementById("kb-modal-delete").classList.add("hidden");
-            var projectActionBtn = document.getElementById("kb-modal-act-project");
-            var cliActionBtn = document.getElementById("kb-modal-act-cli");
-            if (projectActionBtn) {
-                var currentBoardData = deps.getCurrentBoardData() || {};
-                var canPush = !!currentBoardData.default_project_id;
-                projectActionBtn.classList.toggle("hidden", !canPush);
-                projectActionBtn.disabled = false;
-                projectActionBtn.classList.remove("opacity-40", "cursor-not-allowed");
-                projectActionBtn.title = "Send to Project";
-                projectActionBtn.setAttribute("aria-label", projectActionBtn.title);
-                if (cliActionBtn) {
-                    cliActionBtn.classList.toggle("hidden", !canPush);
-                    cliActionBtn.disabled = false;
-                    cliActionBtn.classList.remove("opacity-40", "cursor-not-allowed");
-                    cliActionBtn.title = "Run with Cursor/Codex";
-                    cliActionBtn.setAttribute("aria-label", cliActionBtn.title);
-                }
-            }
+            var modalFooter = document.getElementById("kb-modal-footer");
+            if (modalFooter) modalFooter.classList.add("hidden");
             document.getElementById("kb-modal-title").textContent = ticket.title || "Ticket";
             window._extTicketData = ticket;
             window._extTicketSource = source;
@@ -465,8 +584,8 @@
                     var imgUrl = m.url;
                     var thumbUrl = m.thumbnail || m.url;
                     if (!isLocal && currentBoard && currentBoard.source === "jira" && imgUrl) {
-                        imgUrl = "/api/kanban/external-boards/jira/proxy-image?url=" + encodeURIComponent(imgUrl);
-                        thumbUrl = m.thumbnail ? "/api/kanban/external-boards/jira/proxy-image?url=" + encodeURIComponent(m.thumbnail) : imgUrl;
+                        imgUrl = "/api/tickets/external-boards/jira/proxy-image?url=" + encodeURIComponent(imgUrl);
+                        thumbUrl = m.thumbnail ? "/api/tickets/external-boards/jira/proxy-image?url=" + encodeURIComponent(m.thumbnail) : imgUrl;
                     }
                     var mtype = (m.type || "").startsWith("video/") ? "video" : "image";
                     if (mtype === "image") {
@@ -516,80 +635,74 @@
                 canDelete: canDelete,
             });
 
-            card.addEventListener("click", function(e) {
-                if (e.target.closest(".kb-card-actions") || e.target.closest("a")) return;
-                if (isLocal) deps.openTicketModal(ticket.id);
-                else openExternalTicketModal(ticket, currentBoard.source);
-            });
-            var agentBtn = card.querySelector(".kb-act-agent");
-            if (agentBtn) {
-                agentBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deps.startTicketDiscussion(ticket, isLocal);
-                });
-                agentBtn.addEventListener("contextmenu", function(e) {
-                    showAgentMenu(e, ticket, isLocal, agentBtn, { hasProject: hasProject });
-                });
-            }
-            var copyBtn = card.querySelector(".kb-act-copy");
-            if (copyBtn) {
-                copyBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    copyTicketToClipboard(ticket);
-                });
-            }
-            var cliBtn = card.querySelector(".kb-act-cli");
-            if (cliBtn) {
-                cliBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isLocal) deps.pushTicketToCli(ticket.id, cliBtn);
-                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "cli", null, "", cliBtn);
-                });
-            }
-            var projectBtn = card.querySelector(".kb-act-project");
-            if (projectBtn) {
-                projectBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
-                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project", null, "", projectBtn);
-                });
-            }
-            var workflowBtn = card.querySelector(".kb-act-workflow");
-            if (workflowBtn) {
-                workflowBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deps.openSendWorkflowModal(ticket, isLocal ? "database" : currentBoard.source);
-                });
-            }
-            var transferBtn = card.querySelector(".kb-act-transfer");
-            if (transferBtn) {
-                transferBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deps.openCopyModal(ticket);
-                });
-            }
-            var deleteBtn = card.querySelector(".kb-act-delete");
-            if (deleteBtn) {
-                deleteBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deleteLocalTicket(ticket);
-                });
-            }
-            var wfBadge = card.querySelector(".kb-wf-status-badge");
-            if (wfBadge && wfBadge.tagName === "BUTTON" && isLocal && typeof deps.showRunPopover === "function") {
-                wfBadge.addEventListener("click", function(e) {
-                    e.stopPropagation();
-                    deps.showRunPopover(wfBadge, ticket.id);
-                });
-            }
+            bindTicketActions(card, ticket, isLocal, hasProject);
             return card;
+        }
+
+        function buildListDragHandleHtml(draggable) {
+            if (!draggable) {
+                return '<span class="kb-ticket-list-drag-handle kb-ticket-list-drag-handle--static" aria-hidden="true"></span>';
+            }
+            return '<span class="kb-ticket-list-drag-handle" title="Drag to another lane" aria-label="Drag to another lane">' +
+                '<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">' +
+                '<circle cx="2.5" cy="2" r="1.2"/><circle cx="7.5" cy="2" r="1.2"/>' +
+                '<circle cx="2.5" cy="8" r="1.2"/><circle cx="7.5" cy="8" r="1.2"/>' +
+                '<circle cx="2.5" cy="14" r="1.2"/><circle cx="7.5" cy="14" r="1.2"/>' +
+                "</svg></span>";
+        }
+
+        function createTicketListRow(ticket, isLocal, boardData) {
+            boardData = boardData || deps.getCurrentBoardData() || {};
+            var currentBoard = deps.getCurrentBoard();
+            var row = document.createElement("div");
+            row.className = "kb-ticket-list-row";
+            row.dataset.ticketId = String(ticket.id);
+            var extDnD = !isLocal && currentBoard && (currentBoard.source === "trello" || currentBoard.source === "jira");
+            var canDrag = isLocal || extDnD;
+            var hasProject = !!(ticket.linked_project_id || boardData.default_project_id);
+            var canDelete = isLocal;
+            var canTransfer = !isLocal;
+            var cleanDesc = deps.stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
+            var descHtml = cleanDesc
+                ? '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + deps.esc(cleanDesc) + "</span></div></div>"
+                : "";
+            var contentClass = "kb-ticket-list-content" + (cleanDesc ? "" : " kb-ticket-list-content--no-desc");
+            var actionRowHtml = buildActionRow({
+                layout: "list",
+                hasProject: hasProject,
+                canTransfer: canTransfer,
+                canDelete: canDelete,
+            });
+            row.innerHTML =
+                '<div class="kb-ticket-list-prefix">' +
+                    buildListDragHandleHtml(canDrag) +
+                    '<span class="kb-ticket-list-badges">' + buildComplexityBadge(ticket.complexity) + buildPriorityBadge(ticket.priority) + "</span>" +
+                "</div>" +
+                '<div class="' + contentClass + '">' +
+                    '<span class="kb-ticket-list-title">' + deps.esc(ticket.title || "") + "</span>" +
+                    descHtml +
+                "</div>" +
+                '<div class="kb-ticket-list-actions">' + actionRowHtml + "</div>";
+            if (canDrag) {
+                var handle = row.querySelector(".kb-ticket-list-drag-handle");
+                if (handle) {
+                    handle.draggable = true;
+                    handle.addEventListener("dragstart", function(e) {
+                        e.stopPropagation();
+                        var section = row.closest(".kb-ticket-list-section");
+                        var sourceLaneId = section ? (section.dataset.laneId || "") : "";
+                        e.dataTransfer.setData("text/plain", String(ticket.id));
+                        e.dataTransfer.setData("application/x-kanban-source-lane", sourceLaneId);
+                        e.dataTransfer.effectAllowed = "move";
+                        row.classList.add("dragging");
+                    });
+                    handle.addEventListener("dragend", function() {
+                        row.classList.remove("dragging");
+                    });
+                }
+            }
+            bindTicketActions(row, ticket, isLocal, hasProject);
+            return row;
         }
 
         return {
@@ -597,6 +710,8 @@
             renderExternalTodos: renderExternalTodos,
             openExternalTicketModal: openExternalTicketModal,
             createTicketCard: createTicketCard,
+            createTicketListRow: createTicketListRow,
+            initListRowMarquee: initListRowMarquee,
         };
     }
 
@@ -619,7 +734,7 @@
             var title = document.getElementById("kb-modal-link-title").value.trim();
             var url = document.getElementById("kb-modal-link-url").value.trim();
             if (!title || !url) { deps.showSnackbar("Title and URL required", "error"); return; }
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/links", {
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/links", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ title: title, url: url })
             }).then(function() {
@@ -631,7 +746,7 @@
 
         function deleteLink(linkId) {
             if (!deps.getModalTicketId()) return;
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/links/" + linkId, { method: "DELETE" })
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/links/" + linkId, { method: "DELETE" })
                 .then(function() { refreshModalTicket(); })
                 .catch(function(e) { deps.showSnackbar("Failed: " + e.message, "error"); });
         }
@@ -642,7 +757,7 @@
             files.forEach(function(f) {
                 var row = document.createElement("div");
                 row.className = "flex items-center gap-2 text-xs";
-                var url = f.url || (f.id && deps.getModalTicketId() ? "/api/kanban/tickets/" + encodeURIComponent(deps.getModalTicketId()) + "/files/" + encodeURIComponent(f.id) + "/content" : "");
+                var url = f.url || (f.id && deps.getModalTicketId() ? "/api/tickets/tickets/" + encodeURIComponent(deps.getModalTicketId()) + "/files/" + encodeURIComponent(f.id) + "/content" : "");
                 var label = deps.esc(f.filename || f.name || "Attachment");
                 row.innerHTML = (url
                     ? '<a class="text-blue-300 hover:text-blue-200 flex-1 truncate" href="' + deps.esc(url) + '" target="_blank" rel="noopener noreferrer">📎 ' + label + '</a>'
@@ -659,7 +774,7 @@
             for (var i = 0; i < fileList.length; i++) {
                 var form = new FormData();
                 form.append("file", fileList[i]);
-                promises.push(deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/files", { method: "POST", body: form }));
+                promises.push(deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/files", { method: "POST", body: form }));
             }
             Promise.all(promises).then(function() {
                 deps.showSnackbar("Files uploaded");
@@ -669,7 +784,7 @@
 
         function deleteFile(fileId) {
             if (!deps.getModalTicketId()) return;
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/files/" + fileId, { method: "DELETE" })
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/files/" + fileId, { method: "DELETE" })
                 .then(function() { refreshModalTicket(); })
                 .catch(function(e) { deps.showSnackbar("Upload failed: " + e.message, "error"); });
         }
@@ -694,7 +809,7 @@
             var input = document.getElementById("kb-modal-todo-input");
             var text = input.value.trim();
             if (!text) return;
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/todos", {
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/todos", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ text: text })
             }).then(function() {
@@ -705,7 +820,7 @@
 
         function toggleTodo(todoId, done) {
             if (!deps.getModalTicketId()) return;
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/todos/" + todoId, {
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/todos/" + todoId, {
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ done: done })
             }).then(function() { refreshModalTicket(); }).catch(function() {});
@@ -713,13 +828,13 @@
 
         function deleteTodo(todoId) {
             if (!deps.getModalTicketId()) return;
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId() + "/todos/" + todoId, { method: "DELETE" })
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/todos/" + todoId, { method: "DELETE" })
                 .then(function() { refreshModalTicket(); }).catch(function() {});
         }
 
         function refreshModalTicket() {
             if (!deps.getModalTicketId()) return;
-            deps.apiFetch("/api/kanban/tickets/" + deps.getModalTicketId()).then(function(t) {
+            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId()).then(function(t) {
                 renderModalLinks(t.links || []);
                 renderModalFiles(t.files || []);
                 renderModalTodos(t.todos || []);
@@ -732,16 +847,18 @@
         }
 
         function loadLinkableEntities(ticket) {
-            deps.apiFetch("/api/kanban/linkable").then(function(data) {
+            deps.apiFetch("/api/tickets/linkable").then(function(data) {
                 populateSelect("kb-modal-link-workflow", data.workflows, "id", "title", ticket.linked_workflow_id);
                 populateSelect("kb-modal-link-project", data.projects, "id", "name", ticket.linked_project_id);
             }).catch(function() {});
         }
 
-        function populateSelect(selectId, items, valKey, labelKey, selectedVal) {
+        function populateSelect(selectId, items, valKey, labelKey, selectedVal, opts) {
+            opts = opts || {};
             var sel = document.getElementById(selectId);
             if (!sel) return;
-            sel.innerHTML = '<option value="">Inherit from board default</option>';
+            var emptyLabel = opts.emptyLabel || "Inherit from board default";
+            sel.innerHTML = '<option value="">' + emptyLabel + "</option>";
             (items || []).forEach(function(it) {
                 var o = document.createElement("option");
                 o.value = it[valKey];
@@ -749,6 +866,9 @@
                 if (selectedVal && String(it[valKey]) === String(selectedVal)) o.selected = true;
                 sel.appendChild(o);
             });
+            if (window.KanbanCustomSelect) {
+                window.KanbanCustomSelect.refresh(sel);
+            }
         }
 
         return {
@@ -769,6 +889,114 @@
     }
 
     function createTicketActions(deps) {
+        var laneCopyAllIconSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>';
+
+        function preferredCopyLaneId(lanes) {
+            if (!lanes || !lanes.length) return null;
+            var backlog = lanes.find(function(lane) {
+                return String(lane.name || "").trim().toLowerCase() === "backlog";
+            });
+            if (backlog && backlog.id != null) return String(backlog.id);
+            return lanes[0].id != null ? String(lanes[0].id) : null;
+        }
+
+        function populateCopyBoardSelect() {
+            var sel = document.getElementById("kb-copy-board-select");
+            if (!sel) return Promise.resolve(null);
+            sel.innerHTML = "";
+            var dbBoards = deps.getDbBoards();
+            if (!dbBoards.length) {
+                sel.innerHTML = '<option value="">No boards available</option>';
+                document.getElementById("kb-copy-confirm").disabled = true;
+                return Promise.resolve(null);
+            }
+            document.getElementById("kb-copy-confirm").disabled = false;
+            dbBoards.forEach(function(b) {
+                var opt = document.createElement("option");
+                opt.value = b.id;
+                opt.textContent = b.name;
+                sel.appendChild(opt);
+            });
+            var boardId = parseInt(sel.value, 10);
+            if (!boardId) return Promise.resolve(null);
+            return refreshCopyLaneSelect(boardId);
+        }
+
+        function refreshCopyLaneSelect(boardId) {
+            var laneSel = document.getElementById("kb-copy-lane-select");
+            if (!laneSel) return Promise.resolve();
+            laneSel.innerHTML = '<option value="">Loading lanes...</option>';
+            laneSel.disabled = true;
+            if (!boardId) {
+                laneSel.innerHTML = '<option value="">Select a board first</option>';
+                return Promise.resolve();
+            }
+            return deps.apiFetch("/api/tickets/boards/" + boardId).then(function(boardData) {
+                var lanes = (boardData && boardData.lanes) || [];
+                laneSel.innerHTML = "";
+                if (!lanes.length) {
+                    laneSel.innerHTML = '<option value="">No lanes on this board</option>';
+                    document.getElementById("kb-copy-confirm").disabled = true;
+                    return;
+                }
+                lanes.forEach(function(lane) {
+                    var opt = document.createElement("option");
+                    opt.value = lane.id;
+                    opt.textContent = lane.name || ("Lane " + lane.id);
+                    laneSel.appendChild(opt);
+                });
+                var preferred = preferredCopyLaneId(lanes);
+                if (preferred) laneSel.value = preferred;
+                laneSel.disabled = false;
+                document.getElementById("kb-copy-confirm").disabled = false;
+            }).catch(function(e) {
+                laneSel.innerHTML = '<option value="">Could not load lanes</option>';
+                deps.showSnackbar("Could not load lanes: " + e.message, "error");
+            });
+        }
+
+        function showCopyModalUi(state) {
+            var titleEl = document.getElementById("kb-copy-modal-title");
+            var hintEl = document.getElementById("kb-copy-modal-hint");
+            if (state.mode === "lane") {
+                var count = (state.tickets || []).length;
+                if (titleEl) titleEl.textContent = "Copy column to local board";
+                if (hintEl) {
+                    hintEl.textContent = "Copy " + count + " ticket" + (count === 1 ? "" : "s") +
+                        ' from "' + (state.laneName || "column") + '" into a local board lane.';
+                }
+            } else {
+                if (titleEl) titleEl.textContent = "Copy to local board";
+                if (hintEl) hintEl.textContent = "Choose a local board and lane for this ticket.";
+            }
+            populateCopyBoardSelect().then(function() {
+                document.getElementById("kb-copy-modal").classList.remove("hidden");
+            });
+        }
+
+        function buildCopyTicketPayload(ticketFields, boardId, laneId, linkedProjectId) {
+            var copyPayload = {
+                board_id: boardId,
+                lane_id: laneId,
+                title: ticketFields.title,
+                description: ticketFields.external_source
+                    ? (ticketFields.description || "")
+                    : deps.stripHtml(ticketFields.description || ""),
+                priority: ticketFields.priority || "medium",
+                time_estimate: ticketFields.time_estimate || "",
+                time_spent: ticketFields.time_spent || "",
+                external_source: ticketFields.external_source,
+                external_id: ticketFields.external_id,
+                external_url: ticketFields.external_url,
+                complexity: ticketFields.complexity || null,
+            };
+            if (linkedProjectId) copyPayload.linked_project_id = linkedProjectId;
+            if (typeof deps.mergeSourceChatIntoPayload === "function") {
+                deps.mergeSourceChatIntoPayload(copyPayload);
+            }
+            return copyPayload;
+        }
+
         function addTicket() {
             var currentBoard = deps.getCurrentBoard();
             var currentBoardData = deps.getCurrentBoardData();
@@ -782,61 +1010,120 @@
 
         function openCopyModal(ticket) {
             var currentBoard = deps.getCurrentBoard();
-            deps.setCopyTicketData({
-                title: ticket.title || "",
-                description: ticket.description || "",
-                priority: ticket.priority || "medium",
-                time_estimate: ticket.time_estimate || "",
-                time_spent: ticket.time_spent || "",
-                external_source: ticket.external_source || (currentBoard.source !== "database" ? currentBoard.source : null),
-                external_id: ticket.external_id || (currentBoard.source !== "database" ? String(ticket.id) : null),
-                external_url: ticket.external_url || ticket.url || "",
+            deps.setCopyModalState({
+                mode: "single",
+                ticket: {
+                    title: ticket.title || "",
+                    description: ticket.description || "",
+                    priority: ticket.priority || "medium",
+                    time_estimate: ticket.time_estimate || "",
+                    time_spent: ticket.time_spent || "",
+                    complexity: ticket.complexity || null,
+                    external_source: ticket.external_source || (currentBoard.source !== "database" ? currentBoard.source : null),
+                    external_id: ticket.external_id || (currentBoard.source !== "database" ? String(ticket.id) : null),
+                    external_url: ticket.external_url || ticket.url || "",
+                },
             });
-            var sel = document.getElementById("kb-copy-board-select");
-            sel.innerHTML = "";
-            var dbBoards = deps.getDbBoards();
-            if (!dbBoards.length) {
-                sel.innerHTML = '<option value="">No boards available</option>';
-                document.getElementById("kb-copy-confirm").disabled = true;
-            } else {
-                document.getElementById("kb-copy-confirm").disabled = false;
-                dbBoards.forEach(function(b) {
-                    var opt = document.createElement("option");
-                    opt.value = b.id;
-                    opt.textContent = b.name;
-                    sel.appendChild(opt);
-                });
+            showCopyModalUi(deps.getCopyModalState());
+        }
+
+        function openCopyLaneModal(lane) {
+            var currentBoard = deps.getCurrentBoard();
+            var tickets = (lane && lane.tickets) || [];
+            if (!tickets.length) {
+                deps.showSnackbar("No tickets in this column");
+                return;
             }
-            document.getElementById("kb-copy-modal").classList.remove("hidden");
+            deps.setCopyModalState({
+                mode: "lane",
+                laneName: lane.name || "Column",
+                tickets: tickets.map(function(ticket) {
+                    return {
+                        title: ticket.title || "",
+                        description: ticket.description || "",
+                        priority: ticket.priority || "medium",
+                        time_estimate: ticket.time_estimate || "",
+                        time_spent: ticket.time_spent || "",
+                        complexity: ticket.complexity || null,
+                        external_source: ticket.external_source || (currentBoard.source !== "database" ? currentBoard.source : null),
+                        external_id: ticket.external_id || (currentBoard.source !== "database" ? String(ticket.id) : null),
+                        external_url: ticket.external_url || ticket.url || "",
+                    };
+                }),
+            });
+            showCopyModalUi(deps.getCopyModalState());
         }
 
         function closeCopyModal() {
             document.getElementById("kb-copy-modal").classList.add("hidden");
-            deps.setCopyTicketData(null);
+            deps.setCopyModalState(null);
+        }
+
+        function onCopyBoardChanged() {
+            var boardId = parseInt(document.getElementById("kb-copy-board-select").value, 10);
+            refreshCopyLaneSelect(boardId);
         }
 
         function confirmCopy() {
-            var copyTicketData = deps.getCopyTicketData();
-            if (!copyTicketData) return;
+            var copyModalState = deps.getCopyModalState();
+            if (!copyModalState) return;
             var boardId = parseInt(document.getElementById("kb-copy-board-select").value, 10);
+            var laneId = parseInt(document.getElementById("kb-copy-lane-select").value, 10);
             if (!boardId) { deps.showSnackbar("Select a board", "error"); return; }
-            var copyPayload = {
-                board_id: boardId,
-                title: copyTicketData.title,
-                description: copyTicketData.external_source
-                    ? (copyTicketData.description || "")
-                    : deps.stripHtml(copyTicketData.description || ""),
-                priority: copyTicketData.priority || "medium",
-                time_estimate: copyTicketData.time_estimate || "",
-                time_spent: copyTicketData.time_spent || "",
-                external_source: copyTicketData.external_source,
-                external_id: copyTicketData.external_id,
-                external_url: copyTicketData.external_url,
-            };
-            if (typeof deps.mergeSourceChatIntoPayload === "function") {
-                deps.mergeSourceChatIntoPayload(copyPayload);
+            if (!laneId) { deps.showSnackbar("Select a lane", "error"); return; }
+            var boardData = deps.getCurrentBoardData() || {};
+            var linkedProjectId = boardData.default_project_id || null;
+            var confirmBtn = document.getElementById("kb-copy-confirm");
+            if (confirmBtn) {
+                confirmBtn.disabled = true;
+                confirmBtn.textContent = "Copying...";
             }
-            deps.apiFetch("/api/kanban/tickets/copy-external-to-board", {
+            var finish = function() {
+                if (confirmBtn) {
+                    confirmBtn.disabled = false;
+                    confirmBtn.textContent = "Copy";
+                }
+            };
+            if (copyModalState.mode === "lane") {
+                var bulkPayload = {
+                    board_id: boardId,
+                    lane_id: laneId,
+                    tickets: copyModalState.tickets || [],
+                };
+                if (linkedProjectId) bulkPayload.linked_project_id = linkedProjectId;
+                deps.apiFetch("/api/tickets/tickets/bulk-copy-to-board", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(bulkPayload),
+                }).then(function(result) {
+                    var copied = Number(result.copied || 0);
+                    var reused = Number(result.reused || 0);
+                    var skipped = Number(result.skipped || 0);
+                    var parts = [];
+                    if (copied) parts.push(copied + " copied");
+                    if (reused) parts.push(reused + " already local");
+                    if (skipped) parts.push(skipped + " skipped");
+                    deps.showSnackbar(parts.length ? parts.join(", ") : "No tickets copied");
+                    if (result.errors && result.errors.length) {
+                        deps.showSnackbar(result.errors[0], "error");
+                    }
+                    closeCopyModal();
+                    var currentBoard = deps.getCurrentBoard();
+                    if (currentBoard && currentBoard.source === "database" && currentBoard.id === boardId) {
+                        deps.selectBoard("database", boardId);
+                    }
+                }).catch(function(e) {
+                    deps.showSnackbar("Copy failed: " + e.message, "error");
+                }).finally(finish);
+                return;
+            }
+            var copyPayload = buildCopyTicketPayload(
+                copyModalState.ticket || {},
+                boardId,
+                laneId,
+                linkedProjectId
+            );
+            deps.apiFetch("/api/tickets/tickets/copy-external-to-board", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(copyPayload)
             }).then(function() {
@@ -846,14 +1133,33 @@
                 if (currentBoard && currentBoard.source === "database" && currentBoard.id === boardId) {
                     deps.selectBoard("database", boardId);
                 }
-            }).catch(function(e) { deps.showSnackbar("Copy failed: " + e.message, "error"); });
+            }).catch(function(e) {
+                deps.showSnackbar("Copy failed: " + e.message, "error");
+            }).finally(finish);
         }
+
+        var laneWhatsappIconSvg = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.27-1.38a9.9 9.9 0 0 0 4.77 1.21h.01c5.46 0 9.91-4.45 9.91-9.91C21.96 6.45 17.51 2 12.04 2Zm0 18.16h-.01a8.2 8.2 0 0 1-4.18-1.14l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.39c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.82 2.42a8.2 8.2 0 0 1 2.42 5.83c0 4.54-3.7 8.23-8.25 8.23Zm4.52-6.17c-.25-.12-1.47-.72-1.7-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.96-.14.16-.29.18-.54.06-.25-.13-1.04-.38-1.99-1.22-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.12-.15.16-.25.25-.41.08-.17.04-.31-.02-.43-.06-.13-.56-1.35-.77-1.85-.2-.49-.41-.42-.56-.43h-.48c-.16 0-.43.06-.65.31-.23.25-.86.84-.86 2.04 0 1.2.88 2.37 1 2.53.12.17 1.73 2.64 4.18 3.7.58.25 1.04.4 1.39.51.58.18 1.11.16 1.53.1.47-.07 1.47-.6 1.68-1.18.21-.58.21-1.08.14-1.18-.06-.1-.22-.16-.47-.28Z"/></svg>';
 
         return {
             addTicket: addTicket,
             openCopyModal: openCopyModal,
+            openCopyLaneModal: openCopyLaneModal,
             closeCopyModal: closeCopyModal,
             confirmCopy: confirmCopy,
+            onCopyBoardChanged: onCopyBoardChanged,
+            laneCopyAllButtonHtml: function(tooltip) {
+                return '<button type="button" class="kb-lane-copy-all" title="' + deps.esc(tooltip || "Copy all to local board") +
+                    '" aria-label="' + deps.esc(tooltip || "Copy all to local board") + '">' + laneCopyAllIconSvg + "</button>";
+            },
+            laneWhatsappSnapshotButtonHtml: function(opts) {
+                opts = opts || {};
+                var tooltip = opts.tooltip || "Create ticket from linked WhatsApp messages";
+                return '<button type="button" class="kb-lane-whatsapp-snapshot" title="' + deps.esc(tooltip) +
+                    '" aria-label="' + deps.esc(tooltip) + '" data-board-id="' + deps.esc(String(opts.boardId || "")) +
+                    '" data-link-id="' + deps.esc(String(opts.linkId || "")) + '" data-lane-id="' + deps.esc(String(opts.laneId || "")) +
+                    '" data-lane-name="' + deps.esc(opts.laneName || "") + '" data-board-name="' + deps.esc(opts.boardName || "") +
+                    '" data-link-phone="' + deps.esc(opts.linkPhone || "") + '">' + laneWhatsappIconSvg + "</button>";
+            },
         };
     }
 
@@ -937,6 +1243,149 @@
             return raw.length > 220 ? raw.slice(0, 217) + "..." : raw;
         }
 
+        function renderCetWaMedia(media) {
+            var mediaContainer = document.getElementById("kb-cet-wa-media");
+            var countEl = document.getElementById("kb-cet-attach-count");
+            if (!mediaContainer) return;
+            mediaContainer.innerHTML = "";
+            media = media || [];
+            if (!countEl) return;
+            if (!media.length) {
+                countEl.classList.add("hidden");
+                return;
+            }
+            countEl.textContent = media.length;
+            countEl.classList.remove("hidden");
+            var label = document.createElement("div");
+            label.className = "text-sm text-gray-400 mb-1";
+            label.textContent = "WhatsApp Media (will be linked to ticket)";
+            mediaContainer.appendChild(label);
+            media.forEach(function(m) {
+                var item = document.createElement("div");
+                item.className = "flex items-center gap-2 p-2 bg-[#0a1030] rounded border border-white/10";
+                var icon = m.media_type === "photo" || m.media_type === "image" ? "&#128247;" : "&#128206;";
+                var preview = "";
+                if (m.media_type === "photo" || m.media_type === "image") {
+                    preview = '<img src="' + m.media_path + '" class="w-10 h-10 object-cover rounded" onerror="this.style.display=\'none\'">';
+                } else {
+                    preview = '<div class="w-10 h-10 flex items-center justify-center bg-white/5 rounded text-lg">' + icon + "</div>";
+                }
+                item.innerHTML = preview + '<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">' + deps.esc(m.media_filename) + '</div><div class="text-xs text-gray-500">' + deps.esc(m.media_type) + '</div></div><input type="hidden" name="wa-media" value="' + m.message_id + '">';
+                mediaContainer.appendChild(item);
+            });
+        }
+
+        function openBoardWhatsappSnapshotTicket(opts) {
+            opts = opts || {};
+            var boardId = opts.boardId;
+            var linkId = opts.linkId;
+            var laneId = opts.laneId;
+            var laneName = opts.laneName || "Backlog";
+            var boardName = opts.boardName || "Board";
+            var linkPhone = opts.linkPhone || "";
+            if (!boardId || !linkId) {
+                deps.showSnackbar("Link a WhatsApp chat to this board first", "error");
+                return;
+            }
+            if (deps.getWaTicketComposeInFlight && deps.getWaTicketComposeInFlight()) return;
+            if (deps.setWaTicketComposeInFlight) deps.setWaTicketComposeInFlight(true);
+            var modal = document.getElementById("kb-create-ext-ticket-modal");
+            if (!modal) {
+                if (deps.setWaTicketComposeInFlight) deps.setWaTicketComposeInFlight(false);
+                deps.showSnackbar("Ticket form not found", "error");
+                return;
+            }
+            document.getElementById("kb-cet-heading").textContent = "Create Ticket from WhatsApp";
+            document.getElementById("kb-cet-board-row").style.display = "none";
+            setCreateTicketBoardValue("database", boardId, boardName);
+            var currentBoardData = deps.getCurrentBoardData && deps.getCurrentBoardData();
+            var lanes = (currentBoardData && currentBoardData.lanes) || [];
+            populateCreateTicketLanes(lanes, laneId, laneName);
+            var titleEl = document.getElementById("kb-cet-title");
+            var descEl = document.getElementById("kb-cet-desc");
+            var statusEl = document.getElementById("kb-cet-distill-status");
+            titleEl.value = "WhatsApp ticket";
+            descEl.value = "";
+            titleEl.dataset.composeBaseTitle = "WhatsApp ticket";
+            descEl.dataset.composeBaseDesc = "";
+            titleEl.disabled = false;
+            descEl.disabled = false;
+            setCetPriority("medium");
+            var complexityEl = document.getElementById("kb-cet-complexity");
+            if (complexityEl) complexityEl.value = "medium";
+            var submitBtn = document.getElementById("kb-cet-submit");
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            }
+            modal.dataset.whatsappPhone = linkPhone;
+            modal.dataset.whatsappBoardId = String(boardId);
+            modal.dataset.whatsappMsgIds = "[]";
+            document.getElementById("kb-cet-files-list").innerHTML = "";
+            document.getElementById("kb-cet-file-input").value = "";
+            renderCetWaMedia([]);
+            resetCetComposeStatus(statusEl, "Draft ready; loading WhatsApp context...", "text-[#f97316]");
+            modal.classList.remove("hidden");
+            cetSwitchTab("details");
+            setCetLoadingOverlay(true, "Syncing WhatsApp messages from relay, then loading board context.", "Syncing WhatsApp", 4);
+            var syncNote = "";
+            deps.apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).then(function(syncResult) {
+                if (syncResult && syncResult.error) {
+                    syncNote = " Sync skipped: " + syncResult.error + ". Using locally stored messages.";
+                } else if (syncResult && typeof syncResult.synced === "number") {
+                    syncNote = " Synced " + syncResult.synced + " message(s) from relay.";
+                }
+            }).catch(function() {
+                syncNote = " Sync unavailable; using locally stored messages.";
+            }).finally(function() {
+                setCetLoadingOverlay(true, "Finding new WhatsApp messages for this board." + syncNote, "Collecting messages", 12);
+                return deps.apiFetch("/api/tickets/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        link_id: parseInt(linkId, 10),
+                        limit: 500,
+                        scope: "new_since_last_ticket",
+                    }),
+                });
+            }).then(function(data) {
+                if (!data || data.empty) {
+                    setCetLoadingOverlay(false);
+                    if (deps.setWaTicketComposeInFlight) deps.setWaTicketComposeInFlight(false);
+                    deps.showSnackbar((data && data.empty_reason) ? "No new WhatsApp messages for this board" : "No WhatsApp messages to ticket", "error");
+                    closeCreateExtTicketModal();
+                    return;
+                }
+                modal.dataset.whatsappMsgIds = JSON.stringify(data.message_ids || []);
+                if (data.contact_name && !linkPhone) {
+                    modal.dataset.whatsappPhone = data.contact_name;
+                }
+                if (data.lane_id) {
+                    populateCreateTicketLanes(lanes, data.lane_id, data.lane_name || laneName);
+                }
+                titleEl.value = data.title || "WhatsApp ticket";
+                descEl.value = data.description || "";
+                titleEl.dataset.composeBaseTitle = titleEl.value;
+                descEl.dataset.composeBaseDesc = descEl.value;
+                setCetPriority(data.priority || "medium");
+                if (complexityEl) complexityEl.value = data.complexity || "medium";
+                renderCetWaMedia(data.media || []);
+                setCetLoadingOverlay(true, "Reading messages, attaching media, and transcribing voice notes where needed.", "Preparing media", 42);
+                if (!data.message_ids || !data.message_ids.length) {
+                    setCetLoadingOverlay(false);
+                    if (deps.setWaTicketComposeInFlight) deps.setWaTicketComposeInFlight(false);
+                    resetCetComposeStatus(statusEl, "Draft updated; you can edit before creating.", "text-green-400");
+                    return;
+                }
+                composeWaTicket(data.message_ids, titleEl, descEl, statusEl);
+            }).catch(function(e) {
+                setCetLoadingOverlay(false);
+                if (deps.setWaTicketComposeInFlight) deps.setWaTicketComposeInFlight(false);
+                deps.showSnackbar(e.message || "Could not load WhatsApp messages", "error");
+                closeCreateExtTicketModal();
+            });
+        }
+
         function composeWaTicket(messageIds, titleEl, descEl, statusEl) {
             titleEl = titleEl || document.getElementById("kb-cet-title");
             descEl = descEl || document.getElementById("kb-cet-desc");
@@ -944,7 +1393,7 @@
             if (!messageIds || !messageIds.length) return;
             resetCetComposeStatus(statusEl, "Draft ready; improving from WhatsApp context...", "text-[#f97316]");
             setCetLoadingOverlay(true, "Transcribing voice notes, extracting image text, reading attachments, and composing one clean ticket.", "Composing WhatsApp ticket", 26);
-            deps.apiFetch("/api/kanban/whatsapp/compose-ticket", {
+            deps.apiFetch("/api/tickets/whatsapp/compose-ticket", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({message_ids: messageIds})
@@ -965,30 +1414,7 @@
                 if (r.priority) setCetPriority(r.priority);
                 var complexityEl = document.getElementById("kb-cet-complexity");
                 if (complexityEl) complexityEl.value = r.complexity || "";
-                var mediaContainer = document.getElementById("kb-cet-wa-media");
-                mediaContainer.innerHTML = "";
-                var media = r.media || [];
-                var countEl = document.getElementById("kb-cet-attach-count");
-                if (media.length) {
-                    countEl.textContent = media.length;
-                    countEl.classList.remove("hidden");
-                    var label = document.createElement("div");
-                    label.className = "text-sm text-gray-400 mb-1";
-                    label.textContent = "WhatsApp Media (will be linked to ticket)";
-                    mediaContainer.appendChild(label);
-                    media.forEach(function(m) {
-                        var item = document.createElement("div");
-                        item.className = "flex items-center gap-2 p-2 bg-[#0a1030] rounded border border-white/10";
-                        var icon = m.media_type === "photo" || m.media_type === "image" ? "&#128247;" : "&#128206;";
-                        var preview = "";
-                        if (m.media_type === "photo" || m.media_type === "image") preview = '<img src="' + m.media_path + '" class="w-10 h-10 object-cover rounded" onerror="this.style.display=\'none\'">';
-                        else preview = '<div class="w-10 h-10 flex items-center justify-center bg-white/5 rounded text-lg">' + icon + "</div>";
-                        item.innerHTML = preview + '<div class="flex-1 min-w-0"><div class="text-sm text-white truncate">' + deps.esc(m.media_filename) + '</div><div class="text-xs text-gray-500">' + deps.esc(m.media_type) + '</div></div><input type="hidden" name="wa-media" value="' + m.message_id + '">';
-                        mediaContainer.appendChild(item);
-                    });
-                } else {
-                    countEl.classList.add("hidden");
-                }
+                renderCetWaMedia(r.media || []);
                 if (r.fallback) {
                     var err = summarizeComposeError(r.compose_error || r.error);
                     resetCetComposeStatus(statusEl, "Ticket drafted locally. AI compose failed: " + err, "text-yellow-500");
@@ -1057,11 +1483,11 @@
                 return Promise.resolve();
             }
             if (source === "database") {
-                return deps.apiFetch("/api/kanban/boards/" + encodeURIComponent(boardId)).then(function(boardData) {
+                return deps.apiFetch("/api/tickets/boards/" + encodeURIComponent(boardId)).then(function(boardData) {
                     populateCreateTicketLanes(boardData.lanes || [], selectedValue, preferredName);
                 });
             }
-            return deps.apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(boardId)).then(function(extBoard) {
+            return deps.apiFetch("/api/tickets/external-boards/" + source + "/" + encodeURIComponent(boardId)).then(function(extBoard) {
                 var lanes = extBoard.lanes || extBoard.columns || extBoard.lists || [];
                 populateCreateTicketLanes(lanes, selectedValue, preferredName);
             });
@@ -1107,7 +1533,7 @@
             setCetLoadingOverlay(true, "Opening the ticket form now. The transcript, image text, media context, and draft will fill in as they are ready.", "Collecting WhatsApp context", 8);
             composeWaTicket(msgIds, titleEl, descEl, statusEl);
             Promise.all([
-                deps.apiFetch("/api/kanban/boards"),
+                deps.apiFetch("/api/tickets/boards"),
                 deps.getExternalBoards(false).catch(function() { return {trello: [], jira: []}; })
             ]).then(function(results) {
                 var boards = results[0];
@@ -1266,7 +1692,7 @@
             for (var i = 0; i < files.length; i++) {
                 var fd = new FormData();
                 fd.append("file", files[i]);
-                promises.push(deps.apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(extTicketId) + "/attach", {
+                promises.push(deps.apiFetch("/api/tickets/external-boards/" + source + "/" + encodeURIComponent(extTicketId) + "/attach", {
                     method: "POST", body: fd
                 }).catch(function(e) { console.error("Failed to upload attachment:", e); }));
             }
@@ -1295,7 +1721,7 @@
                 if (!laneId) { deps.showSnackbar("Select a lane", "error"); return; }
                 if (waPhone) {
                     var sourceMsgIds = JSON.parse(waMsgIds);
-                    deps.apiFetch("/api/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-ticket", {
+                    deps.apiFetch("/api/tickets/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-ticket", {
                         method: "POST",
                         headers: {"Content-Type": "application/json"},
                         body: JSON.stringify({
@@ -1325,7 +1751,7 @@
                 if (typeof deps.mergeSourceChatIntoPayload === "function") {
                     deps.mergeSourceChatIntoPayload(cetPayload);
                 }
-                deps.apiFetch("/api/kanban/tickets", {
+                deps.apiFetch("/api/tickets/tickets", {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify(cetPayload)
@@ -1334,7 +1760,7 @@
                     deps.showSnackbar("Ticket created");
                     if (waPhone) {
                         var msgIdList = JSON.parse(waMsgIds);
-                        deps.apiFetch("/api/kanban/whatsapp/messages/mark-snapshot-group", {
+                        deps.apiFetch("/api/tickets/whatsapp/messages/mark-snapshot-group", {
                             method: "POST",
                             headers: {"Content-Type": "application/json"},
                             body: JSON.stringify({ jid_phone: waPhone, snapshot_group: r.id + "_" + r.lane_id, message_ids: msgIdList })
@@ -1347,7 +1773,7 @@
                         });
                         if (!attachMsgIds.length) attachMsgIds = msgIdList;
                         attachMsgIds.forEach(function(msgId) {
-                            deps.apiFetch("/api/kanban/tickets/" + r.id + "/attach-whatsapp-media", {
+                            deps.apiFetch("/api/tickets/tickets/" + r.id + "/attach-whatsapp-media", {
                                 method: "POST",
                                 headers: {"Content-Type": "application/json"},
                                 body: JSON.stringify({ message_id: msgId })
@@ -1374,13 +1800,13 @@
                 var fileInput = document.getElementById("kb-cet-file-input");
                 var files = fileInput.files;
                 deps.showSnackbar("Creating ticket on " + (extSource === "trello" ? "Trello" : "Jira") + "...");
-                deps.apiFetch("/api/kanban/external-boards/" + extSource + "/" + encodeURIComponent(extBoard.id) + "/create-ticket", {
+                deps.apiFetch("/api/tickets/external-boards/" + extSource + "/" + encodeURIComponent(extBoard.id) + "/create-ticket", {
                     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
                 }).then(function(r) {
                     if (r.success && r.ticket) {
                         if (waPhone) {
                             var msgIdList = JSON.parse(waMsgIds);
-                            deps.apiFetch("/api/kanban/whatsapp/messages/mark-snapshot-group", {
+                            deps.apiFetch("/api/tickets/whatsapp/messages/mark-snapshot-group", {
                                 method: "POST",
                                 headers: {"Content-Type": "application/json"},
                                 body: JSON.stringify({ jid_phone: waPhone, snapshot_group: "ext_" + r.ticket.id, message_ids: msgIdList })
@@ -1417,6 +1843,7 @@
             setCetLoadingOverlay: setCetLoadingOverlay,
             composeWaTicket: composeWaTicket,
             openTicketFromWhatsApp: openTicketFromWhatsApp,
+            openBoardWhatsappSnapshotTicket: openBoardWhatsappSnapshotTicket,
             openCreateExternalTicketModal: openCreateExternalTicketModal,
             cetSwitchTab: cetSwitchTab,
             closeCreateExtTicketModal: closeCreateExtTicketModal,
@@ -1426,7 +1853,54 @@
         };
     }
 
-    window.KanbanTicketUi = { create: createTicketUi };
+    function normalizeComplexityLevel(value) {
+        var raw = String(value || "medium").toLowerCase().trim().replace(/[\s-]+/g, "_");
+        if (raw === "i" || raw === "1") return "low";
+        if (raw === "ii" || raw === "2") return "medium";
+        if (raw === "iii" || raw === "3") return "high";
+        if (raw === "extra_high" || raw === "extrahigh" || raw === "xhigh") return "extra_high";
+        if (raw === "low" || raw === "medium" || raw === "high") return raw;
+        return "medium";
+    }
+
+    function complexityRank(value) {
+        var level = normalizeComplexityLevel(value);
+        var ranks = { extra_high: 5, high: 4, medium: 3, low: 1 };
+        return ranks[level] != null ? ranks[level] : 2;
+    }
+
+    function normalizePriorityLevel(value) {
+        var raw = String(value || "medium").toLowerCase().trim();
+        if (raw === "urgent") return "critical";
+        if (raw === "normal") return "medium";
+        if (raw === "critical" || raw === "high" || raw === "low") return raw;
+        return "medium";
+    }
+
+    function priorityRank(value) {
+        var level = normalizePriorityLevel(value);
+        var ranks = { critical: 5, high: 4, medium: 3, low: 1 };
+        return ranks[level] != null ? ranks[level] : 2;
+    }
+
+    /** List view: highest complexity first, then priority, then lane position. */
+    function compareTicketsForListView(a, b) {
+        var cxDiff = complexityRank(b.complexity) - complexityRank(a.complexity);
+        if (cxDiff) return cxDiff;
+        var priDiff = priorityRank(b.priority) - priorityRank(a.priority);
+        if (priDiff) return priDiff;
+        var posA = typeof a.position === "number" ? a.position : parseInt(a.position, 10) || 0;
+        var posB = typeof b.position === "number" ? b.position : parseInt(b.position, 10) || 0;
+        if (posA !== posB) return posA - posB;
+        return String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "base" });
+    }
+
+    window.KanbanTicketUi = {
+        create: createTicketUi,
+        compareTicketsForListView: compareTicketsForListView,
+        complexityRank: complexityRank,
+        priorityRank: priorityRank,
+    };
     window.KanbanTicketModalSections = { create: createTicketModalSections };
     window.KanbanTicketActions = { create: createTicketActions };
     window.KanbanExternalTicketModal = { create: createExternalTicketModal };

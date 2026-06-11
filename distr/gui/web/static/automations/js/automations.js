@@ -46,18 +46,29 @@
         }
     }
 
+    function normalizeScheduleKind(kind) {
+        kind = String(kind || "daily").toLowerCase();
+        if (kind === "15min" || kind === "15m") return "interval";
+        if (kind === "30min" || kind === "30m") return "interval";
+        return kind;
+    }
+
     function scheduleLabel(schedule) {
         var cfg = schedule || {};
-        var kind = String(cfg.kind || cfg.frequency || "daily");
+        var kind = normalizeScheduleKind(cfg.kind || cfg.frequency || "daily");
         var labels = {
             once: "Once",
-            "15min": "Every 15 minutes",
-            "30min": "Every 30 minutes",
+            interval: "Every " + (cfg.interval || 15) + " " + (cfg.interval_unit === "seconds" ? "seconds" : "minutes"),
             hourly: "Hourly",
             daily: "Daily",
             weekly: "Weekly"
         };
         if (kind === "once") return cfg.run_at ? "Once at " + shortDate(cfg.run_at) : "Once";
+        if (kind === "interval") {
+            if (cfg.kind === "15min" || cfg.kind === "15m") return "Every 15 minutes";
+            if (cfg.kind === "30min" || cfg.kind === "30m") return "Every 30 minutes";
+            return labels.interval;
+        }
         if (cfg.time && (kind === "daily" || kind === "weekly")) return (labels[kind] || kind) + " at " + cfg.time;
         return labels[kind] || kind;
     }
@@ -137,16 +148,47 @@
         if (el) el.value = value == null ? "" : String(value);
     }
 
+    function setAutomationStatus(status) {
+        var hidden = document.getElementById("automation-status");
+        var toggle = document.getElementById("automation-status-switch");
+        if (!hidden || !toggle) return;
+        var isActive = String(status || "active").toLowerCase() !== "paused";
+        hidden.value = isActive ? "active" : "paused";
+        toggle.classList.toggle("is-on", isActive);
+        toggle.setAttribute("aria-checked", isActive ? "true" : "false");
+        toggle.setAttribute("aria-label", isActive ? "Active" : "Inactive");
+        var text = toggle.querySelector(".automation-status-switch-text");
+        if (text) text.textContent = isActive ? "Active" : "Inactive";
+    }
+
+    function toggleAutomationStatus() {
+        var hidden = document.getElementById("automation-status");
+        if (!hidden) return;
+        setAutomationStatus(hidden.value === "active" ? "paused" : "active");
+    }
+
     function fillForm(row) {
         row = row || emptyAutomation();
         var schedule = row.schedule || {};
+        var kind = normalizeScheduleKind(schedule.kind || schedule.frequency || "daily");
+        var interval = schedule.interval || 15;
+        var intervalUnit = schedule.interval_unit || "minutes";
+        if (schedule.kind === "15min" || schedule.kind === "15m") {
+            interval = 15;
+            intervalUnit = "minutes";
+        } else if (schedule.kind === "30min" || schedule.kind === "30m") {
+            interval = 30;
+            intervalUnit = "minutes";
+        }
         setValue("automation-id", row.id || "");
         setValue("automation-name", row.name || "");
         setValue("automation-instruction", row.instruction || "");
-        setValue("automation-kind", schedule.kind || schedule.frequency || "daily");
+        setValue("automation-kind", kind);
         setValue("automation-time", schedule.time || "09:00");
-        setValue("automation-run-at", String(schedule.run_at || "").replace(/Z$/, ""));
-        setValue("automation-status", row.status || "active");
+        setValue("automation-once-at", String(schedule.run_at || ""));
+        setValue("automation-interval-value", interval);
+        setValue("automation-interval-unit", intervalUnit === "seconds" ? "seconds" : "minutes");
+        setAutomationStatus(row.status || "active");
         document.getElementById("automation-detail-title").textContent = row.id ? (row.name || "Untitled Automation") : "New Automation";
         document.getElementById("automation-detail-meta").textContent = row.id ? ("Next run: " + shortDate(row.next_run_at)) : "Not saved yet";
         document.getElementById("automation-delete").disabled = !row.id;
@@ -209,10 +251,17 @@
     function payloadFromForm() {
         var kind = document.getElementById("automation-kind").value || "daily";
         var schedule = { kind: kind };
-        var time = document.getElementById("automation-time").value;
-        var runAt = document.getElementById("automation-run-at").value;
-        if (time) schedule.time = time;
-        if (runAt) schedule.run_at = runAt;
+        if (kind === "once") {
+            var runAt = document.getElementById("automation-once-at").value;
+            if (runAt) schedule.run_at = runAt;
+        } else if (kind === "interval") {
+            var intervalValue = parseInt(document.getElementById("automation-interval-value").value, 10);
+            schedule.interval = intervalValue > 0 ? intervalValue : 15;
+            schedule.interval_unit = document.getElementById("automation-interval-unit").value || "minutes";
+        } else if (kind === "daily" || kind === "weekly") {
+            var time = document.getElementById("automation-time").value;
+            if (time) schedule.time = time;
+        }
         return {
             name: (document.getElementById("automation-name").value || "Untitled Automation").trim(),
             automation_type: "scheduled_instruction",
@@ -220,6 +269,55 @@
             instruction: (document.getElementById("automation-instruction").value || "").trim(),
             schedule: schedule
         };
+    }
+
+    function softRefreshCurrentAutomation() {
+        if (!currentAutomationId) return Promise.resolve();
+        return apiFetch("/api/automations/" + encodeURIComponent(currentAutomationId))
+            .then(function(data) {
+                var automation = data.automation;
+                if (!automation) return;
+                var idx = automationsData.findIndex(function(a) { return a.id === automation.id; });
+                if (idx >= 0) {
+                    automationsData[idx] = automation;
+                }
+                fillForm(automation);
+                renderList(automationsData);
+                if (Array.isArray(data.runs)) {
+                    renderRuns(data.runs);
+                }
+            })
+            .catch(function() {});
+    }
+
+    function connectAutomationUpdatesSocket() {
+        var proto = location.protocol === "https:" ? "wss:" : "ws:";
+        var url = proto + "//" + location.host + "/api/ws/workflows";
+        var ws;
+        var reconnectTimer;
+        function connect() {
+            if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+            try {
+                ws = new WebSocket(url);
+            } catch (_) {
+                reconnectTimer = setTimeout(connect, 5000);
+                return;
+            }
+            ws.onmessage = function(evt) {
+                try {
+                    var msg = JSON.parse(evt.data);
+                    if (msg.type === "workflow_updated") {
+                        loadAutomations(true);
+                        softRefreshCurrentAutomation();
+                    }
+                } catch (_) {}
+            };
+            ws.onclose = function() {
+                ws = null;
+                reconnectTimer = setTimeout(connect, 5000);
+            };
+        }
+        connect();
     }
 
     function loadAutomations(skipAutoSelect) {
@@ -262,10 +360,24 @@
         });
     }
 
+    function resolveAutomationId(idOverride) {
+        if (typeof idOverride === "string" && idOverride.trim()) {
+            return idOverride.trim();
+        }
+        var fromField = document.getElementById("automation-id");
+        return fromField ? String(fromField.value || "").trim() : "";
+    }
+
     function deleteSelected(idOverride) {
-        var id = idOverride || document.getElementById("automation-id").value;
+        var id = resolveAutomationId(idOverride) || currentAutomationId;
         if (!id) return;
-        var row = automationsData.filter(function(a) { return a.id === id; })[0] || {};
+        var row = automationsData.filter(function(a) { return a.id === id; })[0];
+        if (!row) {
+            row = {
+                id: id,
+                name: (document.getElementById("automation-name").value || "").trim() || "Untitled Automation",
+            };
+        }
         window.DecisionsAPI.confirm({
             title: "Remove automation",
             message: 'Remove automation "' + (row.name || "Untitled Automation") + '"? This cannot be undone.',
@@ -352,19 +464,22 @@
     }
 
     function updateScheduleControls() {
-        var kind = document.getElementById("automation-kind");
+        var kindEl = document.getElementById("automation-kind");
+        var timeWrap = document.getElementById("automation-time-wrap");
+        var onceWrap = document.getElementById("automation-once-wrap");
+        var intervalWrap = document.getElementById("automation-interval-wrap");
         var time = document.getElementById("automation-time");
-        var runAt = document.getElementById("automation-run-at");
-        if (!kind || !time || !runAt) return;
-        var once = kind.value === "once";
-        time.disabled = once;
-        runAt.disabled = !once;
-        [time, runAt].forEach(function(el) {
-            var disabled = el.disabled;
-            var group = el.parentElement;
-            el.style.cursor = disabled ? "not-allowed" : "";
-            el.style.opacity = disabled ? "0.48" : "1";
-            if (group) group.style.opacity = disabled ? "0.62" : "1";
+        var onceAt = document.getElementById("automation-once-at");
+        if (!kindEl || !timeWrap || !onceWrap || !intervalWrap) return;
+        var kind = kindEl.value || "daily";
+        var showTime = kind === "daily" || kind === "weekly";
+        timeWrap.classList.toggle("hidden", !showTime);
+        onceWrap.classList.toggle("hidden", kind !== "once");
+        intervalWrap.classList.toggle("hidden", kind !== "interval");
+        if (time) time.disabled = !showTime;
+        if (onceAt) onceAt.disabled = kind !== "once";
+        [time, onceAt].forEach(function(el) {
+            if (!el) return;
             if (window.DecisionsDateTime) window.DecisionsDateTime.refreshInput(el);
         });
     }
@@ -377,9 +492,17 @@
         document.getElementById("automation-new").addEventListener("click", createNewAutomation);
         document.getElementById("automation-create-big").addEventListener("click", createNewAutomation);
         document.getElementById("automation-detail").addEventListener("submit", saveAutomation);
-        document.getElementById("automation-delete").addEventListener("click", deleteSelected);
+        document.getElementById("automation-delete").addEventListener("click", function() {
+            deleteSelected();
+        });
         document.getElementById("automation-run").addEventListener("click", runSelected);
         document.getElementById("automation-kind").addEventListener("change", updateScheduleControls);
+        var statusSwitch = document.getElementById("automation-status-switch");
+        if (statusSwitch) {
+            statusSwitch.addEventListener("click", function() {
+                toggleAutomationStatus();
+            });
+        }
         document.querySelectorAll(".automation-tab").forEach(function(btn) {
             btn.addEventListener("click", function() {
                 setActiveTab(btn.getAttribute("data-tab"));
@@ -390,6 +513,16 @@
 
     document.addEventListener("DOMContentLoaded", function() {
         bind();
+        connectAutomationUpdatesSocket();
         loadAutomations();
+        try {
+            var prefill = sessionStorage.getItem("automation_prefill_instruction");
+            if (prefill) {
+                sessionStorage.removeItem("automation_prefill_instruction");
+                createNewAutomation();
+                setValue("automation-instruction", prefill);
+                setValue("automation-name", prefill.split(/\s+/).slice(0, 6).join(" "));
+            }
+        } catch (e) {}
     });
 })();

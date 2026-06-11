@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base, Chat
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
-from distr.core.workflow.chat_trace import record_workflow_chat_event
+from distr.core.workflow.chat_trace import record_chat_workflow_event, record_workflow_chat_event
 
 
 def test_record_workflow_chat_event_persists_to_owning_chat(monkeypatch):
@@ -61,3 +61,47 @@ def test_record_workflow_chat_event_persists_to_owning_chat(monkeypatch):
     assert events[0]["run_id"] == run_id
     assert events[0]["type"] == "step_started"
     assert events[0]["phase"] == "validation"
+
+
+def test_record_chat_workflow_event_persists_explicit_chat(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def patched_get_session():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr("distr.core.db.get_session", patched_get_session)
+
+    with patched_get_session() as session:
+        chat = Chat(title="Automation owner")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    event = record_chat_workflow_event(
+        chat_id,
+        "automation_run",
+        status="running",
+        workflow_id=12,
+        workflow_name="Daily Plan",
+        run_id=99,
+        summary="Summarize my inbox.",
+    )
+
+    assert event is not None
+    assert event["chat_id"] == chat_id
+    assert event["type"] == "automation_run"
+    assert event["workflow_name"] == "Daily Plan"
+    assert event["summary"] == "Summarize my inbox."
+
+    with patched_get_session() as session:
+        chat = session.get(Chat, chat_id)
+        params = json.loads(chat.params)
+
+    assert params["workflow_events"][0]["run_id"] == 99

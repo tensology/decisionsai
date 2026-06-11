@@ -93,6 +93,157 @@ def _first_nonempty(*values: Any, default: str = "") -> str:
     return default
 
 
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if int(count or 0) == 1 else (plural or f"{singular}s")
+
+
+def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{int(count or 0)} {_plural(int(count or 0), singular, plural)}"
+
+
+def _ticket_title(ticket: dict[str, Any]) -> str:
+    return _first_nonempty(
+        ticket.get("title"),
+        ticket.get("name"),
+        ticket.get("description_preview"),
+        ticket.get("description"),
+        default="the next useful outcome",
+    )
+
+
+def _ticket_why(ticket: dict[str, Any]) -> str:
+    text = _first_nonempty(
+        ticket.get("description_preview"),
+        ticket.get("description"),
+        ticket.get("source_label"),
+        default="",
+    )
+    return f" — {text}" if text else ""
+
+
+def _priority_rank(ticket: dict[str, Any]) -> int:
+    priority = str(ticket.get("priority") or "").strip().lower()
+    return {
+        "critical": 5,
+        "urgent": 5,
+        "high": 4,
+        "medium": 3,
+        "normal": 3,
+        "low": 1,
+    }.get(priority, 2)
+
+
+def _lane_lookup(board: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    lanes = [lane for lane in board.get("lanes") or [] if isinstance(lane, dict)]
+    return {str(lane.get("name") or "").strip().lower(): lane for lane in lanes}
+
+
+def _lane_tickets(lane: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(lane, dict):
+        return []
+    tickets = [ticket for ticket in lane.get("tickets") or [] if isinstance(ticket, dict)]
+    tickets.sort(key=_priority_rank, reverse=True)
+    return tickets
+
+
+def _fallback_board_outcomes(boards: list[dict[str, Any]], *, scope: str) -> list[str]:
+    outcomes: list[str] = []
+    for board in boards[:6]:
+        board_name = _first_nonempty(board.get("name"), board.get("board_name"), default="Board")
+        lane_by_name = _lane_lookup(board)
+        current = lane_by_name.get("current") or lane_by_name.get("doing") or lane_by_name.get("in progress")
+        backlog = lane_by_name.get("backlog") or lane_by_name.get("todo") or lane_by_name.get("to do")
+        current_tickets = _lane_tickets(current)
+        backlog_tickets = _lane_tickets(backlog)
+        period = "this week" if scope == "week" else "today"
+
+        if current_tickets:
+            for ticket in current_tickets[:2]:
+                outcomes.append(f"{board_name}: finish {_ticket_title(ticket)} {period}{_ticket_why(ticket)}.")
+            continue
+
+        if backlog_tickets:
+            for ticket in backlog_tickets[:2 if scope == "week" else 1]:
+                outcomes.append(
+                    f"{board_name}: Current is empty; make {_ticket_title(ticket)} the achievable outcome {period}{_ticket_why(ticket)}."
+                )
+            continue
+
+        backlog_count = int((backlog or {}).get("ticket_count") or 0)
+        if backlog_count:
+            outcomes.append(
+                f"{board_name}: Choose the {board_name} outcome from Backlog before starting new work."
+            )
+            continue
+
+        lanes = [lane for lane in board.get("lanes") or [] if isinstance(lane, dict)]
+        visible_count = sum(int(lane.get("ticket_count") or len(lane.get("tickets") or []) or 0) for lane in lanes)
+        if visible_count:
+            outcomes.append(
+                f"{board_name}: pick one visible work item and turn it into a finished outcome {period}."
+            )
+    return outcomes
+
+
+def _fallback_source_pressure(proposals: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
+    pressure: list[str] = []
+    seen: set[str] = set()
+    for proposal in proposals:
+        payload = proposal.get("payload") if isinstance(proposal.get("payload"), dict) else {}
+        source = _first_nonempty(payload.get("source"), proposal.get("source"), default="source")
+        description = _first_nonempty(proposal.get("description"), proposal.get("action_type"), default="")
+        if not description:
+            continue
+        key = f"{source}:{description}".lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        pressure.append(f"{source.title()}: {description}")
+        if len(pressure) >= limit:
+            break
+    return pressure
+
+
+def build_planner_orchestration_actions(bundle: ContextBundle, *, scope: str) -> list[dict[str, Any]]:
+    """Build concrete, permission-gated actions implied by a plan."""
+    if scope != "day":
+        return []
+    work_scan = bundle.work_scan if isinstance(bundle.work_scan, dict) else {}
+    boards = [board for board in work_scan.get("boards", []) if isinstance(board, dict)]
+    actions: list[dict[str, Any]] = []
+    for board in boards[:8]:
+        board_id = board.get("id") or board.get("board_id")
+        if not board_id:
+            continue
+        board_name = _first_nonempty(board.get("name"), board.get("board_name"), default="Board")
+        lane_by_name = _lane_lookup(board)
+        current = lane_by_name.get("current") or lane_by_name.get("doing") or lane_by_name.get("in progress")
+        backlog = lane_by_name.get("backlog") or lane_by_name.get("todo") or lane_by_name.get("to do")
+        if _lane_tickets(current):
+            continue
+        backlog_tickets = _lane_tickets(backlog)
+        if not backlog_tickets:
+            continue
+        ticket = backlog_tickets[0]
+        ticket_id = ticket.get("id")
+        if ticket_id is None:
+            continue
+        title = _ticket_title(ticket)
+        actions.append({
+            "action_type": "ticket_lane_move",
+            "description": f"Make '{title}' current for today's {board_name} outcome.",
+            "payload": {
+                "board_id": int(board_id),
+                "ticket_ids": [int(ticket_id)],
+                "target_lane": "Current",
+                "source": "planner_orchestration",
+                "confidence": 0.74,
+                "risk_level": "low",
+            },
+        })
+    return actions
+
+
 def _fallback_planner_markdown(
     scope: str,
     date_info: dict[str, Any],
@@ -136,10 +287,13 @@ def _fallback_planner_markdown(
         lane_count = len(board.get("lanes") or [])
         ticket_count = sum(int(l.get("ticket_count") or 0) for l in board.get("lanes") or [])
         today_items.append(
-            f"{_first_nonempty(board.get('name'), default='Board')} has {ticket_count} visible item(s) across {lane_count} lane(s)."
+            f"{_first_nonempty(board.get('name'), default='Board')} has {_count_phrase(ticket_count, 'visible item')} across {_count_phrase(lane_count, 'lane')}."
         )
     if not today_items:
         today_items.append("No connected work source produced actionable items yet.")
+
+    outcome_items = _fallback_board_outcomes(boards, scope=scope)
+    source_pressure = _fallback_source_pressure(proposals)
 
     attention_items: list[str] = []
     for candidate in triage_candidates[:8]:
@@ -174,10 +328,18 @@ def _fallback_planner_markdown(
             total = int(board.get("total_tickets") or 0)
             if overdue or total:
                 attention_items.append(
-                    f"{_first_nonempty(board.get('board_name'), default='Board')}: {total} ticket(s), {overdue} overdue."
+                    f"{_first_nonempty(board.get('board_name'), default='Board')}: {_count_phrase(total, 'ticket')}, {overdue} overdue."
                 )
     if not attention_items:
         attention_items.append("No stuck tickets, unfinished workflows, or board proposals were found in the current scan.")
+
+    if not outcome_items:
+        outcome_items = [
+            item for item in attention_items
+            if not item.startswith("No stuck")
+        ][:4]
+    if not outcome_items:
+        outcome_items.append("Choose one meaningful work thread and turn it into a finished next step.")
 
     blockers = []
     if unavailable_sources:
@@ -205,6 +367,36 @@ def _fallback_planner_markdown(
             "\n".join(f"- {item}" for item in blockers[:6]),
             "## Suggested Next Action",
             f"- {next_action}",
+        ])
+
+    if scope == "day":
+        return "\n\n".join([
+            "## Outcome for Today",
+            "\n".join(f"- {item}" for item in outcome_items[:6]),
+            "## Project Moves",
+            "\n".join(f"- {item}" for item in attention_items[:8]),
+            "## Source Pressure",
+            "\n".join(f"- {item}" for item in source_pressure[:5]) if source_pressure else "- No connected-source pressure stood out.",
+            "## Signals Checked",
+            f"- {', '.join(connected_labels[:8])}." if connected_labels else "- No connected work sources reported in this scan.",
+            "## Blockers",
+            "\n".join(f"- {item}" for item in blockers[:6]),
+            f"<!-- planner provider failures: {_clip_text(failure_summary, 500)} -->",
+        ])
+
+    if scope == "week":
+        return "\n\n".join([
+            "## Week Outcome",
+            "\n".join(f"- {item}" for item in outcome_items[:8]),
+            "## This Week",
+            "\n".join(f"- {item}" for item in attention_items[:8]),
+            "## Source Pressure",
+            "\n".join(f"- {item}" for item in source_pressure[:6]) if source_pressure else "- No connected-source pressure stood out.",
+            "## Signals Checked",
+            f"- {', '.join(connected_labels[:8])}." if connected_labels else "- No connected work sources reported in this scan.",
+            "## Blockers",
+            "\n".join(f"- {item}" for item in blockers[:6]),
+            f"<!-- planner provider failures: {_clip_text(failure_summary, 500)} -->",
         ])
 
     return "\n\n".join([
@@ -262,42 +454,60 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
         return (
             "You are the daily check-in orchestrator for a proactive desktop work agent. "
             "The user does not want a passive report. They need decisions: create tickets, update tickets, "
-            "make bookings, draft replies, attach agent work back to tickets, or ignore noise.\n"
+            "make bookings, draft replies, attach agent work back to tickets, or ignore noise. "
+            "Assume the answer may be read as a Telegram voice note: conversational, short, and useful out loud.\n"
             + common
             + "Use these sections (## headings):\n"
             "## Morning Check-in — what changed across sources\n"
             "## Needs Your Call — direct questions the user can approve/reject\n"
+            "## Today's Outcomes — what the user should actually achieve today\n"
             "## Approvals & blockers\n"
             "## Suggested next action\n"
             "Rules:\n"
             "- Be concise and direct.\n"
+            "- Use Current lane items as active commitments before looking at Backlog.\n"
+            "- If Current is empty or thin, infer achievable outcomes from Backlog and connected-source pressure.\n"
+            "- Pull signal from Telegram, WhatsApp, Gmail/email, Slack, Jira, Trello, ClickUp, Monday, workflows, developer context, and memory when present.\n"
             "- Use work_scan.hermes_triage.candidates as the primary source of decisions, but do not mention internal system names.\n"
             "- Ask concrete questions, e.g. 'Should I create a ticket from this WhatsApp thread?'\n"
             "- If source context is thin, say exactly which connector or permission is missing.\n"
             "- Do not say only that a proactive brief ran.\n"
-            "- Prefer an actionable triage queue over a broad status list.\n"
+            "- Prefer outcomes and decisions over lane maintenance or broad status lists.\n"
         )
     if scope == "day":
         return (
             "You are a day-planning assistant. The user uses a personal productivity agent with "
-            "ticket boards, workflows, and memory files.\n"
+            "ticket boards, workflows, and memory files. Be outcome-driven: say what should be achieved "
+            "for the day and for each important project, not just which tickets exist. "
+            "The result will often become a Telegram voice note, so keep it natural and spoken-friendly.\n"
             + common
             + "Use these sections (## headings):\n"
-            "## Focus — top priorities today\n"
+            "## Outcome for Today — the result the day should produce\n"
+            "## Project Moves — what needs to move forward per project or board\n"
+            "## Source Pressure — Slack, Gmail/email, WhatsApp, Telegram, Jira, Trello, ClickUp, Monday, workflow, and developer signals that change priority\n"
             "## Schedule — suggested time blocks (if inferable from context)\n"
-            "## Work items — tickets / stuck items to address\n"
             "## Risks & blockers\n"
-            "Be concise and actionable.\n"
+            "Rules:\n"
+            "- Inspect Current first and treat it as the active commitment list.\n"
+            "- If Current is empty or too thin, pull only the most achievable Backlog outcomes and explain why.\n"
+            "- Do not tell the user to move backlog items as the outcome; describe the useful result to finish.\n"
+            "- Be conversational, concise, and actionable. Avoid robotic inventory wording.\n"
         )
     if scope == "week":
         return (
-            "You are a week-planning assistant.\n"
+            "You are a week-planning assistant for DecisionsAI. Build a weekly arc from active commitments, "
+            "achievable backlog outcomes, connected messages, workflows, developer context, and memory. "
+            "Do not create a ticket dump; explain what the week should accomplish.\n"
             + common
             + "Use these sections:\n"
-            "## Themes — what matters this week\n"
-            "## Deadlines & milestones\n"
-            "## Backlog — suggested pulls into the week\n"
+            "## Week Outcome — the main results the week should produce\n"
+            "## This Week — project-by-project focus\n"
+            "## Source Pressure — external signals that change priority\n"
             "## Stuck / needs attention\n"
+            "Rules:\n"
+            "- Current lane work anchors the week.\n"
+            "- Backlog only becomes part of the week if it is realistically achievable or externally pressured.\n"
+            "- Keep phrasing useful for a Telegram summary.\n"
         )
     if scope == "month":
         return (

@@ -42,4 +42,4 @@ def test_remote_chat_no_longer_embeds_whatsapp_reply_form():
     assert "WhatsApp Reply" not in chat_tab
     assert "sendWhatsAppText" not in chat_tab
     assert "startWhatsAppRecording" not in chat_tab
-    assert "/api/kanban/whatsapp/send" not in chat_tab
+    assert "/api/tickets/whatsapp/send" not in chat_tab

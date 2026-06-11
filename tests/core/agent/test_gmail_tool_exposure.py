@@ -12,6 +12,7 @@ class _CoreHarness(LLMSharedMixin):
         self._tools = [
             SimpleNamespace(name="request_tool"),
             SimpleNamespace(name="google_workspace"),
+            SimpleNamespace(name="hermes_delegated_workflow"),
         ]
         self._tools_dict = {t.name: t for t in self._tools}
         self._sticky_tool_names = set()
@@ -53,6 +54,45 @@ def test_get_filtered_tools_force_exposes_google_workspace_for_gmail_queries(mon
 
     assert "request_tool" in names
     assert "google_workspace" in names
+
+
+def test_get_filtered_tools_force_exposes_delegated_workflow_for_remote_email_document_handoff(monkeypatch):
+    class _Retriever:
+        def retrieve(self, _msg, _model):
+            return ["request_tool", "google_workspace"]
+
+    monkeypatch.setattr(
+        "distr.core.agent.tool_retriever.get_tool_retriever",
+        lambda: _Retriever(),
+    )
+
+    h = _CoreHarness()
+    out = h._get_filtered_tools(
+        "From Telegram, access my email, fetch Julie's latest PDF, scope the changes, and prep it for Codex."
+    )
+    names = {t.name for t in out}
+
+    assert "google_workspace" in names
+    assert "hermes_delegated_workflow" in names
+
+
+def test_get_filtered_tools_force_exposes_delegated_workflow_for_remote_browser_tasks(monkeypatch):
+    class _Retriever:
+        def retrieve(self, _msg, _model):
+            return ["request_tool"]
+
+    monkeypatch.setattr(
+        "distr.core.agent.tool_retriever.get_tool_retriever",
+        lambda: _Retriever(),
+    )
+
+    h = _CoreHarness()
+    out = h._get_filtered_tools(
+        "From Telegram, open https://example.com in the browser, click the docs link, take a screenshot, and report back."
+    )
+    names = {t.name for t in out}
+
+    assert "hermes_delegated_workflow" in names
 
 
 def test_get_filtered_tools_preserves_sticky_injected_google_workspace(monkeypatch):

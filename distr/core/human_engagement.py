@@ -294,6 +294,8 @@ def sanitize_engagement_text(text: str, *, preserve_links: bool = False) -> str:
         clean = re.sub(r"https?://\S+", "", clean)
     clean = re.sub(r"^\s*\[Initiative\]\s*", "", clean)
     clean = re.sub(r"\[APPROVE\]|\[ESCALATE\]|\[SUGGEST_ONLY\]", "", clean)
+    clean = re.sub(r"\n{2,}Draft:\n.*?(?=\n{2,}Payload:|\n{2,}[A-Z][A-Za-z ]{2,}:|\Z)", "", clean, flags=re.S)
+    clean = re.sub(r"\n{1,}Payload:\s*\{.*?\}(?=\n|$)", "", clean, flags=re.S)
     clean = re.sub(r"(?i)^quick update:\s*#{1,6}\s*quick check-?in\s*[-:]*\s*", "Quick check-in: ", clean)
     clean = re.sub(r"(?im)^\s*#{1,6}\s*", "", clean)
     clean = re.sub(r"(?m)^\s*[-*]\s+", "", clean)

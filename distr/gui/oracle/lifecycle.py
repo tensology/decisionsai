@@ -5,9 +5,6 @@ Handles restart_app and exit_app.
 
 import logging
 import os
-import platform
-import subprocess
-import sys
 
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QTimer
@@ -18,9 +15,6 @@ from distr.core.paths import ASSETS_DIR, ICONS_DIR
 from distr.core.signals import signal_manager
 
 logger = logging.getLogger(__name__)
-
-# Project root: lifecycle.py is at distr/gui/oracle/lifecycle.py → 3 levels up
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 
 
 def _quit_confirmation_icon_path():
@@ -159,6 +153,8 @@ class LifecycleMixin:
     def restart_app(self):
         """Restart the application by spawning a new process and quitting."""
         try:
+            from distr.core.app_restart import spawn_restart_process
+
             logger.info("[RESTART] Restart requested")
 
             # Save state
@@ -168,47 +164,10 @@ class LifecycleMixin:
             if hasattr(self, 'save_hands_free_state'):
                 self.save_hands_free_state()
 
-            # Build the command to restart
-            if getattr(sys, 'frozen', False):
-                # Packaged app
-                if sys.platform == 'darwin':
-                    cmd = ['open', '-n', sys.executable]
-                else:
-                    cmd = [sys.executable]
-            else:
-                # Running from source — use bin/start.py
-                start_script = os.path.join(_PROJECT_ROOT, 'bin', 'start.py')
-                cmd = [sys.executable, start_script]
-                logger.info("[RESTART] cmd=%s  cwd=%s  start.py exists=%s",
-                            cmd, _PROJECT_ROOT, os.path.exists(start_script))
+            spawn_restart_process()
 
-            # Write a tiny shell/bat script that waits then launches.
-            # This survives the parent process dying.
-            if platform.system() == 'Windows':
-                script = os.path.join(_PROJECT_ROOT, '_restart.bat')
-                with open(script, 'w') as f:
-                    f.write('@echo off\n')
-                    f.write('timeout /t 2 /nobreak >nul\n')
-                    f.write(' '.join(f'"{c}"' for c in cmd) + '\n')
-                    f.write(f'del "{script}"\n')
-                subprocess.Popen(
-                    ['cmd', '/c', script],
-                    cwd=_PROJECT_ROOT,
-                    creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-            else:
-                # Unix/macOS: use bash -c with sleep
-                shell_cmd = f'sleep 2 && {" ".join(cmd)}'
-                subprocess.Popen(
-                    ['bash', '-c', shell_cmd],
-                    cwd=_PROJECT_ROOT,
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-
-            logger.info("[RESTART] Spawned restart process, quitting in 500ms")
-            QTimer.singleShot(500, lambda: self.exit_app(confirm=False))
+            logger.info("[RESTART] Spawned detached restart process, quitting in 1500ms")
+            QTimer.singleShot(1500, lambda: self.exit_app(confirm=False))
 
         except Exception as e:
             logger.error("[RESTART] Failed: %s", e, exc_info=True)

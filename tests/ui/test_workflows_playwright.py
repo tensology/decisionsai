@@ -18,6 +18,18 @@ BASE_URL = "http://127.0.0.1:8765"
 WORKFLOWS_URL = f"{BASE_URL}/workflows/"
 
 
+def open_workflow_create_modal(page):
+    page.locator("#wf-new-workflow-btn").click()
+    page.wait_for_timeout(300)
+    page.locator("#wf-create-modal").wait_for(state="visible", timeout=5000)
+
+
+def open_workflow_execution_setup(page):
+    page.locator("#wf-menu-btn").click()
+    page.wait_for_timeout(500)
+    page.locator("#sr-llm-modal").wait_for(state="visible", timeout=5000)
+
+
 @pytest.fixture(scope="module")
 def browser_context(browser):
     """Shared context with console & network logging."""
@@ -176,10 +188,12 @@ class TestWorkflowsBasicLoad:
         expect(page).to_have_title(re.compile("Workflows"))
 
         # Core UI elements exist
+        assert page.locator("#wf-menu-btn").is_visible(), "Workflow menu button missing"
+        assert page.locator("#wf-list").is_visible(), "Workflow list missing"
+        open_workflow_create_modal(page)
         assert page.locator("#wf-new-name").is_visible(), "Create workflow input missing"
         assert page.locator("#wf-create-btn").is_visible(), "Create button missing"
-        assert page.locator("#wf-search").is_visible(), "Search input missing"
-        assert page.locator("#wf-list").is_visible(), "Workflow list missing"
+        page.locator("#wf-create-modal-close").click()
 
         print_diagnostics(cl, nl, "BASIC LOAD")
         page.close()
@@ -454,6 +468,7 @@ class TestWorkflowsCreateAndDelete:
         cl, nl = attach_loggers(page)
 
         page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+        open_workflow_create_modal(page)
 
         # Enter a name
         name_input = page.locator("#wf-new-name")
@@ -483,6 +498,7 @@ class TestWorkflowsCreateAndDelete:
         cl, nl = attach_loggers(page)
 
         page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+        open_workflow_create_modal(page)
 
         # First create one to delete
         name_input = page.locator("#wf-new-name")
@@ -513,42 +529,36 @@ class TestWorkflowsCreateAndDelete:
         page.close()
 
 
-class TestWorkflowsSearch:
-    """Search filtering in the workflow list."""
+class TestWorkflowsMenu:
+    """Plus opens new workflow; cog opens execution setup."""
 
-    def test_search_filters_list(self, browser_context):
+    def test_menu_opens_create_modal(self, browser_context):
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
         page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+        open_workflow_create_modal(page)
 
-        # Wait for list to populate
-        list_items = page.locator("#wf-list [data-id]")
-        try:
-            list_items.first.wait_for(state="visible", timeout=5000)
-            initial_count = list_items.count()
-            print(f"\n🔍 Initial workflow count: {initial_count}")
-        except Exception:
-            initial_count = 0
+        assert page.locator("#wf-create-modal").is_visible()
+        page.locator("#wf-create-modal-close").click()
+        page.wait_for_timeout(200)
+        assert page.locator("#wf-create-modal").is_hidden()
 
-        # Type a search term unlikely to match anything
-        search_input = page.locator("#wf-search")
-        search_input.fill("zzz_nonexistent_workflow_xyz")
-        page.wait_for_timeout(500)
+        print_diagnostics(cl, nl, "WORKFLOW MENU CREATE")
+        page.close()
 
-        # List should be empty or filtered
-        filtered_count = page.locator("#wf-list [data-id]").count()
-        print(f"  Filtered count: {filtered_count}")
-        assert filtered_count < initial_count or initial_count == 0, "Search did not filter results"
+    def test_menu_opens_execution_setup(self, browser_context):
+        page = browser_context.new_page()
+        cl, nl = attach_loggers(page)
 
-        # Clear search
-        search_input.clear()
-        page.wait_for_timeout(500)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+        open_workflow_execution_setup(page)
 
-        restored_count = page.locator("#wf-list [data-id]").count()
-        print(f"  Restored count: {restored_count}")
+        assert page.locator("#sr-llm-modal").is_visible()
+        page.locator("#sr-llm-close").click()
+        page.wait_for_timeout(200)
 
-        print_diagnostics(cl, nl, "SEARCH")
+        print_diagnostics(cl, nl, "WORKFLOW MENU CONFIG")
         page.close()
 
 
@@ -786,9 +796,8 @@ class TestWorkflowsHeaderActions:
         assert stop_reset_btn.is_visible(), "Stop & Reset button not visible"
         assert delete_btn.is_visible(), "Delete button not visible"
 
-        # LLM settings button
-        llm_btn = page.locator("#wf-sr-llm-btn")
-        assert llm_btn.is_visible(), "Workflow LLM settings button not visible"
+        # Workflow options menu
+        assert page.locator("#wf-menu-btn").is_visible(), "Workflow menu button not visible"
 
         print_diagnostics(cl, nl, "HEADER BUTTONS")
         page.close()
@@ -807,17 +816,13 @@ class TestWorkflowsHeaderActions:
         except Exception:
             pytest.skip("No workflows for LLM modal test")
 
-        # Open LLM modal
-        llm_btn = page.locator("#wf-sr-llm-btn")
-        llm_btn.click()
-        page.wait_for_timeout(1500)
+        open_workflow_execution_setup(page)
 
         modal = page.locator("#sr-llm-modal")
         assert modal.is_visible(), "LLM settings modal not visible after click"
 
-        # Provider dropdown should exist
-        provider = page.locator("#sr-llm-provider")
-        assert provider.is_visible(), "Provider dropdown not visible in LLM modal"
+        backend = page.locator("#wf-cli-low-backend")
+        assert backend.is_visible(), "Execution routing controls not visible in setup modal"
 
         # Close modal
         close_btn = page.locator("#sr-llm-close")
@@ -868,6 +873,7 @@ class TestWorkflowsAddStep:
         cl, nl = attach_loggers(page)
 
         page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+        open_workflow_create_modal(page)
 
         # Create a new workflow first
         name_input = page.locator("#wf-new-name")

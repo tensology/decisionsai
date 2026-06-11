@@ -59,10 +59,10 @@ _PAGE_MAP = {
     "workflows":      "/workflows/",
     "workflow":       "/workflows/",
     # Ticket Board / Board
-    "kanban":         "/kanban/",
-    "board":          "/kanban/",
-    "ticket board":   "/kanban/",
-    "ticketboard":    "/kanban/",
+    "kanban":         "/tickets/",
+    "board":          "/tickets/",
+    "ticket board":   "/tickets/",
+    "ticketboard":    "/tickets/",
     # API Docs
     "api docs":       "/docs/",
     "api documentation": "/docs/",
@@ -93,7 +93,7 @@ def _confirmation_for_path(path: str) -> str:
         return "I've opened that page in your browser."
     if "/chat" in path or path.startswith("/chat"):
         return "I've opened Chat in your browser."
-    if "/kanban" in path:
+    if "/tickets" in path:
         return "I've opened the Ticket Board in your browser."
     if "/projects" in path:
         return "I've opened Projects in your browser."

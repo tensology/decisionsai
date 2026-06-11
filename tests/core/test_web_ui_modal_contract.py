@@ -63,6 +63,8 @@ def test_delete_and_reset_flows_use_shared_modal_instead_of_native_confirm():
     assert 'confirmLabel: "Remove"' in automations_js
     assert "Remove automation" in automations_js
     assert "confirm('Remove automation" not in automations_js
+    assert 'automation-delete").addEventListener("click", function()' in automations_js
+    assert 'addEventListener("click", deleteSelected)' not in automations_js
 
     assert 'window.DecisionsAPI.confirm({' in settings_js
     assert 'title: "Reset settings"' in settings_js

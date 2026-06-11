@@ -264,7 +264,7 @@ def humanize_silent_navigation_json(result: str) -> Optional[str]:
         return "I've opened Skills in your browser."
     if "doc" in page:
         return "I've opened the API documentation in your browser."
-    if "/kanban" in path:
+    if "/tickets" in path or "/kanban" in path:
         return "I've opened the Ticket Board in your browser."
     if "/chat" in path:
         return "I've opened Chat in your browser."

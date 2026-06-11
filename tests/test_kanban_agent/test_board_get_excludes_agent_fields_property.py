@@ -2,7 +2,7 @@
 """
 Property 7: Board GET response excludes agent configuration fields
 
-For any board, the JSON response from GET /api/kanban/boards/{board_id} should not
+For any board, the JSON response from GET /api/tickets/boards/{board_id} should not
 contain the keys: agent_orchestrator_provider, agent_orchestrator_model,
 agent_coder_provider, agent_coder_model, agent_sub_provider, agent_sub_model,
 agent_enabled, agent_frequency, agent_time, agent_days, agent_monthly_day,

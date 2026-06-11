@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 _workflow_update_counter = 0
 _lock = threading.Lock()
+_workflow_updated_callbacks: list = []
+_callbacks_lock = threading.Lock()
 
 # All connected workflow WebSocket clients (set of websocket objects)
 _wf_ws_connections: set = set()
@@ -63,6 +65,15 @@ def _push_ws_update(version: int) -> None:
             logger.debug("workflow WS push failed: %s", e)
 
 
+def register_workflow_updated_callback(callback) -> None:
+    """Register a desktop-side callback fired after workflow/automation data changes."""
+    if not callable(callback):
+        return
+    with _callbacks_lock:
+        if callback not in _workflow_updated_callbacks:
+            _workflow_updated_callbacks.append(callback)
+
+
 def increment_workflow_updated() -> None:
     """Call when Workflow data changes — increments counter and pushes WS event."""
     global _workflow_update_counter
@@ -70,6 +81,13 @@ def increment_workflow_updated() -> None:
         _workflow_update_counter += 1
         v = _workflow_update_counter
     _push_ws_update(v)
+    with _callbacks_lock:
+        callbacks = list(_workflow_updated_callbacks)
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception as exc:
+            logger.debug("workflow updated callback failed: %s", exc)
 
 
 def get_workflow_update_counter() -> int:

@@ -670,6 +670,54 @@ def get_startup_sessions_for_project(project_id: int, purpose: Optional[str] = "
     return results
 
 
+def kill_all_startup_sessions_for_project(project_id: int, purpose: str = "startup") -> int:
+    """Synchronously terminate all alive startup sessions for a project."""
+    cleanup_dead_startup_sessions()
+    killed = 0
+    keys_to_kill = [
+        key
+        for key, sess in list(_startup_sessions.items())
+        if sess.project_id == int(project_id)
+        and sess.is_alive
+        and (not purpose or sess.purpose == purpose)
+    ]
+    for key in keys_to_kill:
+        sess = _startup_sessions.pop(key, None)
+        if not sess:
+            continue
+        sess._running = False
+        if sess._reader_task:
+            sess._reader_task.cancel()
+        if sess.master_fd is not None:
+            try:
+                asyncio.get_event_loop().remove_reader(sess.master_fd)
+            except Exception:
+                pass
+            try:
+                os.close(sess.master_fd)
+            except OSError:
+                pass
+            sess.master_fd = None
+        if sess.pid:
+            for pid in reversed(sess._collect_descendants(sess.pid)):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            try:
+                os.kill(sess.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:
+            from distr.core.hermes import mark_project_runtime_session_stopped
+
+            mark_project_runtime_session_stopped(key, status="stopped")
+        except Exception:
+            pass
+        killed += 1
+    return killed
+
+
 def _sync_runtime_session_to_hermes(sess: TerminalSession) -> None:
     try:
         from distr.core.hermes import upsert_project_runtime_session

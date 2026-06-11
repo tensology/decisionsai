@@ -2,14 +2,14 @@
 Unit tests for the global kanban settings GET/PUT API endpoints.
 
 Tests cover:
-1. GET /kanban/settings returns kanban-prefixed settings
-2. PUT /kanban/settings updates settings and returns success
-3. PUT /kanban/settings validates hours in [0, 23]
-4. PUT /kanban/settings validates days in [0, 6]
-5. PUT /kanban/settings validates monthly_day in [1, 28]
-6. PUT /kanban/settings validates frequency in allowed values
-7. PUT /kanban/settings deduplicates hours before saving
-8. PUT /kanban/settings returns 422 for invalid values
+1. GET /tickets/settings returns kanban-prefixed settings
+2. PUT /tickets/settings updates settings and returns success
+3. PUT /tickets/settings validates hours in [0, 23]
+4. PUT /tickets/settings validates days in [0, 6]
+5. PUT /tickets/settings validates monthly_day in [1, 28]
+6. PUT /tickets/settings validates frequency in allowed values
+7. PUT /tickets/settings deduplicates hours before saving
+8. PUT /tickets/settings returns 422 for invalid values
 
 **Validates: Requirements 10.1, 10.2, 10.5, 10.6**
 """
@@ -94,14 +94,14 @@ def client():
 
 
 class TestGetKanbanSettings:
-    """GET /kanban/settings returns kanban-prefixed global settings.
+    """GET /tickets/settings returns kanban-prefixed global settings.
 
     **Validates: Requirements 10.1**
     """
 
     def test_returns_kanban_settings(self, client):
         test_client, store = client
-        resp = test_client.get("/api/kanban/settings")
+        resp = test_client.get("/api/tickets/settings")
         assert resp.status_code == 200
         data = resp.json()
         assert all(k.startswith("kanban_") for k in data.keys())
@@ -112,7 +112,7 @@ class TestGetKanbanSettings:
         test_client, store = client
         store["kanban_agent_hours"] = "[1, 5, 10]"
         store["kanban_agent_days"] = "[0, 3]"
-        resp = test_client.get("/api/kanban/settings")
+        resp = test_client.get("/api/tickets/settings")
         assert resp.status_code == 200
         data = resp.json()
         assert data["kanban_agent_hours"] == [1, 5, 10]
@@ -121,20 +121,20 @@ class TestGetKanbanSettings:
     def test_excludes_non_kanban_keys(self, client):
         test_client, store = client
         store["openai_key"] = "sk-test"
-        resp = test_client.get("/api/kanban/settings")
+        resp = test_client.get("/api/tickets/settings")
         data = resp.json()
         assert "openai_key" not in data
 
 
 class TestPutKanbanSettings:
-    """PUT /kanban/settings updates global kanban settings.
+    """PUT /tickets/settings updates global kanban settings.
 
     **Validates: Requirements 10.2**
     """
 
     def test_update_basic_fields(self, client):
         test_client, store = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_enabled": True,
             "kanban_agent_source_lane": "Backlog",
         })
@@ -146,7 +146,7 @@ class TestPutKanbanSettings:
     def test_partial_update_preserves_other_fields(self, client):
         test_client, store = client
         store["kanban_agent_frequency"] = "weekly"
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_enabled": True,
         })
         assert resp.status_code == 200
@@ -154,14 +154,14 @@ class TestPutKanbanSettings:
 
 
 class TestPutKanbanSettingsValidation:
-    """PUT /kanban/settings validates input and returns 422 for invalid values.
+    """PUT /tickets/settings validates input and returns 422 for invalid values.
 
     **Validates: Requirements 10.5, 10.6**
     """
 
     def test_invalid_frequency_returns_422(self, client):
         test_client, _ = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_frequency": "biweekly",
         })
         assert resp.status_code == 422
@@ -169,7 +169,7 @@ class TestPutKanbanSettingsValidation:
     def test_valid_frequency_accepted(self, client):
         test_client, store = client
         for freq in ["hourly", "daily", "weekly", "fortnightly", "monthly"]:
-            resp = test_client.put("/api/kanban/settings", json={
+            resp = test_client.put("/api/tickets/settings", json={
                 "kanban_agent_frequency": freq,
             })
             assert resp.status_code == 200
@@ -177,21 +177,21 @@ class TestPutKanbanSettingsValidation:
 
     def test_hours_out_of_range_returns_422(self, client):
         test_client, _ = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_hours": [0, 24],
         })
         assert resp.status_code == 422
 
     def test_hours_negative_returns_422(self, client):
         test_client, _ = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_hours": [-1, 5],
         })
         assert resp.status_code == 422
 
     def test_valid_hours_accepted(self, client):
         test_client, store = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_hours": [0, 12, 23],
         })
         assert resp.status_code == 200
@@ -199,14 +199,14 @@ class TestPutKanbanSettingsValidation:
 
     def test_days_out_of_range_returns_422(self, client):
         test_client, _ = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_days": [0, 7],
         })
         assert resp.status_code == 422
 
     def test_valid_days_accepted(self, client):
         test_client, store = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_days": [0, 3, 6],
         })
         assert resp.status_code == 200
@@ -214,21 +214,21 @@ class TestPutKanbanSettingsValidation:
 
     def test_monthly_day_below_range_returns_422(self, client):
         test_client, _ = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_monthly_day": 0,
         })
         assert resp.status_code == 422
 
     def test_monthly_day_above_range_returns_422(self, client):
         test_client, _ = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_monthly_day": 29,
         })
         assert resp.status_code == 422
 
     def test_valid_monthly_day_accepted(self, client):
         test_client, store = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_monthly_day": 15,
         })
         assert resp.status_code == 200
@@ -236,14 +236,14 @@ class TestPutKanbanSettingsValidation:
 
 
 class TestPutKanbanSettingsDeduplication:
-    """PUT /kanban/settings deduplicates hours before saving.
+    """PUT /tickets/settings deduplicates hours before saving.
 
     **Validates: Requirements 1.5**
     """
 
     def test_duplicate_hours_are_deduplicated(self, client):
         test_client, store = client
-        resp = test_client.put("/api/kanban/settings", json={
+        resp = test_client.put("/api/tickets/settings", json={
             "kanban_agent_hours": [9, 9, 12, 12, 15],
         })
         assert resp.status_code == 200

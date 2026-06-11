@@ -6,14 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_project_details_points_to_global_complexity_routing():
+def test_project_details_does_not_surface_implementation_routing_block():
     html = (ROOT / "distr/gui/web/templates/projects/tabs/details.html").read_text(encoding="utf-8")
 
     assert 'id="detail-coding-backend"' not in html
     assert 'id="codex-sync-panel"' not in html
-    assert "Implementation routing" in html
-    assert "Settings → LLMs" in html
-    assert 'href="/settings/#llms"' in html
+    assert "Implementation routing" not in html
+    assert "Context items &amp; files" in html
 
 
 def test_project_js_does_not_save_project_coding_backend_from_details():

@@ -64,6 +64,14 @@ def test_ticket_lane_move_can_execute_when_allowed():
     ) == PolicyDecision.EXECUTE
 
 
+def test_ticket_lane_move_message_uses_clean_plural_wording():
+    from distr.core.initiative.action_handlers import _moved_tickets_message
+
+    assert _moved_tickets_message(1, "Current") == "Moved 1 ticket to Current"
+    assert _moved_tickets_message(2, "Current") == "Moved 2 tickets to Current"
+    assert "ticket(s)" not in _moved_tickets_message(2, "Current")
+
+
 def test_telegram_continue_phrase_approves_pending_draft():
     assert match_draft_decision("yes continue") == "approve"
     assert match_draft_decision("go ahead and continue") == "approve"

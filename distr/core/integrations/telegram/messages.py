@@ -325,6 +325,16 @@ class TelegramMessagesMixin:
                 self.send_to_telegram(f"Project control failed: {exc}")
                 return
 
+            try:
+                from distr.core.hermes_delegated.continuation import handle_delegated_continuation_message
+
+                if handle_delegated_continuation_message(self, text):
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] Delegated continuation failed: %s", exc, exc_info=True)
+                self.send_to_telegram(f"Delegated continuation failed: {exc}")
+                return
+
             # Detect mode-switch intent and persist to Settings_Store
             from distr.core.integrations.telegram.response_format import detect_mode_switch_intent
             from distr.core.services.settings_service import update_setting
@@ -767,6 +777,10 @@ class TelegramMessagesMixin:
         if not hermes_entries:
             return False
 
+        def _pending_items_phrase(count: int) -> str:
+            noun = "pending item" if int(count or 0) == 1 else "pending items"
+            return f"{int(count or 0)} {noun}"
+
         def _decision_word(text: str) -> str | None:
             if re.search(r"\b(approve|approved|yes|yep|correct|go ahead|do it|create it|make it|turn it into|ticket it)\b", text):
                 return "approve"
@@ -794,12 +808,12 @@ class TelegramMessagesMixin:
                 elif queue_obj.remove(entry.id):
                     acted += 1
             verb = "Approved" if decision == "approve" else "Rejected"
-            self.send_to_telegram(f"{verb} {acted} pending item(s).")
+            self.send_to_telegram(f"{verb} {_pending_items_phrase(acted)}.")
             return True
 
         if idx >= len(hermes_entries):
             self.send_to_telegram(
-                f"I only have {len(hermes_entries)} pending item(s) waiting. "
+                f"I only have {_pending_items_phrase(len(hermes_entries))} waiting. "
                 "Reply 'show pending items' to see them."
             )
             return True

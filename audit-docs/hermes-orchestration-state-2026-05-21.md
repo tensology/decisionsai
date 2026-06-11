@@ -29,6 +29,10 @@ Hermes owns events and learning signals. It does not own WhatsApp, Telegram, Gma
 - [x] Playwright validation receives project runtime URLs via Hermes runtime sessions (`PLAYWRIGHT_BASE_URL`).
 - [x] Workflows UI exposes route cards, run command center, IDE handoff modal, board Hermes policy editor, skill chains, and learned-rule promote hints.
 - [x] `/api/ws/workflows` pushes realtime workflow refresh events to the Workflows page.
+- [x] Hermes delegated workflow planning is available as a typed planner and agent tool for Telegram/desktop/chat instructions. It produces API-first email/document intake plans, desktop-operation plans, Codex/Cursor handoff plans, roadblock reports, redacted payloads, and `delegated_plan_created` ledger events.
+- [x] Hermes delegated workflow execution has a first runner slice for email-document scope requests. It can search Gmail through a Google adapter, download Gmail attachments, extract documents, build execution scope, dispatch to Codex/Cursor through project CLI backends when project context is present, and record `delegated_run_report` events for completion or blockers.
+- [x] Hermes delegated desktop sequence execution has a direct adapter path for clipboard-to-file workflows. It prefers clipboard and filesystem writes before GUI control, verifies the destination content, and returns Telegram-safe run summaries for completed or blocked runs.
+- [x] Codex and Cursor backend setup status now reports remote handoff readiness, callback handoff method, and reporter script path so the UI/orchestrator can distinguish "backend unavailable" from "backend can receive a delegated handoff."
 - [x] Route override approval: when board policy requires approval, Hermes LLM override pauses the run (`waiting_kind: route_approval`), exposes Approve/Reject in the Active Run command center, and redispatches on approval via `POST /workflows/{id}/runs/{run_id}/route-approval`.
 - [x] Google Agent Skills (`google/skills`) cloned to `COMPETITION/google-skills`, synced into `DecisionsAI/skills/` (19 Google Cloud skills) with registry entries and `GET /workflows/skills` catalog API.
 - [x] Hermes skill transfer catalog (`distr/core/skills/catalog.py`): ticket keyword inference, LLM advisory skill list, validated push via workflow pre_chain + `RouteDecision.skills`.
@@ -104,6 +108,20 @@ Examples:
 - A given executor is unreliable for a category and should escalate sooner.
 - A board’s WhatsApp intake often lacks acceptance criteria, so clarification should happen before execution.
 - A project usually exposes its React app on a known port after startup, so future validation can reuse that URL instead of guessing.
+
+## 2026-06-11 Delegated Continuation Update
+
+Telegram can now recognize continuation replies for delegated workflow runs (`continue`, `retry`, `skip`, `cancel`, plus browser/desktop/Gmail/Codex/Cursor route hints). The handler finds the latest delegated run report, emits a redacted `delegated_continuation_requested` Hermes event linked to that run, and acknowledges the request in Telegram instead of dropping the message into generic agent batching. Retry/continue replies reconstruct the delegated plan from the run report payload, re-enter the delegated runner with the original workflow/project context, record a fresh `delegated_run_report`, and send the resumed run summary back to Telegram.
+
+Browser/URL instructions now compile into a first-class `browser_workflow` plan instead of being misrouted as desktop copy/paste work. Delegated browser runs execute through an injected browser adapter or the default `PlaywrightBrowserAdapter`, capture output/screenshot evidence, report typed browser automation blockers, and remain resumable through the delegated continuation path.
+
+Standalone Codex/Cursor requests now execute as `project_handoff` delegated runs rather than stopping at planning. The runner prepares a handoff packet, dispatches through the existing project CLI backend contract, records backend output/error evidence, and reports `backend_not_ready` blockers when no dispatcher or ready backend is available.
+
+Delegated workflows now support `preflight=True` readiness checks before side effects. The preflight reports route-specific adapter/backend readiness for Gmail attachments, document extraction, direct desktop operations, Playwright/browser automation, and Codex/Cursor project handoff, with Telegram-safe blocker text for missing connections, missing browser automation, or unavailable project backends. Preflight checks are recorded as redacted `delegated_preflight_report` Hermes events so Telegram/desktop runs have durable readiness evidence before execution begins.
+
+Browser workflow execution now accepts local `file://` and localhost URLs in addition to external `http(s)` URLs. A local delegated browser smoke against a temporary HTML file completed outside the Codex sandbox and recorded run event `5576`; the same run inside the sandbox was blocked by macOS Chromium launch permissions, which should be treated as an environment permission issue rather than a delegated runner failure.
+
+Initiative approval surfacing now has a chat-context guard. Pending approvals are no longer injected into ordinary chats such as board UI/design requests; `_surface_draft_queue` only surfaces them when the current chat title or recent user messages explicitly refer to Initiative approvals, pending approvals, approval queues, Hermes triage, or Hermes decisions. The queue is expired before surfacing so stale approval prompts do not reappear after their expiry window. Cursor project handoff readiness now blocks unauthenticated Cursor CLI sessions with `auth_required` and `can_receive_remote_handoff=False`, allowing Hermes to fall back to Codex or report Cursor unavailable without hijacking the current chat.
 
 ## Next Build Order
 

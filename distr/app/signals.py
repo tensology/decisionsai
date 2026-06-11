@@ -485,17 +485,24 @@ class SignalBridgeMixin:
         # Web routes -> main thread: hot-swap LLM in running agent, then send message.
         # No timers, no pending state, no reload locks. Commands go immediately via command_queue.
 
-        def on_web_send_to_agent_requested(chat_id, message, speak, provider=None, model_name=None):
+        def on_web_send_to_agent_requested(
+            chat_id, message, speak, provider=None, model_name=None, options=None
+        ):
             """Send message to agent. load-in-agent already ran current_chat_changed; just send the text."""
             try:
                 speak_bool = coerce_speak_enabled(speak, default=True)
+                opts = options if isinstance(options, dict) else {}
+                params = {
+                    'text': message,
+                    'speak': speak_bool,
+                    'chat_id': chat_id,
+                }
+                if opts.get('skip_user_persist'):
+                    params['skip_user_persist'] = True
                 # Pass speak_bool directly into process_text_input so process_chat_input applies it
                 # as a per-request override — no separate set_speaker_enabled needed, and no second
                 # current_chat_changed that would create a new LLM service after set_speaker_enabled ran.
-                self._send_command_to_agent(
-                    'process_text_input',
-                    {'text': message, 'speak': speak_bool, 'chat_id': chat_id},
-                )
+                self._send_command_to_agent('process_text_input', params)
                 logger.info(
                     "Web send-to-agent: process_text_input for chat_id=%s (speak_raw=%r speak_bool=%s)",
                     chat_id,
@@ -556,6 +563,39 @@ class SignalBridgeMixin:
                 logger.error("Web load-in-agent slot failed: %s", e, exc_info=True)
         signal_manager.web_load_chat_in_agent_requested.connect(on_web_load_chat_in_agent_requested)
         logger.info("Connected web_load_chat_in_agent_requested (direct command sends, no process restart)")
+
+        def on_web_load_chat_and_process_requested(chat_id, message, speak, skip_user_persist):
+            """Load chat history, then process one orchestrator prompt in deterministic order."""
+            try:
+                player_active = bool(
+                    hasattr(self, "player_window")
+                    and self.player_window
+                    and self.player_window.isVisible()
+                )
+                if player_active:
+                    self._send_command_to_agent("interrupt_tts", {})
+                self._send_command_to_agent(
+                    "current_chat_changed",
+                    {
+                        "chat_id": int(chat_id),
+                        "initial_message": (message or "").strip(),
+                        "initial_speak": coerce_speak_enabled(speak, default=True),
+                        "skip_user_persist": bool(skip_user_persist),
+                    },
+                )
+                logger.info(
+                    "Web load-chat-and-process: chat_id=%s message_len=%s skip_user_persist=%s",
+                    chat_id,
+                    len((message or "")),
+                    bool(skip_user_persist),
+                )
+            except Exception as e:
+                logger.error("Web load-chat-and-process slot failed: %s", e, exc_info=True)
+
+        signal_manager.web_load_chat_and_process_requested.connect(
+            on_web_load_chat_and_process_requested
+        )
+        logger.info("Connected web_load_chat_and_process_requested")
 
         # Workflow completion → forward summary to agent so it can report back
         def on_workflow_finished(session_id, summary):

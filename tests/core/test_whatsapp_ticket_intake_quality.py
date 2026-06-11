@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -117,12 +117,12 @@ def test_whatsapp_media_items_use_stable_message_preview_urls_without_local_cach
 
     items = _whatsapp_media_items(messages)
 
-    assert items[0]["preview_url"] == "/api/kanban/whatsapp/relay-media/42?wa_key=WA_KEY_42"
+    assert items[0]["preview_url"] == "/api/tickets/whatsapp/relay-media/42?wa_key=WA_KEY_42"
     assert items[0]["download_url"] == items[0]["preview_url"]
     assert items[0]["local_preview_url"] == ""
     assert items[0]["media_mime_type"] == "image/jpeg"
-    assert items[1]["preview_url"] == "/api/kanban/whatsapp/relay-media/43?wa_key=WA_KEY_43"
-    assert items[1]["local_preview_url"] == "/api/kanban/whatsapp/media?path=brief.pdf"
+    assert items[1]["preview_url"] == "/api/tickets/whatsapp/relay-media/43?wa_key=WA_KEY_43"
+    assert items[1]["local_preview_url"] == "/api/tickets/whatsapp/media?path=brief.pdf"
 
 
 def test_resolving_reviewed_whatsapp_messages_rejects_changed_batch(tmp_path):
@@ -164,6 +164,66 @@ def test_resolving_reviewed_whatsapp_messages_rejects_changed_batch(tmp_path):
             _resolve_board_whatsapp_snapshot(session, board.id, link_id=link.id, message_ids=[msg.id])
 
         assert getattr(exc.value, "status_code", None) == 409
+    finally:
+        session.close()
+
+
+def test_board_whatsapp_snapshot_uses_latest_two_visible_unticketed_message_days(tmp_path):
+    import distr.core.db.kanban  # noqa: F401
+
+    db_path = tmp_path / "wa_two_visible_days.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+
+    def ts(day: str) -> int:
+        return int(datetime.fromisoformat(f"{day}T09:00:00+00:00").timestamp())
+
+    session = Session()
+    try:
+        board = KanbanBoard(name="Linked Board")
+        session.add(board)
+        session.flush()
+        session.add(KanbanLane(board_id=board.id, name="Backlog", position=0))
+        link = WhatsAppPhoneLink(
+            board_id=board.id,
+            phone_jid="27710000001@s.whatsapp.net",
+            phone_number="27710000001",
+            contact_name="Client",
+        )
+        session.add(link)
+        session.add_all([
+            WhatsAppMessage(
+                message_id="old_day",
+                jid="27710000001@s.whatsapp.net",
+                jid_phone="27710000001",
+                text="old visible day",
+                whatsapp_timestamp=ts("2026-06-06"),
+                created_date=datetime(2026, 6, 6, tzinfo=timezone.utc),
+            ),
+            WhatsAppMessage(
+                message_id="second_day",
+                jid="27710000001@s.whatsapp.net",
+                jid_phone="27710000001",
+                text="second latest visible day",
+                whatsapp_timestamp=ts("2026-06-08"),
+                created_date=datetime(2026, 6, 8, tzinfo=timezone.utc),
+            ),
+            WhatsAppMessage(
+                message_id="latest_day",
+                jid="27710000001@s.whatsapp.net",
+                jid_phone="27710000001",
+                text="latest visible day",
+                whatsapp_timestamp=ts("2026-06-09"),
+                created_date=datetime(2026, 6, 9, tzinfo=timezone.utc),
+            ),
+        ])
+        session.flush()
+
+        snapshot = _resolve_board_whatsapp_snapshot(session, board.id, link_id=link.id)
+
+        assert [m.message_id for m in snapshot["messages"]] == ["second_day", "latest_day"]
+        assert snapshot["intake_stats"]["scope"] == "latest_two_visible_days"
     finally:
         session.close()
 

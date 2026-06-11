@@ -86,6 +86,30 @@ const llmModelSelect = document.getElementById('llmModel');
 const voiceProviderSelect = document.getElementById('voiceProvider');
 const voiceModelSelect = document.getElementById('voiceModel');
 const startingQuestionInput = document.getElementById('startingQuestion');
+const configureChatButton = document.getElementById('configureChatButton');
+const compactChatButton = document.getElementById('compactChatButton');
+const forkChatButton = document.getElementById('forkChatButton');
+const chatConfigModal = document.getElementById('chatConfigModal');
+const chatConfigClose = document.getElementById('chatConfigClose');
+const chatConfigCancel = document.getElementById('chatConfigCancel');
+const chatConfigSave = document.getElementById('chatConfigSave');
+const chatConfigLlmProvider = document.getElementById('chatConfigLlmProvider');
+const chatConfigLlmModel = document.getElementById('chatConfigLlmModel');
+const chatConfigVoiceProvider = document.getElementById('chatConfigVoiceProvider');
+const chatConfigVoiceModel = document.getElementById('chatConfigVoiceModel');
+const chatConfigStatus = document.getElementById('chatConfigStatus');
+const headerLlmProvider = document.getElementById('headerLlmProvider');
+const headerLlmModel = document.getElementById('headerLlmModel');
+const headerVoiceProvider = document.getElementById('headerVoiceProvider');
+const headerVoiceModel = document.getElementById('headerVoiceModel');
+const headerSettingsStatus = document.getElementById('headerSettingsStatus');
+
+let _headerSettingsSyncing = false;
+let _headerOptionsReady = false;
+let _headerSettingsSaveTimer = null;
+let _autoCompactInFlight = false;
+let _lastAutoCompactChatId = null;
+let _headerStatsTimer = null;
 
 // TTS Player (bottom of sidebar)
 const ttsPlayerCard = document.getElementById('ttsPlayerCard');
@@ -341,8 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (data && data.last_chat_id != null && data.chats && data.chats.length) {
             const lastId = Number(data.last_chat_id);
             if (!isNaN(lastId) && data.chats.some(c => c.id === lastId)) {
-                // Use selectChat on startup — agent already has this chat loaded from app init, no need to hot-swap
-                await selectChat(lastId);
+                await loadChat(lastId);
             }
         }
         syncKanbanSourceChatContext();
@@ -381,6 +404,33 @@ function setupEventListeners() {
             persistGlobalVoiceToSettings(voiceProviderSelect ? voiceProviderSelect.value : '', voiceModelSelect.value);
         });
     }
+    if (configureChatButton) configureChatButton.addEventListener('click', () => openChatConfigModal());
+    if (compactChatButton) compactChatButton.addEventListener('click', () => compactCurrentChat());
+    if (forkChatButton) forkChatButton.addEventListener('click', () => forkCurrentChat());
+    bindHeaderSettingsControls();
+    if (chatMessages) {
+        chatMessages.addEventListener('contextmenu', (e) => {
+            if (!currentChatId) return;
+            if (e.target && e.target.closest && e.target.closest('.message')) {
+                e.preventDefault();
+                showChatContextMenu(e, currentChatId);
+            }
+        });
+        bindActivityToggleHandlers();
+    }
+    if (chatConfigClose) chatConfigClose.addEventListener('click', hideChatConfigModal);
+    if (chatConfigCancel) chatConfigCancel.addEventListener('click', hideChatConfigModal);
+    if (chatConfigSave) chatConfigSave.addEventListener('click', saveChatConfig);
+    if (chatConfigLlmProvider) {
+        chatConfigLlmProvider.addEventListener('change', () => {
+            loadLlmModelsInto(chatConfigLlmModel, chatConfigLlmProvider.value);
+        });
+    }
+    if (chatConfigVoiceProvider) {
+        chatConfigVoiceProvider.addEventListener('change', async () => {
+            await loadVoiceModelsInto(chatConfigVoiceModel, chatConfigVoiceProvider.value);
+        });
+    }
 
     const emptyStateLlmProvider = document.getElementById('emptyStateLlmProvider');
     const emptyStateVoiceProvider = document.getElementById('emptyStateVoiceProvider');
@@ -411,16 +461,6 @@ function setupEventListeners() {
     // Modal should only close via Cancel, Close button, or Escape — NOT on overlay click
     // (removed: newChatModal background click handler)
 
-    // Update active nav tab based on current page
-    document.querySelectorAll('.nav-tab').forEach(tab => {
-        if (tab.href === window.location.href ||
-            (tab.href.includes('/chat') && window.location.pathname.startsWith('/chat'))) {
-            tab.classList.add('active');
-        } else {
-            tab.classList.remove('active');
-        }
-    });
-
     // Header Load button + Load bar button (view → load, matches native chat.py)
     const headerLoadBtn = document.getElementById('headerLoadButton');
     if (headerLoadBtn) headerLoadBtn.addEventListener('click', () => { if (currentChatId) loadChat(currentChatId); });
@@ -446,6 +486,24 @@ function setupEventListeners() {
                 }
                 if (action === 'load') {
                     setTimeout(() => loadChat(id), 0);
+                }
+                if (action === 'configure') {
+                    setTimeout(async () => {
+                        if (currentChatId !== id) await selectChat(id);
+                        openChatConfigModal(id);
+                    }, 0);
+                }
+                if (action === 'compact') {
+                    setTimeout(async () => {
+                        if (currentChatId !== id) await selectChat(id);
+                        compactCurrentChat(id);
+                    }, 0);
+                }
+                if (action === 'fork') {
+                    setTimeout(async () => {
+                        if (currentChatId !== id) await selectChat(id);
+                        forkCurrentChat(id);
+                    }, 0);
                 }
                 if (action === 'rename') renameChat(id);
                 if (action === 'delete') deleteChat(id);
@@ -595,7 +653,7 @@ function startChatWebSocket(force) {
                                 provider: data.provider || '-',
                                 model_name: data.model_name || '-',
                                 voice_provider: data.voice_provider,
-                                voice_model: data.voice_model, voice_model_display: data.voice_model_display
+                                voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
                             });
                             scrollToBottom();
                             syncRenderedMessageCountFromDom();
@@ -614,7 +672,7 @@ function startChatWebSocket(force) {
                             provider: data.provider || '-',
                             model_name: data.model_name || '-',
                             voice_provider: data.voice_provider,
-                            voice_model: data.voice_model, voice_model_display: data.voice_model_display
+                            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
                         });
                         scrollToBottom();
                     }).catch(() => {});
@@ -755,6 +813,7 @@ function handleChatEventMessageAdded(msg) {
             chatMessages.appendChild(div);
         }
         scrollToBottom();
+        scheduleRefreshChatHeaderStats();
         return;
     }
     if (role === 'assistant' && streamingChatId === currentChatId) {
@@ -799,6 +858,7 @@ function handleChatEventMessageAdded(msg) {
     const div = createMessageElement({ role, content });
     chatMessages.appendChild(div);
     scrollToBottom();
+    scheduleRefreshChatHeaderStats({ checkTitle: role === 'assistant' });
 }
 
 function handleChatEventStreamStarted(msg) {
@@ -903,7 +963,7 @@ function handleChatEventStreamFinished(msg) {
                     provider: data.provider || '-',
                     model_name: data.model_name || '-',
                     voice_provider: data.voice_provider,
-                    voice_model: data.voice_model, voice_model_display: data.voice_model_display
+                    voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
                 });
                 scrollToBottom();
             }
@@ -919,6 +979,7 @@ function handleChatEventStreamFinished(msg) {
     }
     streamingChatId = null;
     _optimisticUserMessages.clear();
+    scheduleRefreshChatHeaderStats({ checkTitle: true });
     // Reset input state in case the message came from voice/PTT (not web sendMessage)
     isStreaming = false;
     messageInput.disabled = false;
@@ -983,6 +1044,7 @@ function handleChatEventToolExecuted(msg) {
             title: msg.title || `Executed ${msg.tool_name || 'tool'}`,
             status: msg.status || 'completed',
             result_summary: msg.result_summary || '',
+            result_detail: msg.result_detail || '',
             routing_path: msg.routing_path || '',
             user_text: msg.user_text || '',
             compact: Boolean(msg.chat_compact)
@@ -1049,11 +1111,9 @@ function appendToolToActivityGroup(message) {
     if (!group) {
         group = createToolExecutionGroupElement({ role: 'tool_group', timestamp: message.timestamp, tools: [] });
     }
-    const list = group.querySelector('.tool-execution-list');
+    const list = group.querySelector('.activity-steps');
     if (list) list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(message));
-    const count = group.querySelectorAll('.tool-execution-item').length;
-    const countEl = group.querySelector('.tool-execution-count');
-    if (countEl) countEl.textContent = `${count} ${count === 1 ? 'step' : 'steps'}`;
+    group.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
     return group;
 }
 
@@ -1227,6 +1287,87 @@ async function saveLastChatId(chatId) {
     }
 }
 
+function focusMessageInput() {
+    if (!messageInput || messageInput.disabled) return;
+    if (emptyState && emptyState.style.display !== 'none') return;
+    messageInput.focus();
+}
+
+function measureChatTitleTextWidth(titleEl) {
+    if (!titleEl) return 0;
+    const style = window.getComputedStyle(titleEl);
+    const probe = document.createElement('span');
+    probe.textContent = titleEl.textContent || '';
+    probe.style.cssText = [
+        'position:absolute',
+        'visibility:hidden',
+        'white-space:nowrap',
+        `font:${style.font}`,
+        `letter-spacing:${style.letterSpacing}`,
+    ].join(';');
+    document.body.appendChild(probe);
+    const width = probe.offsetWidth;
+    probe.remove();
+    return width;
+}
+
+function applyTitleMarquee(wrapEl, titleEl, { wrapClass, titleClass } = {}) {
+    if (!wrapEl || !titleEl) return;
+    const wrapMarqueeClass = wrapClass || 'chat-item-title-wrap--marquee';
+    const titleMarqueeClass = titleClass || 'chat-item-title--marquee';
+    titleEl.classList.remove(titleMarqueeClass);
+    wrapEl.classList.remove(wrapMarqueeClass);
+    titleEl.style.removeProperty('--marquee-distance');
+    const textWidth = measureChatTitleTextWidth(titleEl);
+    const available = wrapEl.clientWidth;
+    if (textWidth <= available + 1) return;
+    titleEl.classList.add(titleMarqueeClass);
+    wrapEl.classList.add(wrapMarqueeClass);
+    titleEl.style.setProperty('--marquee-distance', `${textWidth - available}px`);
+}
+
+function applyChatTitleMarqueeForWrap(wrapEl) {
+    applyTitleMarquee(wrapEl, wrapEl ? wrapEl.querySelector('.chat-item-title') : null);
+}
+
+function applyHeaderTitleMarquee() {
+    const wrap = document.querySelector('.chat-settings-title-wrap');
+    const titleEl = document.getElementById('chatTitle');
+    applyTitleMarquee(wrap, titleEl, {
+        wrapClass: 'chat-settings-title-wrap--marquee',
+        titleClass: 'chat-settings-title--marquee',
+    });
+}
+
+function applySidebarTitleMarquees() {
+    document.querySelectorAll('.chat-item-title-wrap').forEach(applyChatTitleMarqueeForWrap);
+}
+
+let _titleMarqueeResizeTimer = null;
+window.addEventListener('resize', () => {
+    clearTimeout(_titleMarqueeResizeTimer);
+    _titleMarqueeResizeTimer = setTimeout(() => {
+        applySidebarTitleMarquees();
+        applyHeaderTitleMarquee();
+    }, 150);
+});
+
+function getAdjacentChatIdAfterDelete(chatId) {
+    const item = document.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+    if (!item) return null;
+    let sibling = item.previousElementSibling;
+    while (sibling && !sibling.classList.contains('chat-item')) {
+        sibling = sibling.previousElementSibling;
+    }
+    if (sibling) return parseInt(sibling.getAttribute('data-chat-id'), 10);
+    sibling = item.nextElementSibling;
+    while (sibling && !sibling.classList.contains('chat-item')) {
+        sibling = sibling.nextElementSibling;
+    }
+    if (sibling) return parseInt(sibling.getAttribute('data-chat-id'), 10);
+    return null;
+}
+
 function renderChatList(chats) {
     chatList.innerHTML = '';
     
@@ -1240,13 +1381,14 @@ function renderChatList(chats) {
         chatList.appendChild(chatItem);
     });
     updateActiveChat();
+    requestAnimationFrame(applySidebarTitleMarquees);
 }
 
 function createChatItem(chat) {
     const div = document.createElement('div');
     div.className = 'chat-item';
     div.setAttribute('data-chat-id', String(chat.id));
-    div.setAttribute('title', 'Double-click to load into agent');
+    div.setAttribute('title', 'Click to load. Double-click to focus message input.');
     div.setAttribute('tabindex', '0');
     div.setAttribute('role', 'option');
     div.setAttribute('aria-selected', chat.id === currentChatId ? 'true' : 'false');
@@ -1275,14 +1417,21 @@ function createChatItem(chat) {
         </div>
     `;
     
+    let clickTimer = null;
     div.addEventListener('click', (e) => {
-        selectChat(chat.id);
-    });
-    div.addEventListener('focus', () => {
-        if (currentChatId !== chat.id) selectChat(chat.id);
+        if (e.target.closest('.chat-item-btn')) return;
+        clearTimeout(clickTimer);
+        clickTimer = setTimeout(() => {
+            clickTimer = null;
+            loadChat(chat.id);
+        }, 220);
     });
     div.addEventListener('dblclick', (e) => {
-        loadChat(chat.id);
+        if (e.target.closest('.chat-item-btn')) return;
+        e.preventDefault();
+        clearTimeout(clickTimer);
+        clickTimer = null;
+        loadChat(chat.id).then(() => focusMessageInput());
     });
     div.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -1314,15 +1463,19 @@ function bindChatListKeyboard() {
         if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
         const row = e.target && e.target.closest ? e.target.closest('.chat-item') : null;
         if (!row) return;
+        if (document.getElementById('decisions-confirm-modal')) return;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
             const rows = Array.from(chatList.querySelectorAll('.chat-item'));
             const idx = rows.indexOf(row);
             const next = rows[Math.max(0, Math.min(rows.length - 1, idx + (e.key === 'ArrowDown' ? 1 : -1)))];
-            if (next) next.focus();
+            if (next) {
+                next.focus();
+                loadChat(parseInt(next.getAttribute('data-chat-id'), 10));
+            }
         } else if (e.key === 'Enter') {
             e.preventDefault();
-            selectChat(parseInt(row.getAttribute('data-chat-id'), 10));
+            focusMessageInput();
         } else if (e.key === 'Delete') {
             e.preventDefault();
             deleteChat(parseInt(row.getAttribute('data-chat-id'), 10));
@@ -1410,13 +1563,14 @@ async function selectChat(chatId) {
             provider: data.provider || '-',
             model_name: data.model_name || '-',
             voice_provider: data.voice_provider,
-            voice_model: data.voice_model, voice_model_display: data.voice_model_display
+            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
         });
         showChatView(loadedChatId === chatId);
         updateLoadButtonVisibility();
         startChatWebSocket();
         setTimeout(() => { chatMessages.scrollTop = chatMessages.scrollHeight; }, 300);
         await saveLastChatId(chatId);
+        scheduleRefreshChatHeaderStats();
         syncKanbanSourceChatContext();
     } catch (error) {
         console.error('Error selecting chat:', error);
@@ -1453,7 +1607,7 @@ async function loadChat(chatId, options = {}) {
             provider: data.provider || '-',
             model_name: data.model_name || '-',
             voice_provider: data.voice_provider,
-            voice_model: data.voice_model, voice_model_display: data.voice_model_display
+            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
         });
         showChatView(true);
         updateLoadButtonVisibility();
@@ -1467,13 +1621,21 @@ async function loadChat(chatId, options = {}) {
         } else {
             loadedChatSkippedLoadInAgent = false;
             try {
-                await fetch(`${API_BASE}/chats/${chatId}/load-in-agent`, { method: 'POST' });
+                const loadRes = await fetch(`${API_BASE}/chats/${chatId}/load-in-agent`, { method: 'POST' });
+                if (!loadRes.ok) {
+                    const err = await loadRes.json().catch(() => ({}));
+                    throw new Error(err.detail || err.error || 'Load in agent failed');
+                }
                 agentCurrentChatId = chatId;
                 updateActiveChat();
             } catch (e) {
                 console.warn('Load-in-agent failed:', e);
+                if (headerSettingsStatus) {
+                    setHeaderSaveStatus('Agent not loaded', 'is-error');
+                }
             }
         }
+        scheduleRefreshChatHeaderStats();
     } catch (error) {
         console.error('Error loading chat:', error);
     } finally {
@@ -1855,7 +2017,7 @@ let _suppressChatUpdatedFetchUntil = 0;
 /** Keep _renderedMessageCount aligned when WebSocket finalizes #streamingAssistantMessage (no renderMessages() call). */
 function syncRenderedMessageCountFromDom() {
     if (!chatMessages) return;
-    _renderedMessageCount = [...chatMessages.querySelectorAll('.message')].filter(
+    _renderedMessageCount = [...chatMessages.querySelectorAll('.message, .chat-divider')].filter(
         el => el.id !== 'transcriptionStatus'
     ).length;
 }
@@ -2155,7 +2317,53 @@ function _formatTimestamp(ts) {
     } catch (_) { return ''; }
 }
 
+function chatDividerParts(divider) {
+    const d = divider || {};
+    if (d.type === 'fork') {
+        const title = (d.source_title || '').trim() || (d.source_chat_id ? `Chat #${d.source_chat_id}` : 'previous chat');
+        return {
+            label: `Forked from ${title}`,
+            note: d.compacted !== false ? 'compacted' : '',
+        };
+    }
+    if (d.reason === 'auto') {
+        return { label: 'Context compacted automatically', note: '' };
+    }
+    return { label: 'Context compacted', note: '' };
+}
+
+function createChatDividerElement(message) {
+    const divider = (message && message.divider) || {};
+    let tsRaw = message.timestamp;
+    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
+    const ts = _formatTimestamp(tsRaw);
+    const { label, note } = chatDividerParts(divider);
+    const div = document.createElement('div');
+    div.className = `chat-divider chat-divider--${escapeHtml(divider.type || 'compact')}`;
+    div.setAttribute('role', 'separator');
+    div.setAttribute('data-speakable', 'false');
+    if (message.chat_row_id != null && message.chat_row_id !== '') {
+        div.dataset.turnChatId = String(message.chat_row_id);
+    }
+    if (divider.type === 'fork' && divider.source_chat_id) {
+        div.dataset.sourceChatId = String(divider.source_chat_id);
+    }
+    div.innerHTML = `
+        <span class="chat-divider-line" aria-hidden="true"></span>
+        <div class="chat-divider-body">
+            ${ts ? `<span class="chat-divider-meta chat-divider-time">${ts}</span>` : ''}
+            <span class="chat-divider-label">${escapeHtml(label)}</span>
+            ${note ? `<span class="chat-divider-note">${escapeHtml(note)}</span>` : ''}
+        </div>
+        <span class="chat-divider-line" aria-hidden="true"></span>
+    `;
+    return div;
+}
+
 function createMessageElement(message) {
+    if (message && message.role === 'divider') {
+        return createChatDividerElement(message);
+    }
     if (message && message.role === 'tool_group') {
         return createToolExecutionGroupElement(message);
     }
@@ -2196,6 +2404,91 @@ function createMessageElement(message) {
     return div;
 }
 
+function bindActivityToggleHandlers() {
+    if (!chatMessages || chatMessages.dataset.activityToggleBound === '1') return;
+    chatMessages.dataset.activityToggleBound = '1';
+    chatMessages.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.activity-step-toggle');
+        if (!toggle) return;
+        e.preventDefault();
+        const step = toggle.closest('.activity-step');
+        if (!step) return;
+        const expanded = !step.classList.contains('activity-step--expanded');
+        step.classList.toggle('activity-step--expanded', expanded);
+        step.classList.toggle('activity-step--collapsed', !expanded);
+        toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        const body = step.querySelector('.activity-step-body');
+        if (body) body.hidden = !expanded;
+        syncActivityMessageAlignment(step);
+    });
+}
+
+function syncActivityMessageAlignment(step) {
+    const message = step && step.closest ? step.closest('.message.activity') : null;
+    if (!message) return;
+    const anyExpanded = Boolean(message.querySelector('.activity-step--expanded'));
+    message.classList.toggle('activity--expanded', anyExpanded);
+}
+
+function createActivityMessageElement({ innerHtml, extraClass = '' }) {
+    const div = document.createElement('div');
+    div.className = `message activity${extraClass ? ` ${extraClass}` : ''}`;
+    div.setAttribute('data-speakable', 'false');
+    div.innerHTML = `
+        <div class="message-avatar activity-avatar">${AVATAR_SVG_ACTIVITY}</div>
+        <div class="message-content activity-content">
+            ${innerHtml}
+        </div>
+    `;
+    return div;
+}
+
+function activityCollapsedActionLabel(title, event) {
+    let t = String(title || '').trim();
+    if (!t) {
+        const tool = String((event && event.tool_name) || 'tool').replace(/_/g, ' ').trim();
+        return tool ? tool.charAt(0).toUpperCase() + tool.slice(1) : 'Activity';
+    }
+    t = t.replace(/^Executed\s+/i, '').trim();
+    if (/^sent ticket\b/i.test(t)) return 'Sent ticket';
+    if (/^screenshot/i.test(t)) return 'Screenshot Analyzer';
+    if (/^type text\b/i.test(t)) return 'Type Text';
+    if (/^ran helper code/i.test(t)) return 'Ran helper code';
+    if (/^inspected files/i.test(t)) return 'Inspected files';
+    if (/^checked mode control/i.test(t)) return 'Checked mode control';
+    const bracket = t.match(/^\[([^\]]+)\]/);
+    if (bracket) {
+        const inner = bracket[1].replace(/_/g, ' ').trim();
+        if (inner) return inner.charAt(0).toUpperCase() + inner.slice(1);
+    }
+    const beforeQuote = t.split(/["']/)[0].trim().replace(/[.:]+$/, '');
+    if (beforeQuote && beforeQuote.length < t.length && beforeQuote.length <= 48) {
+        return beforeQuote;
+    }
+    if (t.length <= 48) return t;
+    return t.split(/\s+/).slice(0, 4).join(' ');
+}
+
+function activitySystemLabel(title, event) {
+    const short = activityCollapsedActionLabel(title, event);
+    if (/^system activity:/i.test(short)) return short;
+    return `System Activity: ${short}`;
+}
+
+function buildActivityCollapsibleStep({ timestamp, label, bodyHtml, safeStatus = 'completed', extraClass = '' }) {
+    const ts = _formatTimestamp(timestamp || Date.now());
+    return `
+        <div class="activity-step activity-step--collapsed activity-step--${safeStatus}${extraClass ? ` ${extraClass}` : ''}">
+            <button type="button" class="activity-step-toggle" aria-expanded="false">
+                <span class="activity-step-time">${ts}</span>
+                <span class="activity-step-label">${escapeHtml(label)}</span>
+                <svg class="activity-step-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="activity-step-body" hidden>${bodyHtml}</div>
+        </div>
+    `;
+}
+
 function createWorkflowEventElement(message) {
     const event = (message && message.workflow_event) || {};
     const status = String(event.status || 'running').toLowerCase();
@@ -2205,37 +2498,35 @@ function createWorkflowEventElement(message) {
     const stepName = event.step_name || '';
     const summary = event.summary || message.content || '';
     const phase = event.phase || '';
-    let tsRaw = message.timestamp;
-    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
-    const ts = _formatTimestamp(tsRaw);
 
     const meta = [];
-    if (phase) meta.push(`<span>${escapeHtml(phase)}</span>`);
-    if (stepName) meta.push(`<span>${escapeHtml(stepName)}</span>`);
-    const metaHtml = meta.length ? `<div class="workflow-event-meta">${meta.join('')}</div>` : '';
-    const summaryHtml = summary ? `<div class="workflow-event-summary">${formatMessage(summary)}</div>` : '';
+    if (phase) meta.push(`<span class="activity-meta-chip">${escapeHtml(phase)}</span>`);
+    if (stepName) meta.push(`<span class="activity-meta-chip">${escapeHtml(stepName)}</span>`);
+    const metaHtml = meta.length ? `<div class="activity-meta">${meta.join('')}</div>` : '';
+    const statusHtml = safeStatus !== 'completed' && safeStatus !== 'passed'
+        ? `<span class="activity-status activity-status--${safeStatus}">${escapeHtml(safeStatus)}</span>`
+        : '';
 
-    const div = document.createElement('div');
-    div.className = `message workflow-event workflow-event--${safeStatus}`;
-    div.setAttribute('data-speakable', 'false');
-    div.innerHTML = `
-        <div class="workflow-event-rail" aria-hidden="true"></div>
-        <div class="workflow-event-card">
-            <div class="workflow-event-header">
-                <div class="workflow-event-title-wrap">
-                    <span class="workflow-event-kicker">${escapeHtml(type)}</span>
-                    <span class="workflow-event-title">${escapeHtml(workflowName)}</span>
-                </div>
-                <div class="workflow-event-right">
-                    ${ts ? `<span class="workflow-event-time">${ts}</span>` : ''}
-                    <span class="workflow-event-status">${escapeHtml(safeStatus)}</span>
-                </div>
-            </div>
-            ${summaryHtml}
-            ${metaHtml}
-        </div>
+    const bodyHtml = `
+        ${statusHtml ? `<div class="activity-step-meta-row">${statusHtml}</div>` : ''}
+        <div class="activity-step-kind">${escapeHtml(type)}</div>
+        ${summary ? `<div class="activity-step-detail">${formatMessage(summary)}</div>` : ''}
+        ${metaHtml}
     `;
-    return div;
+    const innerHtml = `<div class="activity-steps">${buildActivityCollapsibleStep({
+        timestamp: message.timestamp,
+        label: activitySystemLabel(workflowName, { tool_name: 'workflow' }),
+        bodyHtml,
+        safeStatus,
+        extraClass: 'workflow-event'
+    })}</div>`;
+    const el = createActivityMessageElement({
+        innerHtml,
+        extraClass: `workflow-event workflow-event--${safeStatus}`
+    });
+    const step = el.querySelector('.activity-step');
+    if (step) syncActivityMessageAlignment(step);
+    return el;
 }
 
 function getLateToolInsertAnchor() {
@@ -2279,91 +2570,49 @@ function toolExecutionItemHtml(message) {
     const status = String(event.status || 'completed').toLowerCase();
     const safeStatus = ['completed', 'failed', 'running', 'cancelled', 'skipped', 'passed'].includes(status) ? status : 'completed';
     const title = toolDisplayTitle(event);
-    const summary = event.result_summary || message.content || '';
+    const detail = (event.result_detail || event.result_summary || message.content || '').trim();
     const compact = Boolean(event.compact);
     const statusLabel = toolStatusLabel(safeStatus);
-    const showSummary = summary && normalizedTraceText(summary) !== normalizedTraceText(title);
-    const summaryHtml = showSummary ? `<div class="tool-execution-item-summary">${formatMessage(summary)}</div>` : '';
-    const statusHtml = statusLabel ? `<span class="tool-execution-item-status">${escapeHtml(statusLabel)}</span>` : '';
-    return `
-        <div class="tool-execution-item tool-execution-item--${safeStatus}${compact ? ' tool-execution-item--compact' : ''}">
-            <div class="tool-execution-item-dot" aria-hidden="true"></div>
-            <div class="tool-execution-item-body">
-                <div class="tool-execution-item-head">
-                    <span class="tool-execution-item-title">${escapeHtml(title)}</span>
-                    ${statusHtml}
-                </div>
-                ${summaryHtml}
-            </div>
-        </div>
+    const statusHtml = statusLabel ? `<span class="activity-status activity-status--${safeStatus}">${escapeHtml(statusLabel)}</span>` : '';
+    const meta = [];
+    if (event.routing_path) meta.push(`<span class="activity-meta-chip">${escapeHtml(event.routing_path)}</span>`);
+    const collapsedAction = activityCollapsedActionLabel(title, event);
+    const fullAction = String(title || '').replace(/^Executed\s+/i, '').trim();
+    const titleHtml = fullAction && fullAction !== collapsedAction
+        ? `<div class="activity-step-detail activity-step-detail--title">${formatMessage(fullAction)}</div>`
+        : '';
+    const bodyHtml = `
+        ${statusHtml ? `<div class="activity-step-meta-row">${statusHtml}</div>` : ''}
+        ${titleHtml}
+        <div class="activity-step-detail${compact ? ' activity-step-detail--muted' : ''}">${formatMessage(detail && detail !== fullAction ? detail : (detail || title))}</div>
+        ${meta.length ? `<div class="activity-meta">${meta.join('')}</div>` : ''}
     `;
+    return buildActivityCollapsibleStep({
+        timestamp: message.timestamp,
+        label: activitySystemLabel(title, event),
+        bodyHtml,
+        safeStatus,
+        extraClass: compact ? 'activity-step--compact' : ''
+    });
 }
 
 function createToolExecutionGroupElement(message) {
     const tools = Array.isArray(message.tools) ? message.tools : [];
-    let tsRaw = message.timestamp;
-    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
-    const ts = _formatTimestamp(tsRaw);
-    const div = document.createElement('div');
-    div.className = 'message tool-execution-group';
-    div.setAttribute('data-speakable', 'false');
-    div.innerHTML = `
-        <div class="tool-execution-group-card">
-            <div class="tool-execution-group-header">
-                <span class="tool-execution-group-title">Activity</span>
-                <span class="tool-execution-count">${tools.length} ${tools.length === 1 ? 'step' : 'steps'}</span>
-                ${ts ? `<span class="tool-execution-group-time">${ts}</span>` : ''}
-            </div>
-            <div class="tool-execution-list">
-                ${tools.map(toolExecutionItemHtml).join('')}
-            </div>
-        </div>
-    `;
-    return div;
+    const innerHtml = `<div class="activity-steps">${tools.map(toolExecutionItemHtml).join('')}</div>`;
+    const el = createActivityMessageElement({
+        innerHtml,
+        extraClass: 'tool-execution-group'
+    });
+    el.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
+    return el;
 }
 
 function createToolExecutionElement(message) {
-    const event = (message && message.tool_event) || {};
-    const status = String(event.status || 'completed').toLowerCase();
-    const safeStatus = ['completed', 'failed', 'running', 'cancelled', 'skipped'].includes(status) ? status : 'completed';
-    const toolName = event.tool_name || 'tool';
-    const title = event.title || toolName.replace(/_/g, ' ');
-    const summary = event.result_summary || message.content || '';
-    const route = event.routing_path || '';
-    const userText = event.user_text || '';
-    const compact = Boolean(event.compact);
-    let tsRaw = message.timestamp;
-    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
-    const ts = _formatTimestamp(tsRaw);
-
-    const details = [];
-    if (route) details.push(`<span>${escapeHtml(route)}</span>`);
-    if (userText) details.push(`<span>${escapeHtml(userText)}</span>`);
-    const detailsHtml = details.length ? `<div class="tool-execution-meta">${details.join('')}</div>` : '';
-    const summaryHtml = summary ? `<div class="tool-execution-summary">${formatMessage(summary)}</div>` : '';
-
-    const div = document.createElement('div');
-    div.className = `message tool-execution tool-execution--${safeStatus}${compact ? ' tool-execution--compact' : ''}`;
-    div.setAttribute('data-speakable', 'false');
-    div.innerHTML = `
-        <div class="tool-execution-rail" aria-hidden="true"></div>
-        <div class="tool-execution-card">
-            <div class="tool-execution-header">
-                <div class="tool-execution-title-wrap">
-                    <span class="tool-execution-kicker">Action</span>
-                    <span class="tool-execution-title">${escapeHtml(title)}</span>
-                </div>
-                <div class="tool-execution-right">
-                    ${ts ? `<span class="tool-execution-time">${ts}</span>` : ''}
-                    <span class="tool-execution-status">${escapeHtml(safeStatus)}</span>
-                </div>
-            </div>
-            <div class="tool-execution-tool">${escapeHtml(toolName)}</div>
-            ${summaryHtml}
-            ${detailsHtml}
-        </div>
-    `;
-    return div;
+    return createToolExecutionGroupElement({
+        role: 'tool_group',
+        timestamp: message.timestamp,
+        tools: [message]
+    });
 }
 
 function formatMessage(text) {
@@ -2530,6 +2779,7 @@ async function sendMessage() {
     _lastStreamFinalizedPlain = null;
     chatMessages.appendChild(createTypingIndicator());
     scrollToBottom();
+    scheduleRefreshChatHeaderStats();
     setSendButtonStreaming(true);
     streamAbortController = new AbortController();
     try {
@@ -2650,7 +2900,7 @@ async function pollUntilAgentResponse(abortSignal) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
-                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
                         scrollToBottom();
                     }
                     return;
@@ -2658,12 +2908,12 @@ async function pollUntilAgentResponse(abortSignal) {
                 finish();
                 if (currentChatId === myChatId) {
                     renderMessages(messages, false);
-                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
                     scrollToBottom();
                 }
             } else if (has_new && streamingChatId !== myChatId && currentChatId === myChatId) {
                 renderMessages(messages, false);
-                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
                 scrollToBottom();
             }
         }, pollMs);
@@ -2678,7 +2928,7 @@ async function pollUntilAgentResponse(abortSignal) {
                 const msgs = (d.messages || []);
                 if (msgs.some(m => m.role === 'assistant')) {
                     renderMessages(msgs, false);
-                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display });
+                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats });
                     scrollToBottom();
                 }
             }
@@ -2743,7 +2993,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
-                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
                         scrollToBottom();
                     }
                     return;
@@ -2751,12 +3001,12 @@ async function sendToAgentAndPoll(message, abortSignal) {
                 finish();
                 if (currentChatId === myChatId) {
                     renderMessages(messages, false);
-                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
                     scrollToBottom();
                 }
             } else if (has_new && streamingChatId !== myChatId && currentChatId === myChatId) {
                 renderMessages(messages, false);
-                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
                 scrollToBottom();
             }
         }, pollMs);
@@ -2771,7 +3021,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
                 const msgs = (d.messages || []);
                 if (msgs.some(m => m.role === 'assistant')) {
                     renderMessages(msgs, false);
-                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display });
+                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats });
                     scrollToBottom();
                 }
             }
@@ -2858,6 +3108,7 @@ async function deleteChat(chatId) {
     if (!confirmed) {
         return;
     }
+    const fallbackChatId = getAdjacentChatIdAfterDelete(chatId);
     const wasLoaded = (loadedChatId === chatId);
     // Abort any in-flight stream before tearing down state
     if (wasLoaded && streamAbortController) { streamAbortController.abort(); streamAbortController = null; }
@@ -2872,7 +3123,11 @@ async function deleteChat(chatId) {
         if (agentCurrentChatId === chatId) agentCurrentChatId = null;
         const data = await loadChats();
         if (data.chats && data.chats.length > 0) {
-            await selectChat(data.chats[0].id);
+            const remainingIds = data.chats.map((c) => c.id);
+            const nextId = (fallbackChatId != null && remainingIds.includes(fallbackChatId))
+                ? fallbackChatId
+                : data.chats[0].id;
+            await loadChat(nextId);
         } else {
             showEmptyState();
             await saveLastChatId(null);
@@ -2904,10 +3159,17 @@ async function renameChat(chatId) {
         }
         const data = await response.json();
         const displayTitle = data.title || 'New Chat';
-        if (titleEl) titleEl.textContent = displayTitle;
+        if (titleEl) {
+            titleEl.textContent = displayTitle;
+            applyChatTitleMarqueeForWrap(titleEl.closest('.chat-item-title-wrap'));
+        }
         if (currentChatId === chatId) {
             const headerTitle = document.getElementById('chatTitle');
-            if (headerTitle) headerTitle.textContent = displayTitle;
+            if (headerTitle) {
+                headerTitle.textContent = displayTitle;
+                headerTitle.title = displayTitle;
+                requestAnimationFrame(applyHeaderTitleMarquee);
+            }
         }
         if (currentChatSettings && currentChatId === chatId) {
             currentChatSettings.title = displayTitle;
@@ -2947,6 +3209,7 @@ function scrollToBottomImmediate() {
 // Avatar SVGs matching website Hero (Hero.tsx): user = Volume2, assistant = brain/arcs (animated like Hero)
 const AVATAR_SVG_USER = '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>';
 const AVATAR_SVG_ASSISTANT = '<div class="avatar-icon-spin"><svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 3a9 9 0 0 1 9 9"/><path d="M12 21a9 9 0 0 1-9-9"/></svg></div>';
+const AVATAR_SVG_ACTIVITY = '<svg class="avatar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>';
 
 // Utility Functions
 function escapeHtml(text) {
@@ -2956,17 +3219,30 @@ function escapeHtml(text) {
 }
 
 // Load LLM models for provider (settings API)
-async function loadLlmModels(provider) {
-    llmModelSelect.innerHTML = '<option value="">Loading...</option>';
+async function loadLlmModelsInto(modelSelectEl, provider, preferredModel) {
+    if (!modelSelectEl) return;
+    modelSelectEl.innerHTML = '<option value="">Loading...</option>';
     try {
-        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider)}`);
+        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider || '')}`);
         const data = await response.json();
         const models = data.models || [];
-        llmModelSelect.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
+        modelSelectEl.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
+        const preferred = (preferredModel || '').trim();
+        if (preferred) {
+            const opt = Array.from(modelSelectEl.options).find(o => o.value === preferred);
+            if (opt) modelSelectEl.value = preferred;
+        }
+        if (!modelSelectEl.value && modelSelectEl.options[0] && modelSelectEl.options[0].value) {
+            modelSelectEl.selectedIndex = 0;
+        }
     } catch (e) {
         console.error('Error loading LLM models:', e);
-        llmModelSelect.innerHTML = '<option value="">Error loading</option>';
+        modelSelectEl.innerHTML = '<option value="">Error loading</option>';
     }
+}
+
+async function loadLlmModels(provider) {
+    await loadLlmModelsInto(llmModelSelect, provider);
 }
 
 // Modal voice sample: same setup as Settings > General (general.js) — fetch WAV, play in browser, loading/playing state
@@ -3156,30 +3432,47 @@ async function playEmptyStateVoice() {
 
 // Load voice options — registry voices first (same as Settings → General), then /api/voices fallback.
 async function loadVoiceModels(provider) {
-    if (!voiceModelSelect) return;
+    await loadVoiceModelsInto(voiceModelSelect, provider);
+}
+
+function selectVoiceModelOption(modelSelectEl, preferredVoice) {
+    if (!modelSelectEl) return;
+    const preferred = (preferredVoice || modelSelectEl.value || '').trim();
+    if (preferred && Array.from(modelSelectEl.options).some(o => o.value === preferred)) {
+        modelSelectEl.value = preferred;
+        return;
+    }
+    const first = Array.from(modelSelectEl.options).find(o => (o.value || '').trim());
+    if (first) modelSelectEl.value = first.value;
+}
+
+async function loadVoiceModelsInto(modelSelectEl, provider, preferredVoice) {
+    if (!modelSelectEl) return;
     await _ensureTTSProviders();
     if (!provider) {
-        voiceModelSelect.innerHTML = '<option value="">Select provider</option>';
+        modelSelectEl.innerHTML = '<option value="">Select provider</option>';
         return;
     }
     const prov = _ttsProviders && _ttsProviders.find(p => p.id === provider);
     if (prov && Array.isArray(prov.voices) && prov.voices.length) {
-        populateChatVoiceModelSelectForEl(voiceModelSelect, provider);
+        populateChatVoiceModelSelectForEl(modelSelectEl, provider);
+        selectVoiceModelOption(modelSelectEl, preferredVoice);
         return;
     }
-    voiceModelSelect.innerHTML = '<option value="">Loading…</option>';
+    modelSelectEl.innerHTML = '<option value="">Loading…</option>';
     try {
         const response = await fetch(`/api/voices/${encodeURIComponent(provider)}`);
         const data = await response.json();
         const voices = Array.isArray(data) ? data : (data.voices || data.chats || []);
         if (voices.length) {
-            voiceModelSelect.innerHTML = voices.map(chatVoiceOptionHtml).join('');
+            modelSelectEl.innerHTML = voices.map(chatVoiceOptionHtml).join('');
+            selectVoiceModelOption(modelSelectEl, preferredVoice);
         } else {
-            voiceModelSelect.innerHTML = '<option value="">No voices available</option>';
+            modelSelectEl.innerHTML = '<option value="">No voices available</option>';
         }
     } catch (e) {
         console.error('Error loading voice models:', e);
-        voiceModelSelect.innerHTML = '<option value="">Error loading</option>';
+        modelSelectEl.innerHTML = '<option value="">Error loading</option>';
     }
 }
 
@@ -3398,6 +3691,421 @@ async function createNewChatWithSettings() {
         newChatBtn.disabled = false;
     }
 }
+
+function providerIdFromDisplay(value) {
+    const raw = (value || '').toString().trim();
+    const lower = raw.toLowerCase();
+    const map = {
+        'ollama': 'ollama',
+        'openai': 'openai',
+        'anthropic': 'anthropic',
+        'groq': 'groq',
+        'openrouter': 'openrouter',
+        'kilocode': 'kilocode',
+        'kilo': 'kilocode',
+        'google gemini': 'gemini',
+        'gemini': 'gemini'
+    };
+    return map[lower] || lower;
+}
+
+async function openChatConfigModal(chatId) {
+    const targetId = chatId || currentChatId;
+    if (!targetId || !chatConfigModal) return;
+    if (chatConfigStatus) chatConfigStatus.textContent = '';
+    chatConfigModal.style.display = 'flex';
+    if (chatConfigSave) chatConfigSave.disabled = true;
+    try {
+        await _ensureTTSProviders();
+        const [providersRes, chatRes] = await Promise.all([
+            fetch('/api/llms/available-providers'),
+            fetch(`${API_BASE}/chats/${targetId}`)
+        ]);
+        const providersData = providersRes.ok ? await providersRes.json() : { providers: [] };
+        const chatData = chatRes.ok ? await chatRes.json() : currentChatSettings || {};
+        const providers = providersData.providers || [];
+        if (chatConfigLlmProvider) {
+            chatConfigLlmProvider.innerHTML = providers.length
+                ? providers.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')
+                : '<option value="">No providers configured</option>';
+            const providerId = providerIdFromDisplay(chatData.provider || currentChatSettings?.provider || '');
+            if (Array.from(chatConfigLlmProvider.options).some(o => o.value === providerId)) {
+                chatConfigLlmProvider.value = providerId;
+            }
+        }
+        await loadLlmModelsInto(chatConfigLlmModel, chatConfigLlmProvider ? chatConfigLlmProvider.value : '', chatData.model_name || currentChatSettings?.model_name || '');
+
+        if (chatConfigVoiceProvider) {
+            populateChatVoiceProviderSelect(chatConfigVoiceProvider);
+            const voiceProvider = (chatData.voice_provider || currentChatSettings?.voice_provider || '').toString().trim();
+            const voiceProviderId = canonicalVoiceProviderForSelect({ tts_provider: voiceProvider, voice_provider: voiceProvider });
+            if (Array.from(chatConfigVoiceProvider.options).some(o => o.value === voiceProviderId)) {
+                chatConfigVoiceProvider.value = voiceProviderId;
+            } else if (chatConfigVoiceProvider.options[0] && chatConfigVoiceProvider.options[0].value) {
+                chatConfigVoiceProvider.selectedIndex = 0;
+            }
+        }
+        await loadVoiceModelsInto(chatConfigVoiceModel, chatConfigVoiceProvider ? chatConfigVoiceProvider.value : '');
+        const rawVoice = (chatData.voice_model || currentChatSettings?.voice_model || '').toString().trim();
+        if (rawVoice && chatConfigVoiceModel && Array.from(chatConfigVoiceModel.options).some(o => o.value === rawVoice)) {
+            chatConfigVoiceModel.value = rawVoice;
+        }
+    } catch (e) {
+        console.error('Open chat config failed:', e);
+        if (chatConfigStatus) chatConfigStatus.textContent = 'Could not load chat configuration.';
+    } finally {
+        if (chatConfigSave) chatConfigSave.disabled = false;
+    }
+}
+
+function hideChatConfigModal() {
+    if (chatConfigModal) chatConfigModal.style.display = 'none';
+}
+
+function setHeaderSaveStatus(text, kind) {
+    if (!headerSettingsStatus) return;
+    headerSettingsStatus.textContent = text || '';
+    headerSettingsStatus.classList.remove('is-saving', 'is-error');
+    if (kind) headerSettingsStatus.classList.add(kind);
+}
+
+function bindHeaderSettingsControls() {
+    if (!headerLlmProvider) return;
+    headerLlmProvider.addEventListener('change', async () => {
+        await loadLlmModelsInto(headerLlmModel, headerLlmProvider.value, currentChatSettings?.model_name || '');
+        scheduleHeaderSettingsSave();
+    });
+    if (headerLlmModel) headerLlmModel.addEventListener('change', scheduleHeaderSettingsSave);
+    if (headerVoiceProvider) {
+        headerVoiceProvider.addEventListener('change', async () => {
+            await loadVoiceModelsInto(
+                headerVoiceModel,
+                headerVoiceProvider.value,
+                currentChatSettings?.voice_model || ''
+            );
+            scheduleHeaderSettingsSave();
+        });
+    }
+    if (headerVoiceModel) headerVoiceModel.addEventListener('change', scheduleHeaderSettingsSave);
+}
+
+function scheduleHeaderSettingsSave() {
+    if (_headerSettingsSyncing) return;
+    if (_headerSettingsSaveTimer) clearTimeout(_headerSettingsSaveTimer);
+    _headerSettingsSaveTimer = setTimeout(() => {
+        _headerSettingsSaveTimer = null;
+        persistHeaderChatSettings();
+    }, 350);
+}
+
+async function ensureHeaderSettingOptions() {
+    if (_headerOptionsReady || !headerLlmProvider) return;
+    await _ensureTTSProviders();
+    const providersRes = await fetch('/api/llms/available-providers').catch(() => null);
+    const providersData = providersRes && providersRes.ok ? await providersRes.json() : { providers: [] };
+    const providers = providersData.providers || [];
+    headerLlmProvider.innerHTML = providers.length
+        ? providers.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')
+        : '<option value="">No providers</option>';
+    populateChatVoiceProviderSelect(headerVoiceProvider);
+    _headerOptionsReady = true;
+}
+
+async function syncHeaderSelectorsFromSettings(settings) {
+    if (!headerLlmProvider || !settings) return;
+    await ensureHeaderSettingOptions();
+    _headerSettingsSyncing = true;
+    try {
+        const providerId = providerIdFromDisplay(settings.provider || '');
+        if (Array.from(headerLlmProvider.options).some(o => o.value === providerId)) {
+            headerLlmProvider.value = providerId;
+        }
+        await loadLlmModelsInto(headerLlmModel, headerLlmProvider.value, settings.model_name || '');
+        if (headerVoiceProvider) {
+            populateChatVoiceProviderSelect(headerVoiceProvider);
+            const voiceProviderId = canonicalVoiceProviderForSelect({
+                tts_provider: settings.voice_provider,
+                voice_provider: settings.voice_provider
+            });
+            if (Array.from(headerVoiceProvider.options).some(o => o.value === voiceProviderId)) {
+                headerVoiceProvider.value = voiceProviderId;
+            }
+        }
+        await loadVoiceModelsInto(
+            headerVoiceModel,
+            headerVoiceProvider ? headerVoiceProvider.value : '',
+            settings.voice_model || ''
+        );
+        const voiceGroup = document.getElementById('headerVoiceGroup');
+        if (voiceGroup) {
+            voiceGroup.style.display = (settings.voice_provider || settings.voice_model) ? '' : 'none';
+        }
+    } finally {
+        _headerSettingsSyncing = false;
+    }
+}
+
+function headerVoiceControlsVisible() {
+    const voiceGroup = document.getElementById('headerVoiceGroup');
+    return Boolean(voiceGroup && voiceGroup.style.display !== 'none');
+}
+
+function buildHeaderSettingsPatchBody() {
+    const settings = currentChatSettings || {};
+    const provider = (headerLlmProvider?.value || providerIdFromDisplay(settings.provider) || '').trim();
+    const model_name = (headerLlmModel?.value || settings.model_name || '').trim();
+    const voice_provider = (
+        headerVoiceProvider?.value
+        || canonicalVoiceProviderForSelect({ tts_provider: settings.voice_provider, voice_provider: settings.voice_provider })
+        || ''
+    ).trim();
+    const voice_model = (headerVoiceModel?.value || settings.voice_model || '').trim();
+    return { provider, model_name, voice_provider, voice_model };
+}
+
+async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
+    if (!currentChatId) return null;
+    const voiceRequired = fromModal || headerVoiceControlsVisible();
+    if (!body.provider || !body.model_name) {
+        const msg = 'Choose an LLM provider and model.';
+        if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
+        else setHeaderSaveStatus('Pick model', 'is-error');
+        return null;
+    }
+    if (voiceRequired && (!body.voice_provider || !body.voice_model)) {
+        const msg = 'Choose a voice provider and voice.';
+        if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
+        else setHeaderSaveStatus('Pick voice', 'is-error');
+        return null;
+    }
+    if (fromModal && chatConfigSave) chatConfigSave.disabled = true;
+    if (fromModal && chatConfigStatus) chatConfigStatus.textContent = 'Saving...';
+    else setHeaderSaveStatus('Saving…', 'is-saving');
+    const selects = [headerLlmProvider, headerLlmModel, headerVoiceProvider, headerVoiceModel];
+    selects.forEach(el => { if (el) el.disabled = true; });
+    try {
+        const response = await fetch(`${API_BASE}/chats/${currentChatId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || data.error || 'Failed to save chat settings');
+        if (loadedChatId === currentChatId) {
+            await fetch(`${API_BASE}/chats/${currentChatId}/load-in-agent`, { method: 'POST' }).catch(() => {});
+        }
+        const refreshedRes = await fetch(`${API_BASE}/chats/${currentChatId}`);
+        const refreshed = await refreshedRes.json().catch(() => ({}));
+        if (!refreshedRes.ok) {
+            throw new Error(refreshed.detail || refreshed.error || 'Failed to reload chat settings');
+        }
+        updateChatSettingsDisplay({
+            title: refreshed.title || 'New Chat',
+            provider: refreshed.provider || '-',
+            model_name: refreshed.model_name || '-',
+            voice_provider: refreshed.voice_provider,
+            voice_model: refreshed.voice_model,
+            voice_model_display: refreshed.voice_model_display,
+            context_stats: refreshed.context_stats
+        });
+        if (fromModal) hideChatConfigModal();
+        else setHeaderSaveStatus('Saved', '');
+        await loadChats();
+        return refreshed;
+    } catch (e) {
+        console.error('Save chat settings failed:', e);
+        const msg = e.message || 'Could not save chat settings.';
+        if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
+        else setHeaderSaveStatus(msg.length > 28 ? 'Save failed' : msg, 'is-error');
+        return null;
+    } finally {
+        selects.forEach(el => { if (el) el.disabled = false; });
+        if (fromModal && chatConfigSave) chatConfigSave.disabled = false;
+    }
+}
+
+async function persistHeaderChatSettings() {
+    if (!currentChatId || _headerSettingsSyncing) return;
+    await persistChatSettingsPatch(buildHeaderSettingsPatchBody(), { fromModal: false });
+}
+
+async function saveChatConfig() {
+    if (!currentChatId || !chatConfigSave) return;
+    await persistChatSettingsPatch({
+        provider: chatConfigLlmProvider ? chatConfigLlmProvider.value : '',
+        model_name: chatConfigLlmModel ? chatConfigLlmModel.value : '',
+        voice_provider: chatConfigVoiceProvider ? chatConfigVoiceProvider.value : '',
+        voice_model: chatConfigVoiceModel ? chatConfigVoiceModel.value : ''
+    }, { fromModal: true });
+}
+
+async function maybeAutoCompactChat(settings) {
+    const stats = settings?.context_stats || {};
+    const threshold = Number(stats.auto_compact_threshold || 75);
+    const percent = Number(stats.percent_used || 0);
+    const chatId = currentChatId;
+    if (!chatId || loadedChatId !== chatId || isStreaming || _autoCompactInFlight) return;
+    if (percent < threshold) return;
+    if (_lastAutoCompactChatId === chatId && percent < 95) return;
+    _autoCompactInFlight = true;
+    try {
+        const response = await fetch(`${API_BASE}/chats/${chatId}/compact`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                provider: settings.provider || '',
+                model_name: settings.model_name || '',
+                reason: 'auto'
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || data.error || 'Auto-compact failed');
+        _lastAutoCompactChatId = chatId;
+        if (currentChatId === chatId) {
+            await selectChat(chatId);
+            if (loadedChatId === chatId) loadedChatId = chatId;
+            showChatView(loadedChatId === chatId);
+        }
+        await loadChats();
+    } catch (e) {
+        console.warn('Auto-compact skipped:', e);
+    } finally {
+        _autoCompactInFlight = false;
+    }
+}
+
+async function compactCurrentChat(chatId) {
+    const targetId = chatId || currentChatId;
+    if (!targetId || isStreaming) return;
+    if (compactChatButton) compactChatButton.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE}/chats/${targetId}/compact`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                provider: currentChatSettings?.provider || '',
+                model_name: currentChatSettings?.model_name || '',
+                reason: 'manual'
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || data.error || 'Compaction failed');
+        if (currentChatId === targetId) {
+            await loadChat(targetId);
+            await refreshChatHeaderStats({ checkTitle: true });
+        }
+        await loadChats();
+    } catch (e) {
+        console.error('Compact chat failed:', e);
+        alert(e.message || 'Could not compact chat.');
+    } finally {
+        if (compactChatButton) compactChatButton.disabled = false;
+    }
+}
+
+async function forkCurrentChat(chatId) {
+    const targetId = chatId || currentChatId;
+    if (!targetId || isStreaming) return;
+    if (forkChatButton) forkChatButton.disabled = true;
+    try {
+        const response = await fetch(`${API_BASE}/chats/${targetId}/fork`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                provider: currentChatSettings?.provider || '',
+                model_name: currentChatSettings?.model_name || ''
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || data.error || 'Fork failed');
+        await loadChats();
+        await loadChat(data.id, { skipLoadInAgent: true });
+    } catch (e) {
+        console.error('Fork chat failed:', e);
+        alert(e.message || 'Could not fork chat.');
+    } finally {
+        if (forkChatButton) forkChatButton.disabled = false;
+    }
+}
+
+function updateContextRing(stats) {
+    const estimated = Number((stats || {}).estimated_tokens || 0);
+    let percent = Math.max(0, Math.min(100, Number((stats || {}).percent_used || 0)));
+    if (estimated > 0 && percent === 0) percent = 1;
+    const ring = document.getElementById('contextRing');
+    const ringValue = document.getElementById('contextRingValue');
+    if (ring) {
+        ring.style.setProperty('--context-percent', `${percent}%`);
+        ring.title = `${percent}% context used (${estimated}/${stats.context_window || 'unknown'} token limit)`;
+        ring.classList.toggle('context-ring-warn', percent >= (stats.auto_compact_threshold || 75));
+    }
+    if (ringValue) ringValue.textContent = `${percent}%`;
+}
+
+function applyHeaderStatsPayload(data) {
+    if (!data || currentChatId == null) return;
+    const title = data.title || 'New Chat';
+    if (currentChatSettings) {
+        currentChatSettings.title = title;
+        if (data.context_stats) currentChatSettings.context_stats = data.context_stats;
+        if (data.title_auto) currentChatSettings.title_auto = data.title_auto;
+    }
+    const titleEl = document.getElementById('chatTitle');
+    if (titleEl) {
+        titleEl.textContent = title;
+        titleEl.title = title;
+        requestAnimationFrame(applyHeaderTitleMarquee);
+    }
+    const sidebarTitle = document.querySelector(`.chat-item[data-chat-id="${currentChatId}"] .chat-item-title`);
+    if (sidebarTitle) {
+        sidebarTitle.textContent = title;
+        applyChatTitleMarqueeForWrap(sidebarTitle.closest('.chat-item-title-wrap'));
+    }
+    if (data.context_stats) updateContextRing(data.context_stats);
+}
+
+function scheduleRefreshChatHeaderStats({ checkTitle = false } = {}) {
+    if (_headerStatsTimer) clearTimeout(_headerStatsTimer);
+    _headerStatsTimer = setTimeout(() => {
+        _headerStatsTimer = null;
+        refreshChatHeaderStats({ checkTitle });
+    }, 250);
+}
+
+async function refreshChatHeaderStats({ checkTitle = false } = {}) {
+    const chatId = currentChatId;
+    if (!chatId) return;
+    try {
+        if (checkTitle) {
+            const titleRes = await fetch(`${API_BASE}/chats/${chatId}/refresh-title`, { method: 'POST' });
+            if (titleRes.ok) {
+                applyHeaderStatsPayload(await titleRes.json());
+                return;
+            }
+        }
+        const response = await fetch(`${API_BASE}/chats/${chatId}/header-stats`);
+        if (!response.ok) return;
+        const data = await response.json();
+        applyHeaderStatsPayload(data);
+        const auto = data.title_auto || {};
+        if (!auto.manual) {
+            const count = Number(data.context_stats?.message_count || 0);
+            const last = Number(auto.last_refresh_message_count || 0);
+            const interval = Number(auto.interval || 20);
+            if (count - last >= interval) {
+                const titleRes = await fetch(`${API_BASE}/chats/${chatId}/refresh-title`, { method: 'POST' });
+                if (titleRes.ok) applyHeaderStatsPayload(await titleRes.json());
+            }
+        }
+        if (currentChatSettings) {
+            currentChatSettings.context_stats = data.context_stats;
+            maybeAutoCompactChat(currentChatSettings);
+        }
+    } catch (e) {
+        console.warn('Header stats refresh failed:', e);
+    }
+}
+
 function updateChatSettingsDisplay(settings) {
     const rawVoiceModel = settings.voice_model_raw ?? settings.voice_model ?? null;
     const displayVoiceModel = settings.voice_model_display || rawVoiceModel || null;
@@ -3407,29 +4115,18 @@ function updateChatSettingsDisplay(settings) {
         voice_model_display: displayVoiceModel
     };
 
-    const titleEl = document.getElementById('chatTitle');
-    if (titleEl) titleEl.textContent = settings.title || 'New Chat';
+    applyHeaderStatsPayload({
+        title: settings.title || 'New Chat',
+        context_stats: settings.context_stats,
+        title_auto: settings.title_auto
+    });
 
-    document.getElementById('chatProvider').textContent = settings.provider || '-';
-    document.getElementById('chatModel').textContent = settings.model_name || '-';
-
-    if (settings.voice_provider || displayVoiceModel) {
-        document.getElementById('voiceSeparator').style.display = 'inline';
-        document.getElementById('voiceLabel').style.display = 'inline';
-        document.getElementById('chatVoiceProvider').style.display = 'inline';
-        document.getElementById('chatVoiceProvider').textContent = settings.voice_provider || '-';
-        document.getElementById('voiceModelSeparator').style.display = 'inline';
-        document.getElementById('chatVoiceModel').style.display = 'inline';
-        document.getElementById('chatVoiceModel').textContent = displayVoiceModel || '-';
-    } else {
-        document.getElementById('voiceSeparator').style.display = 'none';
-        document.getElementById('voiceLabel').style.display = 'none';
-        document.getElementById('chatVoiceProvider').style.display = 'none';
-        document.getElementById('voiceModelSeparator').style.display = 'none';
-        document.getElementById('chatVoiceModel').style.display = 'none';
-    }
+    syncHeaderSelectorsFromSettings(currentChatSettings).catch((e) => {
+        console.warn('Header settings sync failed:', e);
+    });
 
     chatSettingsHeader.style.display = 'flex';
+    maybeAutoCompactChat(currentChatSettings);
 }
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────

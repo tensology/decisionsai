@@ -693,6 +693,10 @@ def _cmd_process_text_input(session, params):
             _prev = prev_speaker_enabled
             _llm = session.llm_service
 
+            skip_user_persist = bool(
+                isinstance(params, dict) and params.get('skip_user_persist')
+            )
+
             async def _run_and_restore():
                 try:
                     await _llm.process_chat_input(
@@ -701,6 +705,7 @@ def _cmd_process_text_input(session, params):
                         uploaded_image_path=uploaded_image_path or None,
                         speaker_enabled=speaker_override,
                         telegram_input_type=telegram_input_type,
+                        skip_user_persist=skip_user_persist,
                     )
                 finally:
                     # Restore speaker state after a speak-override request so
@@ -1413,7 +1418,17 @@ def _cmd_current_chat_changed(session, params):
             raw_speak,
             initial_speak,
         )
-        _cmd_process_text_input(session, {'text': initial_message, 'speak': initial_speak})
+        initial_skip_persist = bool(
+            isinstance(params, dict) and params.get("skip_user_persist")
+        )
+        _cmd_process_text_input(
+            session,
+            {
+                "text": initial_message,
+                "speak": initial_speak,
+                "skip_user_persist": initial_skip_persist,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

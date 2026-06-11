@@ -23,6 +23,9 @@ class BackendStatus:
     setup_instructions: str = ""
     supports_rpc: bool = False
     supports_install: bool = False
+    can_receive_remote_handoff: bool = False
+    handoff_method: str = ""
+    reporter_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -146,7 +146,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             return {}, {}
         return {}, {}
 
-    @router.get("/kanban/whatsapp/relay/messages")
+    @router.get("/tickets/whatsapp/relay/messages")
     async def get_relay_whatsapp_messages(jid_phone: str = "", limit: int = 500, offset: int = 0, unprocessed_only: bool = False):
         """Proxy: fetch messages from the relay server (avoids CORS in browser)."""
         try:
@@ -170,7 +170,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp relay proxy error: {e}")
             return JSONResponse({"messages": [], "total": 0, "error": str(e)}, status_code=500)
 
-    @router.post("/kanban/whatsapp/relay/mark-processed/{message_id}")
+    @router.post("/tickets/whatsapp/relay/mark-processed/{message_id}")
     async def mark_relay_message_processed(message_id: int):
         """Proxy: mark a message processed on the relay server."""
         try:
@@ -185,7 +185,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp relay mark-processed proxy error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-    @router.post("/kanban/whatsapp/relay/clear-messages")
+    @router.post("/tickets/whatsapp/relay/clear-messages")
     async def clear_relay_whatsapp_messages():
         """Proxy: request the relay server to wipe stored WhatsApp messages."""
         try:
@@ -244,7 +244,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp relay clear proxy error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-    @router.post("/kanban/whatsapp/send")
+    @router.post("/tickets/whatsapp/send")
     async def send_whatsapp_message(payload: dict):
         """Proxy: send a WhatsApp message through the relay server."""
         try:
@@ -283,7 +283,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp send proxy error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-    @router.post("/kanban/whatsapp/ws-auth")
+    @router.post("/tickets/whatsapp/ws-auth")
     async def whatsapp_ws_auth_bundle(payload: dict):
         """Proxy: request scoped websocket auth bundle from relay."""
         try:
@@ -328,7 +328,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp ws-auth proxy error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-    @router.post("/kanban/whatsapp/messages/{message_id}/processed")
+    @router.post("/tickets/whatsapp/messages/{message_id}/processed")
     async def mark_whatsapp_message_processed(message_id: int):
         """Mark a WhatsApp message as processed."""
         with get_session() as s:
@@ -339,7 +339,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             msg.processed_date = datetime.utcnow()
             return JSONResponse({"success": True})
 
-    @router.delete("/kanban/whatsapp/messages/{message_id}")
+    @router.delete("/tickets/whatsapp/messages/{message_id}")
     async def delete_whatsapp_message(message_id: int):
         """Delete a single WhatsApp message."""
         with get_session() as s:
@@ -355,7 +355,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             s.delete(msg)
             return JSONResponse({"success": True})
 
-    @router.delete("/kanban/whatsapp/chat/{jid_phone}")
+    @router.delete("/tickets/whatsapp/chat/{jid_phone}")
     async def delete_whatsapp_chat(jid_phone: str):
         """Delete all messages from a WhatsApp chat (by phone number)."""
         with get_session() as s:
@@ -372,7 +372,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 s.delete(msg)
             return JSONResponse({"success": True, "deleted": count})
 
-    @router.delete("/kanban/whatsapp/chats")
+    @router.delete("/tickets/whatsapp/chats")
     async def delete_all_whatsapp_chats():
         """Delete all stored WhatsApp messages across all chats."""
         with get_session() as s:
@@ -390,7 +390,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 s.delete(msg)
             return JSONResponse({"success": True, "deleted": deleted, "deleted_chats": len(chat_ids)})
 
-    @router.post("/kanban/whatsapp/messages/mark-snapshot-group")
+    @router.post("/tickets/whatsapp/messages/mark-snapshot-group")
     async def mark_whatsapp_messages_snapshot_group(payload: dict):
         """Mark WhatsApp messages with a snapshot group ID."""
         jid_phone = payload.get("jid_phone", "")
@@ -410,7 +410,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             s.commit()
             return JSONResponse({"success": True, "count": len(msgs)})
 
-    @router.get("/kanban/whatsapp/media")
+    @router.get("/tickets/whatsapp/media")
     async def get_whatsapp_media(path: str = ""):
         """Serve a WhatsApp media file for display in the UI."""
         if not path:
@@ -439,7 +439,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         media_type = ext_media.get(ext, "application/octet-stream")
         return FileResponse(full_path, media_type=media_type)
 
-    @router.get("/kanban/whatsapp/chats")
+    @router.get("/tickets/whatsapp/chats")
     async def get_whatsapp_chats(limit: int = 100, offset: int = 0, search: str = ""):
         """Get the WhatsApp chat list from the Baileys service."""
         try:
@@ -455,7 +455,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp chats query error: {e}")
             return JSONResponse({"chats": [], "total": 0, "error": str(e)})
 
-    @router.post("/kanban/whatsapp/messages/{message_id}/analyze-media")
+    @router.post("/tickets/whatsapp/messages/{message_id}/analyze-media")
     async def analyze_whatsapp_message_media(message_id: int):
         """On-demand media extraction for WhatsApp messages.
 
@@ -540,7 +540,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 }
             )
 
-    @router.get("/kanban/whatsapp/relay-media/{message_id}")
+    @router.get("/tickets/whatsapp/relay-media/{message_id}")
     async def relay_whatsapp_media(
         message_id: int,
         format: str = "",
@@ -778,7 +778,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.warning(f"Could not cache relay media: {e}")
         return Response(content=media_bytes, media_type=content_type)
 
-    @router.post("/kanban/tickets/from-whatsapp/{message_id}")
+    @router.post("/tickets/tickets/from-whatsapp/{message_id}")
     async def create_ticket_from_whatsapp(message_id: int, payload: dict):
         """Create a Ticket Board ticket from a WhatsApp message."""
         with get_session() as s:
@@ -916,7 +916,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         except Exception as e:
             logger.debug(f"WhatsApp SSE hook failed: {e}")
 
-    @router.get("/kanban/whatsapp/stream")
+    @router.get("/tickets/whatsapp/stream")
     async def stream_whatsapp_messages():
         """SSE endpoint for real-time WhatsApp messages."""
         _hook_whatsapp_signal()
@@ -944,7 +944,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @router.websocket("/kanban/ws/whatsapp")
+    @router.websocket("/tickets/ws/whatsapp")
     async def whatsapp_websocket(websocket: WebSocket):
         """WebSocket stream for real-time WhatsApp thread updates."""
         origin = websocket.headers.get("origin")

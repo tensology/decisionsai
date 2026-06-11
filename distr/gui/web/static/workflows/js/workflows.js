@@ -616,7 +616,7 @@
         var item = workflowBoardTicketByKey[key];
         if (!item || !item.ticket) return;
         if (item.selected && item.selected.source === "database" && item.ticket.id != null) {
-            api("GET", "/kanban/tickets/" + encodeURIComponent(item.ticket.id))
+            api("GET", "/tickets/tickets/" + encodeURIComponent(item.ticket.id))
                 .then(function (ticket) { openWorkflowTicketModal(ticket, item); })
                 .catch(function () { openWorkflowTicketModal(item.ticket, item); });
             return;
@@ -651,7 +651,7 @@
     function reloadWorkflowTicketModal() {
         var ticketId = currentWorkflowModalTicketId();
         if (!ticketId) return Promise.resolve();
-        return api("GET", "/kanban/tickets/" + encodeURIComponent(ticketId))
+        return api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId))
             .then(function (ticket) {
                 openWorkflowTicketModal(ticket, workflowTicketModalState ? workflowTicketModalState.context : {});
                 loadWorkflowTicketQueue();
@@ -672,7 +672,7 @@
             snack("Title and URL required", "error");
             return;
         }
-        api("POST", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/links", { title: title, url: url })
+        api("POST", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/links", { title: title, url: url })
             .then(function () {
                 if (titleEl) titleEl.value = "";
                 if (urlEl) urlEl.value = "";
@@ -688,7 +688,7 @@
         var input = document.getElementById("kb-modal-todo-input");
         var text = input ? input.value.trim() : "";
         if (!text) return;
-        api("POST", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/todos", { text: text })
+        api("POST", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/todos", { text: text })
             .then(function () {
                 if (input) input.value = "";
                 snack("To-do added");
@@ -704,7 +704,7 @@
         Array.prototype.forEach.call(fileList, function (file) {
             var form = new FormData();
             form.append("file", file);
-            uploads.push(fetch(API + "/kanban/tickets/" + encodeURIComponent(ticketId) + "/files", { method: "POST", body: form }).then(function (r) {
+            uploads.push(fetch(API + "/tickets/tickets/" + encodeURIComponent(ticketId) + "/files", { method: "POST", body: form }).then(function (r) {
                 if (!r.ok) throw new Error("Upload failed");
                 return r.json();
             }));
@@ -719,28 +719,28 @@
         if (!ticketId || !workflowTicketModalState || !workflowTicketModalState.isLocal) return;
         document.querySelectorAll(".wf-ticket-delete-link").forEach(function (btn) {
             btn.addEventListener("click", function () {
-                api("DELETE", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/links/" + encodeURIComponent(btn.dataset.linkId || ""))
+                api("DELETE", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/links/" + encodeURIComponent(btn.dataset.linkId || ""))
                     .then(reloadWorkflowTicketModal)
                     .catch(function (e) { snack(e.message || "Failed to delete link", "error"); });
             });
         });
         document.querySelectorAll(".wf-ticket-delete-file").forEach(function (btn) {
             btn.addEventListener("click", function () {
-                api("DELETE", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/files/" + encodeURIComponent(btn.dataset.fileId || ""))
+                api("DELETE", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/files/" + encodeURIComponent(btn.dataset.fileId || ""))
                     .then(reloadWorkflowTicketModal)
                     .catch(function (e) { snack(e.message || "Failed to delete file", "error"); });
             });
         });
         document.querySelectorAll(".wf-ticket-toggle-todo").forEach(function (input) {
             input.addEventListener("change", function () {
-                api("PUT", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/todos/" + encodeURIComponent(input.dataset.todoId || ""), { done: input.checked })
+                api("PUT", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/todos/" + encodeURIComponent(input.dataset.todoId || ""), { done: input.checked })
                     .then(reloadWorkflowTicketModal)
                     .catch(function (e) { snack(e.message || "Failed to update to-do", "error"); });
             });
         });
         document.querySelectorAll(".wf-ticket-delete-todo").forEach(function (btn) {
             btn.addEventListener("click", function () {
-                api("DELETE", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/todos/" + encodeURIComponent(btn.dataset.todoId || ""))
+                api("DELETE", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/todos/" + encodeURIComponent(btn.dataset.todoId || ""))
                     .then(reloadWorkflowTicketModal)
                     .catch(function (e) { snack(e.message || "Failed to delete to-do", "error"); });
             });
@@ -889,7 +889,7 @@
             });
         }
         if (opt.source === "database") {
-            api("GET", "/kanban/boards/" + encodeURIComponent(opt.id)).then(function (data) {
+            api("GET", "/tickets/boards/" + encodeURIComponent(opt.id)).then(function (data) {
                 populateHermesPolicy(data && data.hermes_policy);
             }).catch(function () { populateHermesPolicy({}); });
         }
@@ -929,8 +929,8 @@
                 }
                 saveBtn.disabled = true;
                 var request = opt.source === "database"
-                    ? api("PUT", "/kanban/boards/" + encodeURIComponent(opt.id), payload)
-                    : api("POST", "/kanban/external-boards/" + encodeURIComponent(opt.source) + "/" + encodeURIComponent(opt.id) + "/register", payload);
+                    ? api("PUT", "/tickets/boards/" + encodeURIComponent(opt.id), payload)
+                    : api("POST", "/tickets/external-boards/" + encodeURIComponent(opt.source) + "/" + encodeURIComponent(opt.id) + "/register", payload);
                 request.then(function () {
                     closeModal();
                     snack("Board updated");
@@ -1169,35 +1169,27 @@
 
     // ── Workflow list ──
     function loadList() {
-        var search = (document.getElementById("wf-search") || {}).value || "";
-        api("GET", "/workflows?limit=50" + (search ? "&search=" + encodeURIComponent(search) : ""))
+        api("GET", "/workflows?limit=50")
             .then(function (data) {
                 var el = document.getElementById("wf-list");
                 if (!data.length) {
-                    el.innerHTML = '<p class="text-sm text-gray-500">' + (search ? "No workflows match your search." : "No workflows yet.") + "</p>";
+                    el.innerHTML = "";
                     return;
                 }
                 el.innerHTML = data.map(function (w) {
-                    var active = currentWorkflowId === w.id ? " border-[#f97316] bg-white/10" : " border-transparent hover:bg-white/5";
-                    var state = workflowRuntimeStateById[w.id] || {};
-                    var dotClass = "bg-gray-500";
-                    if (state.status === "waiting") dotClass = "bg-yellow-400";
-                    else if (state.status === "running") dotClass = "bg-blue-400";
-                    return '<div class="flex items-center gap-2 rounded border px-3 py-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#f97316]/60' + active + '" data-id="' + w.id + '" tabindex="0" role="option" aria-selected="' + (currentWorkflowId === w.id ? "true" : "false") + '">' +
-                        '<span class="w-2 h-2 rounded-full ' + dotClass + ' flex-shrink-0"></span>' +
-                        '<span class="text-sm text-white truncate">' + esc(w.name) + '</span>' +
-                        '<span class="ml-auto inline-flex items-center gap-1.5">' +
-                            '<span class="text-xs text-gray-500">' + (w.step_count || 0) + '</span>' +
-                        '</span>' +
-                        '</div>';
+                    var isActive = currentWorkflowId === w.id;
+                    return '<button type="button" class="wf-workflow-tab px-4 py-2 text-sm text-gray-400 truncate' + (isActive ? " active" : "") + '" data-id="' + w.id + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '" tabindex="' + (isActive ? "0" : "-1") + '" title="' + esc(w.name) + '">' + esc(w.name) + "</button>";
                 }).join("");
                 el.querySelectorAll("[data-id]").forEach(function (row) {
                     row.addEventListener("click", function () { selectWorkflow(parseInt(row.dataset.id, 10)); });
-                    row.addEventListener("focus", function () { selectWorkflow(parseInt(row.dataset.id, 10)); });
                     row.addEventListener("contextmenu", function (evt) {
                         openWorkflowContextMenu(evt, parseInt(row.dataset.id, 10));
                     });
                 });
+                var activeTab = currentWorkflowId != null ? el.querySelector('[data-id="' + currentWorkflowId + '"]') : null;
+                if (activeTab && typeof activeTab.scrollIntoView === "function") {
+                    activeTab.scrollIntoView({ block: "nearest", inline: "nearest" });
+                }
 
                 // Auto-select last workflow or first in list if nothing selected yet
                 if (!currentWorkflowId && data.length) {
@@ -1230,7 +1222,6 @@
             if (nameStatus) nameStatus.textContent = "";
             renderRuns(data.runs || []);
             renderRunSettings(data);
-            renderControlOverview(data);
             loadActiveRuns();
             loadWorkflowExecutionSessions();
             loadWorkflowTicketQueue();
@@ -1314,7 +1305,7 @@
     function attachWorkflowBoardWhatsappLinks(data, selected) {
         var localBoardId = workflowBoardLocalId(selected);
         if (!localBoardId) return Promise.resolve(data || {});
-        return api("GET", "/kanban/boards/" + encodeURIComponent(localBoardId) + "/whatsapp-links")
+        return api("GET", "/tickets/boards/" + encodeURIComponent(localBoardId) + "/whatsapp-links")
             .then(function (links) {
                 var merged = data || {};
                 merged.whatsapp_links = Array.isArray(links) ? links : [];
@@ -1575,7 +1566,7 @@
             return Promise.resolve();
         }
         setWorkflowWhatsappTicketLoading(true, "Composing a clean ticket from the messages, captions, attachments, and voice transcripts. This can take a little while.", "Composing ticket", 68);
-        return api("POST", "/kanban/whatsapp/compose-ticket", {
+        return api("POST", "/tickets/whatsapp/compose-ticket", {
             message_ids: workflowWhatsappTicketDraft.message_ids
         }).then(function (composed) {
             if (composed.title) document.getElementById("wf-wa-ticket-title").value = composed.title;
@@ -1602,7 +1593,7 @@
         var linkId = workflowWhatsappTicketDraft.link_id || "";
         workflowWhatsappTicketDraft.scope = scope || "new_since_last_ticket";
         setWorkflowWhatsappTicketLoading(true, "Finding WhatsApp messages for this board.", "Collecting messages", 12);
-        return api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
+        return api("POST", "/tickets/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
             link_id: linkId ? parseInt(linkId, 10) : null,
             limit: 500,
             scope: workflowWhatsappTicketDraft.scope
@@ -1644,7 +1635,7 @@
         btn.disabled = true;
         btn.classList.add("opacity-60", "cursor-wait");
         var syncNote = "";
-        api("POST", "/kanban/whatsapp/sync", {}).then(function (syncResult) {
+        api("POST", "/tickets/whatsapp/sync", {}).then(function (syncResult) {
             if (syncResult && syncResult.error) {
                 syncNote = " Sync skipped: " + syncResult.error + ". Using locally stored messages.";
             } else if (syncResult && typeof syncResult.synced === "number") {
@@ -1654,7 +1645,7 @@
             syncNote = " Sync unavailable; using locally stored messages.";
         }).finally(function () {
             setWorkflowWhatsappTicketLoading(true, "Finding new WhatsApp messages for this board." + syncNote, "Collecting messages", 12);
-            return api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
+            return api("POST", "/tickets/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
                 link_id: linkId ? parseInt(linkId, 10) : null,
                 limit: 500,
                 scope: "new_since_last_ticket"
@@ -1684,7 +1675,7 @@
             return;
         }
         setWorkflowWhatsappTicketLoading(true, "Saving the ticket, attaching media, and recording the WhatsApp audit trail.", "Creating ticket", 72);
-        api("POST", "/kanban/boards/" + encodeURIComponent(workflowWhatsappTicketDraft.board_id) + "/whatsapp-snapshot-ticket", {
+        api("POST", "/tickets/boards/" + encodeURIComponent(workflowWhatsappTicketDraft.board_id) + "/whatsapp-snapshot-ticket", {
             link_id: workflowWhatsappTicketDraft.link_id ? parseInt(workflowWhatsappTicketDraft.link_id, 10) : null,
             limit: 500,
             message_ids: workflowWhatsappTicketDraft.message_ids || [],
@@ -1719,9 +1710,9 @@
         renderWorkflowBoardSpinner("");
 
         Promise.all([
-            api("GET", "/kanban/boards").catch(function () { return []; }),
-            api("GET", "/kanban/external-boards").catch(function () { return { trello: [], jira: [] }; }),
-            api("GET", "/kanban/linkable").catch(function () { return { projects: [], workflows: [] }; })
+            api("GET", "/tickets/boards").catch(function () { return []; }),
+            api("GET", "/tickets/external-boards").catch(function () { return { trello: [], jira: [] }; }),
+            api("GET", "/tickets/linkable").catch(function () { return { projects: [], workflows: [] }; })
         ]).then(function (results) {
             var localBoards = Array.isArray(results[0]) ? results[0] : [];
             var external = results[1] || {};
@@ -1778,8 +1769,8 @@
         renderWorkflowBoardSpinner("Loading tickets...");
 
         var path = selected.source === "database"
-            ? "/kanban/boards/" + encodeURIComponent(selected.id)
-            : "/kanban/external-boards/" + encodeURIComponent(selected.source) + "/" + encodeURIComponent(selected.id);
+            ? "/tickets/boards/" + encodeURIComponent(selected.id)
+            : "/tickets/external-boards/" + encodeURIComponent(selected.source) + "/" + encodeURIComponent(selected.id);
 
         api("GET", path).then(function (data) {
             if (token !== workflowBoardLoadToken) return;
@@ -1814,11 +1805,6 @@
         }
         var boardName = (board && board.name) || (selected && selected.name) || "Board";
         var boardHasProject = !!(selected && selected.default_project_id);
-        var boardWhatsappLinks = (board && Array.isArray(board.whatsapp_links) ? board.whatsapp_links : [])
-            .concat(selected && Array.isArray(selected.whatsapp_links) ? selected.whatsapp_links : []);
-        var boardWhatsappLink = boardWhatsappLinks.filter(function (link) { return link && link.id; })[0] || null;
-        var localBoardId = workflowBoardLocalId(selected);
-        var firstLanePosition = lanes.length ? lanes[0].position : 0;
         var html = '<div class="text-xs text-gray-500 mb-1 truncate">' + esc(boardName) + '</div>';
         workflowBoardTicketByKey = {};
         if (message) {
@@ -1831,17 +1817,12 @@
             var tickets = Array.isArray(lane.tickets) ? lane.tickets : [];
             var collapseKey = workflowBoardCollapseKey(selected, lane);
             var collapsed = !!workflowBoardCollapsedColumns[collapseKey];
-            var laneName = String(lane.name || "").toLowerCase();
-            var isWhatsappIntakeColumn = !!(boardWhatsappLink && localBoardId && (laneName === "backlog" || laneName.indexOf("backlog") >= 0 || lane.position === firstLanePosition));
             html += '<div class="wf-board-column rounded border border-white/10 bg-[#10183f] overflow-hidden" data-collapse-key="' + esc(collapseKey) + '">';
             html += '<div class="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">';
             html += '<button type="button" class="wf-board-column-toggle min-w-0 flex flex-1 items-center gap-2 text-left hover:text-white" data-collapse-key="' + esc(collapseKey) + '">';
             html += '<span class="chevron' + (collapsed ? "" : " open") + ' text-gray-500">›</span><span class="text-xs font-medium text-gray-200 truncate">' + esc(lane.name || "Column") + '</span>';
             html += '</button>';
             html += '<div class="flex items-center gap-1.5 flex-shrink-0">';
-            if (isWhatsappIntakeColumn) {
-                html += '<button type="button" class="wf-board-whatsapp-snapshot inline-flex h-6 w-6 items-center justify-center rounded border border-[#25D366]/40 bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366]/20" title="Create ticket from linked WhatsApp messages" aria-label="Create ticket from linked WhatsApp messages" data-board-id="' + esc(localBoardId) + '" data-link-id="' + esc(boardWhatsappLink.id) + '">' + WHATSAPP_ICON_SVG + '</button>';
-            }
             html += '<span class="text-[11px] text-gray-500">' + tickets.length + '</span>';
             html += '</div>';
             html += '</div>';
@@ -1893,13 +1874,6 @@
                 var isCollapsed = !!workflowBoardCollapsedColumns[key];
                 if (body) body.classList.toggle("hidden", isCollapsed);
                 if (chev) chev.classList.toggle("open", !isCollapsed);
-            });
-        });
-        list.querySelectorAll(".wf-board-whatsapp-snapshot").forEach(function (btn) {
-            btn.addEventListener("click", function (evt) {
-                evt.preventDefault();
-                evt.stopPropagation();
-                openWorkflowWhatsappTicketModal(btn);
             });
         });
         list.querySelectorAll(".wf-board-ticket-row").forEach(function (btn) {
@@ -2021,7 +1995,7 @@
             }
             return Promise.resolve(null);
         }
-        return api("GET", "/kanban/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=12&rule_limit=5")
+        return api("GET", "/tickets/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=12&rule_limit=5")
             .then(function (data) {
                 renderBoardActivity(data);
                 return data;
@@ -2079,7 +2053,7 @@
             input.addEventListener("change", function () {
                 var ruleId = input.dataset.ruleId;
                 if (!ruleId || !boardId) return;
-                api("PATCH", "/kanban/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId), {
+                api("PATCH", "/tickets/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId), {
                     enabled: !!input.checked
                 }).then(function () {
                     snack(input.checked ? "Learned rule enabled" : "Learned rule disabled", "success");
@@ -2095,7 +2069,7 @@
                 var ruleId = btn.dataset.ruleId;
                 if (!ruleId || !boardId) return;
                 btn.disabled = true;
-                api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId) + "/promote", {
+                api("POST", "/tickets/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId) + "/promote", {
                     category: "general"
                 }).then(function () {
                     snack("Learned rule promoted to board hints", "success");
@@ -2114,7 +2088,7 @@
             renderLearnedRules([], "");
             return Promise.resolve([]);
         }
-        return api("GET", "/kanban/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=1&rule_limit=30")
+        return api("GET", "/tickets/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=1&rule_limit=30")
             .then(function (data) {
                 var rules = data && Array.isArray(data.learned_rules) ? data.learned_rules : [];
                 renderLearnedRules(rules, boardId);
@@ -2433,7 +2407,6 @@
                 renderSteps(steps);
             }
             renderRuns(data.runs || []);
-            renderControlOverview(data);
             // Update live card state so buttons/highlights follow active step.
             steps.forEach(function (s) {
                 applyLiveStepCardState(s, steps);
@@ -2963,7 +2936,7 @@
             btn.addEventListener("click", function () {
                 var ticketId = btn.dataset.ticketId || "";
                 if (!ticketId) return;
-                api("GET", "/kanban/tickets/" + encodeURIComponent(ticketId))
+                api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId))
                     .then(function (ticket) {
                         openWorkflowTicketModal(ticket, { selected: { source: "database", value: "", label: ticket.board_name || "Workflow execution" } });
                     })
@@ -2982,7 +2955,7 @@
             renderWorkflowCliTab();
             return;
         }
-        api("GET", "/kanban/workflows/" + encodeURIComponent(currentWorkflowId) + "/execution-sessions?limit=50")
+        api("GET", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/execution-sessions?limit=50")
             .then(function (data) {
                 latestWorkflowExecutionSessions = Array.isArray(data.sessions) ? data.sessions : [];
                 renderWorkflowExecutionSessions(latestWorkflowExecutionSessions);
@@ -3004,7 +2977,7 @@
             renderWorkflowTickets([]);
             return;
         }
-        api("GET", "/kanban/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets")
+        api("GET", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets")
             .then(function (tickets) {
                 workflowQueueTickets = Array.isArray(tickets) ? tickets : [];
                 workflowLinkedExternalTicketKeys = {};
@@ -3481,7 +3454,7 @@
         if (!ticket || !ticket.id) return;
         var next = normalizeComplexity(value);
         if (normalizeComplexity(ticket.complexity) === next) return;
-        api("PUT", "/kanban/tickets/" + encodeURIComponent(ticket.id), { complexity: next })
+        api("PUT", "/tickets/tickets/" + encodeURIComponent(ticket.id), { complexity: next })
             .then(function () {
                 ticket.complexity = next;
                 snack("Ticket complexity updated");
@@ -3568,8 +3541,8 @@
         if (!output || !ticketId) return;
         output.innerHTML = '<div class="text-gray-500">Loading CLI trail...</div>';
         Promise.all([
-            api("GET", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/execution-sessions").catch(function (e) { return { sessions: [], error: e.message }; }),
-            api("GET", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/audit-entries").catch(function (e) { return { entries: [], error: e.message }; })
+            api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/execution-sessions").catch(function (e) { return { sessions: [], error: e.message }; }),
+            api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/audit-entries").catch(function (e) { return { entries: [], error: e.message }; })
         ]).then(function (results) {
             var sessions = (results[0] && results[0].sessions) || [];
             var entries = (results[1] && results[1].entries) || [];
@@ -3669,7 +3642,7 @@
         }
         confirmBtn.disabled = true;
         modal.classList.remove("hidden");
-        api("GET", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/cli-context")
+        api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/cli-context")
             .then(function (ctx) {
                 if (pendingWorkflowRunTicketId !== String(ticketId)) return;
                 body.innerHTML = workflowRunPreviewRouteHtml(ticket, ctx);
@@ -3707,7 +3680,7 @@
         }
         var buttons = document.querySelectorAll('.wf-workflow-ticket-run[data-ticket-id="' + esc(ticketId) + '"]');
         buttons.forEach(function (btn) { btn.disabled = true; btn.textContent = "Starting"; });
-        api("POST", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/send-to-workflow", {
+        api("POST", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/send-to-workflow", {
             workflow_id: parseInt(currentWorkflowId, 10)
         }).then(function (data) {
             snack(workflowFeedbackText(data, "Ticket run started"));
@@ -3741,7 +3714,7 @@
         }
         workflowPendingTicketLinks[linkKey] = true;
         markWorkflowBoardTicketPending(payload);
-        api("PUT", "/kanban/tickets/" + encodeURIComponent(ticketId), {
+        api("PUT", "/tickets/tickets/" + encodeURIComponent(ticketId), {
             linked_workflow_id: parseInt(currentWorkflowId, 10),
             workflow_queue_position: workflowQueueTickets.length
         }).then(function () {
@@ -3774,7 +3747,7 @@
         }
         if (linkKey) workflowPendingTicketLinks[linkKey] = true;
         markWorkflowBoardTicketPending(payload);
-        api("POST", "/kanban/tickets/copy-external-to-board", {
+        api("POST", "/tickets/tickets/copy-external-to-board", {
             board_id: parseInt(boardId, 10),
             title: payload.title || "Untitled ticket",
             description: payload.description || "",
@@ -3826,7 +3799,7 @@
     function persistWorkflowTicketQueueOrder() {
         if (!currentWorkflowId) return;
         var ids = workflowQueueTickets.map(function (t) { return t.id; }).filter(Boolean);
-        api("PUT", "/kanban/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/reorder", { ticket_ids: ids })
+        api("PUT", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/reorder", { ticket_ids: ids })
             .then(function () { loadWorkflowTicketQueue(); })
             .catch(function (e) { snack(e.message || "Failed to save ticket order", "error"); });
     }
@@ -3939,7 +3912,7 @@
                     evt.stopPropagation();
                     var ticketId = removeBtn.dataset.ticketId || "";
                     if (!ticketId || !currentWorkflowId) return;
-                    api("DELETE", "/kanban/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/" + encodeURIComponent(ticketId))
+                    api("DELETE", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/" + encodeURIComponent(ticketId))
                         .then(function () {
                             snack("Ticket removed from workflow queue");
                             loadWorkflowTicketQueue();
@@ -3952,7 +3925,7 @@
             row.addEventListener("dblclick", function () {
                 var id = row.dataset.ticketId || "";
                 if (!id) return;
-                api("GET", "/kanban/tickets/" + encodeURIComponent(id))
+                api("GET", "/tickets/tickets/" + encodeURIComponent(id))
                     .then(function (ticket) {
                         openWorkflowTicketModal(ticket, { selected: { source: "database", value: "", label: ticket.board_name || "Workflow queue" } });
                     })
@@ -5181,39 +5154,6 @@
     }
 
     // ── Runs tab ──
-    function renderControlOverview(data) {
-        var el = document.getElementById("wf-control-overview");
-        if (!el) return;
-        data = data || {};
-        var steps = Array.isArray(data.steps) ? data.steps : [];
-        var runs = Array.isArray(data.runs) ? data.runs : [];
-        var latest = runs.length ? runs[0] : null;
-        var waitingSteps = steps.filter(function (s) { return !!s.wait_for_continue; }).length;
-        var approvalSteps = steps.filter(function (s) { return !!s.require_approval; }).length;
-        var validationSteps = steps.filter(function (s) {
-            var vt = (s.validation_type || "").trim();
-            return vt && vt !== "none";
-        }).length;
-        var latestStatus = latest ? latest.status : "not run";
-        var latestClass = {
-            running: "text-blue-300 border-blue-500/30 bg-blue-500/10",
-            waiting: "text-amber-300 border-amber-500/30 bg-amber-500/10",
-            completed: "text-green-300 border-green-500/30 bg-green-500/10",
-            failed: "text-red-300 border-red-500/30 bg-red-500/10",
-            cancelled: "text-gray-300 border-white/15 bg-white/5"
-        }[latestStatus] || "text-gray-300 border-white/15 bg-white/5";
-
-        el.innerHTML = '' +
-            '<div class="flex flex-wrap items-center gap-2 text-xs">' +
-                '<span class="inline-flex items-center gap-1.5 rounded border border-white/10 bg-[#152054]/50 px-2.5 py-1 text-gray-400">Flow <span class="wf-count-badge">' + steps.length + '</span></span>' +
-                '<span class="inline-flex items-center gap-1.5 rounded border border-white/10 bg-[#152054]/50 px-2.5 py-1 text-gray-400">Checks <span class="wf-count-badge">' + validationSteps + '</span></span>' +
-                '<span class="inline-flex items-center gap-1.5 rounded border border-white/10 bg-[#152054]/50 px-2.5 py-1 text-gray-400">Pauses <span class="wf-count-badge">' + waitingSteps + '</span></span>' +
-                '<span class="inline-flex items-center gap-1.5 rounded border border-white/10 bg-[#152054]/50 px-2.5 py-1 text-gray-400">Approvals <span class="wf-count-badge">' + approvalSteps + '</span></span>' +
-                '<span class="inline-flex items-center gap-1.5 rounded border px-2.5 py-1 ' + latestClass + '">Latest <strong>' + esc(latestStatus) + '</strong></span>' +
-            '</div>';
-
-    }
-
     function renderRuns(runs) {
         var el = document.getElementById("wf-runs-list");
         var empty = document.getElementById("wf-runs-empty");
@@ -5711,7 +5651,7 @@
             if (evt.defaultPrevented) return;
             if (document.getElementById("decisions-confirm-modal")) return;
             if (isTypingTarget(evt.target)) return;
-            if (evt.key === "ArrowDown" || evt.key === "ArrowUp") {
+            if (evt.key === "ArrowLeft" || evt.key === "ArrowRight") {
                 var list = document.getElementById("wf-list");
                 var insideList = list && evt.target && list.contains(evt.target);
                 if (insideList) {
@@ -5723,9 +5663,12 @@
                     if (idx < 0 && currentWorkflowId != null) {
                         idx = rows.findIndex(function(row) { return String(row.dataset.id) === String(currentWorkflowId); });
                     }
-                    if (idx < 0) idx = evt.key === "ArrowDown" ? -1 : 0;
-                    var next = rows[Math.max(0, Math.min(rows.length - 1, idx + (evt.key === "ArrowDown" ? 1 : -1)))];
-                    if (next) next.focus();
+                    if (idx < 0) idx = evt.key === "ArrowRight" ? -1 : 0;
+                    var next = rows[Math.max(0, Math.min(rows.length - 1, idx + (evt.key === "ArrowRight" ? 1 : -1)))];
+                    if (next) {
+                        next.focus();
+                        selectWorkflow(parseInt(next.dataset.id, 10));
+                    }
                     return;
                 }
             }
@@ -5737,6 +5680,47 @@
             }
         });
 
+        function closeWorkflowCreateModal() {
+            var modal = document.getElementById("wf-create-modal");
+            if (modal) modal.classList.add("hidden");
+        }
+
+        function openWorkflowCreateModal() {
+            var modal = document.getElementById("wf-create-modal");
+            var errEl = document.getElementById("wf-builder-error");
+            if (errEl) errEl.classList.add("hidden");
+            if (modal) modal.classList.remove("hidden");
+            var nameEl = document.getElementById("wf-new-name");
+            if (nameEl) nameEl.focus();
+        }
+
+        function openWorkflowExecutionSetup() {
+            if (typeof window.openWorkflowExecutionSetup === "function") {
+                window.openWorkflowExecutionSetup();
+                return;
+            }
+            var legacySetupBtn = document.getElementById("wf-sr-llm-btn");
+            if (legacySetupBtn) legacySetupBtn.click();
+        }
+
+        var menuBtn = document.getElementById("wf-menu-btn");
+        if (menuBtn) {
+            menuBtn.addEventListener("click", openWorkflowExecutionSetup);
+        }
+        var newWorkflowBtn = document.getElementById("wf-new-workflow-btn");
+        if (newWorkflowBtn) {
+            newWorkflowBtn.addEventListener("click", openWorkflowCreateModal);
+        }
+
+        var createModal = document.getElementById("wf-create-modal");
+        var createModalClose = document.getElementById("wf-create-modal-close");
+        if (createModalClose) createModalClose.addEventListener("click", closeWorkflowCreateModal);
+        if (createModal) {
+            createModal.addEventListener("click", function (e) {
+                if (e.target === createModal) closeWorkflowCreateModal();
+            });
+        }
+
         // Create workflow
         var createBtn = document.getElementById("wf-create-btn");
         if (createBtn) {
@@ -5744,16 +5728,14 @@
                 var nameEl = document.getElementById("wf-new-name");
                 var name = (nameEl.value || "").trim() || "Untitled Workflow";
                 api("POST", "/workflows", { name: name, description: "" })
-                    .then(function (data) { nameEl.value = ""; snack("Workflow created"); selectWorkflow(data.id); })
+                    .then(function (data) {
+                        nameEl.value = "";
+                        closeWorkflowCreateModal();
+                        snack("Workflow created");
+                        selectWorkflow(data.id);
+                    })
                     .catch(function () { snack("Failed to create workflow", "error"); });
             });
-        }
-
-        // Search
-        var searchEl = document.getElementById("wf-search");
-        if (searchEl) {
-            var searchTimer = null;
-            searchEl.addEventListener("input", function () { clearTimeout(searchTimer); searchTimer = setTimeout(loadList, 300); });
         }
 
         // Tabs
@@ -5837,10 +5819,7 @@
         }
         var hermesSetupBtn = document.getElementById("wf-open-hermes-setup");
         if (hermesSetupBtn) {
-            hermesSetupBtn.addEventListener("click", function () {
-                var legacySetupBtn = document.getElementById("wf-sr-llm-btn");
-                if (legacySetupBtn) legacySetupBtn.click();
-            });
+            hermesSetupBtn.addEventListener("click", openWorkflowExecutionSetup);
         }
         bindWorkflowTicketDropZone();
 
@@ -5965,7 +5944,7 @@
                     linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value, 10) || null,
                     linked_project_id: parseInt(document.getElementById("kb-modal-link-project").value, 10) || null
                 };
-                api("PUT", "/kanban/tickets/" + encodeURIComponent(ticket.id), payload)
+                api("PUT", "/tickets/tickets/" + encodeURIComponent(ticket.id), payload)
                     .then(function () {
                         snack("Ticket saved");
                         closeWorkflowTicketModal();
@@ -5987,7 +5966,7 @@
                     message: "Delete this ticket? This cannot be undone.",
                     confirmLabel: "Delete",
                     onConfirm: function () {
-                        api("DELETE", "/kanban/tickets/" + encodeURIComponent(ticket.id))
+                        api("DELETE", "/tickets/tickets/" + encodeURIComponent(ticket.id))
                             .then(function () {
                                 snack("Ticket deleted");
                                 closeWorkflowTicketModal();
@@ -6030,7 +6009,7 @@
                 var ticketId = currentWorkflowModalTicketId();
                 if (!ticketId) return;
                 ticketProject.disabled = true;
-                api("POST", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/send-to-project")
+                api("POST", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/send-to-project")
                     .then(function (r) { snack((r && r.message) || "Ticket sent to project"); })
                     .catch(function (e) { snack(e.message || "Failed to send to project", "error"); })
                     .finally(function () { ticketProject.disabled = false; });
@@ -6042,7 +6021,7 @@
                 var ticketId = currentWorkflowModalTicketId();
                 if (!ticketId) return;
                 ticketCli.disabled = true;
-                api("POST", "/kanban/tickets/" + encodeURIComponent(ticketId) + "/send-to-cli")
+                api("POST", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/send-to-cli")
                     .then(function (r) { snack((r && r.message) || "Ticket sent to CLI"); })
                     .catch(function (e) { snack(e.message || "Failed to send to CLI", "error"); })
                     .finally(function () { ticketCli.disabled = false; });
@@ -6058,7 +6037,7 @@
                     snack("Choose a workflow in Advanced first", "error");
                     return;
                 }
-                api("PUT", "/kanban/tickets/" + encodeURIComponent(ticketId), { linked_workflow_id: workflowId })
+                api("PUT", "/tickets/tickets/" + encodeURIComponent(ticketId), { linked_workflow_id: workflowId })
                     .then(function () {
                         snack("Ticket linked to workflow");
                         return reloadWorkflowTicketModal();
@@ -6247,6 +6226,7 @@
                     .then(function (data) {
                         snack("Workflow planned — " + (data.steps ? data.steps.length : 0) + " steps");
                         document.getElementById("wf-builder-desc").value = "";
+                        closeWorkflowCreateModal();
                         selectWorkflow(data.id);
                         loadList();
                     })
@@ -6257,7 +6237,7 @@
                     })
                     .finally(function () {
                         planBtn.disabled = false;
-                        planBtn.textContent = "⚡ Plan";
+                        planBtn.textContent = "Plan";
                     });
             });
         }

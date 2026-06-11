@@ -19,7 +19,7 @@ def test_ticket_board_no_longer_exposes_checkin_agent_controls():
         "kb-board-modal-whatsapp-checkin-enabled",
         "kb-gs-agent-enabled",
         "kanban_agent_",
-        "/api/kanban/agent/checkin",
+        "/api/tickets/agent/checkin",
         "/agent-enabled",
         "kb-agent-indicator",
     ]
@@ -60,7 +60,19 @@ def test_automation_hub_is_plain_crud_scheduler_surface():
     assert "Run History" in html
     assert "automation-tab-details" in html
     assert "automation-tab-history" in html
-    assert "md:grid-cols-4" in html
+    assert "automation-fields-row" in html
+    assert "automation-status-switch" in html
+    assert 'id="automation-status-switch"' in html
+    assert 'select id="automation-status"' not in html
+    assert "setAutomationStatus" in js
+    assert "toggleAutomationStatus" in js
+    assert "automation-schedule-detail" in html
+    assert "automation-interval-value" in html
+    assert "automation-schedule-kind" in html
+    assert "automation-interval-unit" in html
+    assert "Every N sec/min" in html
+    assert "automation-once-at" in html
+    assert 'id="automation-run-at"' not in html
     assert "deleteSelected" in js
     assert "setActiveTab" in js
     assert 'method: "DELETE"' in js
@@ -112,7 +124,10 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
     dispatched = []
 
     monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 404)
-    monkeypatch.setattr("distr.core.automation_orchestrator.emit_to_agent_chat", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.emit_to_agent_chat",
+        lambda *args, **kwargs: dispatched.append((*args, kwargs)),
+    )
 
     create_resp = client.post(
         "/api/automations",
@@ -175,6 +190,41 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
 
     with get_session() as session:
         assert session.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first() is None
+
+
+def test_automations_api_accepts_interval_seconds_schedule():
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow
+    from distr.gui.web.routes.automations import create_routes
+
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/api/automations",
+        json={
+            "name": "Frequent Check",
+            "instruction": "Ping the board.",
+            "schedule": {"kind": "interval", "interval": 15, "interval_unit": "seconds"},
+        },
+    )
+
+    assert create_resp.status_code == 200
+    automation = create_resp.json()["automation"]
+    workflow_id = int(str(automation["id"]).replace("wf_", ""))
+    assert automation["schedule"]["kind"] == "interval"
+    assert automation["schedule"]["interval"] == 15
+    assert automation["schedule"]["interval_unit"] == "seconds"
+    assert automation["next_run_at"]
+
+    with get_session() as session:
+        wf = session.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        assert wf is not None
+        assert wf.schedule_preset == "interval"
+        assert wf.schedule_time == "15:seconds"
+        session.delete(wf)
+        session.commit()
 
 
 def test_automations_api_normalizes_slash_time_on_save():
@@ -241,7 +291,10 @@ def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
 
     monkeypatch.setattr("distr.core.workflow.dispatcher.start_workflow_run", fail_if_workflow_agent_path_is_used)
     monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 77)
-    monkeypatch.setattr("distr.core.automation_orchestrator.emit_to_agent_chat", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.emit_to_agent_chat",
+        lambda *args, **kwargs: dispatched.append((*args, kwargs)),
+    )
     monkeypatch.setattr(
         automations_routes,
         "_emit_automation_event",
@@ -279,6 +332,7 @@ def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
     assert dispatched[0][1].startswith("[Multi-Action Intake]")
     assert "screen 3" in dispatched[0][1]
     assert dispatched[0][2] is True
+    assert dispatched[0][3].get("skip_user_persist") is True
     assert [event["event_type"] for event in emitted_events] == ["run_started", "worker_dispatched"]
 
 
@@ -298,7 +352,10 @@ def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monk
 
     monkeypatch.setattr("distr.core.workflow.service.start_workflow_run", fail_if_workflow_agent_path_is_used)
     monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 88)
-    monkeypatch.setattr("distr.core.automation_orchestrator.emit_to_agent_chat", lambda *args: dispatched.append(args))
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.emit_to_agent_chat",
+        lambda *args, **kwargs: dispatched.append((*args, kwargs)),
+    )
 
     with get_session() as session:
         workflow = AutoWorkflow(
@@ -337,3 +394,64 @@ def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monk
         data = json.loads(runs[0].run_data)
         assert data["execution_mode"] == "agent_chat_orchestrator"
         assert data["phase"] == "scheduled_automation"
+        workflow = session.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        assert workflow is not None
+        assert workflow.next_run_at is not None
+        assert workflow.next_run_at > datetime.utcnow()
+
+    dispatched.clear()
+    assert run_scheduled_workflow(workflow_id) is False
+    assert not dispatched
+
+
+def test_automation_dispatch_records_chat_action_card(monkeypatch):
+    import json
+
+    from distr.core.db import Chat, get_session
+    from distr.gui.web.routes.automations import create_routes
+
+    with get_session() as session:
+        chat = Chat(title="Agent chat")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    dispatched = []
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.resolve_current_agent_chat_id",
+        lambda settings=None: chat_id,
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.emit_to_agent_chat",
+        lambda *args, **kwargs: dispatched.append((*args, kwargs)),
+    )
+
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+
+    create_resp = client.post(
+        "/api/automations",
+        json={
+            "name": "Inbox Sweep",
+            "instruction": "Summarize unread messages.",
+            "schedule": {"kind": "hourly"},
+        },
+    )
+    automation_id = create_resp.json()["automation"]["id"]
+
+    run_resp = client.post(f"/api/automations/{automation_id}/run")
+    assert run_resp.status_code == 200
+    assert dispatched
+    assert dispatched[0][3].get("skip_user_persist") is True
+    assert "DecisionsAI automation run" in dispatched[0][1]
+
+    with get_session() as session:
+        chat = session.get(Chat, chat_id)
+        params = json.loads(chat.params)
+
+    events = params.get("workflow_events") or []
+    assert len(events) == 1
+    assert events[0]["type"] == "automation_run"
+    assert events[0]["workflow_name"] == "Inbox Sweep"
+    assert events[0]["summary"] == "Summarize unread messages."
