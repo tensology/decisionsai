@@ -1,0 +1,110 @@
+{
+  "ticket-to-prd-to-ship": {
+    "archetype": "incremental_ship",
+    "step_count": 9,
+    "final_step_name": "Report iteration",
+    "max_iterations": 8,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["browser_use", "cli", "other", "playwright"]
+  },
+  "scope-then-ship": {
+    "archetype": "review_cleanup",
+    "step_count": 6,
+    "final_step_name": "Session retro",
+    "max_iterations": 6,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["browser_use", "cli", "other", "playwright"]
+  },
+  "de-sloppify-pass": {
+    "archetype": "review_cleanup",
+    "step_count": 5,
+    "final_step_name": "Report",
+    "max_iterations": 4,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  },
+  "e2e-until-green": {
+    "archetype": "check_fix_until_green",
+    "step_count": 6,
+    "final_step_name": "Report",
+    "max_iterations": 10,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["browser_use", "cli", "other", "playwright"]
+  },
+  "ship-pr-until-green": {
+    "archetype": "ship_with_ci",
+    "step_count": 6,
+    "final_step_name": "Report",
+    "max_iterations": 10,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  },
+  "pr-babysitter": {
+    "archetype": "watch_maintain",
+    "step_count": 5,
+    "final_step_name": "Report",
+    "max_iterations": 20,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  },
+  "pr-self-review": {
+    "archetype": "review_cleanup",
+    "step_count": 5,
+    "final_step_name": "Report",
+    "max_iterations": 3,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  },
+  "spec-first-ship": {
+    "archetype": "incremental_ship",
+    "step_count": 6,
+    "final_step_name": "Report",
+    "max_iterations": 15,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  },
+  "article-from-ticket": {
+    "archetype": "incremental_ship",
+    "step_count": 7,
+    "final_step_name": "Report",
+    "max_iterations": 5,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["browser_use", "cli", "other", "playwright"]
+  },
+  "seo-landing-page": {
+    "archetype": "incremental_ship",
+    "step_count": 7,
+    "final_step_name": "Report",
+    "max_iterations": 6,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["browser_use", "cli", "other", "playwright"]
+  },
+  "cold-outreach-batch": {
+    "archetype": "incremental_ship",
+    "step_count": 6,
+    "final_step_name": "Report",
+    "max_iterations": 5,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  },
+  "follow-up-cadence": {
+    "archetype": "watch_maintain",
+    "step_count": 5,
+    "final_step_name": "Report",
+    "max_iterations": 10,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["cli", "other"]
+  }
+}

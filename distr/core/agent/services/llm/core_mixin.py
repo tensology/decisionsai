@@ -501,8 +501,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 and any(k in qlow for k in workspace_exposure_keywords + delegated_work_keywords)
                 and any(k in qlow for k in delegated_handoff_keywords + ("mouse", "keyboard", "copy", "paste"))
             )
-            if wants_delegated_plan and "hermes_delegated_workflow" in self._tools_dict:
-                delegated_tool = self._tools_dict["hermes_delegated_workflow"]
+            if wants_delegated_plan and "delegated_workflow" in self._tools_dict:
+                delegated_tool = self._tools_dict["delegated_workflow"]
                 if delegated_tool.name not in retrieved_names:
                     retrieved.append(delegated_tool)
                     retrieved_names.add(delegated_tool.name)

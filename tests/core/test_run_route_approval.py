@@ -6,7 +6,7 @@ import contextlib
 import json
 from unittest.mock import MagicMock
 
-import distr.core.db.hermes  # noqa: F401
+import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
@@ -118,4 +118,4 @@ def test_apply_run_route_approval_reject_clears_pending(tmp_path, monkeypatch):
         row = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         data = json.loads(row.run_data or "{}")
         assert not data.get("pending_route_approval")
-        assert data.get("suppress_hermes_override") is True
+        assert data.get("suppress_orchestrator_override") is True

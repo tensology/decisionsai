@@ -232,7 +232,7 @@ def emit_orchestration_event(
     except Exception:
         pass
 
-    from distr.core.hermes import emit_event
+    from distr.core.orchestrator import emit_event
 
     event_id = emit_event(
         source=source,
@@ -335,7 +335,7 @@ def list_orchestration_timeline(
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Return a chronological conversation timeline from Hermes events."""
-    from distr.core.hermes import list_events
+    from distr.core.orchestrator import list_events
 
     events = list_events(
         workflow_id=workflow_id,

@@ -251,7 +251,7 @@ def _record_packet_ui_quality_validation(
     if any(str(item.get("validation_type") or "").strip().lower() == "ui_quality" for item in snapshots if isinstance(item, dict)):
         return updated
     try:
-        from distr.core.hermes import (
+        from distr.core.orchestrator import (
             build_correction_packet,
             create_correction_attempt,
             list_validation_records,
@@ -508,6 +508,87 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     except Exception:
         logger.error("WorkflowAgentBridge notification failed for run %d", run_id, exc_info=True)
 
+    if status == "completed":
+        _maybe_auto_start_next_queued_ticket(run_id, workflow_id)
+
+
+def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
+    """In sequential mode, start the next queued ticket after a successful run."""
+    try:
+        with get_session() as db:
+            run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+            if not run_rec or not wf or not run_rec.ticket_id:
+                return
+            run_settings = _workflow_run_settings(wf)
+            if run_settings.get("execution_mode") != "sequential":
+                return
+            from distr.core.db.kanban import KanbanTicket
+
+            current_ticket = db.query(KanbanTicket).filter(
+                KanbanTicket.id == int(run_rec.ticket_id)
+            ).first()
+            if not current_ticket:
+                return
+            current_pos = int(current_ticket.workflow_queue_position or 0)
+            next_ticket = (
+                db.query(KanbanTicket)
+                .filter(
+                    KanbanTicket.linked_workflow_id == workflow_id,
+                    KanbanTicket.workflow_queue_position > current_pos,
+                )
+                .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.id.asc())
+                .first()
+            )
+            if not next_ticket:
+                return
+            next_ticket_id = int(next_ticket.id)
+            board_id = run_rec.board_id
+            try:
+                run_data = json.loads(run_rec.run_data or "{}")
+            except Exception:
+                run_data = {}
+            run_metadata = {
+                "project_id": run_data.get("project_id"),
+                "project_name": run_data.get("project_name"),
+                "project_folder": run_data.get("project_folder"),
+                "ticket_title": next_ticket.title,
+                "auto_queued_from_run_id": run_id,
+            }
+            run_metadata = {k: v for k, v in run_metadata.items() if v not in (None, "")}
+
+        result = start_workflow_run(
+            workflow_id,
+            board_id=board_id,
+            ticket_id=next_ticket_id,
+            run_metadata=run_metadata or None,
+        )
+        if result.get("error"):
+            logger.info(
+                "Queue auto-advance skipped for workflow %s after run %s: %s",
+                workflow_id,
+                run_id,
+                result.get("error"),
+            )
+            return
+        try:
+            from distr.gui.web.kanban_events import increment_kanban_updated
+
+            increment_kanban_updated(
+                board_id=board_id,
+                event_type="queue_auto_advance",
+                payload={
+                    "workflow_id": workflow_id,
+                    "previous_run_id": run_id,
+                    "next_run_id": result.get("run_id"),
+                    "next_ticket_id": next_ticket_id,
+                },
+            )
+        except Exception:
+            logger.debug("Could not emit queue_auto_advance kanban event", exc_info=True)
+    except Exception:
+        logger.debug("Queue auto-advance failed for run %s", run_id, exc_info=True)
+
 
 def _clear_workflow_env() -> None:
     """Clear workflow run context environment variables and thread-local entry."""
@@ -661,6 +742,15 @@ def start_workflow_run(
                 execution_lane="workflow",
             ),
         )
+        loop_input = {}
+        if getattr(wf, "workflow_input", None):
+            try:
+                loop_input = json.loads(wf.workflow_input or "{}") or {}
+            except Exception:
+                loop_input = {}
+        if loop_input.get("goal") or loop_input.get("max_iterations") or loop_input.get("check_command"):
+            normalized_metadata["loop_contract"] = loop_input
+            normalized_metadata["loop_iteration"] = 0
         packet = normalized_metadata.get("result_packet") or {}
         packet_audit = dict(packet.get("audit") or {})
         packet_audit["audits_run"] = build_audit_gates(
@@ -681,6 +771,29 @@ def start_workflow_run(
         db.add(run)
         db.flush()
         run_id = run.id
+        if normalized_metadata.get("loop_contract"):
+            try:
+                from distr.core.orchestrator import emit_event
+
+                lc = normalized_metadata["loop_contract"]
+                emit_event(
+                    source="workflow",
+                    event_type="loop_started",
+                    status="running",
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    ticket_id=ticket_id,
+                    board_id=board_id,
+                    summary=f'Loop started: {lc.get("goal") or wf.name}',
+                    payload={
+                        "goal": lc.get("goal"),
+                        "max_iterations": lc.get("max_iterations"),
+                        "check_command": lc.get("check_command"),
+                        "exit_when": lc.get("exit_when"),
+                    },
+                )
+            except Exception:
+                logger.debug("start_workflow_run: loop_started event failed", exc_info=True)
         if ticket_id:
             append_ticket_audit_entry(
                 db,
@@ -925,35 +1038,49 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
             )
         except Exception:
             logger.debug("Could not emit approval_granted event", exc_info=True)
-    elif waiting_kind == "ide_handoff" and optional_input:
+    if optional_input and optional_input.strip():
         try:
-            from distr.core.hermes import record_learning_signal
             from distr.core.orchestration_events import emit_orchestration_event
+            from distr.core.workflow.steering_memory import record_run_steering_feedback
 
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
             board_id = getattr(run, "board_id", None) if run else None
+            workflow_id = getattr(run, "workflow_id", None) if run else None
+            ticket_id = getattr(run, "ticket_id", None) if run else None
+            project_id = None
+            if run and run.run_data:
+                try:
+                    project_id = (json.loads(run.run_data or "{}") or {}).get("project_id")
+                except Exception:
+                    project_id = None
+            event_type = "ide_iteration_completed" if waiting_kind == "ide_handoff" else "user_continuation"
             emit_orchestration_event(
-                source="ide",
-                event_type="ide_iteration_completed",
+                source="ide" if waiting_kind == "ide_handoff" else "workflow",
+                event_type=event_type,
                 status="completed",
                 run_id=run_id,
                 step_id=step_id,
-                workflow_id=getattr(run, "workflow_id", None) if run else None,
-                ticket_id=getattr(run, "ticket_id", None) if run else None,
+                workflow_id=workflow_id,
+                ticket_id=ticket_id,
                 board_id=board_id,
-                summary=(optional_input or "")[:500] or "IDE iteration reported back.",
-                payload={"feedback": optional_input or ""},
-            )
-            record_learning_signal(
-                scope="board" if board_id else "global",
-                scope_id=board_id,
-                rule_type="ide_iteration",
                 summary=(optional_input or "")[:500],
-                payload={"run_id": run_id, "step_id": step_id},
+                payload={"feedback": optional_input or "", "waiting_kind": waiting_kind},
+            )
+            record_run_steering_feedback(
+                run_id=run_id,
+                message=optional_input.strip(),
+                source="ide" if waiting_kind == "ide_handoff" else "workflow",
+                event_type=event_type,
+                workflow_id=workflow_id,
+                step_id=step_id,
+                board_id=board_id,
+                ticket_id=ticket_id,
+                project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                rule_type="ide_iteration" if waiting_kind == "ide_handoff" else "workflow_steering",
             )
         except Exception:
-            logger.debug("Could not emit ide_iteration_completed event", exc_info=True)
+            logger.debug("Could not record workflow steering feedback", exc_info=True)
 
     # Resume must continue execution, not only update run state.
     action = (decision or {}).get("action")

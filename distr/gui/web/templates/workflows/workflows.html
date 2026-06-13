@@ -31,6 +31,8 @@
 .sr-time-input::-webkit-calendar-picker-indicator { filter: brightness(0) invert(1); cursor: pointer; }
 .tab-btn { border-bottom: 2px solid transparent; }
 .tab-btn.active { border-bottom-color: #f97316; color: #fff; }
+.wf-detail-tabbar { min-height: 2.625rem; }
+.wf-tab-trailing { margin-left: auto; }
 .wf-workflow-tabbar { min-height: 2.625rem; }
 .wf-workflow-tab {
     flex-shrink: 0;
@@ -60,7 +62,9 @@
     font-size: 0.875rem;
     line-height: 1.25rem;
 }
-#wf-detail-footer { min-height: 3.25rem; }
+.wf-workflow-ticket-row--running { border-color: rgba(56, 189, 248, 0.45); background: rgba(56, 189, 248, 0.08); }
+.wf-workflow-ticket-row--up-next { border-color: rgba(249, 115, 22, 0.35); }
+#wf-run-bar { flex-wrap: wrap; gap: 0.5rem; }
 .wf-workflow-tabbar-actions { border-left: 1px solid rgba(255,255,255,0.12); }
 .wf-config-btn-spinner { display: none; }
 .wf-config-btn-loading { pointer-events: none; opacity: 0.85; }
@@ -136,8 +140,11 @@
     color: #ffffff;
 }
 .wf-ticket-list-surface .wf-lane-add-all-board-tickets:disabled {
-    opacity: 0.4;
+    opacity: 1;
     cursor: not-allowed;
+    border-color: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    color: #6b7280;
 }
 .wf-ticket-list-surface.wf-board-ticket-list--blocked .kb-ticket-list-section-body,
 .wf-ticket-list-surface.wf-board-ticket-list--blocked .kb-ticket-list-row {
@@ -197,28 +204,34 @@
     border-style: dashed;
     border-color: rgba(249, 115, 22, 0.45);
 }
-.wf-ticket-list-surface .kb-ticket-list-row[draggable="true"] {
+.wf-ticket-list-surface .wf-board-ticket-grip {
     cursor: grab;
 }
-.wf-ticket-list-surface .kb-ticket-list-row[draggable="true"]:active,
-.wf-ticket-list-surface .kb-ticket-list-row.dragging {
+.wf-ticket-list-surface .wf-board-ticket-grip:active,
+.wf-ticket-list-surface .kb-ticket-list-row.dragging .wf-board-ticket-grip {
     cursor: grabbing;
 }
-.wf-board-ticket-drag-ghost {
-    opacity: 0.92 !important;
-    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
-    border-color: rgba(249, 115, 22, 0.75) !important;
-    background: #1a1f3a !important;
-    transform: rotate(-1deg);
-    z-index: 99999;
-    pointer-events: none;
+body.wf-board-pointer-dragging {
+    user-select: none;
+    cursor: grabbing !important;
 }
-.wf-board-ticket-drag-ghost-floating {
+body.wf-board-pointer-dragging * {
+    cursor: grabbing !important;
+}
+.wf-board-ticket-drag-ghost-shell {
     position: fixed;
     top: 0;
     left: 0;
     margin: 0;
-    cursor: grabbing;
+    z-index: 99999;
+    pointer-events: none;
+    filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.42));
+}
+.wf-board-ticket-drag-ghost-shell .kb-ticket-list-row {
+    opacity: 1 !important;
+    border-style: solid !important;
+    transform: none !important;
+    cursor: grabbing !important;
 }
 .wf-workflow-ticket-drop-zone {
     position: relative;
@@ -276,6 +289,21 @@
     color: #6b7280;
     cursor: grab;
     touch-action: none;
+}
+.wf-ticket-list-surface button.kb-ticket-list-drag-handle.wf-board-ticket-grip {
+    border: none;
+    background: transparent;
+    padding: 2px;
+    margin: -2px 0;
+    line-height: 0;
+    color: #6b7280;
+}
+.wf-ticket-list-surface button.kb-ticket-list-drag-handle.wf-board-ticket-grip:hover:not(:disabled) {
+    color: #f97316;
+}
+.wf-ticket-list-surface button.kb-ticket-list-drag-handle.wf-board-ticket-grip:disabled {
+    opacity: 0.35;
+    cursor: default;
 }
 .wf-ticket-list-surface .kb-ticket-list-drag-handle--static {
     flex: 0 0 14px;
@@ -377,7 +405,14 @@
 .wf-ticket-list-surface .kb-card-action-btn:hover { color: #ffffff; filter: brightness(1.08); }
 .wf-ticket-list-surface .kb-act-copy { background: rgba(59,130,246,0.28); }
 .wf-ticket-list-surface .kb-act-agent { background: rgba(249,115,22,0.32); border-color: rgba(249,115,22,0.55); }
+.wf-ticket-list-surface .kb-act-add-workflow { background: rgba(34,197,94,0.30); border-color: rgba(34,197,94,0.55); }
 .wf-ticket-list-surface .kb-act-workflow { background: rgba(14,165,233,0.30); }
+.wf-loop-list-row-wrap .wf-loop-step-drag-handle { cursor: grab; color: #9ca3af; padding: 0 2px; }
+.wf-loop-list-row-wrap .wf-loop-step-drag-handle:active { cursor: grabbing; color: #f97316; }
+.wf-loop-step-dragging { opacity: 0.55; }
+.wf-loop-step-drop-target { outline: 2px solid rgba(249,115,22,0.75); outline-offset: 2px; }
+.wf-loop-ring-node.wf-loop-step-dragging { opacity: 0.55; }
+.wf-loop-ring-node.wf-loop-step-drop-target .wf-loop-ring-node-ball { box-shadow: 0 0 0 3px rgba(249,115,22,0.75); }
 .wf-ticket-list-surface .kb-act-transfer { background: rgba(34,197,94,0.28); }
 .wf-ticket-list-surface .kb-act-delete { background: rgba(239,68,68,0.28); }
 .wf-ticket-list-surface .kb-card-action-btn svg { width: 12px; height: 12px; }
@@ -453,6 +488,722 @@
     justify-content: flex-end;
     max-width: 8.5rem;
 }
+.wf-workflow-queue-list .wf-workflow-ticket-row {
+    cursor: pointer;
+}
+.wf-workflow-queue-list .wf-workflow-ticket-row:focus {
+    outline: none;
+}
+.wf-workflow-queue-list .wf-workflow-ticket-row.is-selected {
+    border-color: rgba(249, 115, 22, 0.55);
+    background: rgba(249, 115, 22, 0.08);
+    box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.25) inset;
+}
+.wf-workflow-queue-list .wf-workflow-ticket-row.is-selected:focus-visible {
+    box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.45);
+}
+.wf-loop-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    flex-shrink: 0;
+}
+.wf-tab-content.hidden {
+    display: none !important;
+}
+#wf-detail-tab-scroll.wf-tab-scroll--loop {
+    overflow: hidden;
+    min-height: 0;
+    padding: 0 0 0 1.5rem;
+}
+#wf-detail-tab-scroll.wf-tab-scroll--loop.wf-tab-scroll--feed-expanded {
+    padding-left: 0;
+}
+#wf-tab-loop:not(.hidden) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+#wf-tab-loop .wf-loop-layout {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    min-height: 0;
+    height: 100%;
+}
+.wf-loop-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding-right: 0.75rem;
+    padding-top: 1.5rem;
+    padding-bottom: 1.5rem;
+}
+.wf-loop-layout--feed-expanded .wf-loop-main {
+    display: none;
+}
+.wf-loop-main .wf-loop-view:not(.hidden) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+#wf-loop-ring-view:not(.hidden) {
+    align-items: center;
+    justify-content: center;
+}
+#wf-loop-list-view:not(.hidden) {
+    overflow-y: auto;
+}
+.wf-loop-feed-panel {
+    flex: 0 0 min(340px, 36%);
+    width: min(340px, 36%);
+    min-width: 260px;
+    max-width: 380px;
+    align-self: stretch;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(8, 12, 36, 0.55);
+    border-radius: 0;
+    overflow: hidden;
+}
+.wf-loop-layout--feed-expanded .wf-loop-feed-panel {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    border-left: none;
+}
+.wf-loop-feed-expand-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 0.3rem;
+    background: rgba(255, 255, 255, 0.04);
+    color: #9ca3af;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.wf-loop-feed-expand-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(249, 115, 22, 0.45);
+}
+.wf-loop-feed-expand-btn[aria-expanded="true"] {
+    color: #fdba74;
+    border-color: rgba(249, 115, 22, 0.45);
+}
+.wf-loop-feed-expand-btn svg {
+    width: 0.875rem;
+    height: 0.875rem;
+}
+.wf-loop-feed-expand-btn .wf-loop-feed-icon-collapse {
+    display: none;
+}
+.wf-loop-feed-expand-btn[aria-expanded="true"] .wf-loop-feed-icon-expand {
+    display: none;
+}
+.wf-loop-feed-expand-btn[aria-expanded="true"] .wf-loop-feed-icon-collapse {
+    display: block;
+}
+.wf-loop-feed-run-select {
+    flex-shrink: 0;
+    margin: 0 0.65rem 0.35rem;
+    width: calc(100% - 1.3rem);
+    padding: 0.25rem 0.4rem;
+    background: #152054;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0.25rem;
+    color: #fff;
+    font-size: 0.6875rem;
+}
+.wf-loop-feed-messages {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.55rem 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.wf-loop-feed-messages:has(.wf-loop-feed-empty:only-child) {
+    justify-content: center;
+    align-items: center;
+}
+.wf-loop-feed-empty {
+    font-size: 0.8125rem;
+    color: #6b7280;
+    text-align: center;
+    padding: 1rem 0.5rem;
+    line-height: 1.45;
+    margin: 0;
+}
+.wf-loop-feed-msg {
+    max-width: 100%;
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+.wf-loop-feed-msg-meta {
+    font-size: 0.625rem;
+    color: #6b7280;
+    margin-bottom: 0.15rem;
+}
+.wf-loop-feed-msg-bubble {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.5rem;
+    word-break: break-word;
+}
+.wf-loop-feed-msg--system .wf-loop-feed-msg-bubble {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #d1d5db;
+    width: 100%;
+}
+.wf-loop-feed-msg--event .wf-loop-feed-msg-bubble {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    color: #e5e7eb;
+    width: 100%;
+}
+.wf-loop-feed-msg--step .wf-loop-feed-msg-bubble {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.28);
+    color: #ecfdf5;
+    width: 100%;
+}
+.wf-loop-feed-msg--waiting .wf-loop-feed-msg-bubble {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #fef3c7;
+    width: 100%;
+}
+.wf-loop-feed-msg--steer .wf-loop-feed-msg-bubble {
+    background: rgba(249, 115, 22, 0.18);
+    border: 1px solid rgba(249, 115, 22, 0.45);
+    color: #fff7ed;
+    margin-left: auto;
+}
+.wf-loop-feed-msg--steer {
+    align-self: flex-end;
+    text-align: right;
+    max-width: 92%;
+}
+.wf-loop-feed-msg-detail {
+    margin-top: 0.25rem;
+    font-size: 0.6875rem;
+    color: #9ca3af;
+}
+.wf-loop-feed-compose {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 0.65rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(0, 0, 0, 0.15);
+}
+.wf-loop-feed-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.45rem 0.55rem;
+    background: #152054;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0.375rem;
+    color: #fff;
+    font-size: 0.8125rem;
+}
+.wf-loop-feed-input:focus {
+    outline: none;
+    border-color: rgba(249, 115, 22, 0.65);
+}
+.wf-loop-feed-input:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.wf-loop-feed-steer-btn {
+    flex-shrink: 0;
+    padding: 0.45rem 0.75rem;
+    border-radius: 0.375rem;
+    background: #f97316;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+}
+.wf-loop-feed-steer-btn:hover:not(:disabled) {
+    background: #ea580c;
+}
+.wf-loop-feed-steer-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+@media (max-width: 960px) {
+    .wf-loop-layout {
+        flex-direction: column;
+        min-height: auto;
+    }
+    .wf-loop-main {
+        padding-right: 0;
+    }
+    .wf-loop-feed-panel {
+        width: 100%;
+        max-width: none;
+        flex: 1 1 auto;
+        align-self: auto;
+        border-left: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 0.5rem;
+    }
+}
+.wf-loop-cli-strip {
+    display: none;
+}
+.wf-config-exec-pill,
+.wf-cli-backend-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 10px;
+    font-weight: 600;
+    color: #d1d5db;
+    line-height: 1.2;
+    cursor: default;
+}
+.wf-config-exec-pill.is-ready,
+.wf-cli-backend-pill.is-ready {
+    cursor: pointer;
+}
+.wf-config-exec-pill.is-ready:hover,
+.wf-cli-backend-pill.is-ready:hover {
+    border-color: rgba(249, 115, 22, 0.45);
+    background: rgba(249, 115, 22, 0.08);
+}
+.wf-config-exec-pill.is-active-route,
+.wf-cli-backend-pill.is-active {
+    border-color: rgba(249, 115, 22, 0.65);
+    background: rgba(249, 115, 22, 0.14);
+    color: #fff;
+}
+.wf-config-exec-pill-dot,
+.wf-cli-backend-pill-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 9999px;
+    background: #6b7280;
+    flex-shrink: 0;
+}
+.wf-config-exec-pill.is-ready .wf-config-exec-pill-dot,
+.wf-cli-backend-pill.is-ready .wf-cli-backend-pill-dot {
+    background: #22c55e;
+}
+.wf-config-exec-pill.is-setup .wf-config-exec-pill-dot,
+.wf-cli-backend-pill.is-setup .wf-cli-backend-pill-dot {
+    background: #f59e0b;
+}
+.wf-cli-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 420px;
+    height: calc(100vh - 17rem);
+}
+.wf-cli-terminal-wrap {
+    flex: 1 1 auto;
+    min-height: 280px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.5rem;
+    background: #0d1117;
+    overflow: hidden;
+}
+.wf-cli-transcript {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #e5e7eb;
+}
+.wf-cli-transcript .wf-cli-line-user { color: #fdba74; margin-bottom: 0.5rem; white-space: pre-wrap; }
+.wf-cli-transcript .wf-cli-line-assistant { color: #d1d5db; margin-bottom: 0.75rem; white-space: pre-wrap; }
+.wf-cli-transcript .wf-cli-line-system { color: #6b7280; margin-bottom: 0.5rem; font-style: italic; }
+.wf-cli-input-row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(21, 32, 84, 0.5);
+    flex-shrink: 0;
+}
+.wf-loop-view-toggle {
+    padding: 0.35rem 0.75rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: transparent;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+}
+.wf-loop-view-toggle.active {
+    border-color: rgba(249, 115, 22, 0.55);
+    background: rgba(249, 115, 22, 0.12);
+    color: #fff;
+}
+.wf-loop-ring-stage {
+    position: relative;
+    width: min(100%, 560px);
+    height: min(100%, 560px);
+    max-height: 100%;
+    margin: 0 auto;
+    aspect-ratio: 1;
+    flex-shrink: 1;
+}
+.wf-loop-ring-track {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+.wf-loop-ring-center-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 4.5rem;
+    height: 4.5rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    background: rgba(249, 115, 22, 0.08);
+    color: #fdba74;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.wf-loop-ring-nodes {
+    position: absolute;
+    inset: 0;
+}
+.wf-loop-ring-node {
+    position: absolute;
+    width: 8.75rem;
+    min-height: 4.5rem;
+    transform: translate(-50%, -50%);
+    border-radius: 0.65rem;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(21, 32, 84, 0.92);
+    padding: 0.5rem 0.5rem 0.45rem 0.55rem;
+    text-align: left;
+    color: #fff;
+    overflow: visible;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.wf-loop-ring-node-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+    margin-bottom: 0.2rem;
+    min-height: 1.5rem;
+}
+.wf-loop-ring-node-ball {
+    position: static;
+    top: auto;
+    left: auto;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.35rem;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(180deg, #fb923c 0%, #ea580c 100%);
+    border: 2px solid rgba(21, 32, 84, 0.96);
+    color: #ffffff;
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    box-shadow: 0 4px 12px rgba(249, 115, 22, 0.32);
+    pointer-events: none;
+    z-index: 2;
+    flex-shrink: 0;
+}
+.wf-loop-ring-node-tool-icons,
+.wf-loop-list-tool-icons {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.12rem;
+    margin-left: auto;
+    flex-shrink: 0;
+    min-height: 1.25rem;
+}
+.wf-loop-list-tool-icons {
+    margin-left: 0;
+}
+.wf-loop-ring-node.is-selected .wf-loop-ring-node-ball {
+    box-shadow: 0 8px 20px rgba(249, 115, 22, 0.5);
+    transform: scale(1.05);
+}
+.wf-loop-ring-node:hover {
+    border-color: rgba(249, 115, 22, 0.45);
+}
+.wf-loop-ring-node.is-selected {
+    border-color: rgba(249, 115, 22, 0.75);
+    box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.35), 0 10px 28px rgba(249, 115, 22, 0.12);
+}
+.wf-loop-ring-node-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wf-loop-ring-node-preview {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 10px;
+    line-height: 1.3;
+    color: #9ca3af;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.wf-loop-list-step-ball {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 1.5rem;
+    padding: 0 0.3rem;
+    border-radius: 9999px;
+    background: linear-gradient(180deg, #fb923c 0%, #ea580c 100%);
+    color: #ffffff;
+    font-size: 0.75rem;
+    font-weight: 800;
+    line-height: 1;
+    box-shadow: 0 3px 10px rgba(249, 115, 22, 0.28);
+}
+.wf-loop-step-status--running { border-color: rgba(34, 197, 94, 0.65) !important; }
+.wf-loop-step-status--waiting { border-color: rgba(245, 158, 11, 0.65) !important; }
+.wf-loop-step-status--done { border-color: rgba(34, 197, 94, 0.45) !important; }
+.wf-loop-step-status--failed { border-color: rgba(239, 68, 68, 0.55) !important; }
+.wf-loop-step-modal {
+    width: min(1120px, 96vw);
+    max-height: min(90vh, 880px);
+    height: min(90vh, 880px);
+    display: flex;
+    flex-direction: column;
+}
+.wf-loop-step-modal .wf-loop-step-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+.wf-loop-step-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 1.25rem;
+    height: 100%;
+    min-height: 0;
+    align-items: stretch;
+}
+@media (max-width: 900px) {
+    .wf-loop-step-modal { height: auto; max-height: 92vh; }
+    .wf-loop-step-layout { grid-template-columns: 1fr; height: auto; }
+}
+.wf-loop-step-col {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    height: 100%;
+}
+.wf-loop-step-col-main {
+    flex: 1 1 auto;
+}
+.wf-loop-step-col-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(249, 115, 22, 0.9);
+    flex-shrink: 0;
+}
+.wf-loop-step-tabs {
+    display: flex;
+    gap: 0.15rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    flex-shrink: 0;
+}
+.wf-loop-step-tab {
+    padding: 0.45rem 0.75rem;
+    font-size: 0.75rem;
+    color: #9ca3af;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    background: transparent;
+    cursor: pointer;
+}
+.wf-loop-step-tab.is-active {
+    color: #fff;
+    border-bottom-color: #f97316;
+}
+.wf-loop-step-tab-panels {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.wf-loop-step-tab-pane {
+    display: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+}
+.wf-loop-step-tab-pane.is-active {
+    display: flex;
+}
+.wf-loop-step-tab-help {
+    font-size: 0.68rem;
+    color: #9ca3af;
+    line-height: 1.4;
+    margin-bottom: 0.4rem;
+    flex-shrink: 0;
+}
+.wf-loop-step-tab-pane textarea {
+    flex: 1 1 auto;
+    min-height: 0;
+    resize: none;
+}
+.wf-loop-step-side-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    margin-bottom: 0.35rem;
+}
+.wf-loop-step-side-panel-label {
+    font-size: 0.75rem;
+    color: #9ca3af;
+    line-height: 1.25rem;
+    margin: 0;
+}
+.wf-loop-step-side-stack {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+.wf-loop-step-side-panel {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.wf-loop-step-side-panel > .text-xs {
+    flex-shrink: 0;
+}
+.wf-loop-step-picker {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.5rem;
+    background: rgba(13, 19, 51, 0.55);
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+.wf-loop-step-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.4rem 0.35rem;
+    border-radius: 0.35rem;
+    flex-shrink: 0;
+    min-height: 1.75rem;
+}
+.wf-loop-step-picker-item:hover { background: rgba(255, 255, 255, 0.04); }
+.wf-loop-step-picker-item label { cursor: pointer; min-width: 0; flex: 1; }
+.wf-loop-step-tools-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+    align-content: start;
+}
+.wf-loop-step-picker-item--tool {
+    min-height: 2.25rem;
+    padding: 0.35rem 0.4rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+}
+.wf-loop-step-picker-item--tool:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.14);
+}
+.wf-loop-step-tool-emoji {
+    flex-shrink: 0;
+    font-size: 1rem;
+    line-height: 1;
+    margin-left: auto;
+}
+.wf-loop-step-tool-icon {
+    display: inline-block;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.wf-loop-step-picker-item .wf-loop-step-skill-desc {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 0.65rem;
+    color: #9ca3af;
+    margin-top: 0.12rem;
+    line-height: 1.35;
+}
+.wf-create-modal { width: min(640px, 94vw); }
 .wf-split-layout {
     display: flex;
     align-items: stretch;
@@ -560,7 +1311,7 @@ body.wf-split-dragging * {
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
                         </svg>
                     </button>
-                    <button type="button" id="wf-menu-btn" title="Workflow configuration" aria-label="Workflow configuration" class="flex-shrink-0 px-2 py-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-white">
+                    <button type="button" id="wf-menu-btn" title="Global workflow configuration" aria-label="Global workflow configuration" class="flex-shrink-0 px-2 py-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-white">
                         <svg xmlns="http://www.w3.org/2000/svg" class="wf-config-btn-icon w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -575,25 +1326,100 @@ body.wf-split-dragging * {
             <div class="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
             <div id="wf-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
                 <p class="text-gray-300 text-base font-medium max-w-md mb-2">Select a workflow.</p>
-                <p class="text-gray-400 text-sm max-w-md mb-4">View its queued tickets and runs.</p>
+                <p class="text-gray-400 text-sm max-w-md mb-4">View its queued tickets and loop.</p>
             </div>
             <div id="wf-detail" class="hidden flex-1 flex flex-col min-h-0">
                 <!-- Tabs -->
-                <div class="border-b border-white/20 px-6 flex gap-1">
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="tickets">Tickets</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Runs</button>
+                <div class="wf-detail-tabbar border-b border-white/20 px-6 flex items-center gap-1">
+                    <div class="flex items-center gap-1 min-w-0">
+                        <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="tickets">Tickets</button>
+                        <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="loop">Loop</button>
+                        <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="cli">CLI</button>
+                        <button type="button" id="wf-runs-tab-btn" class="wf-tab tab-btn hidden px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Runs</button>
+                    </div>
                 </div>
+                <div id="wf-run-bar" class="hidden border-b border-white/10 px-6 py-2 bg-[#12183a]/80 text-xs flex items-center gap-2 min-h-[2rem]"></div>
                 <!-- Tab content -->
                 <div class="flex-1 min-h-0 flex flex-col">
-                    <div class="flex-1 min-h-0 overflow-y-auto p-6">
+                    <div id="wf-detail-tab-scroll" class="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col">
+                    <!-- Tickets tab -->
+                    <div id="wf-tab-tickets" class="wf-tab-content hidden h-full flex flex-col min-h-[420px]" hidden>
+                        <div id="wf-workflow-tickets-list" class="wf-ticket-list-surface wf-workflow-ticket-drop-zone flex-1 min-h-[320px] rounded border border-dashed border-white/10 p-2 transition-colors"></div>
+                        <p id="wf-workflow-tickets-empty" class="hidden"></p>
+                    </div>
+                    <!-- Loop tab -->
+                    <div id="wf-tab-loop" class="wf-tab-content hidden" hidden>
+                        <div class="wf-loop-layout">
+                            <div class="wf-loop-main">
+                                <div class="wf-loop-toolbar">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <button type="button" id="wf-loop-presets-btn" class="px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10">Loop presets</button>
+                                        <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40 disabled:cursor-not-allowed">+ Add step</button>
+                                        <span id="wf-loop-step-count" class="text-[11px] text-gray-500">0 / 14 steps</span>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <button type="button" class="wf-loop-view-toggle active text-white" data-loop-view="ring">Ring</button>
+                                        <button type="button" class="wf-loop-view-toggle text-gray-400" data-loop-view="list">List</button>
+                                    </div>
+                                </div>
+                                <div id="wf-loop-ring-view" class="wf-loop-view"></div>
+                                <div id="wf-loop-list-view" class="wf-loop-view hidden">
+                                    <div id="wf-steps-list" class="space-y-2"></div>
+                                </div>
+                            </div>
+                            <aside id="wf-loop-feed-panel" class="wf-loop-feed-panel" aria-label="Run activity feed">
+                                <div class="wf-loop-feed-compose">
+                                    <button type="button" id="wf-loop-feed-expand-btn" class="wf-loop-feed-expand-btn" title="Expand activity feed" aria-label="Expand activity feed" aria-expanded="false">
+                                        <svg class="wf-loop-feed-icon-expand" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                                        </svg>
+                                        <svg class="wf-loop-feed-icon-collapse" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+                                        </svg>
+                                    </button>
+                                    <input type="text" id="wf-loop-feed-input" class="wf-loop-feed-input" placeholder="Steer the active run…" autocomplete="off" disabled>
+                                    <button type="button" id="wf-loop-feed-steer-btn" class="wf-loop-feed-steer-btn" disabled>Steer</button>
+                                </div>
+                                <select id="wf-loop-feed-run-select" class="wf-loop-feed-run-select hidden" title="Active run"></select>
+                                <div id="wf-loop-feed-messages" class="wf-loop-feed-messages" role="log" aria-live="polite" aria-relevant="additions">
+                                    <p class="wf-loop-feed-empty">No run activity yet. Start a queued ticket.</p>
+                                </div>
+                            </aside>
+                        </div>
+                    </div>
+                    <!-- CLI tab (project terminal) -->
+                    <div id="wf-tab-cli" class="wf-tab-content hidden" hidden>
+                        <div class="wf-cli-panel">
+                            <div class="flex flex-wrap items-center justify-end gap-2 mb-2">
+                                <select id="wf-cli-backend-select" class="px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs min-w-[10rem]" title="Coding backend" disabled>
+                                    <option value="pi">Pi</option>
+                                </select>
+                                <button type="button" id="wf-cli-connect" class="px-2.5 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Connect</button>
+                                <span id="wf-cli-status-dot" class="w-2 h-2 rounded-full bg-gray-500" title="Not connected"></span>
+                                <span id="wf-cli-status-text" class="text-xs text-gray-400">Not connected</span>
+                            </div>
+                            <div class="wf-cli-terminal-wrap">
+                                <div class="wf-cli-input-row">
+                                    <input type="text" id="wf-cli-input" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Choose a CLI and click Connect to load models and send prompts." disabled>
+                                    <select id="wf-cli-model-select" class="px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs min-w-[12rem]" disabled title="Available after Connect">
+                                        <option value="">Connect CLI first</option>
+                                    </select>
+                                    <button type="button" id="wf-cli-send" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c] disabled:opacity-40" disabled>Send</button>
+                                </div>
+                                <div id="wf-cli-transcript" class="wf-cli-transcript">
+                                    <div class="wf-cli-line-system">Output appears here when you send a prompt or when a workflow run dispatches work.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <!-- Runs tab -->
-                    <div id="wf-tab-runs" class="wf-tab-content hidden">
+                    <div id="wf-tab-runs" class="wf-tab-content hidden" hidden>
                         <div class="mb-4 flex items-center justify-between gap-3 border-b border-white/10">
                             <div class="flex gap-1">
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-white border-b-2 border-[#f97316]" data-runs-tab="active">Active</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="sessions">Executor</button>
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="memory">Memory</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="timeline">Events</button>
-                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="recent">History</button>
                             </div>
                         </div>
                         <div id="wf-runs-pane-active" class="wf-runs-pane">
@@ -626,6 +1452,23 @@ body.wf-split-dragging * {
                             <div id="wf-execution-sessions-list" class="space-y-2"></div>
                             <p id="wf-execution-sessions-empty" class="text-sm text-gray-500">No executor activity yet.</p>
                         </div>
+                        <div id="wf-runs-pane-memory" class="wf-runs-pane hidden">
+                            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Steering memory</p>
+                                    <p class="text-xs text-gray-500">What this run and board remember for the next step.</p>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <select id="wf-steering-run-select" class="px-2 py-1 bg-[#152054] border border-white/20 rounded text-white text-xs min-w-[10rem]" title="Active run">
+                                        <option value="">No active run</option>
+                                    </select>
+                                    <button type="button" id="wf-refresh-steering-memory" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                </div>
+                            </div>
+                            <div id="wf-steering-memory-body" class="space-y-3">
+                                <p id="wf-steering-memory-empty" class="text-sm text-gray-500">Select a workflow with an active run to see steering memory.</p>
+                            </div>
+                        </div>
                         <div id="wf-runs-pane-timeline" class="wf-runs-pane hidden">
                             <div class="mb-3 flex items-center justify-between gap-3">
                                 <div>
@@ -633,38 +1476,17 @@ body.wf-split-dragging * {
                                     <p class="text-xs text-gray-500">Orchestration events emitted while tickets move through the workflow.</p>
                                 </div>
                                 <div class="flex items-center gap-2">
-                                    <button type="button" id="wf-refresh-hermes-events" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                                    <button type="button" id="wf-clear-hermes-events" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed">Clear events</button>
+                                    <button type="button" id="wf-refresh-orchestrator-events" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                    <button type="button" id="wf-clear-orchestrator-events" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed">Clear events</button>
                                 </div>
                             </div>
-                            <div id="wf-hermes-events-list" class="space-y-2"></div>
-                            <p id="wf-hermes-events-empty" class="text-sm text-gray-500">No run events yet. Start a ticket run to populate the timeline.</p>
-                        </div>
-                        <div id="wf-runs-pane-recent" class="wf-runs-pane hidden">
-                            <div class="mb-2 flex items-center justify-between gap-3">
-                                <div>
-                                    <p class="text-xs text-gray-400">Run history</p>
-                                    <p class="text-[11px] text-gray-500">Completed, failed, or cancelled run records for this workflow.</p>
-                                </div>
-                                <button type="button" id="wf-clear-runs-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed">Clear history</button>
-                            </div>
-                            <div id="wf-runs-list" class="space-y-2"></div>
-                            <p id="wf-runs-empty" class="text-sm text-gray-500">No runs yet.</p>
+                            <div id="wf-orchestrator-events-list" class="space-y-2"></div>
+                            <p id="wf-orchestrator-events-empty" class="text-sm text-gray-500">No run events yet. Start a ticket run to populate the timeline.</p>
                         </div>
                     </div>
-                    <!-- Tickets tab -->
-                    <div id="wf-tab-tickets" class="wf-tab-content h-full flex flex-col min-h-[420px]">
-                        <div id="wf-workflow-tickets-list" class="wf-ticket-list-surface wf-workflow-ticket-drop-zone flex-1 min-h-[320px] rounded border border-dashed border-white/10 p-2 transition-colors"></div>
-                        <p id="wf-workflow-tickets-empty" class="hidden"></p>
-                    </div>
-                    </div>
-                    <div id="wf-detail-footer" class="border-t border-white/20 px-6 py-3 flex items-center justify-between gap-3 flex-shrink-0 bg-[#1a1f3a]">
-                        <div id="wf-board-consumers" class="hidden items-center gap-1 px-2 py-1 rounded border border-white/15 bg-white/5"></div>
-                        <div class="flex items-center gap-2 ml-auto">
-                            <span id="wf-name-save-status" class="text-xs text-gray-500 min-w-[44px] text-right"></span>
-                            <button type="button" id="wf-save-name-btn" class="px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10 hover:text-white" title="Save workflow name">Save</button>
-                            <button type="button" id="wf-delete-btn" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
-                        </div>
+                    <div id="wf-runs-list" class="hidden" aria-hidden="true"></div>
+                    <p id="wf-runs-empty" class="hidden" aria-hidden="true"></p>
+                    <button type="button" id="wf-clear-runs-btn" class="hidden" aria-hidden="true" tabindex="-1"></button>
                     </div>
                 </div>
             </div>
@@ -789,29 +1611,113 @@ body.wf-split-dragging * {
                 </div>
             </div>
         </div>
-        <div class="flex justify-between items-center gap-4 px-5 py-3 border-t border-white/20">
-            <div class="flex items-center gap-1" id="kb-modal-actions">
-                <button type="button" id="kb-modal-act-copy" class="kb-modal-action-btn text-gray-400 hover:text-white transition-colors" title="Copy title & description" aria-label="Copy title and description">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-discuss" class="kb-modal-action-btn text-gray-400 hover:text-[#c4b5fd] transition-colors" title="Discuss ticket with agent" aria-label="Discuss ticket with agent">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-project" class="kb-modal-action-btn text-gray-400 hover:text-blue-400 transition-colors" title="Send to Project" aria-label="Send to Project">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                </button>
-                <button type="button" id="kb-modal-act-workflow" class="kb-modal-action-btn text-gray-400 hover:text-sky-400 transition-colors" title="Link to selected workflow" aria-label="Link to selected workflow">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>
-                </button>
-                <button type="button" id="kb-modal-transfer-ext" class="hidden kb-modal-action-btn text-gray-400 hover:text-green-400 transition-colors" title="Copy to local board" aria-label="Copy to local board">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
-                </button>
-            </div>
+        <div class="flex justify-end items-center gap-4 px-5 py-3 border-t border-white/20">
             <div class="flex gap-2">
                 <button type="button" id="kb-modal-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
                 <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
                 <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<div id="wf-loop-step-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wf-loop-step-modal-title">
+    <div class="kb-modal p-0 wf-loop-step-modal">
+        <div class="flex items-start justify-between gap-4 px-5 py-4 border-b border-white/10">
+            <div>
+                <h3 id="wf-loop-step-modal-title" class="text-lg font-semibold text-white">Add step</h3>
+                <p id="wf-loop-step-modal-meta" class="text-xs text-gray-500 mt-0.5"></p>
+            </div>
+            <button type="button" id="wf-loop-step-modal-close" class="text-gray-400 hover:text-white text-xl leading-none" aria-label="Close">&times;</button>
+        </div>
+        <div class="px-5 py-4 wf-loop-step-body">
+            <div class="wf-loop-step-layout">
+                <div class="wf-loop-step-col wf-loop-step-col-main">
+                    <p class="wf-loop-step-col-title">Step</p>
+                    <div class="flex-shrink-0">
+                        <label for="wf-loop-step-name" class="block text-xs text-gray-500 mb-1">Step name</label>
+                        <input type="text" id="wf-loop-step-name" class="sf-name w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="What is this step called?">
+                    </div>
+                    <div class="wf-loop-step-tabs" role="tablist" aria-label="Step content">
+                        <button type="button" class="wf-loop-step-tab is-active" data-loop-step-tab="instruction" role="tab" aria-selected="true">Instruction</button>
+                        <button type="button" class="wf-loop-step-tab" data-loop-step-tab="guardrail" role="tab" aria-selected="false">Guardrails</button>
+                        <button type="button" class="wf-loop-step-tab" data-loop-step-tab="validation" role="tab" aria-selected="false">Validation</button>
+                    </div>
+                    <div class="wf-loop-step-tab-panels">
+                        <div id="wf-loop-step-pane-instruction" class="wf-loop-step-tab-pane is-active" role="tabpanel">
+                            <p class="wf-loop-step-tab-help">What the executor should do with the ticket in this step.</p>
+                            <textarea id="wf-loop-step-instruction" class="sf-instruction w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Implement the login fix, run the app locally, and capture evidence…"></textarea>
+                        </div>
+                        <div id="wf-loop-step-pane-guardrail" class="wf-loop-step-tab-pane" role="tabpanel">
+                            <p class="wf-loop-step-tab-help">Constraints while work is in progress — scope limits, quality bar, things to avoid.</p>
+                            <textarea id="wf-loop-step-guardrail" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Stay on the ticket scope; do not refactor unrelated modules; match existing UI patterns…"></textarea>
+                        </div>
+                        <div id="wf-loop-step-pane-validation" class="wf-loop-step-tab-pane" role="tabpanel">
+                            <p class="wf-loop-step-tab-help">Explicit pass/fail criteria the orchestrator uses after the step runs.</p>
+                            <textarea id="wf-loop-step-validation" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Checkout completes without errors; Playwright smoke test passes; no console errors on the login page…"></textarea>
+                        </div>
+                    </div>
+                    <p id="wf-loop-step-orchestrator-note" class="hidden text-[11px] text-gray-500 flex-shrink-0"></p>
+                    <p id="wf-loop-step-clarify" class="hidden text-[11px] text-amber-200/90 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 flex-shrink-0"></p>
+                </div>
+                <div class="wf-loop-step-col wf-loop-step-col-side">
+                    <div class="wf-loop-step-side-head">
+                        <p class="wf-loop-step-col-title" style="margin:0">Skills &amp; tools</p>
+                        <button type="button" id="wf-loop-step-determine-skills" class="px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] text-[11px] hover:bg-[#f97316]/10">Determine skills &amp; tools</button>
+                    </div>
+                    <p id="wf-loop-step-determine-hint" class="text-[11px] text-gray-500 flex-shrink-0"></p>
+                    <div class="wf-loop-step-side-stack">
+                        <div class="wf-loop-step-side-panel">
+                            <p class="wf-loop-step-side-panel-label">Skills</p>
+                            <div id="wf-loop-step-skills-list" class="wf-loop-step-picker">
+                                <p class="text-xs text-gray-500 px-1 py-2">Loading skills…</p>
+                            </div>
+                        </div>
+                        <div class="wf-loop-step-side-panel">
+                            <p class="wf-loop-step-side-panel-label">Additional tools</p>
+                            <div id="wf-loop-step-tools-list" class="wf-loop-step-picker"></div>
+                            <div id="wf-loop-step-other-tool-wrap" class="hidden mt-2">
+                                <label for="wf-loop-step-other-tool" class="block text-xs text-gray-500 mb-1">Other tool</label>
+                                <input type="text" id="wf-loop-step-other-tool" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" placeholder="e.g. MCP server, custom script runner, Jira CLI">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="flex justify-between items-center gap-3 px-5 py-3 border-t border-white/20">
+            <button type="button" id="wf-loop-step-delete" class="hidden px-3 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete step</button>
+            <div class="flex items-center gap-3 ml-auto">
+                <button type="button" id="wf-loop-step-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+                <button type="button" id="wf-loop-step-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Add step</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="wf-loop-preset-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width:min(560px,96vw);max-height:86vh;display:flex;flex-direction:column;">
+        <div class="flex items-start justify-between gap-4 px-5 py-4 border-b border-white/10">
+            <div>
+                <h3 class="text-lg font-semibold text-white">Loop presets</h3>
+                <p class="text-xs text-gray-500 mt-0.5">Role-based loops for developers, content, and sales — full steps with skills, tools, and routing.</p>
+            </div>
+            <button type="button" id="wf-loop-preset-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div class="px-4 py-3 border-b border-white/10 space-y-2">
+            <label for="wf-loop-preset-mode" class="block text-xs text-gray-500">Apply mode</label>
+            <select id="wf-loop-preset-mode" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                <option value="replace">Replace current loop</option>
+                <option value="append">Append to current loop</option>
+            </select>
+            <p id="wf-loop-preset-capacity" class="text-[11px] text-gray-500"></p>
+        </div>
+        <div id="wf-loop-preset-list" class="p-4 space-y-2 overflow-y-auto flex-1 min-h-0"></div>
+        <div class="px-4 py-3 border-t border-white/10 flex flex-wrap items-center justify-end gap-2">
+            <input type="file" id="wf-loop-preset-import-file" class="hidden" accept=".json,application/json">
+            <button type="button" id="wf-loop-preset-import-btn" class="px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10">Import preset</button>
+            <button type="button" id="wf-loop-preset-export-btn" class="px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10">Export current loop</button>
+            <button type="button" id="wf-loop-preset-save-btn" class="px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10">Save current steps</button>
         </div>
     </div>
 </div>
@@ -901,29 +1807,25 @@ body.wf-split-dragging * {
 </div>
 
 <div id="wf-create-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wf-create-modal-title">
-    <div class="kb-modal p-0" style="width: min(560px, 94vw);">
-        <div class="flex items-center justify-between gap-4 px-5 py-3 border-b border-white/10">
-            <h3 id="wf-create-modal-title" class="text-base font-semibold text-white">New workflow</h3>
+    <div class="kb-modal p-0 wf-create-modal">
+        <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10">
+            <h3 id="wf-create-modal-title" class="text-sm font-semibold text-white">New workflow</h3>
             <button type="button" id="wf-create-modal-close" class="text-gray-400 hover:text-white text-xl leading-none" aria-label="Close">&times;</button>
         </div>
-        <div class="p-5 space-y-4">
-            <p class="text-sm text-gray-300">Create a workflow manually or describe what to automate and let the agent plan the steps.</p>
-            <div class="space-y-2">
-                <label for="wf-new-name" class="text-xs uppercase tracking-wide text-gray-500">Name</label>
-                <div class="flex gap-2">
-                    <input type="text" id="wf-new-name" placeholder="New workflow..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
-                    <button type="button" id="wf-create-btn" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Create</button>
-                </div>
+        <div class="px-4 py-3 space-y-3">
+            <div>
+                <label for="wf-new-name" class="block text-xs text-gray-500 mb-1">Name</label>
+                <input type="text" id="wf-new-name" placeholder="Workflow name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
             </div>
-            <div class="space-y-2">
-                <label for="wf-builder-desc" class="text-xs uppercase tracking-wide text-gray-500">Plan from description</label>
-                <div class="flex gap-2">
-                    <input type="text" id="wf-builder-desc" placeholder="Describe the workflow to plan..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
-                    <button type="button" id="wf-plan-btn" class="px-3 py-2 rounded bg-[#1a237e] text-white text-sm font-medium hover:bg-[#283593] border border-white/20 whitespace-nowrap">Plan</button>
-                </div>
+            <div>
+                <label for="wf-builder-desc" class="block text-xs text-gray-500 mb-1">Loop description</label>
+                <textarea id="wf-builder-desc" rows="8" placeholder="Paste a loop kickoff (e.g. from loops.elorm.xyz) or describe what should happen with each ticket..." class="w-full min-h-[200px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 resize-y focus:border-[#f97316] focus:outline-none"></textarea>
             </div>
-            <span id="wf-builder-spinner" class="hidden text-xs text-gray-400">Planning...</span>
             <p id="wf-builder-error" class="hidden text-xs text-red-400"></p>
+        </div>
+        <div class="flex items-center justify-end gap-2 px-4 py-3 border-t border-white/10">
+            <button type="button" id="wf-create-cancel" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="wf-create-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Create</button>
         </div>
     </div>
 </div>
@@ -949,14 +1851,20 @@ body.wf-split-dragging * {
 (function() {
     var modalHtml = [
         '<div id="sr-llm-modal" class="fixed inset-0 z-[10000] hidden items-center justify-center bg-black/60">',
-        '<div class="bg-[#1a1f3a] border border-[#565869] rounded-xl p-4 w-full max-w-3xl max-h-[86vh] overflow-y-auto shadow-2xl">',
-        '<div class="flex items-center justify-between mb-3">',
-        '<h3 class="text-white font-semibold text-lg">Workflow configuration</h3>',
+        '<div class="wf-global-config-shell bg-[#1a1f3a] border border-[#565869] rounded-xl w-full max-w-3xl min-h-[32rem] max-h-[86vh] shadow-2xl flex flex-col overflow-hidden">',
+        '<div id="wf-global-config-header" class="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">',
+        '<h3 class="text-white font-semibold text-lg">Global workflow configuration</h3>',
         '<button id="sr-llm-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>',
         '</div>',
-        '<div id="wf-config-workflow-panel" class="mb-4 space-y-4">',
-        '<p id="wf-config-workflow-hint" class="hidden text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2">Select a workflow to edit run policy and agent context rules.</p>',
-        '<div id="wf-config-workflow-body" class="space-y-4">',
+        '<div id="wf-global-config-tabs" class="flex gap-6 px-4 mt-3 pt-1 border-b border-white/10 flex-shrink-0">',
+        '<button type="button" class="wf-global-config-tab pb-2 text-sm text-white border-b-2 border-[#f97316]" data-wf-config-tab="run-policy">Run policy</button>',
+        '<button type="button" class="wf-global-config-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-wf-config-tab="context-rules">Global context rules</button>',
+        '<button type="button" class="wf-global-config-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-wf-config-tab="execution">Execution</button>',
+        '</div>',
+        '<div id="wf-global-config-body" class="relative w-full flex-1 min-h-0">',
+        '<div id="wf-config-tab-run-policy" class="wf-global-config-pane is-active space-y-4">',
+        '<p class="wf-config-needs-workflow-hint hidden text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2">Select a workflow to edit run policy.</p>',
+        '<div class="wf-config-tab-body space-y-4">',
         '<div id="wf-config-run-settings-panel" class="rounded border border-white/10 bg-[#152054]/40 p-3">',
         '<div class="mb-3">',
         '<p class="text-sm font-semibold text-white">Run policy</p>',
@@ -975,21 +1883,33 @@ body.wf-split-dragging * {
         '<input id="wf-config-run-branch-per-ticket" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
         '<span class="text-xs text-gray-200">Create branch per ticket</span></label>',
         '</div></div>',
-        '<div class="rounded border border-white/10 bg-[#152054]/40 p-3">',
-        '<div class="flex items-center justify-between gap-3 mb-2">',
-        '<div><p class="text-sm font-semibold text-white">Agent context rules</p>',
-        '<p class="text-xs text-gray-500 mt-0.5">Rules the agent follows for this workflow.</p></div>',
+        '</div></div>',
+        '<div id="wf-config-tab-context-rules" class="wf-global-config-pane flex flex-col min-h-0 space-y-4">',
+        '<p class="wf-config-needs-workflow-hint hidden flex-shrink-0 text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2">Select a workflow to edit global context rules.</p>',
+        '<div class="wf-config-tab-body flex flex-col flex-1 min-h-0 rounded border border-white/10 bg-[#152054]/40 p-3">',
+        '<div class="flex items-center justify-between gap-3 mb-2 flex-shrink-0">',
+        '<div><p class="text-sm font-semibold text-white">Global context rules</p>',
+        '<p class="text-xs text-gray-500 mt-0.5">Rules the agent follows for the selected workflow.</p></div>',
         '<button type="button" id="wf-config-add-context-item-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add rule</button>',
         '</div>',
-        '<div class="rounded border border-white/10 overflow-hidden">',
+        '<div id="wf-config-context-table-wrap" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10">',
         '<table class="w-full table-fixed text-sm"><colgroup><col><col style="width:9rem;"></colgroup>',
-        '<thead class="bg-[#0d1333] border-b border-white/10"><tr>',
+        '<thead class="bg-[#0d1333] border-b border-white/10 sticky top-0 z-[1]"><tr>',
         '<th class="text-left text-xs font-medium text-gray-400 px-3 py-2">Rule</th>',
         '<th class="text-right text-xs font-medium text-gray-400 px-3 py-2">Actions</th>',
         '</tr></thead><tbody id="wf-config-context-items-list" class="divide-y divide-white/10"></tbody></table>',
-        '</div><p id="wf-config-context-save-status" class="text-xs text-gray-500 mt-2"></p></div>',
-        '</div></div>',
-        '<div class="flex gap-2 justify-end">',
+        '</div><p id="wf-config-context-save-status" class="text-xs text-gray-500 mt-2 flex-shrink-0"></p></div>',
+        '</div>',
+        '<div id="wf-config-tab-execution" class="wf-global-config-pane space-y-3">',
+        '<div><p class="text-sm font-semibold text-white">Executors</p>',
+        '<p class="text-xs text-gray-500 mt-0.5">Ready executors for the board\'s linked project. Click a pill to set the medium complexity route.</p></div>',
+        '<div id="wf-global-exec-backend-pills" class="flex flex-wrap gap-1.5"></div>',
+        '<div><p class="text-sm font-semibold text-white">Ticket complexity routing</p>',
+        '<p class="text-xs text-gray-500 mt-0.5">Ticket complexity chooses the implementation agent for every workflow run. CLI backends also pick a model; IDE backends use whatever model you choose in the editor.</p></div>',
+        '<div id="wf-global-exec-routes" class="space-y-2"></div>',
+        '</div>',
+        '</div>',
+        '<div id="wf-global-config-footer" class="flex gap-2 justify-end px-4 py-3 border-t border-white/10 flex-shrink-0">',
         '<button id="sr-llm-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>',
         '<button id="sr-llm-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Save</button>',
         '</div>',
@@ -998,18 +1918,55 @@ body.wf-split-dragging * {
     ].join('');
     document.body.insertAdjacentHTML('beforeend', modalHtml);
 
+    var globalConfigHeightStyle = document.createElement('style');
+    globalConfigHeightStyle.textContent = [
+        '#wf-global-config-body { position: relative; width: 100%; flex: 1 1 auto; min-height: 0; }',
+        '.wf-global-config-pane { position: absolute; inset: 0; overflow-y: auto; padding: 1rem; box-sizing: border-box; }',
+        '.wf-global-config-pane:not(.is-active) { visibility: hidden; pointer-events: none; }',
+        '#wf-config-tab-context-rules.wf-global-config-pane { display: flex; flex-direction: column; overflow: hidden; }',
+        '#wf-config-tab-context-rules .wf-config-tab-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }',
+        '#wf-config-context-table-wrap { flex: 1 1 auto; min-height: 12rem; overflow-y: auto; }'
+    ].join('\n');
+    document.head.appendChild(globalConfigHeightStyle);
+
     var modal = document.getElementById('sr-llm-modal');
     var configBtn = document.getElementById('wf-menu-btn');
+
+    function switchGlobalConfigTab(tab) {
+        tab = tab || 'run-policy';
+        document.querySelectorAll('.wf-global-config-tab').forEach(function (btn) {
+            var active = btn.dataset.wfConfigTab === tab;
+            btn.classList.toggle('text-white', active);
+            btn.classList.toggle('text-gray-400', !active);
+            btn.style.borderColor = active ? '#f97316' : 'transparent';
+        });
+        document.querySelectorAll('.wf-global-config-pane').forEach(function (pane) {
+            pane.classList.toggle('is-active', pane.id === 'wf-config-tab-' + tab);
+        });
+    }
+
+    document.querySelectorAll('.wf-global-config-tab').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            switchGlobalConfigTab(btn.dataset.wfConfigTab || 'run-policy');
+        });
+    });
 
     function openModal() {
         modal.classList.remove('hidden');
         modal.classList.add('flex');
+        switchGlobalConfigTab('run-policy');
+        if (typeof window.ensureGlobalConfigExecutionRoutesShell === 'function') {
+            window.ensureGlobalConfigExecutionRoutesShell();
+        }
         if (typeof window.refreshWorkflowConfigPanel === 'function') {
             window.refreshWorkflowConfigPanel();
         }
     }
 
-    function closeModal() { modal.classList.add('hidden'); modal.classList.remove('flex'); }
+    function closeModal() {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
 
     window.openWorkflowExecutionSetup = openModal;
     var legacySetupBtn = document.getElementById('wf-sr-llm-btn');
@@ -1019,12 +1976,15 @@ body.wf-split-dragging * {
     modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
 
     document.getElementById('sr-llm-save').addEventListener('click', function() {
-        var savePromise = typeof window.saveWorkflowRunSettings === 'function'
+        var saveRun = typeof window.saveWorkflowRunSettings === 'function'
             ? window.saveWorkflowRunSettings()
             : Promise.resolve();
-        savePromise.then(function() {
+        var saveExec = typeof window.saveWorkflowGlobalExecutionRouting === 'function'
+            ? window.saveWorkflowGlobalExecutionRouting()
+            : Promise.resolve();
+        Promise.all([saveRun, saveExec]).then(function() {
             closeModal();
-            window.DecisionsAPI && window.DecisionsAPI.snackbar('Workflow configuration saved', 'success');
+            window.DecisionsAPI && window.DecisionsAPI.snackbar('Global workflow configuration saved', 'success');
         }).catch(function() {
             window.DecisionsAPI && window.DecisionsAPI.snackbar('Failed to save configuration', 'error');
         });

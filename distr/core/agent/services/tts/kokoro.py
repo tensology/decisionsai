@@ -265,7 +265,7 @@ class KokoroTTSService(TTSService):
                         if self._cancelled:
                             return
 
-                    audio_int16 = (audio * 32767).astype(np.int16)
+                    audio_int16 = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
                     audio_bytes = audio_int16.tobytes()
 
                     chunk_size = int(sample_rate * 0.02 * 2)
@@ -751,12 +751,6 @@ class KokoroTTSService(TTSService):
                                     logger.debug("TTS: Cancelled right before push - dropping frame")
                                     break
                                 
-                                # Apply speech volume
-                                if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                    audio_array = np.frombuffer(audio_frame.audio, dtype=np.int16)
-                                    audio_array = (audio_array * self._speech_volume).astype(np.int16)
-                                    audio_frame.audio = audio_array.tobytes()
-                                
                                 await self.push_frame(audio_frame, direction)
                                 # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
                                 if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
@@ -912,13 +906,6 @@ class KokoroTTSService(TTSService):
                                 continue
                             
                             # Desktop request - process and push frames normally
-                            # Apply speech volume
-                            if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                audio_array = np.frombuffer(audio_frame.audio, dtype=np.int16)
-                                audio_array = (audio_array * self._speech_volume).astype(np.int16)
-                                
-                                audio_frame.audio = audio_array.tobytes()
-                            
                             await self.push_frame(audio_frame, direction)
                             # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
                             if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):

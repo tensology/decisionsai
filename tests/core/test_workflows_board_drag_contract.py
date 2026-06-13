@@ -1,0 +1,209 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS_JS = ROOT / "distr/gui/web/static/workflows/js/workflows.js"
+WORKFLOWS_HTML = ROOT / "distr/gui/web/templates/workflows/workflows.html"
+WORKFLOWS_PY = ROOT / "distr/gui/web/routes/settings/workflows.py"
+CHAT_PY = ROOT / "distr/gui/web/routes/chat.py"
+KANBAN_TICKET_JS = ROOT / "distr/gui/web/static/kanban/js/kanban_ticket.js"
+
+
+def test_workflows_board_rows_use_kanban_list_with_workflow_mouse_drag():
+    workflows = WORKFLOWS_JS.read_text(encoding="utf-8")
+    kanban = KANBAN_TICKET_JS.read_text(encoding="utf-8")
+    render_block = workflows.split("function renderWorkflowBoardTickets(board, selected, message)", 1)[1].split(
+        "function getSelectedBoardLocalId", 1
+    )[0]
+
+    assert "disableListDrag: true" in render_block
+    assert "ticketUi.createTicketListRow" in render_block
+    assert "bindWorkflowBoardListRow(row, ticket, lane, selected, board)" in render_block
+    assert "if (canDrag && !listOpts.disableListDrag)" in kanban
+
+
+def test_workflows_board_drag_ghost_clones_row_inside_ticket_surface_shell():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    ghost_block = js.split("function createWorkflowBoardDragGhost(row, evt)", 1)[1].split(
+        "function bindWorkflowTicketRowDragSources", 1
+    )[0]
+
+    assert "row.cloneNode(true)" in ghost_block
+    assert "wf-board-ticket-drag-ghost-shell" in ghost_block
+    assert "wf-ticket-list-surface" in ghost_block
+    assert "wf-board-ticket-drag-ghost-shell" in html
+    assert "upgradeWorkflowBoardTicketGrip" in js
+
+
+def test_workflow_queue_rows_define_list_drag_handle_helper():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    assert "function workflowListDragHandleHtml(draggable, title)" in js
+    assert "workflowListDragHandleHtml(canReorder" in js
+
+
+def test_workflows_board_drag_uses_direct_grip_mouse_handlers():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+
+    assert "function bindWorkflowBoardGripMouseDrag(handle, row)" in js
+    assert "bindWorkflowBoardGripMouseDrag(handle, row)" in js.split(
+        "function upgradeWorkflowBoardTicketGrip(row, canDrag)", 1
+    )[1].split("function normalizeWorkflowPriority", 1)[0]
+    assert "startWorkflowBoardGripMouseTracking" in js
+    assert "beginWorkflowBoardMouseDrag" in js
+
+
+def test_workflows_websocket_handler_is_typed_once():
+    workflows_py = WORKFLOWS_PY.read_text(encoding="utf-8")
+    chat_py = CHAT_PY.read_text(encoding="utf-8")
+
+    assert '@router.websocket("/workflows/ws")' in workflows_py
+    assert '@router.websocket("/ws/workflows")' in workflows_py
+    assert '@router.websocket("/workflows/ws")' not in chat_py
+
+
+def test_workflow_queue_remove_uses_confirmation_and_keyboard_helpers():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+
+    assert "wf-workflow-ticket-remove" in js
+    assert 'id="wf-delete-btn"' not in html
+    assert "function removeWorkflowQueueTicket(ticketId, options)" in js
+    assert "function selectWorkflowQueueTicket(ticketId, rowEl)" in js
+    assert 'namespace: "workflow-queue"' in js
+    assert "function finishDetailTabRestore()" in js
+    assert "var shouldRestoreDetailTabOnce = true" in js
+
+
+def test_workflows_ticket_modal_footer_has_save_delete_only():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+
+    assert 'id="kb-modal-save"' in html
+    assert 'id="kb-modal-delete"' in html
+    assert "kb-modal-act-discuss" not in js
+
+
+def test_workflow_context_menu_is_configure_duplicate_delete_only():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    menu_block = js.split("function ensureWorkflowContextMenu()", 1)[1].split(
+        "function openWorkflowContextMenu", 1
+    )[0]
+
+    assert 'data-action="configure"' in menu_block
+    assert 'data-action="duplicate"' in menu_block
+    assert 'data-action="delete"' in menu_block
+    assert 'data-action="run"' not in menu_block
+    assert 'data-action="export"' not in menu_block
+    assert 'data-action="download"' not in menu_block
+    assert 'data-action="purge-all"' not in menu_block
+
+
+def test_workflow_create_modal_is_compact_with_large_description():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wf-create-modal"' in html
+    assert "wf-create-modal" in html
+    assert "640px" in html
+    assert 'id="wf-builder-desc"' in html
+    assert 'rows="8"' in html
+    assert 'min-h-[200px]' in html
+    assert 'id="wf-create-cancel"' in html
+    assert 'id="wf-create-btn"' in html
+
+
+def test_workflow_loop_ui_has_ring_and_list_views():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+
+    assert 'id="wf-loop-ring-view"' in html
+    assert 'id="wf-loop-list-view"' in html
+    assert 'data-loop-view="ring"' in html
+    assert 'data-loop-view="list"' in html
+    assert "WORKFLOW_LOOP_MAX_STEPS = 14" in js
+    assert "function renderLoopRingView(steps)" in js
+    assert 'id="wf-loop-step-modal"' in html
+    assert 'id="wf-loop-step-guardrail"' in html
+    assert 'id="wf-loop-step-validation"' in html
+    assert 'data-loop-step-tab="validation"' in html
+    assert 'id="wf-loop-step-determine-skills"' in html
+    assert 'id="wf-loop-step-skills-list"' in html
+    assert 'id="wf-loop-step-tools-list"' in html
+    assert "wf-loop-step-tools-grid" in js
+    assert "wf-loop-ring-node-head" in js
+    assert 'emoji: "🎭"' in js
+    assert "wf-loop-step-layout" in html
+    assert "function openLoopStepModal(opts)" in js
+    assert "function renderLoopStepSkillsPicker" in js
+    assert "function determineLoopStepSkills" in js
+    assert "wf-loop-step-action-type" not in html
+    assert "wf-loop-step-wait" not in html
+    assert 'id="wf-loop-step-other-tool-wrap"' in html
+    assert 'id="wf-loop-step-other-tool"' in html
+    assert 'id="wf-loop-preset-mode"' in html
+    assert 'id="wf-loop-preset-capacity"' in html
+    assert 'id="wf-loop-preset-import-btn"' in html
+    assert 'id="wf-loop-preset-export-btn"' in html
+    assert 'id="wf-loop-preset-save-btn"' in html
+    assert "function syncLoopStepOtherToolVisibility" in js
+    assert "function syncLoopPresetCapacityHint" in js
+    assert "function exportCurrentLoopPreset" in js
+    assert "function importLoopPresetFile" in js
+    assert "function saveCurrentLoopAsPreset" in js
+    assert "mode: mode" in js or "mode: mode," in js
+
+
+def test_workflows_detail_tabs_use_loop_and_conditional_runs():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+
+    assert 'data-tab="loop"' in html
+    assert 'data-tab="activity"' not in html
+    assert 'id="wf-tab-tickets"' in html
+    assert 'id="wf-tab-loop"' in html
+    assert 'id="wf-tab-cli"' in html
+    assert '.wf-tab-content.hidden' in html
+    assert 'display: none !important' in html
+    assert 'id="wf-tab-activity"' not in html
+    assert 'id="wf-steps-list"' in html
+    assert 'id="wf-runs-tab-btn"' in html
+    assert "Activity log" not in html
+    assert 'id="wf-loop-feed-panel"' in html
+    assert 'wf-loop-feed-title' not in html
+    assert 'id="wf-detail-footer"' not in html
+    assert "function readPersistedWorkflowDetailTab()" in js
+    assert "function syncWorkflowRunsTabVisibility()" in js
+
+
+def test_workflow_lane_add_all_disables_when_nothing_left_to_add():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    add_all_block = js.split("function refreshWorkflowLaneAddAllButtons()", 1)[1].split(
+        "function rememberWorkflowBoardTicketSource", 1
+    )[0]
+    get_addable_block = js.split("function getAddableBoardTicketItems(laneId)", 1)[1].split(
+        "function bindWorkflowBoardListRow", 1
+    )[0]
+    finish_block = js.split("function addAllBoardTicketsToWorkflow(laneId)", 1)[1].split(
+        "function handleWorkflowTicketDropPayload", 1
+    )[0]
+
+    assert "btn.disabled = getAddableBoardTicketItems(laneId).length === 0" in add_all_block
+    assert "workflowBoardTicketLinkState(item).canDragToWorkflow" in get_addable_block
+    assert "isBoardTicketQueuedInCurrentWorkflow" in js
+    assert "refreshWorkflowLaneAddAllButtons()" in finish_block
+    assert "refreshWorkflowBoardTicketsFromQueue()" in js
+
+
+def test_workflows_board_drag_row_state_uses_dataset_draggable():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    sync_block = js.split("function syncWorkflowBoardTicketRowUi(ticketKey, rowEl)", 1)[1].split(
+        "function refreshWorkflowLaneAddAllButtons", 1
+    )[0]
+    render_block = js.split("function renderWorkflowBoardTickets(board, selected, message)", 1)[1].split(
+        "function getSelectedBoardLocalId", 1
+    )[0]
+
+    assert "rowEl || workflowBoardTicketRowForKey(ticketKey)" in sync_block
+    assert 'row.dataset.draggable = state.canDragToWorkflow ? "true" : "false"' in sync_block
+    assert "upgradeWorkflowBoardTicketGrip(row, state.canDragToWorkflow)" in sync_block
+    assert "syncWorkflowBoardTicketRowUi(ticketKey, row)" in js
+    assert "refreshWorkflowBoardTicketDragBindings(list)" in render_block

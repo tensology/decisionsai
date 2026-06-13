@@ -189,6 +189,8 @@
         document.getElementById("project-detail-title").textContent = project.name || "Project";
         document.getElementById("detail-name").value = project.name || "";
         document.getElementById("detail-description").value = project.description || "";
+        var notesEl = document.getElementById("detail-notes");
+        if (notesEl) notesEl.value = project.notes || "";
         document.getElementById("detail-folder").value = project.folder_location || "";
         var words = [];
         try { words = JSON.parse(project.additional_trigger_words || "[]"); } catch (e) {}
@@ -198,6 +200,7 @@
         document.getElementById("detail-startup").value = project.startup_instructions || "";
         var startTracker = document.getElementById("detail-start-time-tracker");
         if (startTracker) startTracker.checked = project.start_time_tracker !== false;
+        updateStartupTimeTrackerVisibility(project);
         var terminalBackendSel = document.getElementById("terminal-backend-select");
         if (terminalBackendSel) terminalBackendSel.value = project.coding_backend || "pi";
         loadProjectCliBackends(project.id, project.coding_backend || "pi");
@@ -328,6 +331,40 @@
         return "";
     }
 
+    function projectHasLinkedBoard(project) {
+        if (!project) return false;
+        if (project.kanban_board_id) return true;
+        var provider = (project.provider || "").toString().trim();
+        var boardId = (project.board_id || "").toString().trim();
+        return !!(provider && boardId);
+    }
+
+    function boardFieldsHaveLinkedBoard(fields) {
+        if (!fields) return false;
+        if (fields.kanban_board_id) return true;
+        return !!((fields.provider || "").trim() && (fields.board_id || "").trim());
+    }
+
+    function updateStartupTimeTrackerVisibility(project) {
+        var label = document.getElementById("startup-time-tracker-label");
+        var checkbox = document.getElementById("detail-start-time-tracker");
+        if (!label) return;
+        var linked = projectHasLinkedBoard(project);
+        label.classList.toggle("hidden", !linked);
+        if (!linked && checkbox) checkbox.checked = false;
+    }
+
+    function updateStartupTimeTrackerVisibilityFromBoardSelect() {
+        var boardSel = document.getElementById("detail-board");
+        var fields = parseProjectBoardValue(boardSel ? boardSel.value : "");
+        var label = document.getElementById("startup-time-tracker-label");
+        var checkbox = document.getElementById("detail-start-time-tracker");
+        if (!label) return;
+        var linked = boardFieldsHaveLinkedBoard(fields);
+        label.classList.toggle("hidden", !linked);
+        if (!linked && checkbox) checkbox.checked = false;
+    }
+
     function renderProjectBoardSelectHtml() {
         var groups = [
             { key: "local", label: "Local", match: function(opt) { return opt.source === "local"; } },
@@ -394,6 +431,7 @@
                 boardSel.value = want && Array.from(boardSel.options).some(function(opt) { return opt.value === want; }) ? want : "";
                 boardSel.disabled = false;
                 updateProjectBoardGoto();
+                updateStartupTimeTrackerVisibilityFromBoardSelect();
             };
             if (!want && project && project.id) {
                 fetch("/api/projects/" + project.id + "/kanban-board")
@@ -537,6 +575,7 @@
         var payload = {
             name: (document.getElementById("detail-name").value || "").trim() || "New Project",
             description: (document.getElementById("detail-description").value || "").trim(),
+            notes: (document.getElementById("detail-notes")?.value || "").trim(),
             folder_location: (document.getElementById("detail-folder").value || "").trim(),
             additional_trigger_words: JSON.stringify(getTriggerWordsArray()),
             startup_instructions: (document.getElementById("detail-startup").value || "").trim(),
@@ -891,7 +930,12 @@
         document.getElementById("startup-terminate-all-btn")?.addEventListener("click", terminateAllStartupTerminals);
 
         var detailBoard = document.getElementById("detail-board");
-        if (detailBoard) detailBoard.addEventListener("change", updateProjectBoardGoto);
+        if (detailBoard) {
+            detailBoard.addEventListener("change", function() {
+                updateProjectBoardGoto();
+                updateStartupTimeTrackerVisibilityFromBoardSelect();
+            });
+        }
 
         var codingBackend = document.getElementById("detail-coding-backend");
         if (codingBackend) codingBackend.addEventListener("change", setProjectCodingBackend);
@@ -2137,7 +2181,13 @@
         if (!_termAgentRunning) {
             appendTranscriptLine(transcript, "system", "Starting agent...");
         }
-        _termWs.send(JSON.stringify({type: "prompt", message: instruction}));
+        var modelSel = document.getElementById("terminal-model-select");
+        var model = modelSel ? (modelSel.value || "").trim() : "";
+        _termWs.send(JSON.stringify({
+            type: "prompt",
+            message: instruction,
+            model: model && model !== "auto" ? model : ""
+        }));
     }
 
     function sendTerminalSteer(instruction) {
@@ -2548,6 +2598,93 @@
         });
     }
 
+    function showStartupTerminalChrome() {
+        var grid = document.getElementById("startup-terminal-grid");
+        var startBtn = document.getElementById("startup-start-btn");
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (grid) grid.classList.remove("hidden");
+        if (startBtn) startBtn.classList.add("hidden");
+        if (termBtn) termBtn.classList.remove("hidden");
+    }
+
+    function clearStartupTerminalPlaceholders() {
+        var grid = document.getElementById("startup-terminal-grid");
+        if (!grid) return;
+        grid.querySelectorAll(".startup-terminal-card--pending").forEach(function(card) {
+            card.remove();
+        });
+        if (!grid.querySelector(".startup-terminal-card:not(.startup-terminal-card--pending)")) {
+            grid.classList.add("hidden");
+        }
+    }
+
+    function renderStartupTerminalPlaceholders(commands) {
+        var grid = document.getElementById("startup-terminal-grid");
+        if (!grid) return;
+        showStartupTerminalChrome();
+        grid.innerHTML = "";
+        commands.forEach(function(command, index) {
+            var card = document.createElement("div");
+            card.className = "startup-terminal-card startup-terminal-card--pending";
+            card.dataset.pendingIndex = String(index);
+            card.innerHTML = '<div class="startup-terminal-header">' +
+                '<span class="startup-terminal-title" title="' + escapeAttr(command) + '">Queued for startup</span>' +
+                '</div>' +
+                '<div class="startup-terminal-pending-body">' +
+                '<div class="startup-terminal-pending-command">' + escapeHtml(command) + '</div>' +
+                '<div class="startup-terminal-pending-status">Waiting for terminal session...</div>' +
+                '</div>';
+            grid.appendChild(card);
+        });
+    }
+
+    function refreshStartupSessionsUntilVisible(projectId, commands) {
+        var attempts = 0;
+        var maxAttempts = 10;
+        var delay = 450;
+
+        function poll() {
+            if (!projectId || currentProjectId !== projectId) return;
+            apiFetch("/api/projects/" + projectId + "/startup-sessions")
+                .then(function(data) {
+                    var sessions = Array.isArray(data.sessions) ? data.sessions : [];
+                    var alive = sessions.filter(function(s) { return s.alive; });
+                    if (alive.length) {
+                        _projectTerminalState[projectId] = alive.map(function(s) {
+                            return { processId: s.process_id, command: s.command, pid: s.pid || null };
+                        });
+                        reattachProjectTerminals(projectId);
+                        switchTab("startup");
+                        return;
+                    }
+                    attempts += 1;
+                    if (attempts < maxAttempts) {
+                        setTimeout(poll, delay);
+                    } else if (commands && commands.length) {
+                        showSnackbar("Startup terminals are queued. Panels will attach when the web runtime starts them.", "info");
+                    }
+                })
+                .catch(function() {
+                    attempts += 1;
+                    if (attempts < maxAttempts) setTimeout(poll, delay);
+                });
+        }
+
+        poll();
+    }
+
+    function formatStartupStartSnackbar(response, commands) {
+        var count = Number(response && response.started) || (commands ? commands.length : 0);
+        var failed = Number(response && response.failed) || 0;
+        if (failed > 0) {
+            return "Started " + count + " startup terminal" + (count === 1 ? "" : "s") + "; " + failed + " failed.";
+        }
+        if (count > 0) {
+            return "Starting " + count + " startup terminal" + (count === 1 ? "" : "s") + ".";
+        }
+        return "Startup terminals queued.";
+    }
+
     function startStartupTerminals() {
         if (!currentProjectId) {
             showSnackbar("Select a project first", "error");
@@ -2570,29 +2707,50 @@
             return;
         }
 
+        switchTab("startup");
+        renderStartupTerminalPlaceholders(commands);
+
+        var trackerLabel = document.getElementById("startup-time-tracker-label");
+        var startTrackerEl = document.getElementById("detail-start-time-tracker");
+        var includeTimeTracker = !!(
+            startTrackerEl &&
+            trackerLabel &&
+            !trackerLabel.classList.contains("hidden") &&
+            startTrackerEl.checked
+        );
+
         apiFetch("/api/projects/" + currentProjectId + "/startup-terminals/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ commands: commands })
+            body: JSON.stringify({
+                commands: commands,
+                startup_instructions: startupText.trim(),
+                start_time_tracker: includeTimeTracker
+            })
         }).then(function(response) {
             if (!response || !response.success) {
+                clearStartupTerminalPlaceholders();
                 showSnackbar((response && response.message) || "Failed to start startup terminals", "error");
                 return;
             }
-            if (response.message) {
-                showSnackbar(response.message, response.failed ? "error" : "success");
-            }
+            showSnackbar(formatStartupStartSnackbar(response, commands), response.failed ? "error" : "success");
             var sessions = Array.isArray(response.sessions) ? response.sessions : [];
-            if (!sessions.length) return;
-            _projectTerminalState[currentProjectId] = sessions.map(function(session) {
-                return {
-                    processId: session.process_id,
-                    command: session.command || "",
-                    pid: session.pid || null
-                };
-            });
-            reattachProjectTerminals(currentProjectId);
+            if (response.action === "already_running" && sessions.length) {
+                clearStartupTerminalPlaceholders();
+            }
+            if (sessions.length) {
+                _projectTerminalState[currentProjectId] = sessions.map(function(session) {
+                    return {
+                        processId: session.process_id,
+                        command: session.command || "",
+                        pid: session.pid || null
+                    };
+                });
+                reattachProjectTerminals(currentProjectId);
+            }
+            refreshStartupSessionsUntilVisible(currentProjectId, commands);
         }).catch(function(err) {
+            clearStartupTerminalPlaceholders();
             showSnackbar("Failed to start startup terminals: " + (err && err.message ? err.message : ""), "error");
         });
     }

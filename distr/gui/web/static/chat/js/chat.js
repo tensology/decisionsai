@@ -662,7 +662,20 @@ function startChatWebSocket(force) {
                         }).catch(() => {});
                         return;
                     }
-                    if (streamingChatId === currentChatId) return;
+                    if (streamingChatId === currentChatId) {
+                        fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
+                            mergeChatUpdatedDuringStream(data.messages || []);
+                            updateChatSettingsDisplay({
+                                title: data.title || 'New Chat',
+                                provider: data.provider || '-',
+                                model_name: data.model_name || '-',
+                                voice_provider: data.voice_provider,
+                                voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
+                            });
+                            scrollToBottom();
+                        }).catch(() => {});
+                        return;
+                    }
                     if (Date.now() < _suppressChatUpdatedFetchUntil) {
                         return;
                     }
@@ -783,6 +796,141 @@ function _discardLiveTranscriptionUi() {
     }
 }
 
+function isLoadedChatView() {
+    return currentChatId != null && loadedChatId === currentChatId;
+}
+
+function canPromoteVoiceTranscriptInChat() {
+    if (currentChatId == null) return false;
+    return loadedChatId === currentChatId || agentCurrentChatId === currentChatId;
+}
+
+function workflowEventDomKey(event) {
+    const ev = event || {};
+    const runId = ev.run_id;
+    const type = String(ev.type || 'event').toLowerCase();
+    if (runId != null && runId !== '') {
+        return `workflow-run:${runId}:${type}`;
+    }
+    if (ev.id) return `workflow-id:${ev.id}`;
+    return null;
+}
+
+function hasRenderedWorkflowEvent(event) {
+    const key = workflowEventDomKey(event);
+    if (!key || !chatMessages) return false;
+    return !!chatMessages.querySelector(`[data-workflow-event-key="${key}"]`);
+}
+
+function isHiddenWorkflowEvent(event) {
+    if (!event) return true;
+    if (event.chat_suppressed === true) return true;
+    if (event.chat_visible === false) return true;
+    const type = String(event.type || '').trim().toLowerCase();
+    // Scheduled/manual automations dispatch through the orchestrator; Automations hub owns run history.
+    return type === 'automation_run';
+}
+
+function hasLiveUserTranscriptionPreview() {
+    const liveStt = document.getElementById('transcriptionStatus');
+    return !!(liveStt && liveStt.classList && liveStt.classList.contains('user'));
+}
+
+function promoteTranscriptionPreviewToUserMessage(committedText) {
+    if (!chatMessages || !canPromoteVoiceTranscriptInChat()) return false;
+    const liveStt = document.getElementById('transcriptionStatus');
+    const previewTextEl = liveStt ? liveStt.querySelector('#transcriptionStatusText') : null;
+    const plain = _normalizeMsgPlain(committedText != null ? committedText : (previewTextEl ? previewTextEl.textContent : ''));
+    if (!plain || hasRenderedMessagePlain('user', plain)) {
+        _discardLiveTranscriptionUi();
+        return false;
+    }
+    _stopSttPreviewClock();
+    if (liveStt) liveStt.remove();
+    const div = createMessageElement({ role: 'user', content: plain, timestamp: Date.now() });
+    insertMessageElementInOrder(div, { role: 'user', content: plain, timestamp: Date.now() });
+    _optimisticUserMessages.add(plain.substring(0, 100));
+    syncRenderedMessageCountFromDom();
+    scheduleRefreshChatHeaderStats();
+    scrollToBottom();
+    return true;
+}
+
+function messageTimestampMs(message) {
+    if (!message) return 0;
+    let ts = message.timestamp;
+    if (ts === undefined || ts === null || ts === '') return 0;
+    if (typeof ts === 'number') return ts;
+    const parsed = Date.parse(String(ts));
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function messageDomTimestampMs(node) {
+    if (!node) return 0;
+    const raw = node.dataset.messageTs;
+    if (raw != null && raw !== '') {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return 0;
+}
+
+function messageDomRowId(node) {
+    if (!node || node.dataset.turnChatId == null || node.dataset.turnChatId === '') return null;
+    const parsed = Number(node.dataset.turnChatId);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function compareMessageOrder(a, b) {
+    const tsA = messageTimestampMs(a);
+    const tsB = messageTimestampMs(b);
+    if (tsA !== tsB) return tsA - tsB;
+    const rowA = a && a.chat_row_id != null ? Number(a.chat_row_id) : null;
+    const rowB = b && b.chat_row_id != null ? Number(b.chat_row_id) : null;
+    if (rowA != null && rowB != null && rowA !== rowB) return rowA - rowB;
+    const roleRank = { user: 0, tool: 1, tool_group: 1, workflow: 1, assistant: 2, divider: 3 };
+    const rankA = roleRank[a && a.role] != null ? roleRank[a.role] : 9;
+    const rankB = roleRank[b && b.role] != null ? roleRank[b.role] : 9;
+    return rankA - rankB;
+}
+
+function sortMessagesForDisplay(messages) {
+    if (!Array.isArray(messages) || messages.length < 2) return messages || [];
+    return [...messages].sort(compareMessageOrder);
+}
+
+function isLiveChatMessageNode(node) {
+    if (!node) return false;
+    const id = node.id || '';
+    return id !== 'transcriptionStatus' && id !== 'streamingAssistantMessage' && id !== 'typingIndicator';
+}
+
+function insertMessageElementInOrder(div, message) {
+    if (!chatMessages || !div) return;
+    const ts = messageTimestampMs(message);
+    const rowId = message.chat_row_id != null ? Number(message.chat_row_id) : null;
+    div.dataset.messageTs = String(ts || Date.now());
+    const nodes = [...chatMessages.querySelectorAll('.message, .chat-divider')].filter(isLiveChatMessageNode);
+    for (const node of nodes) {
+        const nodeTs = messageDomTimestampMs(node);
+        const nodeRow = messageDomRowId(node);
+        if (ts < nodeTs || (ts === nodeTs && rowId != null && nodeRow != null && rowId < nodeRow)) {
+            chatMessages.insertBefore(div, node);
+            syncRenderedMessageCountFromDom();
+            return;
+        }
+    }
+    const streamingMsg = document.getElementById('streamingAssistantMessage');
+    const typingInd = document.getElementById('typingIndicator');
+    const insertBefore = streamingMsg || typingInd;
+    if (insertBefore) {
+        chatMessages.insertBefore(div, insertBefore);
+    } else {
+        chatMessages.appendChild(div);
+    }
+    syncRenderedMessageCountFromDom();
+}
+
 function handleChatEventMessageAdded(msg) {
     if (msg.chat_id !== currentChatId) return;
     const role = msg.role || 'user';
@@ -803,16 +951,7 @@ function handleChatEventMessageAdded(msg) {
         _lastStreamFinalizedPlain = null;
         _discardLiveTranscriptionUi();
         const div = createMessageElement({ role, content, timestamp: msg.timestamp });
-        // Insert BEFORE the streaming assistant message or typing indicator
-        // so the user message appears chronologically first.
-        const streamingMsg = document.getElementById('streamingAssistantMessage');
-        const typingInd = document.getElementById('typingIndicator');
-        const insertBefore = streamingMsg || typingInd;
-        if (insertBefore) {
-            chatMessages.insertBefore(div, insertBefore);
-        } else {
-            chatMessages.appendChild(div);
-        }
+        insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
         scrollToBottom();
         scheduleRefreshChatHeaderStats();
         return;
@@ -856,10 +995,50 @@ function handleChatEventMessageAdded(msg) {
             }
         }
     }
-    const div = createMessageElement({ role, content });
-    chatMessages.appendChild(div);
+    const div = createMessageElement({ role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
+    insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
     scrollToBottom();
     scheduleRefreshChatHeaderStats({ checkTitle: role === 'assistant' });
+}
+
+function hasRenderedMessagePlain(role, plain) {
+    if (!plain || !chatMessages) return false;
+    return [...chatMessages.querySelectorAll(`.message.${role}`)]
+        .filter(el => el.id !== 'transcriptionStatus' && el.id !== 'streamingAssistantMessage')
+        .some(el => {
+            const textEl = el.querySelector('.message-text');
+            return textEl && _normalizeMsgPlain(textEl.textContent) === plain;
+        });
+}
+
+function findLiveTurnAnchor(chatRowId) {
+    if (!chatMessages) return null;
+    if (chatRowId != null && chatRowId !== '') {
+        const matches = [...chatMessages.querySelectorAll(`[data-turn-chat-id="${chatRowId}"]`)]
+            .filter(el => el.id !== 'transcriptionStatus');
+        const activity = matches.find(el => el.classList.contains('activity'));
+        if (activity) return activity;
+        if (matches.length) return matches[0];
+    }
+    return document.getElementById('streamingAssistantMessage') || document.getElementById('typingIndicator');
+}
+
+function mergeChatUpdatedDuringStream(messages) {
+    if (!chatMessages || !Array.isArray(messages)) return;
+    let inserted = false;
+    messages.forEach(message => {
+        if (!message || message.role !== 'user') return;
+        const plain = _normalizeMsgPlain(message.content || '');
+        if (!plain || hasRenderedMessagePlain('user', plain)) return;
+        _discardLiveTranscriptionUi();
+        const div = createMessageElement(message);
+        insertMessageElementInOrder(div, message);
+        inserted = true;
+    });
+    if (inserted) {
+        syncRenderedMessageCountFromDom();
+        scheduleRefreshChatHeaderStats();
+    }
 }
 
 function handleChatEventStreamStarted(msg) {
@@ -1009,7 +1188,7 @@ function handleChatEventStreamError(msg) {
     } else if (errorText.includes('Rate Limit')) {
         displayError = '⚠️ Rate limit hit. Please wait a moment and try again.';
     } else if (errorText.includes('401') || errorText.includes('authentication')) {
-        displayError = '⚠️ Authentication failed. Check your API key in Settings → Third Party Providers.';
+        displayError = '⚠️ Authentication failed. Check your API key in Settings → API Keys.';
     } else if (errorText.length > 200) {
         // Truncate very long error messages
         displayError = '⚠️ ' + errorText.substring(0, 200) + '…';
@@ -1035,13 +1214,33 @@ function handleChatEventStreamError(msg) {
     streamingChatId = null;
 }
 
+function isProactivePlannerToolEvent(msg) {
+    const haystack = [
+        msg && msg.title,
+        msg && msg.tool_name,
+        msg && msg.routing_path
+    ].filter(Boolean).join(' ').toLowerCase();
+    return /\b(day|daily|week|month)\s+planner\b/.test(haystack)
+        || haystack.includes('planner_orchestration')
+        || haystack.includes('proactive_orchestrator');
+}
+
+function isHiddenLiveToolEvent(msg) {
+    if (!msg) return true;
+    if (msg.chat_suppressed === true) return true;
+    if (msg.chat_visible === false) return true;
+    return isProactivePlannerToolEvent(msg);
+}
+
 function handleChatEventToolExecuted(msg) {
     if (msg.chat_id !== currentChatId) return;
     if (!chatMessages) return;
+    if (isHiddenLiveToolEvent(msg)) return;
     const toolMessage = {
         role: 'tool',
         timestamp: msg.timestamp || Date.now(),
         content: msg.result_summary || '',
+        turn_chat_id: msg.turn_chat_id,
         tool_event: {
             tool_name: msg.tool_name || 'tool',
             title: msg.title || `Executed ${msg.tool_name || 'tool'}`,
@@ -1077,19 +1276,6 @@ function handleChatEventToolExecuted(msg) {
         const finalAssistant = matches.reverse().find(el => el.classList.contains('assistant'));
         placed = tryInsertBefore(finalAssistant);
     }
-    if (!placed) {
-        const nodes = [...chatMessages.children].filter(el =>
-            el.classList && el.classList.contains('message') && el.id !== 'transcriptionStatus'
-        );
-        let lastAssistant = null;
-        for (let i = nodes.length - 1; i >= 0; i--) {
-            if (nodes[i].classList.contains('assistant')) {
-                lastAssistant = nodes[i];
-                break;
-            }
-        }
-        placed = tryInsertBefore(lastAssistant);
-    }
     if (!placed && block.parentNode !== chatMessages) {
         if (typingInd && typingInd.parentNode === chatMessages) {
             chatMessages.insertBefore(block, typingInd);
@@ -1101,18 +1287,34 @@ function handleChatEventToolExecuted(msg) {
     scrollToBottom();
 }
 
+function activityGroupMatchesTurn(group, turnChatId) {
+    if (!group) return false;
+    const groupTurn = group.dataset.turnChatId;
+    if (turnChatId == null || turnChatId === '') return groupTurn == null || groupTurn === '';
+    return groupTurn === String(turnChatId);
+}
+
 function appendToolToActivityGroup(message) {
+    const turnChatId = message.turn_chat_id != null ? String(message.turn_chat_id) : null;
     const anchor = getLateToolInsertAnchor();
     let group = null;
     if (anchor && anchor.previousElementSibling && anchor.previousElementSibling.classList.contains('tool-execution-group')) {
-        group = anchor.previousElementSibling;
+        const candidate = anchor.previousElementSibling;
+        if (activityGroupMatchesTurn(candidate, turnChatId)) group = candidate;
     }
     if (!group) {
         const last = chatMessages ? chatMessages.lastElementChild : null;
-        if (last && last.classList.contains('tool-execution-group')) group = last;
+        if (last && last.classList.contains('tool-execution-group') && activityGroupMatchesTurn(last, turnChatId)) {
+            group = last;
+        }
     }
     if (!group) {
-        group = createToolExecutionGroupElement({ role: 'tool_group', timestamp: message.timestamp, tools: [] });
+        group = createToolExecutionGroupElement({
+            role: 'tool_group',
+            timestamp: message.timestamp,
+            turn_chat_id: message.turn_chat_id,
+            tools: []
+        });
     }
     const list = group.querySelector('.activity-steps');
     if (list) list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(message));
@@ -1122,21 +1324,27 @@ function appendToolToActivityGroup(message) {
 
 function handleChatEventWorkflow(msg) {
     if (msg.chat_id !== currentChatId) return;
+    const workflowEvent = {
+        run_id: msg.run_id,
+        workflow_id: msg.workflow_id,
+        workflow_name: msg.workflow_name || 'Workflow',
+        type: msg.type || 'event',
+        status: msg.status || 'running',
+        summary: msg.summary || '',
+        phase: msg.phase || '',
+        step_id: msg.step_id,
+        step_name: msg.step_name || '',
+        id: msg.id || null,
+        chat_suppressed: msg.chat_suppressed,
+        chat_visible: msg.chat_visible
+    };
+    if (isHiddenWorkflowEvent(workflowEvent)) return;
+    if (hasRenderedWorkflowEvent(workflowEvent)) return;
     const block = createWorkflowEventElement({
         role: 'workflow',
         timestamp: msg.timestamp || Date.now(),
         content: msg.summary || '',
-        workflow_event: {
-            run_id: msg.run_id,
-            workflow_id: msg.workflow_id,
-            workflow_name: msg.workflow_name || 'Workflow',
-            type: msg.type || 'event',
-            status: msg.status || 'running',
-            summary: msg.summary || '',
-            phase: msg.phase || '',
-            step_id: msg.step_id,
-            step_name: msg.step_name || ''
-        }
+        workflow_event: workflowEvent
     });
     const streamingMsg = document.getElementById('streamingAssistantMessage');
     const typingInd = document.getElementById('typingIndicator');
@@ -1167,6 +1375,7 @@ function showTranscriptionStatus(text, done, clearLivePreview) {
 
     // Committed user message — real bubble arrives via message_added
     if (clearLivePreview) {
+        promoteTranscriptionPreviewToUserMessage();
         _discardLiveTranscriptionUi();
         return;
     }
@@ -1176,6 +1385,11 @@ function showTranscriptionStatus(text, done, clearLivePreview) {
         return;
     }
     // File / tool transcription finished — short assistant notice, then hide
+    if (done && trimmed && canPromoteVoiceTranscriptInChat() && hasLiveUserTranscriptionPreview()) {
+        promoteTranscriptionPreviewToUserMessage(trimmed);
+        _discardLiveTranscriptionUi();
+        return;
+    }
     if (done && trimmed) {
         let wrap = document.getElementById('transcriptionStatus');
         if (!wrap) {
@@ -2032,6 +2246,40 @@ function isTraceMessage(message) {
     return message && (message.role === 'tool' || message.role === 'workflow');
 }
 
+function traceTurnChatId(message) {
+    if (!message) return null;
+    if (message.turn_chat_id != null && message.turn_chat_id !== '') {
+        const parsed = Number(message.turn_chat_id);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (message.chat_row_id != null && message.chat_row_id !== '') {
+        const parsed = Number(message.chat_row_id);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (message.role === 'tool_group' && Array.isArray(message.tools) && message.tools.length) {
+        return traceTurnChatId(message.tools[0]);
+    }
+    if (message.role === 'tool' && message.tool_event && message.tool_event.turn_chat_id != null) {
+        const parsed = Number(message.tool_event.turn_chat_id);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+}
+
+function assistantTurnChatId(message) {
+    if (!message || message.role !== 'assistant') return null;
+    if (message.chat_row_id == null || message.chat_row_id === '') return null;
+    const parsed = Number(message.chat_row_id);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
+function traceBelongsToAssistantTurn(traceMessage, assistantMessage) {
+    const assistantTurn = assistantTurnChatId(assistantMessage);
+    const traceTurn = traceTurnChatId(traceMessage);
+    if (assistantTurn == null || traceTurn == null) return true;
+    return assistantTurn === traceTurn;
+}
+
 function normalizeTraceMessages(messages) {
     const reordered = [];
     for (let i = 0; i < messages.length; i++) {
@@ -2040,6 +2288,7 @@ function normalizeTraceMessages(messages) {
             const trace = [];
             let j = i + 1;
             while (j < messages.length && isTraceMessage(messages[j])) {
+                if (!traceBelongsToAssistantTurn(messages[j], current)) break;
                 trace.push(messages[j]);
                 j++;
             }
@@ -2058,12 +2307,20 @@ function normalizeTraceMessages(messages) {
         if (message && message.role === 'tool') {
             const tools = [];
             const startTs = message.timestamp;
+            const groupTurn = traceTurnChatId(message);
             while (i < reordered.length && reordered[i] && reordered[i].role === 'tool') {
+                const nextTurn = traceTurnChatId(reordered[i]);
+                if (tools.length && groupTurn != null && nextTurn != null && groupTurn !== nextTurn) break;
                 tools.push(reordered[i]);
                 i++;
             }
             i -= 1;
-            grouped.push({ role: 'tool_group', timestamp: startTs, tools });
+            grouped.push({
+                role: 'tool_group',
+                timestamp: startTs,
+                turn_chat_id: groupTurn,
+                tools
+            });
             continue;
         }
         grouped.push(message);
@@ -2080,7 +2337,7 @@ function renderMessages(messages, preserveOnEmpty) {
     // "Listening…" never sits next to persisted rows from the socket.
     _discardLiveTranscriptionUi();
 
-    messages = normalizeTraceMessages(messages || []);
+    messages = normalizeTraceMessages(sortMessagesForDisplay(messages || []));
 
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;
@@ -2092,8 +2349,11 @@ function renderMessages(messages, preserveOnEmpty) {
     }
     // Incremental render: only append new messages instead of wiping the whole DOM.
     // When messages.length < _renderedMessageCount, the chat was reloaded (e.g. switching chats),
-    // so we do a full rebuild.
-    if (messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10) {
+    // so we do a full rebuild. Also rebuild if order regressed (late-arriving user rows).
+    const previousMessage = _renderedMessageCount > 0 ? messages[_renderedMessageCount - 1] : null;
+    const nextMessage = messages.length > _renderedMessageCount ? messages[_renderedMessageCount] : null;
+    const orderRegressed = previousMessage && nextMessage && compareMessageOrder(nextMessage, previousMessage) < 0;
+    if (messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10 && !orderRegressed) {
         // Fast path: append only new messages, skipping ones already rendered optimistically
         for (let i = _renderedMessageCount; i < messages.length; i++) {
             const msg = messages[i];
@@ -2110,7 +2370,7 @@ function renderMessages(messages, preserveOnEmpty) {
                 }
             }
             const messageDiv = createMessageElement(msg);
-            chatMessages.appendChild(messageDiv);
+            if (messageDiv) chatMessages.appendChild(messageDiv);
         }
         _renderedMessageCount = messages.length;
         scrollToBottom();
@@ -2123,7 +2383,7 @@ function renderMessages(messages, preserveOnEmpty) {
     const toRender = dedupeConsecutiveDuplicateAssistants(messages);
     toRender.forEach(message => {
         const messageDiv = createMessageElement(message);
-        chatMessages.appendChild(messageDiv);
+        if (messageDiv) chatMessages.appendChild(messageDiv);
     });
     _renderedMessageCount = toRender.length;
     scrollToBottomImmediate();
@@ -2354,6 +2614,7 @@ function createChatDividerElement(message) {
     if (divider.type === 'fork' && divider.source_chat_id) {
         div.dataset.sourceChatId = String(divider.source_chat_id);
     }
+    div.dataset.messageTs = String(messageTimestampMs({ timestamp: tsRaw }));
     div.innerHTML = `
         <span class="chat-divider-line" aria-hidden="true"></span>
         <div class="chat-divider-body">
@@ -2377,6 +2638,8 @@ function createMessageElement(message) {
         return createToolExecutionGroupElement({ role: 'tool_group', timestamp: message.timestamp, tools: [message] });
     }
     if (message && message.role === 'workflow') {
+        if (isHiddenWorkflowEvent(message.workflow_event)) return null;
+        if (hasRenderedWorkflowEvent(message.workflow_event)) return null;
         return createWorkflowEventElement(message);
     }
     const div = document.createElement('div');
@@ -2394,6 +2657,7 @@ function createMessageElement(message) {
     if (tsRaw === undefined || tsRaw === null || tsRaw === '') {
         tsRaw = Date.now();
     }
+    div.dataset.messageTs = String(messageTimestampMs({ timestamp: tsRaw }));
     const ts = _formatTimestamp(tsRaw);
     const headerTimestamp = ts ? `<span class="message-header-timestamp">${ts}</span>` : '';
 
@@ -2530,6 +2794,8 @@ function createWorkflowEventElement(message) {
         innerHtml,
         extraClass: `workflow-event workflow-event--${safeStatus}`
     });
+    const domKey = workflowEventDomKey(event);
+    if (domKey) el.dataset.workflowEventKey = domKey;
     const step = el.querySelector('.activity-step');
     if (step) syncActivityMessageAlignment(step);
     return el;
@@ -2609,6 +2875,10 @@ function createToolExecutionGroupElement(message) {
         innerHtml,
         extraClass: 'tool-execution-group'
     });
+    const turnChatId = message.turn_chat_id || (tools[0] && tools[0].turn_chat_id);
+    if (turnChatId != null && turnChatId !== '') {
+        el.dataset.turnChatId = String(turnChatId);
+    }
     el.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
     return el;
 }
@@ -2651,10 +2921,11 @@ async function sendMessage() {
     if (!message || isStreaming) return;
     isStreaming = true;
     sendButton.disabled = true;
-    if (!loadedChatId) {
+    if (!loadedChatId || loadedChatId !== currentChatId) {
         if (currentChatId) {
             isStreaming = false;
-            sendButton.disabled = !messageInput.value.trim();
+            sendButton.disabled = true;
+            setViewOnlyChrome(true);
             alert('Please load a chat to reply.');
             return;
         }
@@ -2678,18 +2949,18 @@ async function sendMessage() {
         if (!provider || !modelName) {
             isStreaming = false;
             sendButton.disabled = !messageInput.value.trim();
-            alert('Please select LLM provider and model in Setup your Agent, or set defaults in Settings > LLMs.');
+            alert('Please select an LLM provider and model in Chat settings, or set defaults in Settings > LLMs.');
             return;
         }
         if (!voiceProvider || !voiceModel) {
             isStreaming = false;
             sendButton.disabled = !messageInput.value.trim();
-            alert('Please select Voice provider and voice in Setup your Agent, or set defaults in Settings > General.');
+            alert('Please select a voice provider and voice in Chat settings, or set defaults in Settings > General.');
             return;
         }
         showEmptyStateAgentLoading();
         const savedPlaceholder = messageInput.placeholder;
-        messageInput.placeholder = 'Agent is loading…';
+        messageInput.placeholder = 'Starting chat...';
         messageInput.disabled = true;
         streamAbortController = new AbortController();
         setSendButtonStreaming(true);
@@ -4104,7 +4375,7 @@ async function refreshChatHeaderStats({ checkTitle = false } = {}) {
         if (!auto.manual) {
             const count = Number(data.context_stats?.message_count || 0);
             const last = Number(auto.last_refresh_message_count || 0);
-            const interval = Number(auto.interval || 20);
+            const interval = Number(auto.interval || 5);
             if (count - last >= interval) {
                 const titleRes = await fetch(`${API_BASE}/chats/${chatId}/refresh-title`, { method: 'POST' });
                 if (titleRes.ok) applyHeaderStatsPayload(await titleRes.json());

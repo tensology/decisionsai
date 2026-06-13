@@ -1,0 +1,184 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "seo-landing-page",
+  "name": "SEO Landing Page",
+  "role": "content",
+  "category": "Content",
+  "archetype": "incremental_ship",
+  "description": "Keyword brief → structure → implement page → technical SEO → browser QA.",
+  "kickoff": "Start the \"SEO Landing Page\" loop.\nGoal: landing page live-ready for target keyword\nMax iterations: 6\nExit when: technical SEO and browser QA pass.\nOrientation: read the linked ticket for target keyword, audience, and page goal.\nStep 1: Confirm keyword brief and page structure plan.",
+  "loop_contract": {
+    "name": "SEO Landing Page",
+    "goal": "landing page meets keyword brief and technical SEO bar",
+    "exit_when": "technical SEO and browser QA pass",
+    "check_command": "SEO metadata + staging URL QA",
+    "max_iterations": 6,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Extract target keyword, intent, audience, and conversion goal from the ticket.",
+    "archetype": "incremental_ship",
+    "role": "content"
+  },
+  "expected_check_command": "SEO metadata + staging URL QA",
+  "tags": [
+    "seo",
+    "landing-page"
+  ],
+  "steps": [
+    {
+      "name": "Ingest page brief",
+      "instruction": "Extract target keyword, intent, audience, and conversion goal from the ticket.",
+      "skills": [
+        "seo",
+        "product-lens",
+        "brainstorming"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Ingest page brief' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket"
+    },
+    {
+      "name": "Page structure",
+      "instruction": "Outline hero, proof, FAQ, CTA. Map keywords to sections.",
+      "skills": [
+        "seo",
+        "writing-plans",
+        "frontend-design"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Page structure' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Implement page slice",
+      "instruction": "Build or update the page in the repo. Match project component patterns.",
+      "skills": [
+        "executing-plans",
+        "frontend-design"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Implement page slice' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "SEO technical check",
+      "instruction": "Verify title, meta, canonical, headings, schema if applicable.",
+      "skills": [
+        "seo",
+        "ln-643-api-contract-auditor"
+      ],
+      "tools": [
+        "cli",
+        "playwright"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'SEO technical check' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Browser QA",
+      "instruction": "Check responsive layout, CTA, forms, and console errors on staging/local.",
+      "skills": [
+        "webapp-testing",
+        "browser-qa",
+        "qa-tester"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Browser QA' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate ship",
+      "instruction": "Page meets brief and SEO checklist.",
+      "skills": [
+        "seo",
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate ship' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Report",
+      "instruction": "URL, screenshots, remaining items.",
+      "skills": [
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

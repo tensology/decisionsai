@@ -171,7 +171,7 @@ class StepExecutorMixin:
         if run_id is None:
             return step_data
         try:
-            from distr.core.hermes import format_correction_instruction
+            from distr.core.orchestrator import format_correction_instruction
 
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -256,15 +256,34 @@ class StepExecutorMixin:
         except Exception as e:
             return {"output": f"{action_type} execution error: {e}", "passed": False}
 
+    @staticmethod
+    def _apply_step_harness_overrides(route: dict, config: dict) -> dict:
+        """Merge per-step harness fields from step config onto the execution route."""
+        from distr.core.project_cli_backends import normalize_backend_id
+
+        merged = dict(route or {})
+        backend_id = str(config.get("backend_id") or "").strip()
+        if backend_id:
+            merged["backend"] = normalize_backend_id(backend_id)
+        model = str(config.get("model") or "").strip()
+        if model:
+            merged["model"] = model
+        complexity = str(config.get("complexity") or "").strip().lower()
+        if complexity in {"low", "medium", "high"}:
+            merged["complexity"] = complexity
+        return merged
+
     def _run_command(self, config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute a shell command."""
         import subprocess
+
+        from distr.core.rtk_support import run_shell_command
+
         cmd = config.get("command", "")
         cwd = config.get("working_directory") or None
         timeout = config.get("timeout_seconds", 60)
         try:
-            proc = subprocess.run(cmd, shell=True, capture_output=True, text=True,
-                                  timeout=timeout, cwd=cwd)
+            proc = run_shell_command(cmd, timeout=timeout, cwd=cwd)
             return {"output": (proc.stdout + proc.stderr).strip()[:2000],
                     "passed": proc.returncode == 0}
         except subprocess.TimeoutExpired:
@@ -415,7 +434,7 @@ class StepExecutorMixin:
                     if ticket_id is not None:
                         try:
                             from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
-                            from distr.core.hermes_orchestrator import resolve_execution_route
+                            from distr.core.orchestrator_routing import resolve_execution_route
 
                             ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
                             if ticket and getattr(ticket, "lane_id", None):
@@ -443,7 +462,7 @@ class StepExecutorMixin:
                                             or run_data_local.get("execution_route", {}).get("complexity")
                                             or "medium"
                                         ),
-                                        "source": "hermes_override",
+                                        "source": "orchestrator_override",
                                         "rationale": str(approved_override.get("rationale") or "").strip(),
                                         "requires_approval": False,
                                     }
@@ -456,8 +475,8 @@ class StepExecutorMixin:
                                         run_id=run_id,
                                         step_id=step_data.get("id"),
                                         workflow_id=workflow_id,
-                                        allow_hermes_override=not bool(
-                                            run_data_local.get("suppress_hermes_override")
+                                        allow_orchestrator_override=not bool(
+                                            run_data_local.get("suppress_orchestrator_override")
                                         ),
                                     )
                                     route = decision.to_route_dict()
@@ -498,6 +517,10 @@ class StepExecutorMixin:
                                         project_id=int(project_id),
                                     )
                                     extra_skills = list(decision.skills or []) if decision else []
+                                    step_skills = config.get("skills") if isinstance(config.get("skills"), list) else []
+                                    for skill_id in step_skills:
+                                        if skill_id and skill_id not in extra_skills:
+                                            extra_skills.append(skill_id)
                                     if extra_skills:
                                         from distr.core.workflow.skill_provision import push_skill_to_project
 
@@ -509,6 +532,7 @@ class StepExecutorMixin:
                                             )
                         except Exception:
                             route = {}
+                    route = self._apply_step_harness_overrides(route, config)
                     handle = await dispatch_harness_async(
                         HarnessContext(
                             project=project,
@@ -532,7 +556,7 @@ class StepExecutorMixin:
                             run_data_local = json.loads(run_row.run_data or "{}") or {}
                             run_data_local["execution_session_id"] = handle.execution_session_id
                             run_data_local.pop("approved_route_override", None)
-                            run_data_local.pop("suppress_hermes_override", None)
+                            run_data_local.pop("suppress_orchestrator_override", None)
                             run_row.run_data = json.dumps(run_data_local)
                             db.commit()
                     if handle.result is None:
@@ -577,16 +601,17 @@ class StepExecutorMixin:
             output = (getattr(result, "output", "") or "").strip()
             error = (getattr(result, "error", "") or "").strip()
             passed = bool(getattr(result, "success", False))
+            waits_for_human = bool(getattr(result, "waits_for_human", False))
             text = output or error or f"Sent to {backend_name}."
             return {
                 "output": (
                     f"Project CLI backend: {backend_name}\n"
                     f"Project: {project_id}\n"
-                    f"Status: {'completed' if passed else 'failed'}\n\n"
+                    f"Status: {'waiting in IDE' if waits_for_human else ('completed' if passed else 'failed')}\n\n"
                     f"{text}"
                 )[:6000],
                 "passed": passed,
-                "skip_wait": True,
+                "skip_wait": not waits_for_human,
             }
         except Exception as e:
             return {"output": f"Failed sending to project CLI: {e}", "passed": False}
@@ -800,7 +825,7 @@ class StepExecutorMixin:
         payload: Optional[dict] = None,
     ) -> None:
         try:
-            from distr.core.hermes import emit_event
+            from distr.core.orchestrator import emit_event
             workflow_id = step_data.get("workflow_id")
             ticket_id = board_id = project_id = None
             if run_id:
@@ -1002,7 +1027,18 @@ class StepExecutorMixin:
                         logger.debug("_build_agent_prompt: failed to combine context items: %s", ce)
                     try:
                         from distr.core.workflow.standards_memory import build_standards_context
-                        context_rules = build_standards_context(context_rules)
+
+                        board_id_for_standards = None
+                        if run_id is not None:
+                            run_row = db.query(AutoWorkflowRun).filter(
+                                AutoWorkflowRun.id == int(run_id)
+                            ).first()
+                            if run_row and run_row.board_id:
+                                board_id_for_standards = int(run_row.board_id)
+                        context_rules = build_standards_context(
+                            context_rules,
+                            board_id=board_id_for_standards,
+                        )
                     except Exception as ce:
                         logger.debug("_build_agent_prompt: failed to add standards memory: %s", ce)
                     all_steps = sorted(wf.steps, key=lambda s: s.position)
@@ -1155,10 +1191,83 @@ class StepExecutorMixin:
         step_instruction = step_data["instruction"].strip()
         step_title = step_data.get("name", f"Step {step_index + 1}")
         step_description = step_data.get("description", "")
+        step_config = step_data.get("config") or {}
+        if isinstance(step_config, str):
+            try:
+                step_config = json.loads(step_config) or {}
+            except Exception:
+                step_config = {}
+        guardrail_text = str(step_config.get("guardrail") or "").strip()
 
         # Prepend step description if it exists (adds "why" context)
         if step_description:
             step_instruction = f"{step_description}\n\n{step_instruction}"
+        if guardrail_text:
+            step_instruction = f"{step_instruction}\n\n[STEP GUARDRAILS]\n{guardrail_text}"
+        failure_checklist = step_config.get("failure_checklist")
+        if failure_checklist:
+            if isinstance(failure_checklist, list):
+                checklist_text = "\n".join(
+                    f"- {str(item).strip().lstrip('-').strip()}"
+                    for item in failure_checklist
+                    if str(item).strip()
+                )
+            else:
+                checklist_text = str(failure_checklist).strip()
+            if checklist_text:
+                step_instruction = (
+                    f"{step_instruction}\n\n[VALIDATION FAILURE CHECKLIST]\n{checklist_text}"
+                )
+        tools = step_config.get("tools") if isinstance(step_config.get("tools"), list) else []
+        other_tool = str(step_config.get("other_tool") or "").strip()
+        if other_tool and "other" in [str(t).lower() for t in tools]:
+            step_instruction = f"{step_instruction}\n\n[ADDITIONAL TOOL]\n{other_tool}"
+
+        loop_context_summary = ""
+        if run_id is not None:
+            try:
+                from distr.core.workflow.planning import build_loop_context_summary
+
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                    run_data = json.loads(run.run_data or "{}") if run and run.run_data else {}
+                    loop_contract = run_data.get("loop_contract") or {}
+                    if not loop_contract and wf and getattr(wf, "workflow_input", None):
+                        try:
+                            loop_contract = json.loads(wf.workflow_input or "{}") or {}
+                        except Exception:
+                            loop_contract = {}
+                    iteration = int(run_data.get("loop_iteration") or 0)
+                    ticket_title = str(run_data.get("ticket_title") or "").strip()
+                    if not ticket_title and getattr(run, "ticket_id", None):
+                        try:
+                            from distr.core.db.kanban import KanbanTicket
+
+                            ticket_row = (
+                                db.query(KanbanTicket)
+                                .filter(KanbanTicket.id == int(run.ticket_id))
+                                .first()
+                            )
+                            if ticket_row and ticket_row.title:
+                                ticket_title = str(ticket_row.title).strip()
+                        except Exception:
+                            pass
+                    loop_context_summary = build_loop_context_summary(
+                        loop_contract,
+                        iteration,
+                        ticket_title=ticket_title,
+                    )
+            except Exception as e:
+                logger.debug("_build_agent_prompt: loop context failed: %s", e)
+
+        steering_context = ""
+        if run_id is not None:
+            try:
+                from distr.core.workflow.steering_memory import build_steering_context_for_run_id
+
+                steering_context = build_steering_context_for_run_id(run_id)
+            except Exception as e:
+                logger.debug("_build_agent_prompt: steering context failed: %s", e)
 
         prompt = build_step_context_prompt(
             step_index=step_index,
@@ -1173,7 +1282,10 @@ class StepExecutorMixin:
             prior_results=prior_results,
             context_rules=context_rules,
             continuation_input=continuation_input,
+            loop_context_summary=loop_context_summary,
         )
+        if steering_context:
+            prompt = f"{prompt}\n\n{steering_context}"
 
         logger.info(
             "_build_agent_prompt: step_id=%s run_id=%s prior_results=%d context_rules_len=%d workflow_input_len=%d feedback_len=%d",

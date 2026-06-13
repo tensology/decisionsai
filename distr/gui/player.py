@@ -254,7 +254,7 @@ class PlayerWindow(QtWidgets.QWidget):
         # Hide the player IMMEDIATELY on click — don't wait for the round-trip
         # through the agent command queue and back via tts_stopped event.
         # This gives the user instant visual feedback.
-        self.hide_window()
+        self.hide_window_immediate()
 
 
     def show_window(self):
@@ -316,6 +316,26 @@ class PlayerWindow(QtWidgets.QWidget):
 
     def hide_window(self):
         """Hide the player window with fade-out animation"""
+        self._hide_window_with_fade()
+
+    def is_on_screen(self) -> bool:
+        """True when the player window is visible or stuck mid-fade."""
+        return self.isVisible() or self.windowOpacity() < 0.99
+
+    def hide_window_immediate(self):
+        """Hide the player immediately after TTS completes (no fade guards)."""
+        if self.fade_animation.state() == QPropertyAnimation.State.Running:
+            self.fade_animation.stop()
+        self._hide_window_processing = False
+        self._fade_finished_processing = False
+        self._hide_processing = False
+        self.reset()
+        super().hide()
+        self.setWindowOpacity(1.0)
+        self.logger.info("[PlayerWindow] Window hidden immediately")
+
+    def _hide_window_with_fade(self):
+        """Hide the player window with fade-out animation"""
         # CRITICAL: Check guard IMMEDIATELY and atomically - silently prevent duplicates
         with self._hide_window_lock:
             if self._hide_window_processing:
@@ -331,10 +351,12 @@ class PlayerWindow(QtWidgets.QWidget):
                 return
             
             # If fade finish is already processing, skip starting a new animation
+            # unless the window is still visible (stuck state).
             if self._fade_finished_processing:
-                # Reset flag since we're not processing
-                QTimer.singleShot(500, lambda: setattr(self, '_hide_window_processing', False))
-                return
+                if not self.isVisible():
+                    QTimer.singleShot(500, lambda: setattr(self, '_hide_window_processing', False))
+                    return
+                self._fade_finished_processing = False
             
             # Check if animation is already running - prevent duplicate animation starts
             if self.fade_animation.state() == QPropertyAnimation.State.Running:

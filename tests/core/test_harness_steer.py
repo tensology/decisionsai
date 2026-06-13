@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import distr.core.db.hermes  # noqa: F401
+import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
@@ -77,7 +77,7 @@ def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch):
     monkeypatch.setattr("distr.core.db.get_session", lambda: _session_ctx(factory))
     monkeypatch.setattr("distr.core.workflow.service.increment_workflow_updated", MagicMock())
     monkeypatch.setattr("distr.core.kanban.project_execution.append_execution_event", MagicMock())
-    monkeypatch.setattr("distr.core.hermes.emit_event", MagicMock(return_value=1))
+    monkeypatch.setattr("distr.core.orchestrator.emit_event", MagicMock(return_value=1))
     monkeypatch.setattr("distr.core.workflow.standards_memory.capture_feedback_as_standard", MagicMock())
 
     result = apply_run_harness_steer(run_id, "Stop refactoring unrelated files")

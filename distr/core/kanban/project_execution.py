@@ -76,7 +76,7 @@ def create_execution_session(
         session.add(event)
         session.commit()
         try:
-            from distr.core.hermes import resolve_board_id_for_ticket
+            from distr.core.orchestrator import resolve_board_id_for_ticket
             from distr.core.orchestration_events import emit_orchestration_event
 
             emit_orchestration_event(

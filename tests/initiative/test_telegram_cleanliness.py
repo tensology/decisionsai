@@ -118,7 +118,7 @@ def test_surface_draft_queue_does_not_pollute_unrelated_chat(tmp_path):
     now = datetime.now(tz=timezone.utc)
     svc._draft_queue.add(DraftEntry(
         id="hermes-7",
-        action_type="hermes_triage_candidate",
+        action_type="orchestrator_triage_candidate",
         description="Player1Sport (jira) has 53 fetched item(s) available for review.",
         draft="Decision draft",
         reason="Hermes standup",
@@ -143,7 +143,7 @@ def test_surface_draft_queue_allows_explicit_initiative_chat(tmp_path):
     now = datetime.now(tz=timezone.utc)
     svc._draft_queue.add(DraftEntry(
         id="hermes-7",
-        action_type="hermes_triage_candidate",
+        action_type="orchestrator_triage_candidate",
         description="Player1Sport (jira) has 53 fetched item(s) available for review.",
         draft="Decision draft",
         reason="Hermes standup",
@@ -170,7 +170,7 @@ def test_surface_draft_queue_expires_stale_approvals_before_chat_surface(tmp_pat
     now = datetime.now(tz=timezone.utc)
     svc._draft_queue.add(DraftEntry(
         id="hermes-old",
-        action_type="hermes_triage_candidate",
+        action_type="orchestrator_triage_candidate",
         description="Old Jira review should not resurface.",
         draft="Decision draft",
         reason="Hermes standup",
@@ -191,30 +191,30 @@ def test_surface_draft_queue_expires_stale_approvals_before_chat_surface(tmp_pat
     assert svc._draft_queue.get_by_id("hermes-old") is None
 
 
-def test_hermes_triage_reply_approves_first_candidate(monkeypatch, tmp_path):
+def test_orchestrator_triage_reply_approves_first_candidate(monkeypatch, tmp_path):
     from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 
     now = datetime.now(tz=timezone.utc)
     queue = DraftQueue(path=str(tmp_path / "drafts.json"))
     queue.add(DraftEntry(
         id="hermes-one",
-        action_type="hermes_triage_candidate",
+        action_type="orchestrator_triage_candidate",
         description="Roland sent a WhatsApp that looks like a booking. Should I create a ticket?",
         draft="Decision draft",
         reason="Hermes standup",
         created_at=now.isoformat(),
         expires_at=(now + timedelta(hours=1)).isoformat(),
-        execute_payload={"kind": "hermes_triage_ack", "candidate": {"id": "one"}},
+        execute_payload={"kind": "orchestrator_triage_ack", "candidate": {"id": "one"}},
     ))
     queue.add(DraftEntry(
         id="hermes-two",
-        action_type="hermes_triage_candidate",
+        action_type="orchestrator_triage_candidate",
         description="Promote Player1Sport backlog items?",
         draft="Decision draft",
         reason="Hermes standup",
         created_at=now.isoformat(),
         expires_at=(now + timedelta(hours=1)).isoformat(),
-        execute_payload={"kind": "hermes_triage_ack", "candidate": {"id": "two"}},
+        execute_payload={"kind": "orchestrator_triage_ack", "candidate": {"id": "two"}},
     ))
     monkeypatch.setattr(
         "distr.core.initiative.draft_queue.DraftQueue",
@@ -240,7 +240,7 @@ def test_hermes_triage_reply_approves_first_candidate(monkeypatch, tmp_path):
     assert "Roland" in sent
 
 
-def test_hermes_triage_reply_approves_all_with_clean_plural_wording(monkeypatch, tmp_path):
+def test_orchestrator_triage_reply_approves_all_with_clean_plural_wording(monkeypatch, tmp_path):
     from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 
     now = datetime.now(tz=timezone.utc)
@@ -248,13 +248,13 @@ def test_hermes_triage_reply_approves_all_with_clean_plural_wording(monkeypatch,
     for draft_id in ("hermes-one", "hermes-two"):
         queue.add(DraftEntry(
             id=draft_id,
-            action_type="hermes_triage_candidate",
+            action_type="orchestrator_triage_candidate",
             description="Create a ticket?",
             draft="Decision draft",
             reason="Hermes standup",
             created_at=now.isoformat(),
             expires_at=(now + timedelta(hours=1)).isoformat(),
-            execute_payload={"kind": "hermes_triage_ack", "candidate": {"id": draft_id}},
+            execute_payload={"kind": "orchestrator_triage_ack", "candidate": {"id": draft_id}},
         ))
     monkeypatch.setattr(
         "distr.core.initiative.draft_queue.DraftQueue",
@@ -278,14 +278,14 @@ def test_hermes_triage_reply_approves_all_with_clean_plural_wording(monkeypatch,
     assert "item(s)" not in sent
 
 
-def test_hermes_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):
+def test_orchestrator_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):
     from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 
     now = datetime.now(tz=timezone.utc)
     queue = DraftQueue(path=str(tmp_path / "drafts.json"))
     queue.add(DraftEntry(
         id="hermes-one",
-        action_type="hermes_triage_candidate",
+        action_type="orchestrator_triage_candidate",
         description="Create a ticket from Telegram?",
         draft="Decision draft",
         reason="Hermes standup",
@@ -301,7 +301,7 @@ def test_hermes_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):
     handler = TelegramMessagesMixin()
     handler.send_to_telegram = MagicMock()
 
-    handled = handler._handle_initiative_draft_command("show hermes decisions")
+    handled = handler._handle_initiative_draft_command("show orchestrator decisions")
 
     assert handled is True
     sent = handler.send_to_telegram.call_args.args[0]

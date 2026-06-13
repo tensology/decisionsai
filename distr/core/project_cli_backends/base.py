@@ -40,6 +40,8 @@ class BackendTaskResult:
     error: str = ""
     session_id: Optional[int] = None
     execution_session_id: Optional[int] = None
+    waits_for_human: bool = False
+    work_packet_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

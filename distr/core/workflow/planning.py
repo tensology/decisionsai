@@ -15,6 +15,19 @@ from distr.core.db.workflow import (
 
 logger = logging.getLogger(__name__)
 
+WORKFLOW_LOOP_MAX_STEPS = 14
+
+_LOOP_MARKERS = (
+    'start the "',
+    "max iterations",
+    "exit when",
+    "between iterations run",
+    "self-pace this loop",
+    "guardrails",
+    "step 1:",
+    "/loop ",
+)
+
 
 # ── LLM Planning ──
 
@@ -65,6 +78,194 @@ Example:
 Return ONLY the JSON array, no markdown or explanation."""
 
 
+LOOP_PLAN_PROMPT = """You are planning a ticket workflow loop compatible with DecisionsAI and the Orchestrator.
+
+Loop kickoffs follow the elorm.xyz pattern (Goal, Max iterations, Between iterations run, Exit when, Step 1).
+Produce an efficient workflow — prefer 3–7 steps for iterative loops, never more than {max_steps}.
+
+Archetype hint: {archetype_hint}
+
+Parsed hints from the description (may be incomplete — use the full text as source of truth):
+{parsed_hints}
+
+Valid action_type values:
+- "send_to_project_cli" — code/repo work routed to Cursor/Codex via ticket complexity
+- "run_command" — shell check commands (lint, test, build, gh pr checks)
+- "agent_instruction" — judgment, reporting, orchestration decisions
+- "playwright" / "computer_use" — only when the loop explicitly needs browser/UI evidence
+
+Rules:
+- Extract loop_contract ONCE (goal, max_iterations, check_command, exit_when, guardrails, pacing_notes).
+- Do NOT duplicate guardrails in every step — put them in loop_contract.guardrails.
+- Do NOT invent or weaken check_command or exit_when from the user's description.
+- Each step needs: title, instruction, action_type, verification, stuck_behavior.
+- Typical structure for iterative loops:
+  1) Do the iteration work (send_to_project_cli)
+  2) Run the check command (run_command with config.command = check_command)
+  3) Evaluate exit condition (agent_instruction, llm_judgment) — on_fail_goto_position back to step 0 if more iterations allowed
+  4) Report outcome to orchestrator/user (agent_instruction; wait_for_continue if human response needed)
+- For ship-with-CI loops you may use 5 steps but stay minimal.
+- For event-gate loops (pre-commit) use 3 steps: check, fix, evaluate.
+
+Full loop description:
+{instruction}
+
+Respond with ONE JSON object (no markdown):
+{{
+  "name": "Short workflow name",
+  "loop_contract": {{
+    "goal": "...",
+    "max_iterations": 4,
+    "check_command": "...",
+    "exit_when": "...",
+    "guardrails": ["...", "..."],
+    "pacing_notes": "..."
+  }},
+  "steps": [
+    {{
+      "title": "...",
+      "instruction": "...",
+      "action_type": "send_to_project_cli",
+      "verification": "...",
+      "stuck_behavior": "...",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_pass_goto_position": null,
+      "on_fail_goto_position": 0,
+      "config": {{}}
+    }}
+  ]
+}}
+
+on_pass_goto_position / on_fail_goto_position: step position (0-based) or null to end/advance linearly.
+Return ONLY valid JSON."""
+
+
+def is_loop_description(instruction: str) -> bool:
+    """True when text looks like an elorm-style loop kickoff."""
+    if not instruction:
+        return False
+    lower = instruction.strip().lower()
+    return any(marker in lower for marker in _LOOP_MARKERS)
+
+
+def parse_loop_contract(text: str) -> Dict[str, Any]:
+    """Deterministic pre-parse of elorm-style loop kickoffs."""
+    raw = (text or "").strip()
+    contract: Dict[str, Any] = {
+        "name": "",
+        "goal": "",
+        "max_iterations": None,
+        "check_command": "",
+        "exit_when": "",
+        "guardrails": [],
+        "pacing_notes": "",
+        "step_1": "",
+    }
+    if not raw:
+        return contract
+
+    name_match = re.search(r'Start the "([^"]+)" loop', raw, re.I)
+    if name_match:
+        contract["name"] = name_match.group(1).strip()
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lower = stripped.lower()
+        if lower.startswith("goal:"):
+            contract["goal"] = stripped.split(":", 1)[1].strip()
+        elif lower.startswith("max iterations:"):
+            num_match = re.search(r"(\d+)", stripped)
+            if num_match:
+                contract["max_iterations"] = int(num_match.group(1))
+        elif lower.startswith("between iterations run:"):
+            contract["check_command"] = stripped.split(":", 1)[1].strip()
+        elif lower.startswith("exit when:"):
+            contract["exit_when"] = stripped.split(":", 1)[1].strip()
+        elif re.match(r"step\s*1\s*:", stripped, re.I):
+            contract["step_1"] = re.split(r":", stripped, maxsplit=1)[1].strip()
+        elif lower.startswith("- ") and contract.get("_in_guardrails"):
+            contract["guardrails"].append(stripped[2:].strip())
+        elif lower.startswith("guardrails"):
+            contract["_in_guardrails"] = True
+        elif "self-pace this loop" in lower:
+            contract["pacing_notes"] = stripped
+
+    contract.pop("_in_guardrails", None)
+
+    guard_block = re.search(
+        r"Guardrails\s*(?:\([^)]*\))?\s*:\s*(.*?)(?:\n\n|\Z)",
+        raw,
+        re.I | re.S,
+    )
+    if guard_block and not contract["guardrails"]:
+        for gline in guard_block.group(1).splitlines():
+            gline = gline.strip()
+            if gline.startswith("- "):
+                contract["guardrails"].append(gline[2:].strip())
+
+    from distr.core.workflow.loop_catalog import infer_loop_archetype
+
+    contract["archetype"] = infer_loop_archetype(raw, contract)
+    return contract
+
+
+def loop_contract_to_context_rules(contract: Dict[str, Any]) -> str:
+    """Format guardrails and loop policy for workflow context_rules."""
+    lines: List[str] = []
+    goal = str(contract.get("goal") or "").strip()
+    if goal:
+        lines.append(f"Loop goal: {goal}")
+    exit_when = str(contract.get("exit_when") or "").strip()
+    if exit_when:
+        lines.append(f"Exit when: {exit_when}")
+    check = str(contract.get("check_command") or "").strip()
+    if check:
+        lines.append(f"Between iterations run: {check}")
+    max_iter = contract.get("max_iterations")
+    if max_iter is not None:
+        lines.append(f"Max iterations: {max_iter}")
+    guardrails = contract.get("guardrails") or []
+    if guardrails:
+        lines.append("Guardrails (do not skip):")
+        for item in guardrails:
+            lines.append(f"- {item}")
+    pacing = str(contract.get("pacing_notes") or "").strip()
+    if pacing:
+        lines.append(pacing)
+    return "\n".join(lines).strip()
+
+
+def build_loop_context_summary(
+    contract: Dict[str, Any],
+    iteration: int = 0,
+    *,
+    ticket_title: str = "",
+) -> str:
+    """Compact loop contract for agent/CLI prompts at run time."""
+    if not contract:
+        return ""
+    parts = ["[LOOP CONTRACT]"]
+    title = str(ticket_title or "").strip()
+    if title:
+        parts.append(f"Ticket: {title}")
+    for key, label in (
+        ("goal", "Goal"),
+        ("exit_when", "Exit when"),
+        ("check_command", "Check command"),
+        ("step_1", "First step focus"),
+    ):
+        val = str(contract.get(key) or "").strip()
+        if val:
+            parts.append(f"{label}: {val}")
+    max_iter = contract.get("max_iterations")
+    if max_iter is not None:
+        parts.append(f"Iteration: {iteration + 1} of {max_iter}")
+    return "\n".join(parts)
+
+
 def _is_simple_instruction(instruction: str) -> bool:
     """Return True if instruction is simple enough for single-step (no LLM breakdown).
 
@@ -72,6 +273,8 @@ def _is_simple_instruction(instruction: str) -> bool:
     Err on the side of breaking down - LLM can always return a single step.
     """
     if not instruction:
+        return False
+    if is_loop_description(instruction):
         return False
     # Only skip LLM for genuinely trivial one-liners (under 80 chars)
     if len(instruction.strip()) > 80:
@@ -263,7 +466,20 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         step["max_retries"] = int(raw_step.get("max_retries", _ACTION_MAX_RETRIES[action_type]) or 0)
         step["timeout_seconds"] = int(raw_step.get("timeout_seconds", _ACTION_TIMEOUT_SECONDS[action_type]) or 300)
         step["config"] = _default_config(action_type, instruction, _coerce_config(raw_step.get("config")))
+        step["routing_mode"] = str(raw_step.get("routing_mode") or "static").strip() or "static"
+        step["wait_for_continue"] = bool(raw_step.get("wait_for_continue", False))
+        if "on_pass_goto_position" in raw_step:
+            step["on_pass_goto_position"] = raw_step.get("on_pass_goto_position")
+        if "on_fail_goto_position" in raw_step:
+            step["on_fail_goto_position"] = raw_step.get("on_fail_goto_position")
         normalized.append(step)
+    if len(normalized) > WORKFLOW_LOOP_MAX_STEPS:
+        logger.warning(
+            "Planner returned %d steps; capping at %d",
+            len(normalized),
+            WORKFLOW_LOOP_MAX_STEPS,
+        )
+        normalized = normalized[:WORKFLOW_LOOP_MAX_STEPS]
     return normalized
 
 
@@ -286,152 +502,380 @@ def _litellm_model(provider: str, model: str, settings: dict) -> str:
     return f"ollama/{model}" if model else "ollama/llama3.2"
 
 
-def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
-    """Call LLM to break down instruction into steps. Returns list of {title, instruction, action_type} dicts."""
-    from distr.core.settings import load_settings_from_db
+def _planning_model_tiers(settings: dict) -> List[tuple]:
+    """Return (tier_label, provider, model) attempts for loop planning."""
     from distr.core.llm_override import get_llm_override
 
-    settings = load_settings_from_db()
-
-    # Check for board-level LLM override (orchestrator role)
+    tiers: List[tuple] = []
     override = get_llm_override()
     if override and override.orchestrator_provider:
-        provider = override.orchestrator_provider.strip().lower()
-        model = (override.orchestrator_model or "").strip()
-        if not model and provider == "ollama":
-            model = "llama3.2"
-    else:
-        # Check dedicated workflow LLM, then fall back to conversational
-        provider = (
-            (settings.get("workflow_llm_provider") or "").strip()
-            or (settings.get("conversational_llm_provider") or "").strip()
-            or (settings.get("agent_provider") or "").strip()
-            or "Ollama"
-        ).strip().lower()
-        model = (
-            (settings.get("workflow_llm_model") or "").strip()
-            or (settings.get("conversational_llm_model") or "").strip()
-            or (settings.get("agent_model") or "").strip()
-            or ""
-        )
+        tiers.append((
+            "orchestrator_override",
+            override.orchestrator_provider.strip().lower(),
+            (override.orchestrator_model or "").strip() or "llama3.2",
+        ))
+
+    coding_provider = (settings.get("coding_llm_provider") or "").strip()
+    coding_model = (settings.get("coding_llm_model") or "").strip()
+    if coding_provider:
+        tiers.append(("coding", coding_provider.lower(), coding_model or "llama3.2"))
+
+    conv_provider = (
+        (settings.get("conversational_llm_provider") or "").strip()
+        or (settings.get("agent_provider") or "").strip()
+        or "Ollama"
+    ).lower()
+    for label, model_key in (
+        ("complexity_high", "project_cli_high_model"),
+        ("complexity_medium", "project_cli_medium_model"),
+        ("complexity_low", "project_cli_low_model"),
+    ):
+        model = (settings.get(model_key) or "").strip()
+        if model and model.lower() != "auto":
+            tiers.append((label, conv_provider, model))
+
+    workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
+    workflow_model = (settings.get("workflow_llm_model") or "").strip()
+    if workflow_provider:
+        tiers.append(("workflow", workflow_provider.lower(), workflow_model or ""))
+
+    tiers.append((
+        "conversational",
+        conv_provider,
+        (settings.get("conversational_llm_model") or "").strip()
+        or (settings.get("agent_model") or "").strip()
+        or "llama3.2",
+    ))
+
+    seen = set()
+    deduped: List[tuple] = []
+    for tier in tiers:
+        key = (tier[1], tier[2])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(tier)
+    return deduped
+
+
+def _strip_json_fence(content: str) -> str:
+    content = (content or "").strip()
+    content = re.sub(r"^```\w*\s*", "", content)
+    content = re.sub(r"\s*```\s*$", "", content)
+    return content.strip()
+
+
+def call_planning_llm(prompt: str, provider: str, model: str, settings: dict) -> str:
+    """Single LLM completion for planning. Returns raw text content."""
+    import litellm
+
     if not model and provider == "ollama":
-        model = "llama3.2"  # fallback
+        model = "llama3.2"
+    response = litellm.completion(
+        model=_litellm_model(provider, model, settings),
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=4096,
+        temperature=0.2,
+    )
+    return response.choices[0].message.content.strip()
 
-    prompt = PLAN_PROMPT.format(instruction=instruction)
-    messages = [{"role": "user", "content": prompt}]
 
+def parse_loop_plan_response(content: str) -> Optional[Dict[str, Any]]:
+    """Parse loop planner JSON object."""
     try:
-        import litellm
-        response = litellm.completion(
-            model=_litellm_model(provider, model, settings),
-            messages=messages,
-            max_tokens=2048,
-            temperature=0.3,
-        )
-        content = response.choices[0].message.content.strip()
-        # Extract JSON array (handle markdown code blocks)
-        content = re.sub(r"^```\w*\s*", "", content)
-        content = re.sub(r"\s*```\s*$", "", content)
-        parsed = json.loads(content)
-        if not isinstance(parsed, list):
-            logger.warning("LLM returned non-array: %s", type(parsed))
-            return None
-        steps = []
-        valid_action_types = {"agent_instruction", "run_command", "send_to_project_cli", "http_request", "execute_code", "playwright", "computer_use", "play_recording", "decision_action"}
-        for i, item in enumerate(parsed):
-            if isinstance(item, dict):
-                title = str(item.get("title") or item.get("label") or f"Step {i + 1}")
-                inst = str(item.get("instruction") or item.get("text") or "")
-                verification = str(item.get("verification") or "").strip() or None
-                stuck_behavior = str(item.get("stuck_behavior") or "").strip() or None
-                # Map action_type from LLM response — validate and default to agent_instruction
-                action_type = str(item.get("action_type") or "").strip().lower()
-                if action_type not in valid_action_types:
-                    action_type = "agent_instruction"
-                if inst:
-                    step = {"title": title, "instruction": inst, "action_type": action_type}
-                    if verification:
-                        step["verification"] = verification
-                    if stuck_behavior:
-                        step["stuck_behavior"] = stuck_behavior
-                    steps.append(step)
-            elif isinstance(item, str):
-                steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})
-        return _normalize_plan_steps(steps, instruction) if steps else None
-    except Exception as e:
-        logger.error("Workflow plan LLM call failed: %s", e, exc_info=True)
+        parsed = json.loads(_strip_json_fence(content))
+    except Exception:
         return None
+    if isinstance(parsed, list):
+        return {"steps": parsed, "loop_contract": {}, "name": ""}
+    if not isinstance(parsed, dict):
+        return None
+    steps = parsed.get("steps")
+    if not isinstance(steps, list) or not steps:
+        return None
+    return parsed
+
+
+def _call_llm_for_loop_plan(instruction: str) -> Optional[Dict[str, Any]]:
+    """Plan a loop workflow using LOOP_PLAN_PROMPT and model fallback chain."""
+    from distr.core.settings import load_settings_from_db
+    from distr.core.workflow.loop_catalog import archetype_planning_hint
+
+    settings = load_settings_from_db()
+    parsed_hints = parse_loop_contract(instruction)
+    archetype = parsed_hints.get("archetype") or "check_fix_until_green"
+    prompt = LOOP_PLAN_PROMPT.format(
+        instruction=instruction,
+        parsed_hints=json.dumps(parsed_hints, indent=2),
+        archetype_hint=archetype_planning_hint(archetype),
+        max_steps=WORKFLOW_LOOP_MAX_STEPS,
+    )
+
+    last_error = None
+    for tier_label, provider, model in _planning_model_tiers(settings):
+        for attempt in range(2):
+            try:
+                content = call_planning_llm(prompt, provider, model, settings)
+                plan_obj = parse_loop_plan_response(content)
+                if not plan_obj:
+                    last_error = f"{tier_label}: invalid JSON"
+                    continue
+                steps_raw = plan_obj.get("steps") or []
+                flat_steps = []
+                for i, item in enumerate(steps_raw):
+                    if isinstance(item, dict):
+                        flat_steps.append(item)
+                    elif isinstance(item, str):
+                        flat_steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})
+                normalized = _normalize_plan_steps(flat_steps, instruction)
+                if not normalized:
+                    last_error = f"{tier_label}: no steps"
+                    continue
+                loop_contract = dict(plan_obj.get("loop_contract") or {})
+                for key in ("goal", "max_iterations", "check_command", "exit_when", "step_1"):
+                    if not loop_contract.get(key) and parsed_hints.get(key):
+                        loop_contract[key] = parsed_hints[key]
+                if parsed_hints.get("guardrails") and not loop_contract.get("guardrails"):
+                    loop_contract["guardrails"] = parsed_hints["guardrails"]
+                if not loop_contract.get("name"):
+                    loop_contract["name"] = parsed_hints.get("name") or plan_obj.get("name") or ""
+                logger.info(
+                    "Loop plan succeeded tier=%s provider=%s model=%s steps=%d",
+                    tier_label,
+                    provider,
+                    model,
+                    len(normalized),
+                )
+                return {
+                    "name": str(plan_obj.get("name") or parsed_hints.get("name") or "").strip(),
+                    "loop_contract": loop_contract,
+                    "steps": normalized,
+                    "planning_model_tier": tier_label,
+                }
+            except Exception as exc:
+                last_error = f"{tier_label}: {exc}"
+                logger.warning("Loop plan attempt failed (%s): %s", tier_label, exc)
+    logger.error("Loop plan failed all tiers: %s", last_error)
+    return None
+
+
+def _position_to_step_id(position: Optional[int], position_map: dict) -> Optional[int]:
+    if position is None:
+        return None
+    if position == -1:
+        return -1
+    step = position_map.get(position)
+    return step.id if step else None
+
+
+def _resolve_goto_position(
+    position: Optional[int],
+    position_map: dict,
+    *,
+    position_offset: int = 0,
+) -> Optional[int]:
+    """Map a preset-relative goto position to a workflow step id."""
+    if position is None:
+        return None
+    if position == -1:
+        return -1
+    return _position_to_step_id(int(position) + int(position_offset), position_map)
+
+
+def _apply_step_goto_positions(
+    db,
+    workflow_id: int,
+    steps_data: List[Dict[str, Any]],
+    *,
+    start_position: int = 0,
+) -> None:
+    """Resolve on_*_goto_position to step IDs after insert."""
+    steps = (
+        db.query(AutoWorkflowStep)
+        .filter(AutoWorkflowStep.workflow_id == workflow_id)
+        .order_by(AutoWorkflowStep.position.asc())
+        .all()
+    )
+    position_map = {s.position: s for s in steps}
+    pass_refs: dict[int, Any] = {}
+    fail_refs: dict[int, Any] = {}
+    for i, s_data in enumerate(steps_data):
+        step = position_map.get(int(start_position) + i)
+        if not step:
+            continue
+        pass_refs[step.id] = s_data.get("on_pass_goto_position")
+        fail_refs[step.id] = s_data.get("on_fail_goto_position")
+    for step in steps:
+        if step.id not in pass_refs and step.id not in fail_refs:
+            continue
+        step.on_pass_goto = _resolve_goto_position(
+            pass_refs.get(step.id),
+            position_map,
+            position_offset=start_position,
+        )
+        step.on_fail_goto = _resolve_goto_position(
+            fail_refs.get(step.id),
+            position_map,
+            position_offset=start_position,
+        )
+
+
+def _persist_planned_steps(
+    db,
+    workflow_id: int,
+    steps_data: List[Dict[str, Any]],
+    *,
+    start_position: int = 0,
+) -> None:
+    """Insert normalized planned steps and wire goto positions."""
+    for i, s in enumerate(steps_data):
+        step = AutoWorkflowStep(
+            workflow_id=workflow_id,
+            position=int(start_position) + i,
+            name=s.get("title", f"Step {i + 1}"),
+            instruction=s.get("instruction", ""),
+            action_type=s.get("action_type", "agent_instruction"),
+            status="pending",
+            step_type=s.get("action_type", "agent_instruction"),
+            config=json.dumps(s.get("config") or {}),
+            code=s.get("code"),
+            validation_type=s.get("validation_type") or "llm_judgment",
+            validation_prompt=s.get("validation_prompt") or s.get("verification"),
+            verification=s.get("verification"),
+            max_retries=s.get("max_retries", 0),
+            timeout_seconds=s.get("timeout_seconds", 300),
+            routing_mode=s.get("routing_mode") or "static",
+            wait_for_continue=bool(s.get("wait_for_continue", False)),
+        )
+        if s.get("stuck_behavior"):
+            step.description = f"Stuck behavior: {s['stuck_behavior']}"
+        db.add(step)
+    db.flush()
+    _apply_step_goto_positions(db, workflow_id, steps_data, start_position=start_position)
+
+
+def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
+    """Call LLM to break down instruction into steps. Returns list of step dicts."""
+    from distr.core.settings import load_settings_from_db
+
+    settings = load_settings_from_db()
+    prompt = PLAN_PROMPT.format(instruction=instruction)
+
+    for tier_label, provider, model in _planning_model_tiers(settings):
+        for _attempt in range(2):
+            try:
+                content = call_planning_llm(prompt, provider, model, settings)
+                parsed = json.loads(_strip_json_fence(content))
+                if not isinstance(parsed, list):
+                    continue
+                steps = []
+                valid_action_types = {
+                    "agent_instruction", "run_command", "send_to_project_cli", "http_request",
+                    "execute_code", "playwright", "computer_use", "play_recording", "decision_action",
+                }
+                for i, item in enumerate(parsed):
+                    if isinstance(item, dict):
+                        title = str(item.get("title") or item.get("label") or f"Step {i + 1}")
+                        inst = str(item.get("instruction") or item.get("text") or "")
+                        verification = str(item.get("verification") or "").strip() or None
+                        stuck_behavior = str(item.get("stuck_behavior") or "").strip() or None
+                        action_type = str(item.get("action_type") or "").strip().lower()
+                        if action_type not in valid_action_types:
+                            action_type = "agent_instruction"
+                        if inst:
+                            step = {"title": title, "instruction": inst, "action_type": action_type}
+                            if verification:
+                                step["verification"] = verification
+                            if stuck_behavior:
+                                step["stuck_behavior"] = stuck_behavior
+                            steps.append(step)
+                    elif isinstance(item, str):
+                        steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})
+                if steps:
+                    logger.info("Linear plan succeeded tier=%s steps=%d", tier_label, len(steps))
+                    return _normalize_plan_steps(steps, instruction)
+            except Exception as e:
+                logger.warning("Linear plan attempt failed (%s): %s", tier_label, e)
+    return None
 
 
 def plan_workflow(
     instruction: str,
     chat_id: Optional[int] = None,
     workflow_input: Optional[dict] = None,
+    name: Optional[str] = None,
 ) -> Optional[int]:
     """Create a Workflow by breaking down the instruction into steps.
 
-    Uses single-step fast path for simple instructions.  Retries LLM once on
-    failure.  Returns the created workflow id, or ``None`` on failure.
-
-    If *workflow_input* is provided (a dict matching the WorkflowInput schema),
-    it is serialized to JSON and stored on the workflow's ``workflow_input``
-    column.
+    Uses loop-aware planning for elorm-style descriptions. Retries LLM on
+    failure. Returns the created workflow id, or ``None`` on failure.
     """
+    loop_plan = None
     steps_data = None
     planning_mode = "simple_instruction"
-    if _is_simple_instruction(instruction):
+    loop_contract: Dict[str, Any] = {}
+    context_rules = ""
+    display_name = (name or "").strip()
+
+    if is_loop_description(instruction):
+        loop_plan = _call_llm_for_loop_plan(instruction)
+        if loop_plan:
+            steps_data = loop_plan.get("steps")
+            loop_contract = dict(loop_plan.get("loop_contract") or {})
+            if not display_name:
+                display_name = str(loop_plan.get("name") or loop_contract.get("name") or "").strip()
+            context_rules = loop_contract_to_context_rules(loop_contract)
+            planning_mode = "loop_planned_" + str(loop_plan.get("planning_model_tier") or "unknown")
+
+    if not steps_data and _is_simple_instruction(instruction):
         steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]
     if not steps_data:
         steps_data = _call_llm_for_plan(instruction)
         planning_mode = "llm_planned"
         if not steps_data:
-            steps_data = _call_llm_for_plan(instruction)  # Retry once
+            steps_data = _call_llm_for_plan(instruction)
     if not steps_data:
-        steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]  # Fallback single-step
+        steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]
         planning_mode = "fallback_single_step"
     steps_data = _normalize_plan_steps(steps_data, instruction)
 
-    # Serialize workflow_input to JSON if provided
+    if not display_name:
+        parsed = parse_loop_contract(instruction)
+        display_name = str(parsed.get("name") or "").strip()
+    if not display_name:
+        display_name = (instruction[:80] + "…") if len(instruction) > 80 else instruction
+
+    merged_input = dict(workflow_input or {})
+    if loop_contract:
+        merged_input.update({k: v for k, v in loop_contract.items() if v not in (None, "", [])})
+        merged_input["planning_mode"] = planning_mode
+
     workflow_input_json = None
-    if workflow_input is not None:
+    if merged_input:
         try:
-            workflow_input_json = json.dumps(workflow_input)
+            workflow_input_json = json.dumps(merged_input)
         except (TypeError, ValueError) as exc:
             logger.warning("Failed to serialize workflow_input: %s", exc)
 
-    logger.info("plan_workflow: planning_mode=%s, steps=%d for instruction: %.80s",
-                planning_mode, len(steps_data), instruction)
+    logger.info(
+        "plan_workflow: planning_mode=%s, steps=%d for instruction: %.80s",
+        planning_mode,
+        len(steps_data),
+        instruction,
+    )
 
     with get_session() as db:
         wf = AutoWorkflow(
-            name=(instruction[:80] + "…") if len(instruction) > 80 else instruction,
+            name=display_name,
             description=instruction,
             workflow_type="instruction",
             chat_id=chat_id,
             workflow_input=workflow_input_json,
+            context_rules=context_rules or None,
         )
         db.add(wf)
         db.flush()
-        for i, s in enumerate(steps_data):
-            step = AutoWorkflowStep(
-                workflow_id=wf.id,
-                position=i,
-                name=s.get("title", f"Step {i + 1}"),
-                instruction=s.get("instruction", ""),
-                action_type=s.get("action_type", "agent_instruction"),
-                status="pending",
-                step_type=s.get("action_type", "agent_instruction"),
-                config=json.dumps(s.get("config") or {}),
-                code=s.get("code"),
-                validation_type=s.get("validation_type") or "llm_judgment",
-                validation_prompt=s.get("validation_prompt") or s.get("verification"),
-                verification=s.get("verification"),
-                max_retries=s.get("max_retries", 0),
-                timeout_seconds=s.get("timeout_seconds", 300),
-            )
-            if s.get("stuck_behavior"):
-                step.description = f"Stuck behavior: {s['stuck_behavior']}"
-            db.add(step)
+        _persist_planned_steps(db, wf.id, steps_data)
         db.commit()
         db.refresh(wf)
         return int(wf.id)
@@ -448,6 +892,7 @@ def build_step_context_prompt(
     context_rules: str = "",
     continuation_input: str = "",
     session_instruction: str = "",
+    loop_context_summary: str = "",
 ) -> str:
     """Build a context-aware prompt for step execution.
 
@@ -485,10 +930,14 @@ def build_step_context_prompt(
         and not prior_results
         and not context_rules
         and not continuation_input
+        and not loop_context_summary
     ):
         return resolve_variables(step_instruction, prior_results)
 
     parts: List[str] = []
+
+    if loop_context_summary:
+        parts.append(loop_context_summary + "\n")
 
     if context_rules:
         parts.append(f"[CONTEXT AND RULES]\n{context_rules}\n")

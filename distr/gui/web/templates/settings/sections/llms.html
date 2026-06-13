@@ -24,7 +24,7 @@
     </style>
 
     <div class="mb-6 pb-4 border-b border-[#565869] text-center">
-        <h2 class="text-xl font-semibold text-white mb-1">Language Models</h2>
+        <h2 class="text-xl font-semibold text-white mb-1">LLMs</h2>
         <p class="text-sm text-gray-400">Configure LLM providers and models</p>
     </div>
 
@@ -178,35 +178,6 @@
             </div>
         </div>
 
-        <!-- Computer Use LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-1 text-center text-base font-semibold text-white">Computer Use</h3>
-            <p class="mb-3 text-center text-xs text-gray-500">Pixel-precise screen element location. Requires Computer Use support (e.g. Claude Sonnet/Opus). Leave empty to use accessibility tree only.</p>
-            <div class="flex items-center gap-4 llms-row">
-                <label for="computer_use_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
-                <div class="flex-1">
-                    <select id="computer_use_provider" name="computer_use_provider"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Disabled (accessibility tree only)</option>
-                    </select>
-                </div>
-                <label for="computer_use_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
-                <div class="llms-model-with-action flex min-w-0 flex-1 items-center gap-4">
-                    <select id="computer_use_model" name="computer_use_model"
-                            class="min-w-0 flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Select model...</option>
-                    </select>
-                    <button type="button" id="computer_use_download" class="h-8 w-8 flex-shrink-0 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
-                        ⬇
-                    </button>
-                </div>
-            </div>
-        </div>
-
         <!-- Workflow LLM -->
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
             <h3 class="mb-1 text-center text-base font-semibold text-white">Workflow</h3>
@@ -236,6 +207,35 @@
             </div>
         </div>
 
+        <!-- Computer Use LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="mb-1 text-center text-base font-semibold text-white">Computer Use</h3>
+            <p class="mb-3 text-center text-xs text-gray-500">Pixel-precise screen element location for desktop and browser automation. Requires Computer Use support (e.g. Claude Sonnet/Opus). Leave empty to use accessibility tree only.</p>
+            <div class="flex items-center gap-4 llms-row">
+                <label for="computer_use_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="flex-1">
+                    <select id="computer_use_provider" name="computer_use_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Disabled (accessibility tree only)</option>
+                    </select>
+                </div>
+                <label for="computer_use_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <div class="llms-model-with-action flex min-w-0 flex-1 items-center gap-4">
+                    <select id="computer_use_model" name="computer_use_model"
+                            class="min-w-0 flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Select model...</option>
+                    </select>
+                    <button type="button" id="computer_use_download" class="h-8 w-8 flex-shrink-0 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                        ⬇
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Project Ticket Routing -->
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
             <h3 class="mb-1 text-center text-base font-semibold text-white">Project Ticket Routing</h3>
@@ -247,7 +247,9 @@
                     <select id="project_cli_{{ level }}_backend" class="project-cli-backend bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
                         <option value="pi">Pi</option>
                         <option value="cursor">Cursor CLI</option>
+                        <option value="cursor_ide">Cursor IDE</option>
                         <option value="codex">Codex CLI</option>
+                        <option value="codex_ide">Codex IDE</option>
                         <option value="claude_code">Claude Code</option>
                     </select>
                     <select id="project_cli_{{ level }}_model" class="project-cli-model bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">

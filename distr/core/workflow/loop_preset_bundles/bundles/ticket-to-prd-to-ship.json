@@ -1,0 +1,233 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "ticket-to-prd-to-ship",
+  "name": "Ticket to PRD to Ship",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "incremental_ship",
+  "description": "Ingest ticket, write and scrutinize a PRD, implement, run project checks, browser-verify, self-review, ship.",
+  "kickoff": "Start the \"Ticket to PRD to Ship\" loop.\nGoal: ticket acceptance criteria met with a reviewed PRD, implementation, and browser verification\nMax iterations: 8\nBetween iterations run: project test suite + targeted browser check on changed flows\nExit when: PRD approved, tests green, browser verification passed, and self-review clean\nStep 1: Ingest the ticket, clarify acceptance criteria, and draft a PRD before writing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "loop_contract": {
+    "name": "Ticket to PRD to Ship",
+    "goal": "ticket acceptance criteria met with reviewed PRD, tests, and browser proof",
+    "exit_when": "PRD approved, tests green, browser verification passed, self-review clean",
+    "check_command": "project lint + test suite + browser check on changed flows",
+    "max_iterations": 8,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read the linked ticket (title, description, comments, attachments). Extract acceptance criteria, constraints, and unknowns. List assumptions that must be confirmed before a PRD is written.",
+    "archetype": "incremental_ship",
+    "role": "developer"
+  },
+  "expected_check_command": "project lint + test suite + browser check on changed flows",
+  "tags": [
+    "developer",
+    "prd",
+    "playwright",
+    "ticket"
+  ],
+  "steps": [
+    {
+      "name": "Ingest ticket",
+      "instruction": "Read the linked ticket (title, description, comments, attachments). Extract acceptance criteria, constraints, and unknowns. List assumptions that must be confirmed before a PRD is written.",
+      "skills": [
+        "product-lens",
+        "brainstorming"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Do not start implementation in this step",
+      "failure_checklist": [
+        "Acceptance criteria not stated clearly",
+        "Ticket context missing or not read"
+      ],
+      "validation_prompt": "Acceptance criteria and constraints are written down with any open questions listed.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket context + project repo"
+    },
+    {
+      "name": "Draft PRD",
+      "instruction": "Write a concise PRD for this ticket: problem, users, acceptance criteria, out-of-scope, test plan, and rollout notes. Use writing-plans and doc-coauthoring patterns. Save where the project keeps specs.",
+      "skills": [
+        "writing-plans",
+        "doc-coauthoring",
+        "product-lens"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "PRD missing acceptance criteria or test plan",
+        "PRD is implementation-only with no why"
+      ],
+      "validation_prompt": "PRD exists with acceptance criteria, scope boundaries, and verification approach.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Scrutinize PRD",
+      "instruction": "Run ceo-scope-review on the PRD: challenge scope size, risks, and missing edge cases. Run pre-flight-review for security/architecture flags relevant to this change. Produce a revised PRD or explicit hold.",
+      "skills": [
+        "ceo-scope-review",
+        "pre-flight-review"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Do not weaken acceptance criteria to force approval",
+      "failure_checklist": [
+        "Scope concerns ignored",
+        "P0 security/architecture flags not addressed"
+      ],
+      "validation_prompt": "PRD reviewed; scope mode chosen; blocking concerns resolved or explicitly accepted.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator PRD review"
+    },
+    {
+      "name": "Implement slice",
+      "instruction": "Implement the next highest-priority unchecked item from the PRD using executing-plans and tdd-workflow. One coherent slice per iteration — minimal diff, tests for behavior changed.",
+      "skills": [
+        "executing-plans",
+        "tdd-workflow",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Detect lint and test commands from the repo (package.json, Makefile, pyproject.toml, etc.)\n- Do not assume npm — use whatever this project actually uses",
+      "failure_checklist": [
+        "No tests for changed behavior",
+        "Unrelated files changed"
+      ],
+      "validation_prompt": "A coherent slice landed with tests and a readable diff.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 3
+    },
+    {
+      "name": "Run project checks",
+      "instruction": "Run this repo's lint and unit/integration tests (discover commands from project config — do not assume npm). Capture output. Fix the first failure before continuing.",
+      "skills": [
+        "verification-loop",
+        "ln-622-build-auditor",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Detect lint and test commands from the repo (package.json, Makefile, pyproject.toml, etc.)\n- Do not assume npm — use whatever this project actually uses\n- Do not disable failing tests to pass",
+      "failure_checklist": [
+        "Checks skipped",
+        "Wrong command used for this stack",
+        "Failures not fixed"
+      ],
+      "validation_prompt": "Project lint/tests pass with command output captured.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Project test/lint commands from repo config",
+      "on_fail_goto_position": 3
+    },
+    {
+      "name": "Browser verify changed flows",
+      "instruction": "Using webapp-testing and qa-tester, exercise the user flows touched by this change in the browser. Check happy path, one error state, and auth if applicable. Capture screenshots or notes for evidence.",
+      "skills": [
+        "webapp-testing",
+        "qa-tester",
+        "browser-qa"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Use test credentials from project env — never invent secrets",
+      "failure_checklist": [
+        "Changed UI flow not exercised",
+        "Console errors ignored",
+        "Credentials hardcoded in test steps"
+      ],
+      "validation_prompt": "Changed flows verified in browser with evidence (screenshot, trace, or repro notes).",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 3
+    },
+    {
+      "name": "Self-review diff",
+      "instruction": "Review the full branch diff with requesting-code-review. Fix P0/P1 findings. Re-run checks if code changed.",
+      "skills": [
+        "requesting-code-review",
+        "ln-511-code-quality-checker",
+        "receiving-code-review"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "Critical review findings left open",
+        "Debug code or TODOs left in diff"
+      ],
+      "validation_prompt": "Self-review complete; no open P0/P1 findings on the diff.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 3
+    },
+    {
+      "name": "Evaluate ship readiness",
+      "instruction": "Confirm: PRD items for this iteration done, tests green, browser verification passed, self-review clean. If more PRD items remain, loop back. If ticket acceptance criteria met, exit.",
+      "skills": [
+        "product-lens",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Do not mark done with open acceptance criteria",
+      "failure_checklist": [
+        "Exit declared with failing tests or open AC",
+        "PRD items still unchecked without reason"
+      ],
+      "validation_prompt": "Ticket acceptance criteria met OR clear list of remaining PRD items for next iteration.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator ship judgment",
+      "on_fail_goto_position": 3
+    },
+    {
+      "name": "Report iteration",
+      "instruction": "Summarize for the ticket: what shipped, test/browser evidence, PRD status, and whether another iteration is needed.",
+      "skills": [
+        "learnings-keeper",
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Ticket-ready summary with evidence links and next-step recommendation.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator ticket update",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

@@ -108,9 +108,9 @@ class ContextAssembler:
 
             work_scan = build_work_scan(settings)
             try:
-                from distr.core.hermes_daily_triage import build_daily_triage
+                from distr.core.orchestrator_daily_triage import build_daily_triage
 
-                work_scan["hermes_triage"] = build_daily_triage(
+                work_scan["orchestrator_triage"] = build_daily_triage(
                     work_scan=work_scan,
                     developer_context=developer_context,
                     recent_events=[],

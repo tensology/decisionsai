@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from distr.core.db import get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.projects import Project
 from distr.core.db.schedule_blocks import ScheduleBlock
 from distr.core.services import schedule_blocks as schedule_service
 from distr.gui.web.routes.schedule_blocks import create_routes
@@ -367,4 +369,176 @@ def test_serialize_block_includes_board_color_from_linked_board():
     with get_session() as session:
         session.query(ScheduleBlock).filter(ScheduleBlock.id == block_id).delete()
         session.query(KanbanBoard).filter(KanbanBoard.id == board_id).delete()
+        session.commit()
+
+
+def test_same_project_blocks_cannot_overlap_in_time():
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+
+    start = datetime(2026, 6, 11, 9, 0, 0)
+    end = start + timedelta(hours=1)
+    overlap_start = start + timedelta(minutes=30)
+    overlap_end = overlap_start + timedelta(hours=1)
+
+    with get_session() as session:
+        project = Project(name="Decisions", folder_location="/tmp/decisions")
+        session.add(project)
+        session.flush()
+        project_id = project.id
+
+    first = client.post(
+        "/api/schedule-blocks",
+        json={
+            "title": "Project work",
+            "start_at": start.isoformat(),
+            "end_at": end.isoformat(),
+            "project_id": project_id,
+        },
+    )
+    assert first.status_code == 200
+    first_id = first.json()["block"]["id"]
+
+    second = client.post(
+        "/api/schedule-blocks",
+        json={
+            "title": "More project work",
+            "start_at": overlap_start.isoformat(),
+            "end_at": overlap_end.isoformat(),
+            "project_id": project_id,
+        },
+    )
+    assert second.status_code == 409
+    assert "already has a time block" in second.json()["detail"]
+
+    different_project = client.post(
+        "/api/schedule-blocks",
+        json={
+            "title": "Other work",
+            "start_at": overlap_start.isoformat(),
+            "end_at": overlap_end.isoformat(),
+        },
+    )
+    assert different_project.status_code == 200
+    other_id = different_project.json()["block"]["id"]
+
+    with get_session() as session:
+        session.query(ScheduleBlock).filter(ScheduleBlock.id.in_([first_id, other_id])).delete()
+        session.query(Project).filter(Project.id == project_id).delete()
+        session.commit()
+
+
+def test_blocks_without_project_can_still_overlap():
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+
+    start = datetime(2026, 6, 11, 10, 0, 0)
+    end = start + timedelta(hours=1)
+
+    first = client.post(
+        "/api/schedule-blocks",
+        json={
+            "title": "General work",
+            "start_at": start.isoformat(),
+            "end_at": end.isoformat(),
+        },
+    )
+    second = client.post(
+        "/api/schedule-blocks",
+        json={
+            "title": "Also general",
+            "start_at": (start + timedelta(minutes=15)).isoformat(),
+            "end_at": (end + timedelta(minutes=15)).isoformat(),
+        },
+    )
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_id = first.json()["block"]["id"]
+    second_id = second.json()["block"]["id"]
+
+    with get_session() as session:
+        session.query(ScheduleBlock).filter(ScheduleBlock.id.in_([first_id, second_id])).delete()
+        session.commit()
+
+
+def test_timesheet_export_boards_and_download():
+    pytest.importorskip("openpyxl")
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+
+    start = datetime(2026, 6, 10, 9, 0, 0)
+    end = start + timedelta(hours=2)
+
+    with get_session() as session:
+        board_a = KanbanBoard(name="Alpha board")
+        board_b = KanbanBoard(name="Beta board")
+        session.add_all([board_a, board_b])
+        session.flush()
+        project = Project(name="Export project", kanban_board_id=board_a.id)
+        session.add(project)
+        session.flush()
+        block_a = schedule_service.create_block(
+            session,
+            title="Alpha work",
+            start_at=start.isoformat(),
+            end_at=end.isoformat(),
+            board_id=board_a.id,
+            project_id=project.id,
+        )
+        block_b = schedule_service.create_block(
+            session,
+            title="Beta work",
+            start_at=(start + timedelta(hours=3)).isoformat(),
+            end_at=(start + timedelta(hours=4)).isoformat(),
+            board_id=board_b.id,
+        )
+        board_a_id = board_a.id
+        board_b_id = board_b.id
+        project_id = project.id
+        block_a_id = block_a.id
+        block_b_id = block_b.id
+
+    boards_resp = client.get(
+        "/api/schedule-blocks/export/boards",
+        params={"start_date": "2026-06-10", "end_date": "2026-06-10"},
+    )
+    assert boards_resp.status_code == 200
+    boards = boards_resp.json()["boards"]
+    keys = {row["board_key"] for row in boards}
+    assert f"local:{board_a_id}" in keys
+    assert f"local:{board_b_id}" in keys
+
+    export_resp = client.post(
+        "/api/schedule-blocks/export/timesheet",
+        json={
+            "start_date": "2026-06-10",
+            "end_date": "2026-06-10",
+            "board_keys": [f"local:{board_a_id}"],
+        },
+    )
+    assert export_resp.status_code == 200
+    assert (
+        export_resp.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert export_resp.content[:2] == b"PK"
+    assert "timesheet_2026-06-10" in export_resp.headers.get("content-disposition", "")
+
+    empty_resp = client.post(
+        "/api/schedule-blocks/export/timesheet",
+        json={
+            "start_date": "2026-06-10",
+            "end_date": "2026-06-10",
+            "board_keys": [],
+        },
+    )
+    assert empty_resp.status_code == 422
+
+    with get_session() as session:
+        session.query(ScheduleBlock).filter(ScheduleBlock.id.in_([block_a_id, block_b_id])).delete()
+        session.query(Project).filter(Project.id == project_id).delete()
+        session.query(KanbanBoard).filter(KanbanBoard.id.in_([board_a_id, board_b_id])).delete()
         session.commit()

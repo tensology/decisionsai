@@ -262,14 +262,14 @@ class LLMSettings(BaseModel):
 class AdvancedSettings(BaseModel):
     exclude_types: str = ""
     indexed_folders: List[str] = Field(default_factory=list)
-    hermes_enabled: bool = True
-    hermes_memory_export_enabled: bool = False
-    hermes_orchestrator_provider: str = ""
-    hermes_orchestrator_model: str = ""
-    hermes_validator_provider: str = ""
-    hermes_validator_model: str = ""
-    hermes_correction_provider: str = ""
-    hermes_correction_model: str = ""
+    orchestrator_enabled: bool = True
+    orchestrator_memory_export_enabled: bool = False
+    orchestrator_provider: str = ""
+    orchestrator_model: str = ""
+    orchestrator_validator_provider: str = ""
+    orchestrator_validator_model: str = ""
+    orchestrator_correction_provider: str = ""
+    orchestrator_correction_model: str = ""
 
 
 class InitiativeSettings(BaseModel):
@@ -364,6 +364,7 @@ class SnippetUpdate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    notes: Optional[str] = None
     folder_location: Optional[str] = None
     additional_trigger_words: Optional[str] = None
     startup_instructions: Optional[str] = None

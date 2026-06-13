@@ -65,11 +65,11 @@ def register_routes(router, templates):
         if stt_id == "assemblyai":
             if settings.get("assemblyai_enabled") and (settings.get("assemblyai_key") or "").strip():
                 return True, ""
-            return False, "AssemblyAI needs an enabled API key in Third Party Providers."
+            return False, "AssemblyAI needs an enabled API key in API Keys."
         if stt_id == "openai_whisper":
             if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip():
                 return True, ""
-            return False, "OpenAI Whisper needs an enabled OpenAI API key in Third Party Providers."
+            return False, "OpenAI Whisper needs an enabled OpenAI API key in API Keys."
         return True, ""
 
     def _available_stt_options(settings: dict) -> tuple[list[dict], dict]:

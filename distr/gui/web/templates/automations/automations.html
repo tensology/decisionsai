@@ -61,7 +61,67 @@
     min-width: 9.5rem;
 }
 .automation-schedule-detail-panel {
-    min-width: 22rem;
+    min-width: 0;
+}
+.automation-schedule-options-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+    min-width: 0;
+}
+.automation-weekday-btn {
+    min-width: 2.5rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.04);
+    color: #9ca3af;
+    font-size: 0.75rem;
+    line-height: 1.1;
+    cursor: pointer;
+}
+.automation-weekday-btn.is-selected {
+    color: #fff;
+    border-color: #f97316;
+    background: rgba(249, 115, 22, 0.18);
+}
+.automation-monthly-days-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    min-height: 42px;
+    min-width: 14rem;
+    padding: 0.5rem;
+    background: #152054;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.375rem;
+}
+.automation-monthly-day-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.375rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e5e7eb;
+    font-size: 0.75rem;
+}
+.automation-monthly-days-input {
+    min-width: 7rem;
+    flex: 1 1 7rem;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #fff;
+    font-size: 0.875rem;
+    padding: 0.25rem 0.375rem;
+    outline: none;
+}
+.automation-monthly-days-input:focus {
+    border-color: #f97316;
+    border-radius: 0.25rem;
 }
 .automation-interval-value {
     width: 5.5rem;
@@ -121,6 +181,59 @@
     border-color: #f97316;
     background: rgba(249, 115, 22, 0.12);
 }
+.automation-cal-view-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.automation-cal-today-btn {
+    height: 1.75rem;
+    padding: 0 0.625rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(16, 24, 63, 0.35);
+    color: #d1d5db;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+}
+.automation-cal-today-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+}
+.sched-export-link {
+    color: #f97316;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+}
+.sched-export-link:hover {
+    color: #fb923c;
+    text-decoration: underline;
+}
+.sched-export-board-list {
+    max-height: 16rem;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.sched-export-board-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: #e5e7eb;
+    cursor: pointer;
+}
+.sched-export-board-item input {
+    accent-color: #f97316;
+}
 .automation-cal-zoom-tools {
     display: inline-flex;
     align-items: center;
@@ -153,13 +266,22 @@
     font-variant-numeric: tabular-nums;
 }
 .automation-cal-nav-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: 1.75rem;
     height: 1.75rem;
+    padding: 0;
     border-radius: 0.375rem;
     border: 1px solid rgba(255, 255, 255, 0.18);
     color: #d1d5db;
     background: transparent;
     line-height: 1;
+}
+.automation-cal-nav-btn svg {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
 }
 .automation-cal-nav-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .automation-cal-month-shell {
@@ -869,7 +991,7 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                 </div>
 
                 <div id="automation-tab-details" class="automation-tab-pane flex-1 min-h-0 flex flex-col gap-0">
-                    <div class="automation-fields-row flex flex-nowrap items-end gap-3 min-w-0 flex-shrink-0 overflow-x-auto pb-1">
+                    <div class="automation-fields-row flex flex-wrap items-end gap-3 min-w-0 flex-shrink-0 pb-1">
                         <div class="flex-shrink-0 self-end pb-2">
                             <input type="hidden" id="automation-status" value="active">
                             <button type="button" id="automation-status-switch" class="automation-status-switch is-on" role="switch" aria-checked="true" aria-label="Active">
@@ -877,7 +999,7 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                                 <span class="automation-status-switch-text">Active</span>
                             </button>
                         </div>
-                        <div class="flex-1 min-w-0">
+                        <div class="flex-1 min-w-[12rem]">
                             <label class="block text-sm text-gray-400 mb-1">Name</label>
                             <input type="text" id="automation-name" class="w-full min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none" placeholder="Daily planning reminder">
                         </div>
@@ -889,26 +1011,46 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                                 <option value="hourly">Hourly</option>
                                 <option value="daily">Daily</option>
                                 <option value="weekly">Weekly</option>
+                                <option value="monthly">Monthly</option>
                             </select>
                         </div>
-                        <div id="automation-schedule-detail" class="automation-schedule-detail-panel w-auto flex-shrink-0">
-                            <div id="automation-time-wrap">
-                                <label id="automation-time-label" class="block text-sm text-gray-400 mb-1">Time</label>
-                                <input id="automation-time" type="time" data-decisions-datetime-label="Time" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                    </div>
+                    <div id="automation-schedule-options" class="automation-schedule-options-row mt-3 flex-shrink-0">
+                        <div id="automation-time-wrap" class="w-40 flex-shrink-0">
+                            <label id="automation-time-label" class="block text-sm text-gray-400 mb-1">Time</label>
+                            <input id="automation-time" type="time" data-decisions-datetime-label="Time" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div id="automation-once-wrap" class="hidden w-56 flex-shrink-0">
+                            <label class="block text-sm text-gray-400 mb-1">Run at</label>
+                            <input id="automation-once-at" type="datetime-local" data-decisions-datetime-label="Run at" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div id="automation-interval-wrap" class="hidden flex-shrink-0">
+                            <label class="block text-sm text-gray-400 mb-1">Every</label>
+                            <div class="flex gap-2">
+                                <input id="automation-interval-value" type="number" min="1" step="1" value="15" class="automation-interval-value px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                <select id="automation-interval-unit" class="automation-interval-unit flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                    <option value="seconds">Seconds</option>
+                                    <option value="minutes" selected>Minutes</option>
+                                </select>
                             </div>
-                            <div id="automation-once-wrap" class="hidden">
-                                <label class="block text-sm text-gray-400 mb-1">Run at</label>
-                                <input id="automation-once-at" type="datetime-local" data-decisions-datetime-label="Run at" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div id="automation-weekly-days-wrap" class="hidden flex-shrink-0 min-w-[18rem]">
+                            <label class="block text-sm text-gray-400 mb-1">Days</label>
+                            <div id="automation-weekly-days" class="flex flex-wrap gap-1">
+                                <button type="button" class="automation-weekday-btn" data-day="0">Sun</button>
+                                <button type="button" class="automation-weekday-btn" data-day="1">Mon</button>
+                                <button type="button" class="automation-weekday-btn" data-day="2">Tue</button>
+                                <button type="button" class="automation-weekday-btn" data-day="3">Wed</button>
+                                <button type="button" class="automation-weekday-btn" data-day="4">Thu</button>
+                                <button type="button" class="automation-weekday-btn" data-day="5">Fri</button>
+                                <button type="button" class="automation-weekday-btn" data-day="6">Sat</button>
                             </div>
-                            <div id="automation-interval-wrap" class="hidden">
-                                <label class="block text-sm text-gray-400 mb-1">Every</label>
-                                <div class="flex gap-2">
-                                    <input id="automation-interval-value" type="number" min="1" step="1" value="15" class="automation-interval-value px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                                    <select id="automation-interval-unit" class="automation-interval-unit flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                                        <option value="seconds">Seconds</option>
-                                        <option value="minutes" selected>Minutes</option>
-                                    </select>
-                                </div>
+                        </div>
+                        <div id="automation-monthly-days-wrap" class="hidden flex-1 min-w-[16rem]">
+                            <label class="block text-sm text-gray-400 mb-1">Days of month</label>
+                            <div id="automation-monthly-days" class="automation-monthly-days-wrap">
+                                <div id="automation-monthly-badges" class="flex flex-wrap gap-1"></div>
+                                <input type="text" id="automation-monthly-days-input" class="automation-monthly-days-input" placeholder="1, 15, 25" autocomplete="off">
                             </div>
                         </div>
                     </div>
@@ -943,9 +1085,13 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                         <input type="checkbox" id="sched-block-snap" checked class="accent-[#f97316]">
                         <span>Snap 15m</span>
                     </label>
-                    <button type="button" id="automation-cal-prev" class="automation-cal-nav-btn" aria-label="Previous period">&lsaquo;</button>
+                    <button type="button" id="automation-cal-prev" class="automation-cal-nav-btn" aria-label="Previous period">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+                    </button>
                     <p id="automation-cal-title" class="text-sm font-medium text-white text-center min-w-[10rem]">Calendar</p>
-                    <button type="button" id="automation-cal-next" class="automation-cal-nav-btn" aria-label="Next period">&rsaquo;</button>
+                    <button type="button" id="automation-cal-next" class="automation-cal-nav-btn" aria-label="Next period">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+                    </button>
                 </div>
             </div>
             <div class="flex items-center justify-between gap-3 mb-4 flex-shrink-0">
@@ -954,10 +1100,14 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                     <button type="button" id="automation-cal-mode-week" class="automation-cal-mode-btn">Week</button>
                     <button type="button" id="automation-cal-mode-day" class="automation-cal-mode-btn">Day</button>
                 </div>
-                <div id="automation-cal-zoom-tools" class="automation-cal-zoom-tools hidden">
-                    <button type="button" id="automation-cal-zoom-out" class="automation-cal-zoom-btn" aria-label="Zoom out">−</button>
-                    <span id="automation-cal-zoom-label" class="automation-cal-zoom-label">100%</span>
-                    <button type="button" id="automation-cal-zoom-in" class="automation-cal-zoom-btn" aria-label="Zoom in">+</button>
+                <div id="automation-cal-view-tools" class="automation-cal-view-tools">
+                    <button type="button" id="automation-cal-export" class="automation-cal-today-btn">Export</button>
+                    <button type="button" id="automation-cal-today" class="automation-cal-today-btn hidden">Today</button>
+                    <div id="automation-cal-zoom-tools" class="automation-cal-zoom-tools hidden">
+                        <button type="button" id="automation-cal-zoom-out" class="automation-cal-zoom-btn" aria-label="Zoom out">−</button>
+                        <span id="automation-cal-zoom-label" class="automation-cal-zoom-label">100%</span>
+                        <button type="button" id="automation-cal-zoom-in" class="automation-cal-zoom-btn" aria-label="Zoom in">+</button>
+                    </div>
                 </div>
             </div>
             <div id="automation-calendar" class="flex-1 min-h-0 flex flex-col overflow-hidden"></div>
@@ -975,6 +1125,26 @@ body.sched-calendar-interacting .sched-block-resize-handle {
     <button type="button" class="sched-block-context-item" data-action="edit" role="menuitem">Edit</button>
     <button type="button" class="sched-block-context-item" data-action="naturalize" role="menuitem">Naturalize time</button>
     <button type="button" class="sched-block-context-item is-danger" data-action="delete" role="menuitem">Delete</button>
+</div>
+
+<div id="sched-export-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div class="w-full max-w-md rounded-lg border border-white/20 bg-[#1a1f3a] p-5 shadow-xl">
+        <h3 class="text-lg font-semibold text-white mb-1">Export timesheet</h3>
+        <p id="sched-export-period" class="text-sm text-gray-400 mb-3"></p>
+        <div class="flex items-center justify-between gap-3 mb-2">
+            <span class="text-sm text-gray-300">Boards</span>
+            <div class="flex items-center gap-3 text-xs">
+                <button type="button" id="sched-export-select-all" class="sched-export-link">Select all</button>
+                <button type="button" id="sched-export-deselect-all" class="sched-export-link">Deselect all</button>
+            </div>
+        </div>
+        <div id="sched-export-board-list" class="sched-export-board-list mb-4" role="group" aria-label="Boards to export"></div>
+        <p id="sched-export-empty" class="hidden text-sm text-gray-400 mb-4">No time blocks in this calendar range.</p>
+        <div class="flex flex-wrap gap-2 justify-end">
+            <button type="button" id="sched-export-cancel" class="px-3 py-2 rounded border border-white/20 text-gray-300 text-sm">Cancel</button>
+            <button type="button" id="sched-export-download" class="px-3 py-2 rounded bg-[#f97316] text-white text-sm font-medium">Download Excel</button>
+        </div>
+    </div>
 </div>
 
 <div id="sched-block-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

@@ -51,7 +51,10 @@ async def dispatch_harness(context: HarnessContext) -> HarnessHandle:
     result = await dispatch_project_handoff(context)
     engine = (getattr(result, "engine", "") or "").strip()
     success = bool(getattr(result, "success", False))
-    if success:
+    waits_for_human = bool(getattr(result, "waits_for_human", False))
+    if waits_for_human and success:
+        status = HarnessStatus.WAITING_HUMAN
+    elif success:
         status = HarnessStatus.DONE
     else:
         status = HarnessStatus.FAILED
@@ -105,7 +108,9 @@ def collect_harness_evidence(handle: HarnessHandle) -> dict[str, Any]:
     return evidence
 
 
-STEERABLE_BACKENDS = frozenset({"pi", "codex", "cursor", "claude_code", "claude"})
+STEERABLE_BACKENDS = frozenset(
+    {"pi", "codex", "codex_ide", "cursor", "cursor_ide", "claude_code", "claude", "hermes_agent"}
+)
 
 
 def is_steerable_backend(backend_id: str) -> bool:

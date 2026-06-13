@@ -327,7 +327,14 @@ def _cmd_update_audio_devices(session, params):
             else:
                 session.transport.input().set_device(input_idx)
         elif not input_changed:
-            session.logger.debug("Skipping input hot-swap (device unchanged)")
+            if hasattr(session, 'transport') and new_input == "System Default":
+                session.logger.debug("Refreshing input stream for unchanged System Default selection")
+                if target_loop and target_loop.is_running():
+                    target_loop.call_soon_threadsafe(session.transport.input().refresh_system_default)
+                else:
+                    session.transport.input().refresh_system_default()
+            else:
+                session.logger.debug("Skipping input hot-swap (device unchanged)")
 
     if output_device:
         audio_cfg['output_device'] = output_device
@@ -389,12 +396,27 @@ def _cmd_set_speech_volume(session, params):
 
 def _cmd_set_elevenlabs_voice_settings(session, params):
     from .services import ElevenLabsTTSService
+
+    stability = params.get('stability')
+    similarity_boost = params.get('similarity_boost')
+    style = params.get('style')
+    use_speaker_boost = params.get('use_speaker_boost')
+
+    if stability is not None:
+        session.settings['elevenlabs_stability'] = float(stability)
+    if similarity_boost is not None:
+        session.settings['elevenlabs_similarity_boost'] = float(similarity_boost)
+    if style is not None:
+        session.settings['elevenlabs_style'] = float(style)
+    if use_speaker_boost is not None:
+        session.settings['elevenlabs_use_speaker_boost'] = bool(use_speaker_boost)
+
     if hasattr(session, 'tts_service') and session.tts_service and isinstance(session.tts_service, ElevenLabsTTSService):
         session.tts_service.set_elevenlabs_voice_settings(
-            stability=params.get('stability'),
-            similarity_boost=params.get('similarity_boost'),
-            style=params.get('style'),
-            use_speaker_boost=params.get('use_speaker_boost'),
+            stability=stability,
+            similarity_boost=similarity_boost,
+            style=style,
+            use_speaker_boost=use_speaker_boost,
         )
         session.logger.debug("Updated ElevenLabs voice_settings in TTS service")
     else:

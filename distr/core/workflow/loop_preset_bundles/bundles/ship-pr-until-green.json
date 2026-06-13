@@ -1,0 +1,163 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "ship-pr-until-green",
+  "name": "Ship PR Until Green",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "ship_with_ci",
+  "description": "Push, open PR, read CI with gh, fix blockers, until checks green.",
+  "kickoff": "Start the \"Ship PR Until Green\" loop.\nGoal: PR open with all CI checks passing\nMax iterations: 10\nBetween iterations run: gh pr checks\nExit when: all PR checks success\nOrientation: read the linked ticket to confirm branch scope and acceptance criteria.\nStep 1: Confirm branch and open or update PR.",
+  "loop_contract": {
+    "name": "Ship PR Until Green",
+    "goal": "PR open with all CI checks passing",
+    "exit_when": "all PR checks are success",
+    "check_command": "gh pr checks",
+    "max_iterations": 10,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Verify branch, commits, and diff against target branch. Ensure local checks pass before push.",
+    "archetype": "ship_with_ci",
+    "role": "developer"
+  },
+  "expected_check_command": "gh pr checks",
+  "tags": [
+    "pr",
+    "ci"
+  ],
+  "steps": [
+    {
+      "name": "Confirm branch state",
+      "instruction": "Verify branch, commits, and diff against target branch. Ensure local checks pass before push.",
+      "skills": [
+        "finishing-a-development-branch",
+        "ln-622-build-auditor"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Confirm branch state' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Push and open PR",
+      "instruction": "Push branch. Open or update PR with summary, test plan, and linked ticket. Use gh CLI if available.",
+      "skills": [
+        "finishing-a-development-branch",
+        "internal-comms"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Push and open PR' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "GitHub CLI (gh pr create / gh pr view)"
+    },
+    {
+      "name": "Read CI status",
+      "instruction": "Run gh pr checks (or equivalent). List failing checks with logs.",
+      "skills": [
+        "systematic-debugging",
+        "ln-732-cicd-generator"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Read CI status' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "gh pr checks / CI logs",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Fix CI blockers",
+      "instruction": "Fix the first CI failure. Re-push. Do not disable checks.",
+      "skills": [
+        "tdd-workflow",
+        "systematic-debugging",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Fix CI blockers' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate PR green",
+      "instruction": "All required PR checks success and PR is merge-ready.",
+      "skills": [
+        "finishing-a-development-branch",
+        "qa-tester"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate PR green' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "gh pr checks",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Report",
+      "instruction": "PR link, check status, merge recommendation.",
+      "skills": [
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

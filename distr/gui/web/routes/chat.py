@@ -27,6 +27,11 @@ from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
 from distr.core.agent.constants import normalize_voice_provider
 from distr.core.agent.services.tts.registry import tts_registry
+from distr.core.chat_title_auto import (
+    TITLE_REFRESH_MESSAGE_INTERVAL,
+    maybe_refresh_chat_title as _maybe_refresh_chat_title,
+    _title_auto_meta,
+)
 from distr.gui.web.security import (
     is_allowed_local_origin,
     websocket_has_valid_internal_token,
@@ -96,6 +101,8 @@ def _chat_tool_event_messages(chat: Chat) -> List[Dict[str, Any]]:
 def _is_visible_tool_event(event: Dict[str, Any]) -> bool:
     if event.get("chat_suppressed") is True:
         return False
+    if event.get("chat_visible") is False:
+        return False
     return True
 
 
@@ -104,6 +111,17 @@ def _is_compact_tool_event(event: Dict[str, Any]) -> bool:
         return bool(event.get("chat_compact"))
     tool_name = (event.get("tool_name") or "").strip()
     return tool_name in {"execute_code", "file_operations", "mode_control"}
+
+
+def _is_visible_workflow_event(event: Dict[str, Any]) -> bool:
+    if event.get("chat_suppressed") is True:
+        return False
+    if event.get("chat_visible") is False:
+        return False
+    # Agent-chat automations already run via orchestrator + Automations hub history.
+    if str(event.get("type") or "").strip().lower() == "automation_run":
+        return False
+    return True
 
 
 def _chat_workflow_event_messages(chat: Chat) -> List[Dict[str, Any]]:
@@ -115,12 +133,15 @@ def _chat_workflow_event_messages(chat: Chat) -> List[Dict[str, Any]]:
     for event in events:
         if not isinstance(event, dict):
             continue
+        if not _is_visible_workflow_event(event):
+            continue
         messages.append(
             {
                 "role": "workflow",
                 "content": event.get("summary") or "",
                 "timestamp": event.get("timestamp"),
                 "workflow_event": {
+                    "id": event.get("id"),
                     "run_id": event.get("run_id"),
                     "workflow_id": event.get("workflow_id"),
                     "workflow_name": event.get("workflow_name") or "Workflow",
@@ -353,73 +374,6 @@ def _summarize_chat_with_model(
     return _fallback_compact_summary(messages), "fallback"
 
 
-TITLE_REFRESH_MESSAGE_INTERVAL = 20
-
-
-def _fallback_chat_title(messages: List[Dict[str, Any]]) -> str:
-    for msg in messages:
-        if msg.get("role") != "user":
-            continue
-        text = str(msg.get("content") or "").strip()
-        if text:
-            first_line = text.split("\n", 1)[0].strip()
-            if len(first_line) > 60:
-                return first_line[:57].rstrip() + "..."
-            return first_line
-    return "New Chat"
-
-
-def _suggest_chat_title(
-    messages: List[Dict[str, Any]],
-    *,
-    provider: str,
-    model_name: str,
-    settings: dict,
-) -> str:
-    transcript = []
-    for msg in messages[-40:]:
-        role = msg.get("role") or "message"
-        if role not in {"user", "assistant"}:
-            continue
-        content = str(msg.get("content") or "").strip()
-        if content:
-            transcript.append(f"{role.upper()}: {content[:500]}")
-    transcript_text = "\n\n".join(transcript)
-    if not transcript_text:
-        return "New Chat"
-    try:
-        import litellm
-        from distr.core.workflow.planning import _litellm_model
-
-        response = litellm.completion(
-            model=_litellm_model((provider or "").strip().lower(), model_name or "", settings),
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Write a short chat title (4-8 words) that captures the user's current "
-                        "intent. No quotes, no punctuation at the end, no filler."
-                    ),
-                },
-                {"role": "user", "content": transcript_text[:24_000]},
-            ],
-            max_tokens=32,
-            temperature=0.2,
-        )
-        title = (response.choices[0].message.content or "").strip().strip("\"'")
-        title = " ".join(title.split())
-        if title:
-            return title[:80]
-    except Exception:
-        logger.warning("Chat title suggestion failed; using fallback", exc_info=True)
-    return _fallback_chat_title(messages)
-
-
-def _title_auto_meta(additional_context: Dict[str, Any]) -> Dict[str, Any]:
-    raw = additional_context.get("title_auto")
-    return raw if isinstance(raw, dict) else {}
-
-
 def _chat_header_stats_payload(
     *,
     root_chat: Chat,
@@ -447,47 +401,6 @@ def _chat_header_stats_payload(
     }
 
 
-def _maybe_refresh_chat_title(
-    session,
-    root_chat: Chat,
-    messages: List[Dict[str, Any]],
-    *,
-    provider: str,
-    model_name: str,
-    settings: dict,
-    force: bool = False,
-) -> Optional[str]:
-    additional_context = _chat_additional_context(root_chat.additional_context)
-    title_auto = _title_auto_meta(additional_context)
-    if title_auto.get("manual"):
-        return None
-    message_count = len([m for m in messages if m.get("role") in {"user", "assistant"}])
-    last_refresh = int(title_auto.get("last_refresh_message_count") or 0)
-    if not force and message_count - last_refresh < TITLE_REFRESH_MESSAGE_INTERVAL:
-        return None
-    if message_count < 2 and not force:
-        return None
-    new_title = _suggest_chat_title(
-        messages,
-        provider=provider,
-        model_name=model_name,
-        settings=settings,
-    )
-    if not new_title:
-        return None
-    root_chat.title = new_title
-    title_auto = {
-        "manual": False,
-        "last_refresh_message_count": message_count,
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-    additional_context["title_auto"] = title_auto
-    root_chat.additional_context = json.dumps(additional_context, ensure_ascii=False, default=str)
-    root_chat.modified_date = datetime.utcnow()
-    session.commit()
-    return new_title
-
-
 def _merge_thread_rows_with_tool_and_workflow_events(
     rows: Iterable[Any], root_chat: Chat
 ) -> List[Dict[str, Any]]:
@@ -513,7 +426,6 @@ def _merge_thread_rows_with_tool_and_workflow_events(
         leftover.extend(lst)
     orphan_tools.extend(leftover)
     orphan_tools.sort(key=_message_sort_key)
-    messages.extend(orphan_tools)
 
     workflow_msgs = _chat_workflow_event_messages(root_chat)
     workflow_msgs.sort(key=_message_sort_key)
@@ -674,31 +586,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     _chat_ws_connections[subscribed_chat_id].discard(websocket)
                     if not _chat_ws_connections[subscribed_chat_id]:
                         del _chat_ws_connections[subscribed_chat_id]
-
-    @router.websocket("/ws/workflows")
-    async def workflows_websocket(websocket: WebSocket):
-        """WebSocket for real-time Workflow updates (unified). Local-only, no auth required."""
-        origin = websocket.headers.get("origin")
-        if origin and not is_allowed_local_origin(origin):
-            await websocket.close(code=1008, reason="Origin not allowed")
-            return
-        await websocket.accept()
-        loop = asyncio.get_event_loop()
-        from distr.gui.web.workflow_events import register_wf_websocket, unregister_wf_websocket
-        register_wf_websocket(websocket, loop)
-        logger.info("Workflow WS: client connected")
-        try:
-            while True:
-                try:
-                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                except asyncio.TimeoutError:
-                    await websocket.send_text('{"type":"ping"}')
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
-        finally:
-            unregister_wf_websocket(websocket)
 
     @router.post("/internal/notify-chat-updated")
     async def notify_chat_updated(req: Request):
@@ -1321,8 +1208,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     session,
                     root_chat,
                     messages,
-                    provider=provider,
-                    model_name=model_name,
                     settings=settings,
                     force=bool(force),
                 )
@@ -1434,8 +1319,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     session,
                     root,
                     refreshed_messages,
-                    provider=provider,
-                    model_name=model_name,
                     settings=settings,
                     force=True,
                 )
@@ -1448,7 +1331,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 content=notice,
             )
             try:
-                from distr.core.hermes import emit_event
+                from distr.core.orchestrator import emit_event
 
                 emit_event(
                     source="chat",
@@ -1555,7 +1438,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 content=f"Fork started from compact checkpoint for chat #{chat_id}.",
             )
             try:
-                from distr.core.hermes import emit_event
+                from distr.core.orchestrator import emit_event
 
                 emit_event(
                     source="chat",

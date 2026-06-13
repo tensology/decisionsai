@@ -4,7 +4,7 @@ import contextlib
 import json
 from types import SimpleNamespace
 
-import distr.core.db.hermes  # noqa: F401
+import distr.core.db.orchestrator  # noqa: F401
 from distr.core.db import Base, Chat
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

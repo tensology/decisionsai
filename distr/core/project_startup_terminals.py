@@ -64,8 +64,32 @@ def _load_project(project_id: int) -> Optional[dict]:
             "folder_location": (project.folder_location or "").strip(),
             "startup_instructions": project.startup_instructions or "",
             "kanban_board_id": project.kanban_board_id,
+            "provider": (project.provider or "").strip() or None,
+            "board_id": (project.board_id or "").strip() or None,
             "start_time_tracker": bool(getattr(project, "start_time_tracker", True)),
         }
+
+
+def _persist_project_startup_preferences(
+    project_id: int,
+    *,
+    startup_instructions: Optional[str] = None,
+    start_time_tracker: Optional[bool] = None,
+) -> None:
+    if startup_instructions is None and start_time_tracker is None:
+        return
+    from distr.core.db import get_session
+    from distr.core.db.projects import Project
+
+    with get_session() as session:
+        project = session.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            return
+        if startup_instructions is not None:
+            project.startup_instructions = startup_instructions
+        if start_time_tracker is not None:
+            project.start_time_tracker = bool(start_time_tracker)
+        session.commit()
 
 
 def _build_start_speak_message(project_name: str, started: int, failed: int) -> str:
@@ -135,7 +159,14 @@ def start_project_startup_terminals(
     *,
     commands: Optional[list[str]] = None,
     announce: bool = True,
+    startup_instructions: Optional[str] = None,
+    start_time_tracker: Optional[bool] = None,
 ) -> ProjectTerminalActionResult:
+    _persist_project_startup_preferences(
+        project_id,
+        startup_instructions=startup_instructions,
+        start_time_tracker=start_time_tracker,
+    )
     project = _load_project(project_id)
     if not project:
         result = ProjectTerminalActionResult(
@@ -221,7 +252,7 @@ def start_project_startup_terminals(
 
             with get_session() as session:
                 db_project = session.query(Project).filter(Project.id == project_id).first()
-                if db_project:
+                if db_project and schedule_service.project_has_linked_board(db_project):
                     schedule_service.start_project_time_tracker(session, db_project)
         except Exception as exc:
             logger.warning("Project time tracker start skipped: %s", exc)

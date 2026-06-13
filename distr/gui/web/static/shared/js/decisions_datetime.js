@@ -178,6 +178,7 @@
         var selected = parseDate(input.value);
         state.viewDate = state.viewDate || selected || new Date();
         popover.classList.toggle("is-datetime", type === "datetime-local");
+        popover.classList.toggle("is-time-only", type === "time");
         popover.innerHTML = renderPopoverBody(input, state) +
             '<div class="decisions-datetime-actions">' +
                 '<button type="button" class="decisions-datetime-action" data-action="today">' + (type === "time" ? "Now" : "Today") + '</button>' +
@@ -234,10 +235,63 @@
         popover.querySelectorAll(".decisions-datetime-choice.is-selected").forEach(function (choice) {
             if (choice.scrollIntoView) choice.scrollIntoView({ block: "center" });
         });
+        if (active && active.popover === popover && active.trigger) {
+            positionPopover(active.trigger, popover);
+        }
+    }
+
+    function positionPopover(trigger, popover) {
+        popover.classList.add("is-portaled");
+        if (popover.parentNode !== document.body) {
+            document.body.appendChild(popover);
+        }
+        popover.style.left = "";
+        popover.style.top = "";
+        popover.style.right = "";
+        popover.style.bottom = "";
+        popover.removeAttribute("data-align");
+        popover.removeAttribute("data-open");
+
+        var triggerRect = trigger.getBoundingClientRect();
+        var popoverRect = popover.getBoundingClientRect();
+        var margin = 12;
+        var gap = 8;
+        var left = triggerRect.left;
+        if (left + popoverRect.width > window.innerWidth - margin) {
+            left = Math.max(margin, triggerRect.right - popoverRect.width);
+            popover.setAttribute("data-align", "right");
+        }
+        var top = triggerRect.bottom + gap;
+        if (top + popoverRect.height > window.innerHeight - margin) {
+            top = Math.max(margin, triggerRect.top - popoverRect.height - gap);
+            popover.setAttribute("data-open", "above");
+        }
+        popover.style.left = Math.round(left) + "px";
+        popover.style.top = Math.round(top) + "px";
+    }
+
+    function bindPopoverReposition() {
+        if (!active || active.repositionBound) return;
+        active.repositionHandler = function () {
+            if (!active) return;
+            positionPopover(active.trigger, active.popover);
+        };
+        window.addEventListener("resize", active.repositionHandler);
+        window.addEventListener("scroll", active.repositionHandler, true);
+        active.repositionBound = true;
+    }
+
+    function unbindPopoverReposition() {
+        if (!active || !active.repositionBound) return;
+        window.removeEventListener("resize", active.repositionHandler);
+        window.removeEventListener("scroll", active.repositionHandler, true);
+        active.repositionBound = false;
+        active.repositionHandler = null;
     }
 
     function closePopover() {
         if (!active) return;
+        unbindPopoverReposition();
         active.trigger.setAttribute("aria-expanded", "false");
         active.popover.remove();
         active = null;
@@ -262,16 +316,16 @@
         popover.addEventListener("click", function (event) {
             event.stopPropagation();
         });
-        shell.appendChild(popover);
+        document.body.appendChild(popover);
         renderPopover(input, popover, state);
-        var rect = popover.getBoundingClientRect();
-        if (rect.right > window.innerWidth - 12) popover.setAttribute("data-align", "right");
-        else popover.removeAttribute("data-align");
-        rect = popover.getBoundingClientRect();
-        if (rect.bottom > window.innerHeight - 12) popover.setAttribute("data-open", "above");
-        else popover.removeAttribute("data-open");
+        positionPopover(trigger, popover);
+        requestAnimationFrame(function () {
+            if (!active || active.popover !== popover) return;
+            positionPopover(trigger, popover);
+        });
+        bindPopoverReposition();
         trigger.setAttribute("aria-expanded", "true");
-        active = { input: input, trigger: trigger, popover: popover };
+        active = { input: input, trigger: trigger, popover: popover, repositionBound: false };
     }
 
     function upgrade(input) {

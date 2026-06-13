@@ -591,6 +591,30 @@ def set_system_default_device(device_name: str, is_output: bool):
         return False
 
 
+def is_system_default_device_name(device_name: str) -> bool:
+    """Return True when the saved selection means follow the OS default route."""
+    text = (device_name or "").strip().lower()
+    return not text or text in ("system default", "system_default", "default")
+
+
+def get_system_default_device_fingerprint() -> str:
+    """Fingerprint of the current OS default input/output (fresh PortAudio query).
+
+    Used by the periodic device checker to detect Bluetooth handoffs where the
+    device list hash is unchanged but the system default route moved.
+    """
+    import hashlib
+    from distr.core.agent.config_loader import (
+        resolve_system_default_input_device,
+        resolve_system_default_output_device,
+    )
+
+    in_idx, in_name = resolve_system_default_input_device()
+    out_idx, out_name = resolve_system_default_output_device()
+    payload = f"in:{in_idx}:{in_name}|out:{out_idx}:{out_name}"
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+
 def find_device_in_list(device_list, device_name):
     """
     Find a device in the device list by name (case-insensitive).
@@ -632,20 +656,27 @@ def restore_locked_devices(settings: dict):
         
         # Try to restore locked devices if they exist
         if locked_output:
-            output_device = find_device_in_list(outputs, locked_output)
-            if output_device:
-                success = set_system_default_device(locked_output, is_output=True)
-                if success:
-                    logger.info(f"Set '{locked_output}' as system default output")
-                    result['output_restored'] = True
-        
+            if is_system_default_device_name(locked_output):
+                # Follow OS route; agent transport refresh picks up the new default.
+                result['output_restored'] = True
+            else:
+                output_device = find_device_in_list(outputs, locked_output)
+                if output_device:
+                    success = set_system_default_device(locked_output, is_output=True)
+                    if success:
+                        logger.info(f"Set '{locked_output}' as system default output")
+                        result['output_restored'] = True
+
         if locked_input:
-            input_device = find_device_in_list(inputs, locked_input)
-            if input_device:
-                success = set_system_default_device(locked_input, is_output=False)
-                if success:
-                    logger.info(f"Set '{locked_input}' as system default input")
-                    result['input_restored'] = True
+            if is_system_default_device_name(locked_input):
+                result['input_restored'] = True
+            else:
+                input_device = find_device_in_list(inputs, locked_input)
+                if input_device:
+                    success = set_system_default_device(locked_input, is_output=False)
+                    if success:
+                        logger.info(f"Set '{locked_input}' as system default input")
+                        result['input_restored'] = True
     except Exception as e:
         logger.error(f"Error restoring locked devices: {e}", exc_info=True)
     

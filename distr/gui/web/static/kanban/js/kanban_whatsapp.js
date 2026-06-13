@@ -709,6 +709,144 @@
     }
 
     function createRuntime(deps) {
+        var waDraftSaveTimers = {};
+        var waDraftLastSaved = {};
+
+        function loadWaDraftMap() {
+            return deps.apiFetch("/api/tickets/whatsapp/drafts").then(function(data) {
+                var map = {};
+                (data.drafts || []).forEach(function(d) {
+                    if (d && d.jid_phone && String(d.text || "").trim()) map[d.jid_phone] = d;
+                });
+                var state = deps.getState();
+                state.waDraftByPhone = map;
+                deps.setState(state);
+                return map;
+            }).catch(function() { return {}; });
+        }
+
+        function waHasDraft(jidPhone) {
+            var d = (deps.getState().waDraftByPhone || {})[jidPhone];
+            return !!(d && String(d.text || "").trim());
+        }
+
+        function waDraftIndicatorHtml(jidPhone) {
+            if (!waHasDraft(jidPhone)) return "";
+            return '<span class="kb-wa-draft-dot inline-block w-2 h-2 rounded-full bg-blue-500 flex-shrink-0" title="Draft waiting"></span>';
+        }
+
+        function flushWaDraftSave(jidPhone, fromSwitch) {
+            if (!jidPhone) return Promise.resolve();
+            var inputEl = document.getElementById("kb-wa-thread-input");
+            var state = deps.getState();
+            var isActive = state.waSelectedJid === jidPhone;
+            var cached = (state.waDraftByPhone || {})[jidPhone] || {};
+            var text = isActive && inputEl ? (inputEl.value || "") : (cached.text || "");
+            var trimmed = String(text || "").trim();
+            if (waDraftSaveTimers[jidPhone]) {
+                clearTimeout(waDraftSaveTimers[jidPhone]);
+                delete waDraftSaveTimers[jidPhone];
+            }
+            if (trimmed === (waDraftLastSaved[jidPhone] || "")) return Promise.resolve();
+
+            var chat = (state.waChats || []).find(function(c) { return c.sender === jidPhone; }) || {};
+            var msgView = document.getElementById("kb-wa-thread-view");
+            var targetJid = (msgView && msgView.dataset.waTargetJid) || (state.waActiveThread && state.waActiveThread.target_jid) || "";
+            var payload = {
+                text: text,
+                jid: targetJid || "",
+                chat_type: chat.chat_type || state.waSelectedChatType || "private",
+                contact_name: chat.name || (state.waActiveThread && state.waActiveThread.name) || "",
+                source: "user"
+            };
+
+            return deps.apiFetch("/api/tickets/whatsapp/drafts/" + encodeURIComponent(jidPhone), {
+                method: "PUT",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(payload)
+            }).then(function(resp) {
+                var stateNow = deps.getState();
+                stateNow.waDraftByPhone = stateNow.waDraftByPhone || {};
+                if (resp && resp.draft && String(resp.draft.text || "").trim()) {
+                    stateNow.waDraftByPhone[jidPhone] = resp.draft;
+                    waDraftLastSaved[jidPhone] = String(resp.draft.text || "").trim();
+                } else {
+                    delete stateNow.waDraftByPhone[jidPhone];
+                    delete waDraftLastSaved[jidPhone];
+                }
+                deps.setState(stateNow);
+                if (!fromSwitch) renderWhatsAppChatList();
+            }).catch(function() {});
+        }
+
+        function scheduleWaDraftSave(jidPhone) {
+            if (!jidPhone) return;
+            if (waDraftSaveTimers[jidPhone]) clearTimeout(waDraftSaveTimers[jidPhone]);
+            waDraftSaveTimers[jidPhone] = setTimeout(function() {
+                delete waDraftSaveTimers[jidPhone];
+                flushWaDraftSave(jidPhone, false);
+            }, 450);
+        }
+
+        function applyWaDraftToComposer(jidPhone, name) {
+            var inputEl = document.getElementById("kb-wa-thread-input");
+            if (!inputEl || !jidPhone) return;
+            var state = deps.getState();
+            var draft = (state.waDraftByPhone || {})[jidPhone];
+            if (draft && String(draft.text || "").trim()) {
+                inputEl.value = draft.text;
+                waDraftLastSaved[jidPhone] = String(draft.text || "").trim();
+                if (draft.source === "agent") setWaSendStatus("Draft ready for review", "text-blue-400");
+                return;
+            }
+            deps.apiFetch("/api/tickets/whatsapp/drafts/" + encodeURIComponent(jidPhone)).then(function(data) {
+                if (deps.getState().waSelectedJid !== jidPhone) return;
+                var d = data && data.draft;
+                if (!d || !String(d.text || "").trim()) {
+                    inputEl.value = "";
+                    waDraftLastSaved[jidPhone] = "";
+                    return;
+                }
+                var stateNow = deps.getState();
+                stateNow.waDraftByPhone = stateNow.waDraftByPhone || {};
+                stateNow.waDraftByPhone[jidPhone] = d;
+                deps.setState(stateNow);
+                inputEl.value = d.text;
+                waDraftLastSaved[jidPhone] = String(d.text || "").trim();
+                if (d.source === "agent") setWaSendStatus("Draft ready for review", "text-blue-400");
+                renderWhatsAppChatList();
+            }).catch(function() {});
+        }
+
+        function clearWaDraftAfterSend(jidPhone) {
+            if (!jidPhone) return;
+            if (waDraftSaveTimers[jidPhone]) {
+                clearTimeout(waDraftSaveTimers[jidPhone]);
+                delete waDraftSaveTimers[jidPhone];
+            }
+            delete waDraftLastSaved[jidPhone];
+            var state = deps.getState();
+            if (state.waDraftByPhone) delete state.waDraftByPhone[jidPhone];
+            deps.setState(state);
+            deps.apiFetch("/api/tickets/whatsapp/drafts/" + encodeURIComponent(jidPhone), { method: "DELETE" }).catch(function() {});
+            renderWhatsAppChatList();
+        }
+
+        function bindWaDraftComposer() {
+            var inputEl = document.getElementById("kb-wa-thread-input");
+            if (!inputEl || inputEl.dataset.waDraftBound) return;
+            inputEl.dataset.waDraftBound = "1";
+            inputEl.addEventListener("input", function() {
+                var state = deps.getState();
+                if (!state.waSelectedJid) return;
+                scheduleWaDraftSave(state.waSelectedJid);
+            });
+            inputEl.addEventListener("blur", function() {
+                var state = deps.getState();
+                if (state.waSelectedJid) flushWaDraftSave(state.waSelectedJid, false);
+            });
+        }
+
         function isWaVoiceType(msg) {
             var t = String((msg && msg.media_type) || "").toLowerCase();
             var m = String((msg && msg.media_mime_type) || "").toLowerCase();
@@ -784,10 +922,12 @@
                         if (id.indexOf("@g.us") >= 0) map[id] = name;
                     });
                     return { groupNames: map, chatNames: allNames };
-                }).catch(function() { return { groupNames: {}, chatNames: {} }; })
+                }).catch(function() { return { groupNames: {}, chatNames: {} }; }),
+                loadWaDraftMap().catch(function() { return {}; })
             ]).then(function(results) {
                 state.waGroupNames = (results[1] && results[1].groupNames) || {};
                 state.waChatNames = (results[1] && results[1].chatNames) || {};
+                state.waDraftByPhone = results[2] || {};
                 deps.setState(state);
                 try {
                     processWhatsAppMessages(results[0] || { messages: [] });
@@ -985,7 +1125,7 @@
                 html += '<div class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-[#25D366]/50' + active + '" data-wa-sender="' + deps.esc(sender) + '" data-wa-name="' + deps.esc(name) + '" data-wa-chat-type="' + (chat.chat_type || "private") + '" tabindex="0" role="option" aria-selected="' + (state.waSelectedJid === chat.sender ? "true" : "false") + '">';
                 if (state.waSidebarChatListMode) html += '<input type="checkbox" class="accent-[#25D366] w-3.5 h-3.5 shrink-0 kb-wa-chat-select" data-wa-phone="' + deps.esc(sender) + '"' + rowSel + " />";
                 html += '<div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-xs font-bold flex-shrink-0">' + deps.esc(name.charAt(0).toUpperCase()) + "</div>";
-                html += '<div class="flex-1 min-w-0"><div class="flex items-center justify-between"><span class="text-white truncate font-medium">' + name + "</span>" + groupBadge + '<span class="text-gray-500 text-[10px] ml-1 flex-shrink-0">' + timeStr + "</span></div>";
+                html += '<div class="flex-1 min-w-0"><div class="flex items-center justify-between"><div class="flex items-center gap-1 min-w-0"><span class="text-white truncate font-medium">' + name + "</span>" + waDraftIndicatorHtml(sender) + groupBadge + '</div><span class="text-gray-500 text-[10px] ml-1 flex-shrink-0">' + timeStr + "</span></div>";
                 html += '<div class="text-gray-500 truncate">' + deps.esc(preview) + (unread ? ' <span class="text-[#25D366] font-bold">(' + unread + ")</span>" : "") + "</div></div></div>";
             });
             chatListEl.innerHTML = html;
@@ -1084,6 +1224,8 @@
         function showWhatsAppThread(sender, name) {
             if (!deps.isMessagesPanelVisible()) return;
             var state = deps.getState();
+            var prevJid = (state.waSelectedJid || "").trim();
+            if (prevJid && prevJid !== sender) flushWaDraftSave(prevJid, true);
             state.waSelectedJid = sender;
             state.waActiveThread = {
                 sender: sender,
@@ -1116,6 +1258,10 @@
             var chatTypeEl = document.getElementById("kb-wa-thread-chat-type");
             if (state.waSelectedChatType === "group") chatTypeEl.classList.remove("hidden");
             else chatTypeEl.classList.add("hidden");
+
+            var inputEl = document.getElementById("kb-wa-thread-input");
+            if (inputEl) inputEl.value = "";
+            applyWaDraftToComposer(sender, name);
 
             msgList.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>';
             msgView.dataset.waSender = String(sender || "");
@@ -1355,6 +1501,7 @@
             }).then(function(resp) {
                 if (!resp || !resp.success) throw new Error((resp && resp.error) || "Send failed");
                 inputEl.value = "";
+                clearWaDraftAfterSend(pinnedSender);
                 deps.clearWaPendingAttachment();
                 statusEl.classList.remove("text-gray-500", "text-red-400");
                 statusEl.classList.add("text-green-400");
@@ -1837,6 +1984,8 @@
             startWhatsAppVoiceRecording: startWhatsAppVoiceRecording,
             stopWhatsAppVoiceRecordingAndSend: stopWhatsAppVoiceRecordingAndSend,
             bindWaMessageActionsUi: bindWaMessageActionsUi,
+            bindWaDraftComposer: bindWaDraftComposer,
+            loadWaDraftMap: loadWaDraftMap,
             hideWaMsgActionsMenu: hideWaMsgActionsMenu,
         };
     }

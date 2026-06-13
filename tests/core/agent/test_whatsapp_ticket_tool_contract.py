@@ -17,6 +17,9 @@ def test_kanban_tool_exposes_whatsapp_agent_actions():
         "whatsapp_mark_processed",
         "whatsapp_snapshot_to_ticket",
         "whatsapp_send_message",
+        "whatsapp_set_draft",
+        "whatsapp_get_draft",
+        "whatsapp_list_drafts",
     ):
         assert action in action_description
         assert action in tool_description
@@ -46,6 +49,7 @@ def test_tool_retriever_description_mentions_whatsapp_intake_and_reply():
         "snapshot",
         "tickets",
         "replies",
+        "draft",
     ):
         assert phrase in description
 

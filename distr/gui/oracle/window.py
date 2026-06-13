@@ -934,8 +934,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Hide/stop the TTS player immediately when voice capture starts."""
         try:
             logging.info("[ORACLE] %s: dismissing TTS player before voice capture", reason)
-            signal_manager.player_stop.emit()
-            signal_manager.emit_hide_player_window()
+            if hasattr(self, 'player_window') and self.player_window and hasattr(self.player_window, 'hide_window_immediate'):
+                self.player_window.hide_window_immediate()
+            else:
+                signal_manager.player_stop.emit()
+                signal_manager.emit_hide_player_window()
             signal_manager.interrupt_tts.emit()
         except Exception as exc:
             logging.debug("[ORACLE] Could not dismiss TTS player for %s: %s", reason, exc)

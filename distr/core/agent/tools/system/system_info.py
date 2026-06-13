@@ -203,6 +203,53 @@ class SystemInfoTool(BaseTool):
         """Async execution."""
         return self._run(query=query, **kwargs)
     
+    def _resolve_live_voice(self, settings: dict) -> tuple[str, str, dict]:
+        """Return (provider_id, voice_model, settings_overlay) for the active runtime stack."""
+        overlay = dict(settings or {})
+        provider_id = (overlay.get("voice_provider") or "kokoro").strip()
+        voice_model = ""
+
+        if self.chat_manager:
+            runtime_vp = getattr(self.chat_manager, "current_voice_provider", None)
+            runtime_vm = getattr(self.chat_manager, "current_voice_model", None)
+            if runtime_vp:
+                provider_id = runtime_vp
+            if runtime_vm:
+                voice_model = runtime_vm
+
+            chat_id = self.chat_manager.get_current_chat()
+            if chat_id and (not runtime_vp or not runtime_vm):
+                try:
+                    from distr.core.db import get_session, Chat
+                    with get_session() as session:
+                        chat = session.get(Chat, chat_id)
+                        if chat:
+                            if not runtime_vp and chat.voice_provider:
+                                from distr.core.agent.constants import normalize_voice_provider
+                                provider_id = normalize_voice_provider(chat.voice_provider)
+                            if not runtime_vm and chat.voice_model:
+                                voice_model = (chat.voice_model or "").strip()
+                except Exception as exc:
+                    logger.debug("Could not load current chat voice for system_info: %s", exc)
+
+        if not voice_model:
+            try:
+                from distr.core.chat import resolve_voice_model_from_global_settings
+                from distr.core.agent.constants import normalize_voice_provider
+                provider_id = normalize_voice_provider(provider_id)
+                voice_model = resolve_voice_model_from_global_settings(provider_id, overlay) or ""
+            except Exception:
+                pass
+
+        overlay["voice_provider"] = provider_id
+        try:
+            from distr.core.agent.services.tts.registry import tts_registry
+            descriptor = tts_registry.get(provider_id)
+            overlay[descriptor.settings_key] = voice_model or descriptor.default_voice
+        except Exception:
+            pass
+        return provider_id, voice_model, overlay
+
     def _get_system_info(self) -> str:
         """Gather and format system information."""
         info = {}
@@ -231,6 +278,8 @@ class SystemInfoTool(BaseTool):
                 conv_provider = getattr(self.chat_manager, 'current_provider', conv_provider) or conv_provider
                 conv_model = getattr(self.chat_manager, 'current_model', conv_model) or conv_model
 
+            live_vp, live_vm, voice_settings = self._resolve_live_voice(settings)
+
             info['settings'] = {
                 'llm': {
                     'conversational_provider': conv_provider,
@@ -243,8 +292,8 @@ class SystemInfoTool(BaseTool):
                     'image_model': settings.get('image_llm_model', 'Not set'),
                 },
                 'tts': {
-                    'provider': settings.get('voice_provider', 'Not set'),
-                    'voice': self._get_voice_display_name(settings),
+                    'provider': live_vp or settings.get('voice_provider', 'Not set'),
+                    'voice': self._get_voice_display_name(voice_settings),
                 },
                 'stt': {
                     'model': settings.get('transcription_model', 'Not set'),
@@ -310,7 +359,10 @@ class SystemInfoTool(BaseTool):
         except Exception:
             info['api_providers'] = {}
 
-        voice_display = self._get_voice_display_name(settings) if settings else ""
+        voice_display = ""
+        if settings:
+            _, _, voice_settings = self._resolve_live_voice(settings)
+            voice_display = self._get_voice_display_name(voice_settings)
         spoken = _build_voice_friendly_config_summary(info, voice_display)
         technical = self._format_system_info_reference_section(info)
         return spoken + _REFERENCE_MARKER + technical

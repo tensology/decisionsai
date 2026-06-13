@@ -1311,7 +1311,7 @@ def _emit_ticket_channel_intake(
     if provider not in {"whatsapp", "telegram", "gmail"}:
         return
     try:
-        from distr.core.hermes import emit_channel_intake_event
+        from distr.core.orchestrator import emit_channel_intake_event
 
         board_id = board.id if board else None
         if board_id is None and ticket.lane_id:
@@ -1351,7 +1351,7 @@ class BoardUpdate(BaseModel):
     default_action_id: Optional[int] = None
     color: Optional[str] = None
     position: Optional[int] = None
-    hermes_policy: Optional[dict] = None
+    orchestrator_policy: Optional[dict] = None
 
 
 class TicketCreate(BaseModel):
@@ -2255,9 +2255,9 @@ def create_routes():
                 board.color = payload.color if payload.color else None
             if payload.position is not None:
                 board.position = payload.position
-            if payload.hermes_policy is not None:
+            if payload.orchestrator_policy is not None:
                 import json as _json
-                board.hermes_policy = _json.dumps(payload.hermes_policy or {})
+                board.orchestrator_policy = _json.dumps(payload.orchestrator_policy or {})
             s.commit()
             
             # Sync Project's kanban_board_id reference if default_project_id changed
@@ -2318,7 +2318,7 @@ def create_routes():
                 raise HTTPException(404, "Board not found")
             # Get WhatsApp links for this board
             from distr.core.db import WhatsAppPhoneLink
-            from distr.core.hermes import parse_board_hermes_policy
+            from distr.core.orchestrator import parse_board_orchestrator_policy
             whatsapp_links = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id).all()
             project_ids = {int(board.default_project_id)} if board.default_project_id else set()
             for lane in board.lanes:
@@ -2370,7 +2370,7 @@ def create_routes():
                 "default_action_id": board.default_action_id,
                 "color": board.color or "",
                 "in_use": getattr(board, 'in_use', False) or False,
-                "hermes_policy": parse_board_hermes_policy(getattr(board, "hermes_policy", None)),
+                "orchestrator_policy": parse_board_orchestrator_policy(getattr(board, "orchestrator_policy", None)),
                 "whatsapp_links": [{"id": l.id, "phone_number": l.phone_number, "contact_name": l.contact_name, "auto_snapshot": l.auto_snapshot or False} for l in whatsapp_links],
             })
 
@@ -2381,21 +2381,21 @@ def create_routes():
             if not board:
                 raise HTTPException(404, "Board not found")
         try:
-            from distr.core.hermes import list_board_activity
+            from distr.core.orchestrator import list_board_activity
 
             return JSONResponse(list_board_activity(board_id, event_limit=event_limit, rule_limit=rule_limit))
         except Exception as e:
             logger.error("Board activity failed: %s", e, exc_info=True)
             raise HTTPException(500, str(e))
 
-    @router.patch("/tickets/boards/{board_id}/learned-rules/{rule_id}")
+    @router.patch("/tickets/boards/{board_id}/orchestrator-learned-rules/{rule_id}")
     async def update_board_learned_rule(board_id: int, rule_id: int, payload: dict):
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard, board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
         try:
-            from distr.core.hermes import list_learned_rules, set_learned_rule_enabled
+            from distr.core.orchestrator import list_learned_rules, set_learned_rule_enabled
 
             rules = list_learned_rules(board_id=int(board_id), enabled_only=False, limit=200)
             match = next((row for row in rules if int(row.get("id") or 0) == int(rule_id)), None)
@@ -2411,19 +2411,19 @@ def create_routes():
             logger.error("Update learned rule failed: %s", e, exc_info=True)
             raise HTTPException(500, str(e))
 
-    @router.post("/tickets/boards/{board_id}/learned-rules/{rule_id}/promote")
+    @router.post("/tickets/boards/{board_id}/orchestrator-learned-rules/{rule_id}/promote")
     async def promote_board_learned_rule(board_id: int, rule_id: int, payload: dict | None = None):
         payload = payload or {}
         category = str(payload.get("category") or "general").strip().lower() or "general"
         try:
-            from distr.core.hermes import promote_learned_rule_to_board_policy
+            from distr.core.orchestrator import promote_learned_rule_to_board_policy
 
             policy = promote_learned_rule_to_board_policy(
                 board_id=int(board_id),
                 rule_id=int(rule_id),
                 category=category,
             )
-            return JSONResponse({"success": True, "hermes_policy": policy})
+            return JSONResponse({"success": True, "orchestrator_policy": policy})
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
         except Exception as exc:
@@ -4635,7 +4635,7 @@ source: kanban_ticket_{t.id}
         }
 
     def _resolve_ticket_execution_route(s, ctx: dict) -> dict:
-        from distr.core.hermes_orchestrator import resolve_execution_route
+        from distr.core.orchestrator_routing import resolve_execution_route
 
         decision = resolve_execution_route(
             project=ctx["project"],
@@ -5070,13 +5070,9 @@ source: kanban_ticket_{t.id}
     async def sync_whatsapp_messages():
         """Sync messages from the relay server into the local DB."""
         try:
-            from distr.core.kanban.whatsapp_relay_sync import (
-                announce_whatsapp_sync,
-                sync_whatsapp_from_relay,
-            )
+            from distr.core.kanban.whatsapp_relay_sync import sync_whatsapp_from_relay
 
             result = sync_whatsapp_from_relay(mark_processed=False)
-            announce_whatsapp_sync(result)
             status = 500 if result.get("error") and not int(result.get("synced") or 0) else 200
             return JSONResponse(result, status_code=status)
         except Exception as e:

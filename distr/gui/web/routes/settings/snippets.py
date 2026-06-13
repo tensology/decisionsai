@@ -30,6 +30,23 @@ def _snippet_response(snippet):
     }
 
 
+def _snippet_summary_response(snippet, preview_limit: int = 160):
+    text = snippet.description or ""
+    preview = text[:preview_limit]
+    if len(text) > preview_limit:
+        preview = preview.rstrip() + "…"
+    return {
+        "id": snippet.id,
+        "title": snippet.title or "",
+        "text": preview,
+        "description": preview,
+        "preview": preview,
+        "has_full_text": len(text) <= preview_limit,
+        "additional_trigger_words": snippet.additional_trigger_words or "[]",
+        "remote_hotkey": snippet.remote_hotkey or "",
+    }
+
+
 def _next_default_remote_hotkey(session, Snippet) -> str:
     used = {
         str(value or "").strip().lower()
@@ -78,6 +95,26 @@ def register_routes(router, templates):
             session.add(snippet)
             session.commit()
             _notify_snippet_hotkeys_changed()
+            return JSONResponse(_snippet_response(snippet))
+
+    @router.get("/snippets/summary")
+    @route_handler("load snippet summaries")
+    async def get_snippets_summary():
+        """Lightweight snippet list for remote UI — omits large bodies."""
+        from distr.core.db import get_session, Snippet
+        with get_session() as session:
+            snippets = session.query(Snippet).order_by(Snippet.modified_date.desc()).all()
+            return JSONResponse([_snippet_summary_response(s) for s in snippets])
+
+    @router.get("/snippets/{snippet_id}")
+    @route_handler("load snippet")
+    async def get_snippet(snippet_id: int):
+        """Load one snippet with full text."""
+        from distr.core.db import get_session, Snippet
+        with get_session() as session:
+            snippet = session.query(Snippet).filter(Snippet.id == snippet_id).first()
+            if not snippet:
+                raise HTTPException(status_code=404, detail="Snippet not found")
             return JSONResponse(_snippet_response(snippet))
 
     @router.get("/snippets")

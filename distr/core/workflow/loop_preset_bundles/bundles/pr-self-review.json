@@ -1,0 +1,138 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "pr-self-review",
+  "name": "PR Self-Review",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "review_cleanup",
+  "description": "Three senior self-review passes on the diff before opening PR.",
+  "kickoff": "Start the \"PR Self-Review\" loop.\nGoal: three clean self-review passes\nMax iterations: 3\nBetween iterations run: git diff against base branch\nExit when: three passes with no critical findings.\nOrientation: read the linked ticket to confirm what the diff must deliver.\nStep 1: Review the current diff against ticket acceptance criteria.",
+  "loop_contract": {
+    "name": "PR Self-Review",
+    "goal": "three clean self-review passes on the current diff",
+    "exit_when": "three passes complete with no critical findings",
+    "check_command": "git diff against base branch",
+    "max_iterations": 3,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Review diff like a senior reviewer (requesting-code-review). Note P0–P2 with file refs.",
+    "archetype": "review_cleanup",
+    "role": "developer"
+  },
+  "expected_check_command": "git diff against base branch",
+  "tags": [
+    "review",
+    "pr"
+  ],
+  "steps": [
+    {
+      "name": "Senior review pass",
+      "instruction": "Review diff like a senior reviewer (requesting-code-review). Note P0–P2 with file refs.",
+      "skills": [
+        "requesting-code-review",
+        "ln-511-code-quality-checker"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Senior review pass' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Fix findings",
+      "instruction": "Address P0/P1 from review. Minimal diffs.",
+      "skills": [
+        "receiving-code-review",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Fix findings' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Re-review pass",
+      "instruction": "Second pass on updated diff. Track pass count toward three clean passes.",
+      "skills": [
+        "receiving-code-review",
+        "ln-511-code-quality-checker"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Re-review pass' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Evaluate three clean passes",
+      "instruction": "Three review passes complete with no critical findings.",
+      "skills": [
+        "requesting-code-review"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate three clean passes' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Report",
+      "instruction": "Review summary ready for PR opening.",
+      "skills": [
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

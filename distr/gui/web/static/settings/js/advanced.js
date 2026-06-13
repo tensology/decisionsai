@@ -1,15 +1,15 @@
 // Advanced Settings JavaScript - Directory tree like native CheckableDirModel (expand ~/, checkboxes = indexed_folders)
 
 var advancedCheckedPaths = new Set();
-var advancedHermesSettings = {
-    hermes_enabled: true,
-    hermes_memory_export_enabled: false,
-    hermes_orchestrator_provider: '',
-    hermes_orchestrator_model: '',
-    hermes_validator_provider: '',
-    hermes_validator_model: '',
-    hermes_correction_provider: '',
-    hermes_correction_model: ''
+var advancedOrchestratorSettings = {
+    orchestrator_enabled: true,
+    orchestrator_memory_export_enabled: false,
+    orchestrator_provider: '',
+    orchestrator_model: '',
+    orchestrator_validator_provider: '',
+    orchestrator_validator_model: '',
+    orchestrator_correction_provider: '',
+    orchestrator_correction_model: ''
 };
 
 function escapeHtml(text) {
@@ -210,14 +210,14 @@ function getAdvancedCheckbox(id) {
 }
 
 function rememberAdvancedHermesSettings(settings) {
-    advancedHermesSettings.hermes_enabled = settings.hermes_enabled !== false;
-    advancedHermesSettings.hermes_memory_export_enabled = !!settings.hermes_memory_export_enabled;
-    advancedHermesSettings.hermes_orchestrator_provider = settings.hermes_orchestrator_provider || '';
-    advancedHermesSettings.hermes_orchestrator_model = settings.hermes_orchestrator_model || '';
-    advancedHermesSettings.hermes_validator_provider = settings.hermes_validator_provider || '';
-    advancedHermesSettings.hermes_validator_model = settings.hermes_validator_model || '';
-    advancedHermesSettings.hermes_correction_provider = settings.hermes_correction_provider || '';
-    advancedHermesSettings.hermes_correction_model = settings.hermes_correction_model || '';
+    advancedOrchestratorSettings.orchestrator_enabled = settings.orchestrator_enabled !== false;
+    advancedOrchestratorSettings.orchestrator_memory_export_enabled = !!settings.orchestrator_memory_export_enabled;
+    advancedOrchestratorSettings.orchestrator_provider = settings.orchestrator_provider || '';
+    advancedOrchestratorSettings.orchestrator_model = settings.orchestrator_model || '';
+    advancedOrchestratorSettings.orchestrator_validator_provider = settings.orchestrator_validator_provider || '';
+    advancedOrchestratorSettings.orchestrator_validator_model = settings.orchestrator_validator_model || '';
+    advancedOrchestratorSettings.orchestrator_correction_provider = settings.orchestrator_correction_provider || '';
+    advancedOrchestratorSettings.orchestrator_correction_model = settings.orchestrator_correction_model || '';
 }
 
 // Load advanced settings from backend
@@ -255,7 +255,7 @@ async function saveAdvancedSettings() {
             indexed_folders: getCheckedPaths(),
             exclude_types: document.getElementById('exclude_types').value
         };
-        Object.assign(settings, advancedHermesSettings);
+        Object.assign(settings, advancedOrchestratorSettings);
 
         var response = await fetch('/api/advanced', {
             method: 'POST',

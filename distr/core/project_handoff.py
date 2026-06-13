@@ -34,12 +34,13 @@ class ProjectHandoffService:
             from distr.core.orchestration_events import emit_orchestration_event
 
             success = bool(getattr(result, "success", False))
+            waits_for_human = bool(getattr(result, "waits_for_human", False))
             backend_id = getattr(result, "backend_id", None) or context.backend_id
             execution_session_id = getattr(result, "execution_session_id", None)
             emit_orchestration_event(
                 source=backend_id or "project_handoff",
                 event_type="project_handoff_dispatched",
-                status="completed" if success else "failed",
+                status="waiting" if waits_for_human and success else ("completed" if success else "failed"),
                 workflow_id=context.workflow_id,
                 run_id=context.run_id,
                 step_id=context.step_id,

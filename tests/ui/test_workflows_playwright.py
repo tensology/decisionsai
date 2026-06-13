@@ -30,13 +30,16 @@ def open_workflow_execution_setup(page):
     page.locator("#sr-llm-modal").wait_for(state="visible", timeout=5000)
 
 
+def open_workflow_global_execution_tab(page):
+    page.locator("#wf-menu-btn").click()
+    page.locator("#sr-llm-modal").wait_for(state="visible", timeout=5000)
+    page.locator('.wf-global-config-tab[data-wf-config-tab="execution"]').click()
+    page.wait_for_timeout(300)
+
+
 def open_workflow_board_execution_tab(page):
-    page.locator("#wf-board-select").wait_for(state="visible", timeout=5000)
-    page.wait_for_timeout(300)
-    page.locator("#wf-edit-board-link").click()
-    page.locator("#wf-board-edit-modal").wait_for(state="visible", timeout=5000)
-    page.locator('.wf-board-edit-tab[data-tab="execution"]').click()
-    page.wait_for_timeout(300)
+    """Deprecated alias — execution routing moved to global workflow configuration."""
+    open_workflow_global_execution_tab(page)
 
 
 @pytest.fixture(scope="module")
@@ -257,15 +260,14 @@ class TestWorkflowsDetailPanel:
         except Exception:
             pytest.skip("No workflows to test tabs with")
 
-        # All tab buttons should be visible
-        tabs = ["steps", "context", "runs", "schedule"]
-        for tab_name in tabs:
+        # Primary tabs should be visible
+        for tab_name in ["tickets", "loop", "activity"]:
             tab_btn = page.locator(f".wf-tab[data-tab='{tab_name}']")
             assert tab_btn.is_visible(), f"Tab '{tab_name}' not visible"
 
-        # Steps tab is active by default
-        steps_tab_content = page.locator("#wf-tab-steps")
-        assert not steps_tab_content.is_hidden(), "Steps tab content hidden by default"
+        # Tickets tab is active by default
+        tickets_tab_content = page.locator("#wf-tab-tickets")
+        assert not tickets_tab_content.is_hidden(), "Tickets tab content hidden by default"
 
         print_diagnostics(cl, nl, "TABS")
         page.close()
@@ -284,19 +286,19 @@ class TestWorkflowsDetailPanel:
         except Exception:
             pytest.skip("No workflows to test tabs with")
 
-        # Switch to Schedule tab
-        page.locator(".wf-tab[data-tab='schedule']").click()
+        # Switch to Loop tab
+        page.locator(".wf-tab[data-tab='loop']").click()
         page.wait_for_timeout(500)
-        schedule_content = page.locator("#wf-tab-schedule")
-        assert not schedule_content.is_hidden(), "Schedule tab content not visible after click"
-        steps_content = page.locator("#wf-tab-steps")
-        assert steps_content.is_hidden(), "Steps tab still visible after switching away"
+        loop_content = page.locator("#wf-tab-loop")
+        assert not loop_content.is_hidden(), "Loop tab content not visible after click"
+        tickets_content = page.locator("#wf-tab-tickets")
+        assert tickets_content.is_hidden(), "Tickets tab still visible after switching away"
 
-        # Switch to Runs tab
-        page.locator(".wf-tab[data-tab='runs']").click()
+        # Switch to Activity log tab
+        page.locator(".wf-tab[data-tab='activity']").click()
         page.wait_for_timeout(500)
-        runs_content = page.locator("#wf-tab-runs")
-        assert not runs_content.is_hidden(), "Runs tab content not visible"
+        activity_content = page.locator("#wf-tab-activity")
+        assert not activity_content.is_hidden(), "Activity log tab content not visible"
 
         print_diagnostics(cl, nl, "TAB SWITCH")
         page.close()
@@ -315,34 +317,28 @@ class TestWorkflowsDetailPanel:
         except Exception:
             pytest.skip("No workflows to test steps with")
 
-        # Check if steps exist
-        step_cards = page.locator(".step-card")
-        count = step_cards.count()
-        print(f"\n📝 Step cards found: {count}")
+        page.locator(".wf-tab[data-tab='loop']").click()
+        page.wait_for_timeout(500)
+
+        step_nodes = page.locator(".wf-loop-ring-node, .wf-loop-list-row")
+        count = step_nodes.count()
+        print(f"\n📝 Loop steps found: {count}")
 
         if count > 0:
-            # Click first step to expand
-            first_step_header = step_cards.first.locator(".step-header")
-            first_step_header.click()
+            step_nodes.first.click()
             page.wait_for_timeout(800)
 
-            # Step body should now be visible
-            first_step_id = step_cards.first.get_attribute("data-step-id")
-            step_body = page.locator(f"#step-body-{first_step_id}")
-            assert not step_body.is_hidden(), "Step body not shown after clicking header"
+            modal = page.locator("#wf-loop-step-modal")
+            assert modal.is_visible(), "Loop step modal not shown after selecting a step"
 
-            # Step form should have inner tabs
-            inner_tabs = step_body.locator(".sf-tab")
-            it_count = inner_tabs.count()
-            print(f"  Inner tabs: {it_count} (action, validation, routing, history)")
-            assert it_count >= 3, f"Expected 4 inner tabs, found {it_count}"
+            assert modal.locator("#wf-loop-step-name").count() == 1
+            assert modal.locator("#wf-loop-step-instruction").count() == 1
 
-            # Click the step header again to collapse
-            first_step_header.click()
+            modal.locator("#wf-loop-step-modal-close").click()
             page.wait_for_timeout(300)
-            assert step_body.is_hidden(), "Step body not hidden after clicking header again"
+            assert modal.is_hidden(), "Loop step modal not hidden after close"
 
-        print_diagnostics(cl, nl, "STEP ACCORDION")
+        print_diagnostics(cl, nl, "LOOP STEP EDITOR")
         page.close()
 
     def test_schedule_tab_interactions(self, browser_context):
@@ -819,15 +815,15 @@ class TestWorkflowsHeaderActions:
         except Exception:
             pytest.skip("No workflows for LLM modal test")
 
-        open_workflow_board_execution_tab(page)
+        open_workflow_global_execution_tab(page)
 
-        modal = page.locator("#wf-board-edit-modal")
-        assert modal.is_visible(), "Board edit modal not visible after click"
+        modal = page.locator("#sr-llm-modal")
+        assert modal.is_visible(), "Global workflow configuration modal not visible after click"
 
-        backend = page.locator("#wf-board-exec-low-backend")
-        assert backend.is_visible(), "Execution routing controls not visible in board edit modal"
+        backend = page.locator("#wf-global-exec-low-backend")
+        assert backend.is_visible(), "Execution routing controls not visible in global configuration modal"
 
-        modal.locator(".wf-board-edit-close").first.click()
+        modal.locator("#sr-llm-close").click()
         page.wait_for_timeout(300)
         assert not modal.is_visible(), "Board edit modal still visible after close"
 
@@ -836,7 +832,7 @@ class TestWorkflowsHeaderActions:
 
 
 class TestWorkflowsContextMenuActions:
-    """Duplicate, export, download, and purge-all live on the list row context menu."""
+    """Configure, duplicate, and delete live on the workflow tab context menu."""
 
     def test_context_menu_shows_workflow_actions(self, browser_context):
         page = browser_context.new_page()
@@ -857,10 +853,11 @@ class TestWorkflowsContextMenuActions:
         menu = page.locator("#wf-context-menu")
         assert menu.is_visible(), "Workflow context menu not visible after right-click"
 
+        assert page.locator('#wf-context-menu [data-action="configure"]').is_visible()
         assert page.locator('#wf-context-menu [data-action="duplicate"]').is_visible()
-        assert page.locator('#wf-context-menu [data-action="export"]').is_visible()
-        assert page.locator('#wf-context-menu [data-action="download"]').is_visible()
-        assert page.locator('#wf-context-menu [data-action="purge-all"]').is_visible()
+        assert page.locator('#wf-context-menu [data-action="delete"]').is_visible()
+        assert page.locator('#wf-context-menu [data-action="run"]').count() == 0
+        assert page.locator('#wf-context-menu [data-action="purge-all"]').count() == 0
 
         print_diagnostics(cl, nl, "CONTEXT MENU ACTIONS")
         page.close()
@@ -883,31 +880,28 @@ class TestWorkflowsAddStep:
         page.wait_for_timeout(2000)
 
         # Make sure we're on Steps tab
-        steps_tab = page.locator(".wf-tab[data-tab='steps']")
+        steps_tab = page.locator(".wf-tab[data-tab='loop']")
         if steps_tab.is_visible():
             steps_tab.click()
             page.wait_for_timeout(500)
 
-        # Count existing steps
-        step_cards = page.locator(".step-card")
-        initial_count = step_cards.count()
+        step_nodes = page.locator(".wf-loop-ring-node")
+        initial_count = step_nodes.count()
         print(f"\n📝 Steps before add: {initial_count}")
 
-        # Click add step
         add_step_btn = page.locator("#wf-add-step-btn")
         if add_step_btn.is_visible():
             add_step_btn.click()
             page.wait_for_timeout(2000)
 
-            new_count = page.locator(".step-card").count()
+            new_count = page.locator(".wf-loop-ring-node").count()
             print(f"📝 Steps after add: {new_count}")
 
-            # Clean up: delete the workflow
-            page.on("dialog", lambda dialog: dialog.accept())
-            delete_btn = page.locator("#wf-delete-btn")
-            delete_btn.click()
+            list_items.first.click(button="right")
+            page.wait_for_timeout(300)
+            page.locator('#wf-context-menu [data-action="delete"]').click()
             page.wait_for_timeout(500)
-            confirm_ok = page.locator("#wf-confirm-modal .wf-confirm-ok")
+            confirm_ok = page.locator("#decisions-confirm-modal .decisions-confirm-ok")
             if confirm_ok.is_visible():
                 confirm_ok.click()
                 page.wait_for_timeout(1000)
@@ -986,20 +980,19 @@ class TestWorkflowsConsoleErrors:
             list_items.first.click()
             page.wait_for_timeout(1000)
 
-            # Expand a step
-            step_cards = page.locator(".step-card")
-            if step_cards.count() > 0:
-                step_cards.first.locator(".step-header").click()
+            page.locator(".wf-tab[data-tab='loop']").click()
+            page.wait_for_timeout(500)
+            step_nodes = page.locator(".wf-loop-ring-node")
+            if step_nodes.count() > 0:
+                step_nodes.first.click()
                 page.wait_for_timeout(1000)
 
-            # Tab through
-            for tab in ["context", "runs", "schedule", "steps"]:
+            for tab in ["tickets", "loop", "activity"]:
                 page.locator(f".wf-tab[data-tab='{tab}']").click()
                 page.wait_for_timeout(500)
 
-                # Switch inner tabs if on steps
-                if tab == "steps" and step_cards.count() > 0:
-                    inner_tabs = page.locator(".sf-tab")
+                if tab == "loop" and step_nodes.count() > 0:
+                    inner_tabs = page.locator("#wf-loop-step-modal #wf-loop-step-name")
                     for it in range(inner_tabs.count()):
                         inner_tabs.nth(it).click()
                         page.wait_for_timeout(300)

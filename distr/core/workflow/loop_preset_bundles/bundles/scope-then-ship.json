@@ -1,0 +1,163 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "scope-then-ship",
+  "name": "Scope Then Ship",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "review_cleanup",
+  "description": "Scope gate, pre-flight, implement, QA in browser, retro — no code before scope approval.",
+  "kickoff": "Start the \"Scope Then Ship\" loop.\nGoal: approved scope shipped with QA evidence\nMax iterations: 6\nExit when: scope items done and QA ship verdict is SHIP or CONDITIONAL\nOrientation: read the linked ticket to confirm scope boundaries before ceo-scope-review.\nStep 1: Run ceo-scope-review before any implementation.",
+  "loop_contract": {
+    "name": "Scope Then Ship",
+    "goal": "approved scope shipped with QA evidence",
+    "exit_when": "scope complete and QA ship verdict SHIP or CONDITIONAL",
+    "check_command": "qa-tester health score + project tests",
+    "max_iterations": 6,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Run ceo-scope-review on the ticket. Present HOLD / REDUCE / EXPAND / SELECTIVE EXPANSION. Produce a revised scope doc before any implementation.",
+    "archetype": "review_cleanup",
+    "role": "developer"
+  },
+  "expected_check_command": "qa-tester health score + project tests",
+  "tags": [
+    "developer",
+    "scope",
+    "qa"
+  ],
+  "steps": [
+    {
+      "name": "Scope review gate",
+      "instruction": "Run ceo-scope-review on the ticket. Present HOLD / REDUCE / EXPAND / SELECTIVE EXPANSION. Produce a revised scope doc before any implementation.",
+      "skills": [
+        "ceo-scope-review",
+        "brainstorming"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Scope mode selected and revised scope document produced.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": true,
+      "other_tool": "Orchestrator scope gate"
+    },
+    {
+      "name": "Pre-flight review",
+      "instruction": "Run pre-flight-review on the approved scope. Surface P0 blockers. Auto-fix mechanical issues only.",
+      "skills": [
+        "pre-flight-review",
+        "ln-621-security-auditor"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "P0 issues still open",
+        "Pre-flight skipped"
+      ],
+      "validation_prompt": "Pre-flight verdict is READY or CONDITIONAL with no open P0.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Implement",
+      "instruction": "Execute the approved scope with executing-plans and tdd-workflow. One iteration slice if the scope is large.",
+      "skills": [
+        "executing-plans",
+        "tdd-workflow",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Detect lint and test commands from the repo (package.json, Makefile, pyproject.toml, etc.)\n- Do not assume npm — use whatever this project actually uses",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Approved scope slice implemented with passing local checks.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "QA pass",
+      "instruction": "Run qa-tester STANDARD on critical paths. Use webapp-testing for UI flows. Health score and ship verdict required.",
+      "skills": [
+        "qa-tester",
+        "webapp-testing"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "QA health score produced; ship verdict SHIP or CONDITIONAL; P0/P1 addressed.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate exit",
+      "instruction": "All scope items for this iteration complete and QA passed. Otherwise loop to implement.",
+      "skills": [
+        "product-lens",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate exit' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Session retro",
+      "instruction": "Run session-retro. Log top learnings to learnings-keeper.",
+      "skills": [
+        "session-retro",
+        "learnings-keeper"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Session retro' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

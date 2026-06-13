@@ -159,6 +159,11 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def legacy_kanban_api_alias(request: Request, call_next):
+        """Deprecated: rewrite /api/kanban/* to /api/tickets/* for older clients.
+
+        Remote app and desktop UI use /api/tickets/* directly. This shim remains
+        for legacy integrations until they are updated.
+        """
         path = request.url.path
         if path.startswith("/api/kanban"):
             scope = request.scope
@@ -324,12 +329,12 @@ def create_app() -> FastAPI:
         logger.error("Failed to load IDE bridge routes: %s", e, exc_info=True)
 
     try:
-        from distr.gui.web.routes.hermes_memory import create_routes as create_hermes_memory_routes
-        hermes_memory_router = create_hermes_memory_routes()
-        app.include_router(hermes_memory_router, prefix="/api", tags=["hermes"])
-        logger.info("Hermes memory routes mounted at /api/hermes")
+        from distr.gui.web.routes.orchestrator_memory import create_routes as create_orchestrator_memory_routes
+        orchestrator_memory_router = create_orchestrator_memory_routes()
+        app.include_router(orchestrator_memory_router, prefix="/api", tags=["orchestrator"])
+        logger.info("Orchestrator memory routes mounted at /api/orchestrator")
     except Exception as e:
-        logger.error("Failed to load Hermes memory routes: %s", e, exc_info=True)
+        logger.error("Failed to load Orchestrator memory routes: %s", e, exc_info=True)
 
     try:
         from distr.gui.web.routes.docs import create_routes as create_docs_routes
@@ -859,13 +864,13 @@ def create_app() -> FastAPI:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
 
     @app.on_event("startup")
-    async def _compact_hermes_machine_activity():
+    async def _compact_orchestrator_machine_activity():
         try:
-            from distr.core.hermes_memory import run_weekly_machine_activity_compaction
+            from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
 
             run_weekly_machine_activity_compaction()
         except Exception as e:
-            logger.debug("Hermes machine activity compaction skipped: %s", e)
+            logger.debug("Orchestrator machine activity compaction skipped: %s", e)
 
     # Check model recommendations staleness on startup
     @app.on_event("startup")

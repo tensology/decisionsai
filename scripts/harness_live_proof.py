@@ -479,7 +479,7 @@ def _capture_ui_proof_screenshots(proof_dir: Path, stamp: str) -> dict[str, str]
 
 
 def _ui_change_proof(stamp: str, *, project_id: int, workflow_id: int, run_id: int, step_id: int) -> dict[str, Any]:
-    from distr.core.hermes import record_ui_feedback_label, record_ui_quality_validation
+    from distr.core.orchestrator import record_ui_feedback_label, record_ui_quality_validation
 
     proof_dir = _proof_dir() / f"ui-change-{stamp}"
     proof_dir.mkdir(parents=True, exist_ok=True)
@@ -911,7 +911,7 @@ async def _codex_backend_edit_proof(ids: dict[str, int], *, project_id: int, sta
 
 def _redacted_report(value: dict[str, Any]) -> dict[str, Any]:
     try:
-        from distr.core.hermes import redact_handoff_payload
+        from distr.core.orchestrator import redact_handoff_payload
 
         redacted = redact_handoff_payload(value)
         return redacted if isinstance(redacted, dict) else value

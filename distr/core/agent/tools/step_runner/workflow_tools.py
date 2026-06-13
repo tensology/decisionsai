@@ -1221,7 +1221,7 @@ def _reference_visual_baseline_readiness_block(readiness: dict[str, Any]) -> str
 class VisualBaselineTool(BaseTool):
     name: str = "visual_baseline"
     description: str = (
-        "Create, list, retrieve, or readiness-check Hermes visual baseline sets used by UI quality validation. "
+        "Create, list, retrieve, or readiness-check Orchestrator visual baseline sets used by UI quality validation. "
         "Use when the user says to save a screenshot as a gold standard, create a visual baseline, "
         "list visual baselines, inspect a baseline's reference screens, or check whether baselines are usable."
     )
@@ -1249,7 +1249,7 @@ class VisualBaselineTool(BaseTool):
                     return "Error: name is required to create a visual baseline."
                 if not screens:
                     return "Error: at least one reference screen is required."
-                from distr.core.hermes import create_visual_baseline_set, get_visual_baseline_set
+                from distr.core.orchestrator import create_visual_baseline_set, get_visual_baseline_set
 
                 baseline_id = create_visual_baseline_set(
                     name=name,
@@ -1269,7 +1269,7 @@ class VisualBaselineTool(BaseTool):
                 )
 
             if operation == "get":
-                from distr.core.hermes import get_visual_baseline_set
+                from distr.core.orchestrator import get_visual_baseline_set
 
                 baseline = get_visual_baseline_set(
                     baseline_set_id=baseline_id,
@@ -1286,7 +1286,7 @@ class VisualBaselineTool(BaseTool):
                 )
 
             if operation == "list":
-                from distr.core.hermes import list_visual_baseline_sets
+                from distr.core.orchestrator import list_visual_baseline_sets
 
                 baselines = list_visual_baseline_sets(
                     board_id=board_id,
@@ -1307,7 +1307,7 @@ class VisualBaselineTool(BaseTool):
                 )
 
             if operation in {"readiness", "ready", "audit", "check"}:
-                from distr.core.hermes import inspect_visual_baseline_readiness
+                from distr.core.orchestrator import inspect_visual_baseline_readiness
 
                 readiness = inspect_visual_baseline_readiness(
                     baseline_set_id=baseline_id,

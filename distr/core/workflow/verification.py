@@ -20,7 +20,7 @@ def _project_runtime_snapshot(project_id: int | None) -> dict[str, Any]:
     if not project_id:
         return {}
     try:
-        from distr.core.hermes import list_project_runtime_sessions
+        from distr.core.orchestrator import list_project_runtime_sessions
 
         sessions = list_project_runtime_sessions(project_id=int(project_id), active_only=True, limit=10)
         urls: list[dict[str, Any]] = []
@@ -176,9 +176,9 @@ def _verify_rule_based(result: str, rules: str) -> bool:
 def _verify_llm_judgment(result: str, validation_prompt: str, *, standards_context: str = "", ticket_context: str = "") -> bool:
     """Send the result + validation prompt to the Hermes validator model."""
     try:
-        from distr.core.hermes_validator import run_hermes_validator_judgment
+        from distr.core.orchestrator_validator import run_orchestrator_validator_judgment
 
-        verdict = run_hermes_validator_judgment(
+        verdict = run_orchestrator_validator_judgment(
             result=result,
             validation_prompt=validation_prompt,
             standards_context=standards_context,

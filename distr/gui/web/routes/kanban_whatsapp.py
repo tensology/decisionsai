@@ -283,6 +283,55 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp send proxy error: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    @router.get("/tickets/whatsapp/drafts")
+    async def list_whatsapp_compose_drafts():
+        """List all non-empty WhatsApp reply drafts."""
+        from distr.core.kanban.whatsapp_compose_drafts import list_compose_drafts
+
+        drafts = list_compose_drafts()
+        return JSONResponse({"drafts": drafts, "count": len(drafts)})
+
+    @router.get("/tickets/whatsapp/drafts/{jid_phone}")
+    async def get_whatsapp_compose_draft(jid_phone: str):
+        """Fetch the saved reply draft for one chat."""
+        from distr.core.kanban.whatsapp_compose_drafts import get_compose_draft
+
+        draft = get_compose_draft(jid_phone)
+        if not draft:
+            return JSONResponse({"draft": None})
+        return JSONResponse({"draft": draft})
+
+    @router.put("/tickets/whatsapp/drafts/{jid_phone}")
+    async def save_whatsapp_compose_draft(jid_phone: str, payload: dict):
+        """Save or clear the reply draft for one chat (empty text deletes)."""
+        from distr.core.kanban.whatsapp_compose_drafts import save_compose_draft
+
+        text = payload.get("text", "")
+        source = (payload.get("source") or "user").strip() or "user"
+        sanitize = bool(payload.get("sanitize")) or source == "agent"
+        try:
+            draft = save_compose_draft(
+                jid_phone=jid_phone,
+                text=text,
+                jid=(payload.get("jid") or "").strip() or None,
+                chat_type=(payload.get("chat_type") or "private").strip() or "private",
+                contact_name=(payload.get("contact_name") or "").strip() or None,
+                source=source,
+                board_id=payload.get("board_id"),
+                sanitize=sanitize,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return JSONResponse({"success": True, "draft": draft})
+
+    @router.delete("/tickets/whatsapp/drafts/{jid_phone}")
+    async def delete_whatsapp_compose_draft(jid_phone: str):
+        """Remove the reply draft for one chat."""
+        from distr.core.kanban.whatsapp_compose_drafts import delete_compose_draft
+
+        deleted = delete_compose_draft(jid_phone)
+        return JSONResponse({"success": True, "deleted": deleted})
+
     @router.post("/tickets/whatsapp/ws-auth")
     async def whatsapp_ws_auth_bundle(payload: dict):
         """Proxy: request scoped websocket auth bundle from relay."""
@@ -370,7 +419,9 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             count = len(msgs)
             for msg in msgs:
                 s.delete(msg)
-            return JSONResponse({"success": True, "deleted": count})
+        from distr.core.kanban.whatsapp_compose_drafts import delete_compose_draft
+        delete_compose_draft(jid_phone)
+        return JSONResponse({"success": True, "deleted": count})
 
     @router.delete("/tickets/whatsapp/chats")
     async def delete_all_whatsapp_chats():
@@ -388,7 +439,9 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             deleted = len(msgs)
             for msg in msgs:
                 s.delete(msg)
-            return JSONResponse({"success": True, "deleted": deleted, "deleted_chats": len(chat_ids)})
+        from distr.core.kanban.whatsapp_compose_drafts import delete_all_compose_drafts
+        delete_all_compose_drafts()
+        return JSONResponse({"success": True, "deleted": deleted, "deleted_chats": len(chat_ids)})
 
     @router.post("/tickets/whatsapp/messages/mark-snapshot-group")
     async def mark_whatsapp_messages_snapshot_group(payload: dict):

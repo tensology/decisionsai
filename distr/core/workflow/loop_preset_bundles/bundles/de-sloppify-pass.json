@@ -1,0 +1,143 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "de-sloppify-pass",
+  "name": "De-Sloppify Pass",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "review_cleanup",
+  "description": "Senior-style diff review, minimal fixes, project quality checks — not generic npm theater.",
+  "kickoff": "Start the \"De-Sloppify Pass\" loop.\nGoal: diff is clean and convention-aligned\nMax iterations: 4\nBetween iterations run: project lint and tests (discover from repo)\nExit when: no slop findings and checks pass\nOrientation: read the linked ticket for scope before reviewing the diff.\nStep 1: Review diff for debug code, dead branches, naming issues.",
+  "loop_contract": {
+    "name": "De-Sloppify Pass",
+    "goal": "recent changes are clean, minimal, and convention-aligned",
+    "exit_when": "review finds no slop and project checks pass",
+    "check_command": "project lint + tests (from repo config)",
+    "max_iterations": 4,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Review git diff against the base branch with requesting-code-review. Flag debug code, dead branches, naming drift, and convention violations. Prioritize P0/P1 only.",
+    "archetype": "review_cleanup",
+    "role": "developer"
+  },
+  "expected_check_command": "project lint + tests (from repo config)",
+  "tags": [
+    "review",
+    "quality"
+  ],
+  "steps": [
+    {
+      "name": "Review diff for slop",
+      "instruction": "Review git diff against the base branch with requesting-code-review. Flag debug code, dead branches, naming drift, and convention violations. Prioritize P0/P1 only.",
+      "skills": [
+        "requesting-code-review",
+        "ln-511-code-quality-checker",
+        "ln-512-tech-debt-cleaner"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Review notes list concrete findings with file/line references.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Fix with minimal diffs",
+      "instruction": "Fix findings with the smallest correct diff. No drive-by refactors.",
+      "skills": [
+        "receiving-code-review",
+        "ln-512-tech-debt-cleaner",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Fix with minimal diffs' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Run project quality checks",
+      "instruction": "Run this repo's lint and tests (discover from project config). Do not assume npm.",
+      "skills": [
+        "ln-622-build-auditor",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Detect lint and test commands from the repo (package.json, Makefile, pyproject.toml, etc.)\n- Do not assume npm — use whatever this project actually uses",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Run project quality checks' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Project lint/test commands",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Evaluate clean pass",
+      "instruction": "No slop findings remain and quality checks pass.",
+      "skills": [
+        "receiving-code-review",
+        "ln-511-code-quality-checker"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate clean pass' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Report",
+      "instruction": "Summarize cleanup for the ticket.",
+      "skills": [
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

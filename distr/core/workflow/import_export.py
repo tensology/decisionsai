@@ -58,6 +58,8 @@ def _serialize_workflow(wf: AutoWorkflow) -> Dict[str, Any]:
         "post_chain": _safe_json_loads(getattr(wf, "post_chain", None)) or [],
         "created_date": wf.created_date.isoformat() if wf.created_date else None,
         "modified_date": wf.modified_date.isoformat() if wf.modified_date else None,
+        "context_rules": wf.context_rules or "",
+        "workflow_input": wf.workflow_input or "",
         "steps": [_serialize_step(s) for s in steps],
         "context_items": [
             {
@@ -86,7 +88,9 @@ def _serialize_step(step: AutoWorkflowStep) -> Dict[str, Any]:
         "id": step.id, "position": step.position,
         "name": step.name, "description": step.description or "",
         "action_type": step.action_type or "agent_instruction",
+        "step_type": step.step_type or step.action_type or "agent_instruction",
         "instruction": step.instruction or "",
+        "config": _safe_json_loads(step.config),
         "validation_type": step.validation_type or "none",
         "validation_prompt": step.validation_prompt or "",
         "screenshot_path": step.screenshot_path or "",

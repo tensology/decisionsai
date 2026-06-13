@@ -1,0 +1,164 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "e2e-until-green",
+  "name": "E2E Until Green",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "check_fix_until_green",
+  "description": "Run E2E with playwright, triage first failure, fix, re-run until green.",
+  "kickoff": "Start the \"E2E Until Green\" loop.\nGoal: E2E suite passes\nMax iterations: 10\nBetween iterations run: project E2E command\nExit when: E2E suite exits 0\nOrientation: read the linked ticket to confirm which flows this run must cover.\nStep 1: Run E2E tests and capture first failure.",
+  "loop_contract": {
+    "name": "E2E Until Green",
+    "goal": "E2E suite passes",
+    "exit_when": "E2E command exits 0",
+    "check_command": "project E2E test command",
+    "max_iterations": 10,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Discover and run the project's E2E command (package.json scripts, playwright config, etc.). Use webapp-testing skill. Capture first failure with trace.",
+    "archetype": "check_fix_until_green",
+    "role": "developer"
+  },
+  "expected_check_command": "project E2E test command",
+  "tags": [
+    "e2e",
+    "playwright"
+  ],
+  "steps": [
+    {
+      "name": "Run E2E suite",
+      "instruction": "Discover and run the project's E2E command (package.json scripts, playwright config, etc.). Use webapp-testing skill. Capture first failure with trace.",
+      "skills": [
+        "webapp-testing",
+        "e2e-testing"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use",
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites\n- Do not delete or skip specs to force green",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Run E2E suite' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Triage first failure",
+      "instruction": "Use systematic-debugging on the first failing spec only. Document root cause hypothesis.",
+      "skills": [
+        "systematic-debugging",
+        "e2e-testing"
+      ],
+      "tools": [
+        "cli",
+        "playwright"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Triage first failure' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Fix failing spec",
+      "instruction": "Fix the failing spec with tdd-workflow — minimal change, add regression coverage if needed.",
+      "skills": [
+        "tdd-workflow",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Fix failing spec' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Re-run E2E",
+      "instruction": "Re-run the full E2E suite or the failing file until green.",
+      "skills": [
+        "webapp-testing",
+        "e2e-testing"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use",
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Re-run E2E' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Evaluate all green",
+      "instruction": "Entire E2E suite passes.",
+      "skills": [
+        "qa-tester",
+        "verification-loop"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate all green' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Report",
+      "instruction": "Summarize specs fixed and evidence.",
+      "skills": [
+        "learnings-keeper"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

@@ -359,7 +359,7 @@ class TerminalSession:
             self._running = False
             if self.purpose in ("startup", "cli_shell"):
                 try:
-                    from distr.core.hermes import mark_project_runtime_session_stopped
+                    from distr.core.orchestrator import mark_project_runtime_session_stopped
 
                     mark_project_runtime_session_stopped(self.session_key, status="stopped")
                 except Exception:
@@ -618,7 +618,7 @@ async def create_startup_shell_session(project_id: int, cwd: str, shell_command:
                                shell_command=shell_command, session_key=terminal_id, purpose=purpose)
     await session.start_with_shell_command()
     _startup_sessions[terminal_id] = session
-    _sync_runtime_session_to_hermes(session)
+    _sync_runtime_session_to_orchestrator(session)
     logger.info(f"Startup session created: key={terminal_id} cmd={shell_command!r} cwd={cwd}")
     return terminal_id, session
 
@@ -628,7 +628,7 @@ async def kill_startup_session(terminal_id: str) -> bool:
     if session:
         await session.kill()
         try:
-            from distr.core.hermes import mark_project_runtime_session_stopped
+            from distr.core.orchestrator import mark_project_runtime_session_stopped
 
             mark_project_runtime_session_stopped(terminal_id, status="stopped")
         except Exception:
@@ -643,7 +643,7 @@ def cleanup_dead_startup_sessions() -> int:
     for k in dead_keys:
         _startup_sessions.pop(k, None)
         try:
-            from distr.core.hermes import mark_project_runtime_session_stopped
+            from distr.core.orchestrator import mark_project_runtime_session_stopped
 
             mark_project_runtime_session_stopped(k, status="dead")
         except Exception:
@@ -659,7 +659,7 @@ def get_startup_sessions_for_project(project_id: int, purpose: Optional[str] = "
         if sess.project_id == project_id and sess.is_alive:
             if purpose and sess.purpose != purpose:
                 continue
-            _sync_runtime_session_to_hermes(sess)
+            _sync_runtime_session_to_orchestrator(sess)
             results.append({
                 "process_id": session_key,
                 "pid": sess.pid,
@@ -709,7 +709,7 @@ def kill_all_startup_sessions_for_project(project_id: int, purpose: str = "start
             except (ProcessLookupError, PermissionError):
                 pass
         try:
-            from distr.core.hermes import mark_project_runtime_session_stopped
+            from distr.core.orchestrator import mark_project_runtime_session_stopped
 
             mark_project_runtime_session_stopped(key, status="stopped")
         except Exception:
@@ -718,9 +718,9 @@ def kill_all_startup_sessions_for_project(project_id: int, purpose: str = "start
     return killed
 
 
-def _sync_runtime_session_to_hermes(sess: TerminalSession) -> None:
+def _sync_runtime_session_to_orchestrator(sess: TerminalSession) -> None:
     try:
-        from distr.core.hermes import upsert_project_runtime_session
+        from distr.core.orchestrator import upsert_project_runtime_session
 
         buffer = sess.get_buffer(80)
         upsert_project_runtime_session(
@@ -786,7 +786,7 @@ def get_project_runtime_snapshot(project_id: int) -> dict[str, Any]:
     for session_key, sess in list(_startup_sessions.items()):
         if sess.project_id != project_id or not sess.is_alive:
             continue
-        _sync_runtime_session_to_hermes(sess)
+        _sync_runtime_session_to_orchestrator(sess)
         buffer = sess.get_buffer(80)
         inferred_urls = _infer_urls_from_terminal_buffer(buffer)
         for item in inferred_urls:
@@ -806,7 +806,7 @@ def get_project_runtime_snapshot(project_id: int) -> dict[str, Any]:
         })
     durable_sessions = []
     try:
-        from distr.core.hermes import list_project_runtime_sessions
+        from distr.core.orchestrator import list_project_runtime_sessions
 
         durable_sessions = list_project_runtime_sessions(project_id=int(project_id), active_only=False, limit=20)
     except Exception:

@@ -210,7 +210,7 @@ def _get_tool_definitions(
         ("ConvertDocumentTool", {}),
         # Google Workspace
         ("GoogleWorkspaceTool", {}),
-        ("HermesDelegatedWorkflowTool", {}),
+        ("DelegatedWorkflowTool", {}),
         # Markdown to Google Doc
         ("MarkdownToGoogleDocTool", {}),
         # Upload DOC/DOCX to Google Doc
@@ -515,7 +515,7 @@ TOOL_REGISTRY = {
     "OpenAndStartProjectTool": ("system.project_tools", "OpenAndStartProjectTool"),
     # integrations/
     "GoogleWorkspaceTool":     ("integrations.google_workspace_tool", "GoogleWorkspaceTool"),
-    "HermesDelegatedWorkflowTool": ("integrations.hermes_delegated_workflow", "HermesDelegatedWorkflowTool"),
+    "DelegatedWorkflowTool": ("integrations.delegated_workflow", "DelegatedWorkflowTool"),
     "MarkdownToGoogleDocTool": ("integrations.markdown_to_google_doc", "MarkdownToGoogleDocTool"),
     "UploadDocToGoogleTool":   ("integrations.upload_doc_to_google", "UploadDocToGoogleTool"),
     "SendFileToTelegramTool":  ("integrations.send_file_to_telegram", "SendFileToTelegramTool"),
@@ -598,7 +598,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "GetActiveWorkflowRunsTool": "List active workflow runs with run IDs, statuses, and current step names so the agent can recover workflow context before continue or status actions.",
     "GetProjectStatusTool": "Get the current status, recent activity, and health summary of a project.",
     "ScheduledActionTool": "Create, preview, list, cancel, disable, enable, or reschedule simple scheduled desktop actions.",
-    "VisualBaselineTool": "Create, list, or retrieve Hermes visual baseline sets and reference screens for UI quality validation.",
+    "VisualBaselineTool": "Create, list, or retrieve Orchestrator visual baseline sets and reference screens for UI quality validation.",
     "AddWorkflowStepTool": "Add a new step to an existing workflow at a specified position.",
     "UpdateWorkflowStepTool": "Update the configuration of an existing workflow step.",
     "GenerateWorkflowTool": "Auto-generate a complete workflow from a natural language description of the desired process.",
@@ -658,7 +658,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Google Drive, Google Docs. Use create_calendar_events_batch for multi-day protocols and bulk slots when "
         "Google is connected."
     ),
-    "HermesDelegatedWorkflowTool": (
+    "DelegatedWorkflowTool": (
         "Plan and record complex delegated remote workflows from Telegram, desktop, or chat: email/document intake, "
         "attachment scoping, browser/desktop actions, Codex/Cursor handoff, roadblocks, approvals, and resumable execution."
     ),
@@ -673,8 +673,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Jira and Trello boards/tickets. Also handles WhatsApp work intake in order: sync relay messages, list latest "
         "activity, preview a project or board's linked WhatsApp feed, list contacts/senders, list chats, read messages, "
         "find likely work-related WhatsApp messages, mark messages handled/unhandled, snapshot WhatsApp messages into "
-        "tickets after confirmation, and send WhatsApp replies to a contact/chat "
-        "after confirmation."
+        "tickets after confirmation, leave reply drafts in the WhatsApp composer for user review, and send WhatsApp "
+        "replies to a contact/chat after confirmation."
     ),
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",

@@ -21,36 +21,38 @@
 <div class="container mx-auto px-6 py-8 max-w-7xl">
     <!-- Tabs and Content -->
     <div class="flex gap-6">
-        <!-- Tab Navigation: all 5 sections must always be visible -->
+        <!-- Tab Navigation -->
         <div id="settings-sidebar" class="settings-sidebar w-64 flex-shrink-0" role="navigation" aria-label="Settings sections">
             <nav id="settings-nav" class="space-y-1 sticky top-20">
                 <a href="#general" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="general">
                     <span class="font-medium">General</span>
                 </a>
-                <a href="#initiative" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center justify-between gap-2" data-tab="initiative">
-                    <span class="font-medium">Initiative</span>
-                    <span id="initiative-nav-badge" class="hidden min-w-[1.25rem] h-5 px-1.5 rounded-full bg-[#f97316] text-white text-[10px] font-semibold leading-5 text-center" aria-live="polite">0</span>
+                <a href="#thirdparty" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="thirdparty">
+                    <span class="font-medium">API Keys</span>
                 </a>
                 <a href="#audio" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="audio">
                     <span class="font-medium">Audio</span>
                 </a>
-                <a href="#thirdparty" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="thirdparty">
-                    <span class="font-medium">Third Party Providers</span>
-                </a>
                 <a href="#llms" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="llms">
                     <span class="font-medium">LLMs</span>
                 </a>
-                <a href="#mcp" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="mcp">
-                    <span class="font-medium">MCP Servers</span>
+                <a href="#initiative" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors flex items-center justify-between gap-2" data-tab="initiative">
+                    <span class="font-medium">Initiative</span>
+                    <span id="initiative-nav-badge" class="hidden min-w-[1.25rem] h-5 px-1.5 rounded-full bg-[#f97316] text-white text-[10px] font-semibold leading-5 text-center" aria-live="polite">0</span>
+                </a>
+                <hr class="settings-nav-divider" aria-hidden="true">
+                <a href="#shortcuts" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="shortcuts">
+                    <span class="font-medium">Shortcuts</span>
                 </a>
                 <a href="#skins" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="skins">
                     <span class="font-medium">Skins</span>
                 </a>
-                <a href="#shortcuts" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="shortcuts">
-                    <span class="font-medium">Shortcut Keys</span>
-                </a>
+                <hr class="settings-nav-divider" aria-hidden="true">
                 <a href="#advanced" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="advanced">
                     <span class="font-medium">Advanced</span>
+                </a>
+                <a href="#mcp" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="mcp">
+                    <span class="font-medium">MCP Servers</span>
                 </a>
                 <a href="#logs" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="logs">
                     <span class="font-medium">Activity Logs</span>
@@ -70,29 +72,29 @@
                 <div id="tab-general" class="tab-content">  
                     {% include "settings/sections/general.html" %}
                 </div>
-                <div id="tab-initiative" class="tab-content">
-                    {% include "settings/sections/initiative.html" %}
+                <div id="tab-thirdparty" class="tab-content">
+                    {% include "settings/sections/thirdparty.html" %}
                 </div>
                 <div id="tab-audio" class="tab-content">
                     {% include "settings/sections/audio.html" %}
                 </div>
-                <div id="tab-thirdparty" class="tab-content">
-                    {% include "settings/sections/thirdparty.html" %}
-                </div>
                 <div id="tab-llms" class="tab-content">
                     {% include "settings/sections/llms.html" %}
                 </div>
-                <div id="tab-mcp" class="tab-content">
-                    {% include "settings/sections/mcp.html" %}
-                </div>
-                <div id="tab-skins" class="tab-content">
-                    {% include "settings/sections/skins.html" %}
+                <div id="tab-initiative" class="tab-content">
+                    {% include "settings/sections/initiative.html" %}
                 </div>
                 <div id="tab-shortcuts" class="tab-content">
                     {% include "settings/sections/shortcuts.html" %}
                 </div>
+                <div id="tab-skins" class="tab-content">
+                    {% include "settings/sections/skins.html" %}
+                </div>
                 <div id="tab-advanced" class="tab-content">
                     {% include "settings/sections/advanced.html" %}
+                </div>
+                <div id="tab-mcp" class="tab-content">
+                    {% include "settings/sections/mcp.html" %}
                 </div>
                 <div id="tab-logs" class="tab-content">
                     {% include "settings/sections/logs.html" %}

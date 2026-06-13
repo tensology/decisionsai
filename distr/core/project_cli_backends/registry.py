@@ -62,8 +62,22 @@ def _version_for(path: Optional[str], args: list[str] | None = None) -> Optional
         return None
 
 
+def _cursor_api_key() -> str:
+    """Resolve Cursor API key from env or Decisions settings."""
+    env_key = (os.environ.get("CURSOR_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db() or {}
+        return (settings.get("cursor_key") or "").strip()
+    except Exception:
+        return ""
+
+
 def _cursor_auth_ready(path: Optional[str]) -> bool:
-    if os.environ.get("CURSOR_API_KEY"):
+    if _cursor_api_key():
         return True
     if not path:
         return False
@@ -112,11 +126,11 @@ def _git_status_short(folder: str) -> list[str]:
     if not folder or not os.path.isdir(folder):
         return []
     try:
-        result = subprocess.run(
+        from distr.core.rtk_support import run_argv_command
+
+        result = run_argv_command(
             ["git", "status", "--short"],
             cwd=folder,
-            capture_output=True,
-            text=True,
             timeout=8,
         )
         if result.returncode != 0:
@@ -249,10 +263,14 @@ class OneShotCliBackend(ProjectCliBackend):
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         return [executable] + self.command_args + [task.instruction]
 
+    def _subprocess_env(self) -> dict[str, str]:
+        return {**os.environ, "TERM": "dumb"}
+
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
-        status = self.check_availability()
+        status = self.setup_status()
         if not status.ready or not status.path:
-            return BackendTaskResult(False, self.id, self.id, error=status.message, session_id=task.audit_id)
+            msg = (status.message or status.setup_instructions or f"{self.name} is not ready.").strip()
+            return BackendTaskResult(False, self.id, self.id, error=msg, session_id=task.audit_id)
 
         _emit(on_event, {"type": "agent_start", "backend": self.id})
         _emit(on_event, {"type": "message_start", "message": {"role": "user", "content": task.instruction}})
@@ -273,7 +291,7 @@ class OneShotCliBackend(ProjectCliBackend):
                 cwd=task.folder,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env={**os.environ, "TERM": "dumb"},
+                env=self._subprocess_env(),
             )
         except Exception as exc:
             msg = f"Failed to start {self.name}: {exc}"
@@ -320,6 +338,13 @@ class CursorBackend(OneShotCliBackend):
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
     )
 
+    def _subprocess_env(self) -> dict[str, str]:
+        env = super()._subprocess_env()
+        key = _cursor_api_key()
+        if key:
+            env["CURSOR_API_KEY"] = key
+        return env
+
     def setup_status(self) -> BackendStatus:
         status = super().setup_status()
         status.can_receive_remote_handoff = bool(status.ready)
@@ -331,7 +356,10 @@ class CursorBackend(OneShotCliBackend):
         if status.ready and not _cursor_auth_ready(status.path):
             status.ready = False
             status.state = "auth_required"
-            status.message = "Cursor CLI authentication required. Run cursor-agent login or set CURSOR_API_KEY."
+            status.message = (
+                "Cursor CLI authentication required. Add a Cursor API key in Third Party API Keys, "
+                "set CURSOR_API_KEY, or run cursor-agent login."
+            )
             status.setup_required = True
             status.can_receive_remote_handoff = False
         return status
@@ -377,6 +405,121 @@ class CursorBackend(OneShotCliBackend):
             cmd += ["--model", task.model]
         return cmd + [self._callback_instruction(task) + task.instruction]
 
+
+
+class IdeHandoffBackend(ProjectCliBackend):
+    """Hand work to the Cursor/Codex IDE via a visible work packet and plugin bridge."""
+
+    id = ""
+    name = ""
+    description = ""
+    plugin_label = ""
+    setup_instructions = (
+        "Install Cursor or VS Code with the DecisionsAI plugin, then make sure the cursor or code command is on PATH."
+    )
+
+    def check_availability(self) -> BackendStatus:
+        from .ide_handoff import _ide_open_command
+
+        path = _ide_open_command()
+        installed = bool(path)
+        return BackendStatus(
+            id=self.id,
+            name=self.name,
+            installed=installed,
+            ready=installed,
+            state="ready" if installed else "missing",
+            message=f"{self.name} is ready for IDE handoff." if installed else f"{self.name} requires Cursor or VS Code on PATH.",
+            path=path,
+            setup_required=not installed,
+            setup_instructions=self.setup_instructions,
+            supports_rpc=False,
+            supports_install=False,
+        )
+
+    def setup_status(self) -> BackendStatus:
+        status = self.check_availability()
+        status.can_receive_remote_handoff = bool(status.ready)
+        status.handoff_method = "ide_work_packet"
+        status.reporter_path = os.environ.get(
+            "DECISIONS_CODEX_REPORTER" if self.id == "codex_ide" else "DECISIONS_CURSOR_REPORTER",
+            os.path.expanduser(
+                "~/plugins/decisions-codex/scripts/report_decisions_event.py"
+                if self.id == "codex_ide"
+                else "~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py"
+            ),
+        )
+        return status
+
+    async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
+        from .ide_handoff import build_ide_callback_meta, open_ide_project, write_ide_work_packet
+
+        status = self.check_availability()
+        if not status.ready:
+            return BackendTaskResult(
+                False,
+                self.id,
+                self.id,
+                error=status.message,
+                session_id=task.audit_id,
+            )
+
+        handoff_event_id = getattr(task, "handoff_event_id", None)
+        meta = build_ide_callback_meta(task, backend_id=self.id, handoff_event_id=handoff_event_id)
+        loop_summary = ""
+        extra = getattr(task, "loop_context_summary", "") or ""
+        if extra:
+            loop_summary = str(extra)
+        try:
+            packet_path = write_ide_work_packet(
+                task,
+                backend_id=self.id,
+                meta=meta,
+                loop_context_summary=loop_summary,
+            )
+        except Exception as exc:
+            return BackendTaskResult(
+                False,
+                self.id,
+                self.id,
+                error=f"Could not write IDE work packet: {exc}",
+                session_id=task.audit_id,
+            )
+
+        opened = open_ide_project(task.folder, packet_path)
+        _emit(on_event, {"type": "ide_handoff_dispatched", "backend": self.id, "work_packet": packet_path, "opened": opened})
+        output_lines = [
+            f"Backend: {self.name}",
+            f"Work packet: {packet_path}",
+            f"IDE opened: {'yes' if opened else 'no — open the project manually'}",
+            "",
+            "The workflow is waiting for IDE completion. Use the DecisionsAI plugin to report progress and completion.",
+        ]
+        if meta.get("bridge_url"):
+            output_lines.append(f"Bridge: {meta['bridge_url']}")
+        return BackendTaskResult(
+            True,
+            self.id,
+            self.id,
+            output="\n".join(output_lines),
+            session_id=task.audit_id,
+            waits_for_human=True,
+            work_packet_path=packet_path,
+        )
+
+
+class CursorIdeBackend(IdeHandoffBackend):
+    id = "cursor_ide"
+    name = "Cursor IDE"
+    description = "Visible Cursor IDE handoff via DecisionsAI work packet and plugin bridge."
+    plugin_label = "Cursor"
+
+
+class CodexIdeBackend(IdeHandoffBackend):
+    id = "codex_ide"
+    name = "Codex IDE"
+    description = "Visible Codex IDE handoff via DecisionsAI work packet and plugin bridge."
+    plugin_label = "Codex"
 
 
 class ClaudeCodeBackend(OneShotCliBackend):
@@ -465,11 +608,34 @@ class CodexBackend(OneShotCliBackend):
         return cmd + [self._callback_instruction(task) + task.instruction]
 
 
+class HermesAgentBackend(OneShotCliBackend):
+    """Optional Nous Hermes Agent CLI (not the Ollama hermes3 model)."""
+
+    id = "hermes_agent"
+    name = "Hermes Agent"
+    description = "Nous Hermes Agent operator CLI (~/.hermes). Optional; not required for the Orchestrator."
+    executable_candidates = ["hermes"]
+    command_args = ["chat"]
+    setup_instructions = (
+        "Install Nous Hermes Agent: NONINTERACTIVE=1 bash scripts/setup_project_clis.sh hermes-agent "
+        "then run hermes setup. See docs/nous-hermes-agent.md."
+    )
+
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable] + self.command_args
+        if task.model and task.model not in ("auto", "default"):
+            cmd += ["--model", task.model]
+        return cmd + [task.instruction]
+
+
 _BACKENDS: dict[str, ProjectCliBackend] = {
     "pi": PiBackend(),
     "cursor": CursorBackend(),
+    "cursor_ide": CursorIdeBackend(),
     "claude_code": ClaudeCodeBackend(),
     "codex": CodexBackend(),
+    "codex_ide": CodexIdeBackend(),
+    "hermes_agent": HermesAgentBackend(),
 }
 
 
@@ -484,14 +650,17 @@ def normalize_backend_id(value: str | None) -> str:
         "cursor_cli": "cursor",
         "cursor_editor": "cursor",
         "cursor_extension": "cursor",
-        "cursor_ide": "cursor",
-        "vscode": "cursor",
-        "vs_code": "cursor",
-        "visual_studio_code": "cursor",
-        "vscode_extension": "cursor",
-        "vscode_ide": "cursor",
+        "vscode_ide": "cursor_ide",
+        "vscode": "cursor_ide",
+        "vs_code": "cursor_ide",
+        "visual_studio_code": "cursor_ide",
+        "vscode_extension": "cursor_ide",
         "codex_cli": "codex",
         "openai_codex": "codex",
+        "hermes": "hermes_agent",
+        "hermes-agent": "hermes_agent",
+        "hermes_agent": "hermes_agent",
+        "nous_hermes": "hermes_agent",
     }
     backend_id = aliases.get(backend_id, backend_id)
     return backend_id if backend_id in _BACKENDS else DEFAULT_BACKEND_ID
@@ -574,6 +743,36 @@ def _handoff_callback_metadata(task: ProjectTask) -> dict[str, Any]:
     return callback
 
 
+def _loop_handoff_extra(workflow_id: int | None, run_id: int | None) -> dict[str, Any]:
+    """Attach loop contract context to CLI handoff when available."""
+    if not run_id:
+        return {}
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflow
+        from distr.core.workflow.planning import build_loop_context_summary
+
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if not run:
+                return {}
+            run_data = json.loads(run.run_data or "{}") or {}
+            loop_contract = run_data.get("loop_contract") or {}
+            if not loop_contract and workflow_id:
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+                if wf and wf.workflow_input:
+                    loop_contract = json.loads(wf.workflow_input or "{}") or {}
+            if not loop_contract:
+                return {}
+            iteration = int(run_data.get("loop_iteration") or 0)
+            return {
+                "loop_contract": loop_contract,
+                "loop_context_summary": build_loop_context_summary(loop_contract, iteration),
+            }
+    except Exception:
+        return {}
+
+
 def _update_run_handoff_state(
     *,
     run_id: int | None,
@@ -642,7 +841,7 @@ async def run_project_task(
     board_id = None
     if ticket_id:
         try:
-            from distr.core.hermes import resolve_board_id_for_ticket
+            from distr.core.orchestrator import resolve_board_id_for_ticket
 
             board_id = resolve_board_id_for_ticket(int(ticket_id))
         except Exception:
@@ -650,6 +849,16 @@ async def run_project_task(
 
     backend_id = normalize_backend_id(backend_id_override) if backend_id_override else get_project_backend_id(project)
     backend = get_backend(backend_id)
+    setup_status = backend.setup_status()
+    if not setup_status.ready:
+        msg = (setup_status.message or setup_status.setup_instructions or f"{backend.name or backend_id} is not ready.").strip()
+        return BackendTaskResult(False, backend_id, backend_id, error=msg)
+    from .ide_handoff import is_ide_backend, plugin_source_for
+
+    ide_mode = is_ide_backend(backend_id)
+    route_type = "ide_bridge" if ide_mode else "project_cli"
+    route_backend = plugin_source_for(backend_id) if ide_mode else backend_id
+    loop_extra = _loop_handoff_extra(workflow_id, run_id)
     task = ProjectTask(
         project_id=int(project.id),
         project_name=project.name or "",
@@ -692,8 +901,8 @@ async def run_project_task(
         run_id=run_id,
         step_id=step_id,
         audit_id=audit_id,
-        route_type="project_cli",
-        route_backend=backend_id,
+        route_type=route_type,
+        route_backend=route_backend,
         selected_model=selected_model,
         selection_reason=selection_reason,
         complexity=ticket_complexity,
@@ -717,10 +926,11 @@ async def run_project_task(
         },
     )
     task.execution_session_id = execution_session_id
+    setattr(task, "loop_context_summary", str(loop_extra.get("loop_context_summary") or ""))
     handoff_packet: dict[str, Any] = {}
     handoff_event_id: int | None = None
     try:
-        from distr.core.hermes import build_backend_handoff_packet, record_backend_handoff
+        from distr.core.orchestrator import build_backend_handoff_packet, record_backend_handoff
 
         handoff_packet = build_backend_handoff_packet(
             backend_id=backend_id,
@@ -742,6 +952,7 @@ async def run_project_task(
             git_status_before=git_status_before,
             runtime_snapshot=runtime_snapshot,
             callback=_handoff_callback_metadata(task),
+            extra=loop_extra,
         )
         handoff_event_id = record_backend_handoff(
             packet=handoff_packet,
@@ -759,7 +970,7 @@ async def run_project_task(
         pass
     if runtime_snapshot:
         try:
-            from distr.core.hermes import resolve_board_id_for_ticket
+            from distr.core.orchestrator import resolve_board_id_for_ticket
             from distr.core.orchestration_events import emit_orchestration_event
 
             active_count = int(runtime_snapshot.get("active_terminal_count") or 0)
@@ -821,8 +1032,72 @@ async def run_project_task(
 
     result.execution_session_id = execution_session_id
     git_status_after = _git_status_short(task.folder)
+    if getattr(result, "waits_for_human", False) and result.success:
+        append_execution_event(
+            execution_session_id,
+            "ide_handoff_waiting",
+            status="waiting",
+            message="Waiting for IDE plugin completion.",
+            payload={
+                "backend_id": backend_id,
+                "work_packet_path": getattr(result, "work_packet_path", "") or "",
+                "output": (result.output or "")[:4000],
+            },
+        )
+        try:
+            from distr.core.orchestrator import record_backend_handoff
+
+            update_packet = {
+                **(handoff_packet or {}),
+                "git_status_after": git_status_after,
+                "work_packet_path": getattr(result, "work_packet_path", "") or "",
+            }
+            record_backend_handoff(
+                packet=update_packet,
+                status="waiting",
+                event_type="backend_handoff_updated",
+                summary=f"{backend.name or backend_id} IDE handoff is waiting in the IDE.",
+                evidence={"output": (result.output or "")[:4000]},
+            )
+            _update_run_handoff_state(
+                run_id=run_id,
+                packet=update_packet,
+                handoff_event_id=handoff_event_id,
+                state="waiting_ide",
+                result={
+                    "success": True,
+                    "engine": result.engine,
+                    "output": (result.output or "")[:4000],
+                    "work_packet_path": getattr(result, "work_packet_path", "") or "",
+                },
+            )
+        except Exception:
+            pass
+        if run_id:
+            try:
+                from distr.core.db import get_session
+                from distr.core.db.workflow import AutoWorkflowRun
+
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                    if run:
+                        try:
+                            run_data = json.loads(run.run_data or "{}") or {}
+                        except Exception:
+                            run_data = {}
+                        run_data["ide_handoff_pending"] = True
+                        run_data["latest_ide_handoff"] = {
+                            "backend_id": backend_id,
+                            "work_packet_path": getattr(result, "work_packet_path", "") or "",
+                            "execution_session_id": execution_session_id,
+                        }
+                        run.run_data = json.dumps(run_data)
+                        db.commit()
+            except Exception:
+                pass
+        return result
     try:
-        from distr.core.hermes import record_backend_handoff
+        from distr.core.orchestrator import record_backend_handoff
 
         update_packet = {
             **(handoff_packet or {}),

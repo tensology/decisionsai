@@ -304,6 +304,8 @@ class FastActionMixin:
         if fast_action.tool_name == 'web_search' and result:
             response_text = str(result)
             if not self._cancelled:
+                from distr.core.agent.tool_audio_timing import wait_after_tool_sound_before_tts
+                await wait_after_tool_sound_before_tts(self)
                 await self._fa_push_tts(response_text)
             self._fa_save_to_history(chat_id, response_text, emit_signals=True)
             self._messages.append({"role": "assistant", "content": response_text})

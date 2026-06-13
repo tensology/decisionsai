@@ -149,6 +149,24 @@ def notify_stt_model_saved_for_running_agent(full_transcription_model: str) -> N
     _run_on_qt_main_thread(_do, label="stt_model_changed")
 
 
+def notify_voice_hot_reload_for_running_agent(voice_provider: str, voice_model: str) -> None:
+    """After voice selection changes, hot-swap the live agent TTS without a full restart."""
+    vp = (voice_provider or "kokoro").strip()
+    vm = (voice_model or "").strip()
+    if not vp or not vm:
+        return
+
+    def _do():
+        _safe_emit(
+            signal_manager.voice_hot_reload,
+            vp,
+            vm,
+            label="voice_hot_reload (voice save)",
+        )
+
+    _run_on_qt_main_thread(_do, label="voice_hot_reload")
+
+
 def notify_conversational_llm_saved_for_running_agent(
     provider: str,
     model_name: str,
@@ -243,7 +261,12 @@ def save_general_settings(data) -> None:
         for field in reload_sensitive_fields
     )
     if should_reload_agent:
-        _safe_emit(signal_manager.reload_agent, label="reload_agent (general save)")
+        from distr.core.chat import resolve_voice_model_from_global_settings
+        from distr.core.agent.constants import normalize_voice_provider
+
+        vp = normalize_voice_provider(settings.get("voice_provider") or "kokoro")
+        vm = resolve_voice_model_from_global_settings(vp, settings) or ""
+        notify_voice_hot_reload_for_running_agent(vp, vm)
     # Oracle skin/size signals removed — those now go through Skins routes
     # (Requirements: 8.8)
     _safe_emit(signal_manager.oracle_position_changed, data.oracle_position,
@@ -508,6 +531,10 @@ def save_voice_selection(voice_provider_id: str, voice_model: str) -> None:
 
     save_settings_to_db(settings)
 
+    from distr.core.chat import resolve_voice_model_from_global_settings
+
+    notify_voice_hot_reload_for_running_agent(pid, resolve_voice_model_from_global_settings(pid, settings) or vm_raw)
+
     from distr.core.agent.constants import normalize_voice_provider as _norm_vp
 
     pid = _norm_vp(vp_raw)
@@ -683,10 +710,11 @@ def save_audio_settings(data) -> None:
     settings["input_device"] = data.input_device
     settings["output_device"] = data.output_device
     settings["lock_sound"] = data.remember_audio_settings
-    if data.locked_output:
-        settings["locked_output"] = data.locked_output
-    if data.locked_input:
-        settings["locked_input"] = data.locked_input
+    if data.remember_audio_settings:
+        if data.locked_output:
+            settings["locked_output"] = data.locked_output
+        if data.locked_input:
+            settings["locked_input"] = data.locked_input
     save_settings_to_db(settings)
 
     _safe_emit(signal_manager.audio_devices_changed,

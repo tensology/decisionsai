@@ -115,11 +115,23 @@ class OpenAICompatibleLLMService(BaseLLMService):
             # what could be a long chain. (If the LLM already wrote text before
             # the tool calls, that was already streamed in _consume_stream above.)
             if tool_calls and not full_content.strip():
-                self._speak_acknowledgment(last_user_msg, tool_calls)
+                if self._should_speak_acknowledgment(last_user_msg, tool_calls):
+                    from distr.core.agent.tool_audio_timing import wait_before_tool_side_effects
+
+                    ack = "Working on it."
+                    await self.push_frame(TextFrame(text=ack))
+                    await self.push_frame(LLMFullResponseEndFrame())
+                    await wait_before_tool_side_effects(self, ack, end_current_utterance=False)
+                else:
+                    self._speak_acknowledgment(last_user_msg, tool_calls)
                 # The acknowledgment's EndFrame closes the TTS transport session.
                 # Push a new StartFrame so follow-up text (after tool execution)
                 # is recognized as a new response by the transport/pipeline.
                 await self.push_frame(LLMFullResponseStartFrame())
+            elif tool_calls and full_content.strip():
+                from distr.core.agent.tool_audio_timing import wait_before_tool_side_effects
+
+                await wait_before_tool_side_effects(self, full_content.strip())
 
             while tool_calls and round_num < MAX_TOOL_ROUNDS:
                 round_num += 1

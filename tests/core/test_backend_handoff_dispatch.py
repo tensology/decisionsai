@@ -40,7 +40,7 @@ def test_run_project_task_records_backend_handoff(monkeypatch):
         handoffs.append(kwargs)
         return 111 if kwargs.get("event_type", "backend_handoff_created") == "backend_handoff_created" else 112
 
-    monkeypatch.setattr("distr.core.hermes.record_backend_handoff", fake_record_backend_handoff)
+    monkeypatch.setattr("distr.core.orchestrator.record_backend_handoff", fake_record_backend_handoff)
     monkeypatch.setattr("distr.core.terminal.get_project_runtime_snapshot", lambda project_id: {})
 
     result = asyncio.run(

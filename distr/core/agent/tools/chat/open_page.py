@@ -113,11 +113,11 @@ def _confirmation_for_path(path: str) -> str:
             "general": "General",
             "initiative": "Initiative",
             "audio": "Audio",
-            "thirdparty": "Third-party integrations",
-            "llms": "Language models",
+            "thirdparty": "API keys",
+            "llms": "LLMs",
             "skins": "Skins",
             "advanced": "Advanced",
-            "logs": "Activity log",
+            "logs": "Activity logs",
             "about": "About",
         }.get(frag, "")
         if section:

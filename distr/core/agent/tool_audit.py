@@ -53,17 +53,18 @@ def _load_params(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
-def _resolve_turn_chat_row_id(session, chat_id: int) -> int:
-    """Leaf chat row for the active turn (matches ChatManagerCore.add_assistant_message target).
+def _resolve_turn_chat_row_id(session, chat_id: int) -> int | None:
+    """Chat row for the active user turn, when the agent is working a reply.
 
     Tool audit uses the thread root id from the agent; assistant text is written on the latest
     child row under that root. Linking tool cards to that row keeps UI ordering correct.
+    Outside an active turn, returns None so background work does not attach to the wrong reply.
     """
     from distr.core.db import Chat
 
     chat = session.get(Chat, int(chat_id))
     if not chat:
-        return int(chat_id)
+        return None
     root = chat
     guard = 0
     while root.parent_id is not None and guard < 64:
@@ -72,16 +73,14 @@ def _resolve_turn_chat_row_id(session, chat_id: int) -> int:
         if not parent:
             break
         root = parent
-    root_id = root.id
-    children = (
-        session.query(Chat)
-        .filter(Chat.parent_id == root_id)
-        .order_by(Chat.created_date.asc())
-        .all()
-    )
-    if not children:
-        return int(root_id)
-    return int(children[-1].id)
+    params = _load_params(root.params)
+    active = params.get("active_turn_chat_row_id")
+    if active is not None:
+        try:
+            return int(active)
+        except (TypeError, ValueError):
+            pass
+    return None
 
 
 def _parse_tool_timestamp_iso(raw: Optional[str]) -> Optional[datetime]:
@@ -205,11 +204,12 @@ def record_tool_execution(
     user_text: Optional[str] = None,
     routing_path: Optional[str] = None,
     routing_hint: Optional[str] = None,
+    chat_visible: Optional[bool] = None,
 ) -> None:
     """Record a tool execution to the chat-local audit log."""
     if not chat_id:
         return
-    turn_chat_id = int(chat_id)
+    turn_chat_id: int | None = None
     try:
         from distr.core.db import get_session
 
@@ -217,6 +217,11 @@ def record_tool_execution(
             turn_chat_id = _resolve_turn_chat_row_id(session, int(chat_id))
     except Exception as e:
         logger.debug("turn_chat_row_id resolution failed: %s", e)
+    visible = chat_visible
+    if visible is None:
+        visible = turn_chat_id is not None
+    if turn_chat_id is None:
+        turn_chat_id = int(chat_id)
     chat_event = _build_chat_tool_event(
         int(chat_id),
         tool_name,
@@ -227,6 +232,7 @@ def record_tool_execution(
         routing_hint if routing_hint is not None else routing_path,
         turn_chat_id=turn_chat_id,
     )
+    chat_event["chat_visible"] = bool(visible)
     if not _persist_chat_tool_event(chat_event):
         return
 

@@ -48,6 +48,135 @@ class TelegramRemoteControlMixin:
         except (TypeError, ValueError):
             return None
 
+    def _dispatch_api_relay(self, data: dict) -> None:
+        """Relay a local HTTP API call without blocking behind screenshot streaming."""
+        command_data = data.get("data", {}) or {}
+        request_id = data.get("request_id")
+        api_method = (command_data.get("method") or "GET").upper()
+        api_path = command_data.get("path", "")
+        api_body = command_data.get("body")
+        response_type = (command_data.get("response_type") or "json").lower()
+        if not api_path:
+            self._send_websocket_message({
+                "type": "remote_control_response",
+                "command": "api_relay",
+                "request_id": request_id,
+                "error": "Missing path",
+                "data": {},
+            })
+            return
+        try:
+            import requests as _req
+            from distr.gui.web.server import get_unified_server
+            from distr.gui.web.security import INTERNAL_AUTH_HEADER, get_internal_api_token
+
+            srv = get_unified_server()
+            base = srv.get_url() if srv and srv.is_running else "http://127.0.0.1:8765"
+            url = base + api_path
+            headers = {
+                "Content-Type": "application/json",
+                INTERNAL_AUTH_HEADER: get_internal_api_token(),
+            }
+            timeout = 8 if api_method == "GET" else 15
+            if api_method == "GET":
+                resp = _req.get(url, headers=headers, timeout=timeout)
+            elif api_method == "POST":
+                resp = _req.post(url, json=api_body, headers=headers, timeout=timeout)
+            elif api_method == "PATCH":
+                resp = _req.patch(url, json=api_body, headers=headers, timeout=timeout)
+            elif api_method == "PUT":
+                resp = _req.put(url, json=api_body, headers=headers, timeout=timeout)
+            elif api_method == "DELETE":
+                resp = _req.delete(url, headers=headers, timeout=timeout)
+            else:
+                resp = _req.request(api_method, url, json=api_body, headers=headers, timeout=timeout)
+            if response_type == "base64":
+                import base64 as _base64
+
+                resp_data = {
+                    "body_base64": _base64.b64encode(resp.content).decode("ascii"),
+                    "content_type": resp.headers.get("content-type", ""),
+                    "size_bytes": len(resp.content),
+                }
+            else:
+                try:
+                    resp_data = resp.json()
+                except Exception:
+                    resp_data = {"text": resp.text}
+            self._send_websocket_message({
+                "type": "remote_control_response",
+                "command": "api_relay",
+                "request_id": request_id,
+                "data": {"status": resp.status_code, "response": resp_data},
+            })
+        except Exception as e:
+            logger.error(f"API relay error: {e}", exc_info=True)
+            self._send_websocket_message({
+                "type": "remote_control_response",
+                "command": "api_relay",
+                "request_id": request_id,
+                "error": str(e),
+                "data": {},
+            })
+
+    def _dispatch_list_screens(self, data: dict) -> None:
+        """Return connected displays without waiting on screenshot/mouse commands."""
+        request_id = data.get("request_id")
+        screens_info = self._get_screens_list(force_update=True)
+        formatted_screens = []
+        for screen in screens_info:
+            formatted_screens.append(
+                {
+                    "screen_number": screen.get("screen_number"),
+                    "name": screen.get(
+                        "screen_name",
+                        screen.get("name", f"Screen {screen.get('screen_number', 1)}"),
+                    ),
+                    "geometry": screen.get("geometry", {}),
+                    "scale_factor": screen.get("scale_factor", 1.0),
+                }
+            )
+        self._send_websocket_message({
+            "type": "remote_control_response",
+            "command": "list_screens",
+            "request_id": request_id,
+            "data": {"screens": formatted_screens},
+        })
+        logger.info(
+            "Sent screen list: %s screen(s) with geometry and scale_factor",
+            len(formatted_screens),
+        )
+
+    def _dispatch_screenshot_stream(self, data: dict) -> None:
+        """Capture and stream one screenshot frame without blocking API relay calls."""
+        command_data = data.get("data", {}) or {}
+        request_id = data.get("request_id")
+        screen_number = command_data.get("screen_number", 1)
+        import struct
+
+        screenshot_data = self._capture_screen_screenshot(screen_number)
+        if "error" in screenshot_data:
+            self._send_websocket_message({
+                "type": "remote_control_response",
+                "command": "screenshot_stream",
+                "request_id": request_id,
+                "error": screenshot_data.get("error") or "Screenshot capture failed",
+                "data": {"screen_number": screen_number},
+            })
+            return
+        image_data = screenshot_data.get("image_data")
+        if image_data:
+            header = struct.pack(">H", screen_number)
+            self._send_websocket_binary(header + image_data)
+        else:
+            self._send_websocket_message({
+                "type": "remote_control_response",
+                "command": "screenshot_stream",
+                "request_id": request_id,
+                "error": "Screenshot capture returned no image",
+                "data": {"screen_number": screen_number},
+            })
+
     def _handle_remote_control_command(self, data: dict):
         """
         Handle remote control commands from the server via WebSocket.
@@ -64,55 +193,28 @@ class TelegramRemoteControlMixin:
         except Exception:
             pass
 
-        # Serialize command execution to prevent race conditions
+        command = data.get("command")
+        request_id = data.get("request_id")
+        logger.info("Remote control command received: %s, request_id=%s", command, request_id)
+
+        # Fast path: never queue lightweight reads behind screenshot streaming or mouse input.
+        if command == "api_relay":
+            self._dispatch_api_relay(data)
+            return
+        if command == "list_screens":
+            self._dispatch_list_screens(data)
+            return
+        if command == "screenshot_stream":
+            self._dispatch_screenshot_stream(data)
+            return
+
+        # Serialize mouse/keyboard commands to prevent race conditions.
         with self._remote_control_lock:
             try:
-                command = data.get("command")
                 command_data = data.get("data", {})
                 take_screenshot = bool(command_data.get("take_screenshot", True))
-                request_id = data.get(
-                    "request_id"
-                )  # Optional request ID for response correlation
 
-                logger.info(
-                    f"Remote control command received: {command}, request_id={request_id}"
-                )
-
-                if command == "list_screens":
-                    # Return list of all screens (force update to detect new screens)
-                    screens_info = self._get_screens_list(force_update=True)
-                    # Map screen_name to name to match reference format
-                    # Include scale_factor for coordinate calculation (especially important for High-DPI/Retina displays)
-                    formatted_screens = []
-                    for screen in screens_info:
-                        formatted_screens.append(
-                            {
-                                "screen_number": screen.get("screen_number"),
-                                "name": screen.get(
-                                    "screen_name",
-                                    screen.get(
-                                        "name",
-                                        f"Screen {screen.get('screen_number', 1)}",
-                                    ),
-                                ),
-                                "geometry": screen.get("geometry", {}),
-                                "scale_factor": screen.get(
-                                    "scale_factor", 1.0
-                                ),  # Device pixel ratio for coordinate calculation
-                            }
-                        )
-                    response = {
-                        "type": "remote_control_response",
-                        "command": "list_screens",
-                        "request_id": request_id,
-                        "data": {"screens": formatted_screens},
-                    }
-                    self._send_websocket_message(response)
-                    logger.info(
-                        f"Sent screen list: {len(formatted_screens)} screen(s) with geometry and scale_factor"
-                    )
-
-                elif command == "remote_audio_stop":
+                if command == "remote_audio_stop":
                     audio_request_id = str(command_data.get("request_id") or request_id or "")
                     if not hasattr(self, "_cancelled_remote_audio_requests"):
                         self._cancelled_remote_audio_requests = set()
@@ -225,36 +327,7 @@ class TelegramRemoteControlMixin:
                                 }
                             )
 
-                elif command == "screenshot_stream":
-                    # Fast path: capture screenshot and send raw bytes over WebSocket
-                    # Binary frame format: [2 bytes screen_number big-endian] [raw WebP bytes]
-                    screen_number = command_data.get("screen_number", 1)
-                    import struct
-                    screenshot_data = self._capture_screen_screenshot(screen_number)
-                    if "error" in screenshot_data:
-                        self._send_websocket_message({
-                            "type": "remote_control_response",
-                            "command": "screenshot_stream",
-                            "request_id": request_id,
-                            "error": screenshot_data.get("error") or "Screenshot capture failed",
-                            "data": {"screen_number": screen_number},
-                        })
-                        return
-                    image_data = screenshot_data.get("image_data")
-                    if image_data:
-                        header = struct.pack(">H", screen_number)
-                        self._send_websocket_binary(header + image_data)
-                    else:
-                        self._send_websocket_message({
-                            "type": "remote_control_response",
-                            "command": "screenshot_stream",
-                            "request_id": request_id,
-                            "error": "Screenshot capture returned no image",
-                            "data": {"screen_number": screen_number},
-                        })
-                    # No JSON response needed — the binary frame IS the response
-
-                elif command == "set_mouse_position":
+                elif command == "screenshot":
                     x = command_data.get("x")
                     y = command_data.get("y")
                     screen_number = command_data.get("screen_number")
@@ -1186,63 +1259,6 @@ class TelegramRemoteControlMixin:
                                 })
 
                         threading.Thread(target=_do_voice_transcribe, daemon=True, name="VoiceTranscribe").start()
-
-                elif command == "api_relay":
-                    # Relay an API call to the local web UI server and return the response
-                    api_method = (command_data.get("method") or "GET").upper()
-                    api_path = command_data.get("path", "")
-                    api_body = command_data.get("body")
-                    response_type = (command_data.get("response_type") or "json").lower()
-                    if not api_path:
-                        self._send_websocket_message({
-                            "type": "remote_control_response", "command": "api_relay",
-                            "request_id": request_id, "error": "Missing path", "data": {},
-                        })
-                    else:
-                        try:
-                            import requests as _req
-                            from distr.gui.web.server import get_unified_server
-                            from distr.gui.web.security import INTERNAL_AUTH_HEADER, get_internal_api_token
-                            srv = get_unified_server()
-                            base = srv.get_url() if srv and srv.is_running else "http://127.0.0.1:8765"
-                            url = base + api_path
-                            headers = {"Content-Type": "application/json", INTERNAL_AUTH_HEADER: get_internal_api_token()}
-                            if api_method == "GET":
-                                resp = _req.get(url, headers=headers, timeout=15)
-                            elif api_method == "POST":
-                                resp = _req.post(url, json=api_body, headers=headers, timeout=15)
-                            elif api_method == "PATCH":
-                                resp = _req.patch(url, json=api_body, headers=headers, timeout=15)
-                            elif api_method == "PUT":
-                                resp = _req.put(url, json=api_body, headers=headers, timeout=15)
-                            elif api_method == "DELETE":
-                                resp = _req.delete(url, headers=headers, timeout=15)
-                            else:
-                                resp = _req.request(api_method, url, json=api_body, headers=headers, timeout=15)
-                            if response_type == "base64":
-                                import base64 as _base64
-
-                                resp_data = {
-                                    "body_base64": _base64.b64encode(resp.content).decode("ascii"),
-                                    "content_type": resp.headers.get("content-type", ""),
-                                    "size_bytes": len(resp.content),
-                                }
-                            else:
-                                try:
-                                    resp_data = resp.json()
-                                except Exception:
-                                    resp_data = {"text": resp.text}
-                            self._send_websocket_message({
-                                "type": "remote_control_response", "command": "api_relay",
-                                "request_id": request_id,
-                                "data": {"status": resp.status_code, "response": resp_data},
-                            })
-                        except Exception as e:
-                            logger.error(f"API relay error: {e}", exc_info=True)
-                            self._send_websocket_message({
-                                "type": "remote_control_response", "command": "api_relay",
-                                "request_id": request_id, "error": str(e), "data": {},
-                            })
 
                 else:
                     self._send_websocket_message(

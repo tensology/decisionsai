@@ -36,6 +36,7 @@
     var waPendingAttachment = null; // { name, mime_type, data_b64, kind }
     var waGroupNames = {};          // { "<group-jid>": "Group Name" }
     var waChatNames = {};           // { "<jid-or-phone>": "Display Name" }
+    var waDraftByPhone = {};        // { "<phone>": { text, source, ... } }
     var activeSourceTab = "local";
     var kbBoardWS = null;
     var kbBoardWSReconnectTimer = null;
@@ -740,6 +741,7 @@
                 waSelectedChatPhones: waSelectedChatPhones,
                 waGroupNames: waGroupNames,
                 waChatNames: waChatNames,
+                waDraftByPhone: waDraftByPhone,
             };
         },
         setState: function(s) {
@@ -763,6 +765,7 @@
             waSelectedChatPhones = s.waSelectedChatPhones;
             waGroupNames = s.waGroupNames;
             waChatNames = s.waChatNames;
+            waDraftByPhone = s.waDraftByPhone || {};
         },
     });
     var ticketActions = window.KanbanTicketActions.create({
@@ -3273,6 +3276,7 @@
             });
         updateWaSidebarFooterUi();
         if (typeof waRuntime.bindWaMessageActionsUi === "function") waRuntime.bindWaMessageActionsUi();
+        if (typeof waRuntime.bindWaDraftComposer === "function") waRuntime.bindWaDraftComposer();
         document.getElementById("kb-wa-thread-attach").addEventListener("click", function() {
             var fileInput = document.getElementById("kb-wa-thread-file");
             if (fileInput) fileInput.click();

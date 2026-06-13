@@ -99,7 +99,7 @@ def _chat_audit_preview(message: str, *, max_len: int = 1000) -> str:
     if not clean:
         return ""
     try:
-        from distr.core.hermes import redact_handoff_payload
+        from distr.core.orchestrator import redact_handoff_payload
 
         redacted = redact_handoff_payload(clean)
         clean = redacted if isinstance(redacted, str) else clean
@@ -119,7 +119,7 @@ def record_chat_audit_event(
     source_platform: str | None = None,
     hidden: bool = False,
 ) -> None:
-    """Mirror visible chat turns into the Hermes orchestration ledger."""
+    """Mirror visible chat turns into the Orchestrator ledger."""
     if hidden:
         return
     clean = (content or "").strip()
@@ -154,7 +154,7 @@ def record_chat_audit_event(
         )
         if role_clean == "user":
             try:
-                from distr.core.hermes_memory import extract_and_record_user_memories_from_text
+                from distr.core.orchestrator_memory import extract_and_record_user_memories_from_text
 
                 extract_and_record_user_memories_from_text(
                     clean,
@@ -205,10 +205,10 @@ def remove_chat_transcript_audit_events(chat_id: int) -> int:
         return 0
     deleted = 0
     try:
-        from distr.core.db.hermes import HermesEvent
+        from distr.core.db.orchestrator import OrchestratorEvent
 
         with get_session() as session:
-            rows = session.query(HermesEvent).filter(HermesEvent.source == "chat").all()
+            rows = session.query(OrchestratorEvent).filter(OrchestratorEvent.source == "chat").all()
             for row in rows:
                 try:
                     payload = json.loads(row.payload or "{}")

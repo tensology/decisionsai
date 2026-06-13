@@ -694,6 +694,11 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
             # 10. Execute tools (router already filtered; if tools survived, execute them)
             if tool_calls and allow_tools and not is_processing_tool_result:
+                spoken_before_tools = (full_response or "").strip()
+                if spoken_before_tools:
+                    from distr.core.agent.tool_audio_timing import wait_before_tool_side_effects
+
+                    await wait_before_tool_side_effects(self, spoken_before_tools)
                 tool_results = await self._execute_tool_calls(tool_calls, last_user_message=last_user_message)
                 self._messages.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
 

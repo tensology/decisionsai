@@ -6,12 +6,17 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from distr.core.db import get_session
 from distr.core.db.schedule_blocks import ScheduleBlock
 from distr.core.services import schedule_blocks as schedule_service
+from distr.core.services.schedule_timesheet_export import (
+    build_timesheet_workbook,
+    parse_export_dates,
+    timesheet_filename,
+)
 
 
 class ScheduleBlockPayload(BaseModel):
@@ -46,6 +51,12 @@ class TimerStartPayload(BaseModel):
     ticket_id: Optional[int] = None
     external_ticket_key: Optional[str] = None
     project_id: Optional[int] = None
+
+
+class TimesheetExportPayload(BaseModel):
+    start_date: str
+    end_date: str
+    board_keys: list[str] = Field(default_factory=list)
 
 
 def _parse_range(start: str, end: str) -> tuple[datetime, datetime]:
@@ -188,5 +199,37 @@ def create_routes() -> APIRouter:
                 "success": True,
                 "block": schedule_service.serialize_block(session, block),
             })
+
+    @router.get("/schedule-blocks/export/boards")
+    async def list_timesheet_export_boards(
+        start_date: str = Query(...),
+        end_date: str = Query(...),
+    ):
+        try:
+            start_dt, end_dt, _ = parse_export_dates(start_date, end_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid start or end date.") from exc
+        with get_session() as session:
+            boards = schedule_service.boards_for_export_range(session, start_dt, end_dt)
+        return JSONResponse({"boards": boards})
+
+    @router.post("/schedule-blocks/export/timesheet")
+    async def export_schedule_timesheet(payload: TimesheetExportPayload):
+        board_keys = [str(key).strip() for key in payload.board_keys if str(key).strip()]
+        if not board_keys:
+            raise HTTPException(status_code=422, detail="Select at least one board.")
+        try:
+            start_dt, end_dt, period_label = parse_export_dates(payload.start_date, payload.end_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid start or end date.") from exc
+        with get_session() as session:
+            rows = schedule_service.timesheet_export_rows(session, start_dt, end_dt, board_keys)
+        content = build_timesheet_workbook(rows, period_label=period_label)
+        filename = timesheet_filename(payload.start_date, payload.end_date)
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     return router

@@ -260,22 +260,6 @@ def dispatch_automation_to_current_chat(
         schedule_metadata=schedule_metadata,
     )
 
-    if workflow_run_id and target_chat_id and status == "dispatched":
-        try:
-            from distr.core.workflow.chat_trace import record_chat_workflow_event
-
-            record_chat_workflow_event(
-                int(target_chat_id),
-                "automation_run",
-                status="running",
-                workflow_id=int(automation["workflow_id"]) if automation.get("workflow_id") else None,
-                workflow_name=str(automation.get("name") or "Untitled Automation"),
-                run_id=int(workflow_run_id),
-                summary=instruction,
-            )
-        except Exception:
-            logger.debug("Automation chat action card failed", exc_info=True)
-
     dispatched_event_id = event_fn(
         automation=automation,
         event_type="worker_dispatched" if status == "dispatched" else "worker_failed",

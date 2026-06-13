@@ -94,13 +94,13 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
             settings=settings,
         )
         return
-    if kind == "hermes_triage_ack":
-        from distr.core.hermes import emit_event
+    if kind == "orchestrator_triage_ack":
+        from distr.core.orchestrator import emit_event
 
         candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
-        execution_result = _execute_hermes_triage_candidate(candidate)
+        execution_result = _execute_orchestrator_triage_candidate(candidate)
         emit_event(
-            source="hermes",
+            source="orchestrator",
             event_type="daily_triage_candidate_approved",
             status="approved",
             summary=str(candidate.get("question") or candidate.get("title") or "Work-scan item approved"),
@@ -110,7 +110,7 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
     raise ValueError(f"unknown execute_payload kind: {kind!r}")
 
 
-def _execute_hermes_triage_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+def _execute_orchestrator_triage_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     """Perform the safest concrete action for an approved Hermes triage item."""
     if not isinstance(candidate, dict):
         return {"status": "noop", "reason": "candidate missing"}

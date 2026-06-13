@@ -30,7 +30,7 @@ def record_external_agent_context_activity(context: dict[str, Any] | None) -> in
     if not isinstance(context, dict):
         return 0
     try:
-        from distr.core.hermes_memory import record_machine_activity, run_weekly_machine_activity_compaction
+        from distr.core.orchestrator_memory import record_machine_activity, run_weekly_machine_activity_compaction
     except Exception:
         return 0
 

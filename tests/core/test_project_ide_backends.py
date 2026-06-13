@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 
-def test_legacy_editor_extension_backends_are_not_registered():
+def test_ide_backends_are_registered_separately_from_cli():
     from distr.core.project_cli_backends import list_backends, normalize_backend_id
 
     backend_ids = {backend.id for backend in list_backends()}
 
-    assert "cursor_ide" not in backend_ids
-    assert "vscode_ide" not in backend_ids
+    assert "cursor_ide" in backend_ids
+    assert "codex_ide" in backend_ids
     assert normalize_backend_id("cursor extension") == "cursor"
-    assert normalize_backend_id("vscode") == "cursor"
+    assert normalize_backend_id("vscode") == "cursor_ide"
 
 
 def test_cli_output_compaction_keeps_head_and_tail():
@@ -36,7 +36,7 @@ def test_cursor_plugin_setup_state_replaces_editor_extension_contract():
 
 
 def test_codex_and_cursor_status_expose_remote_handoff_readiness(monkeypatch):
-    from distr.core.project_cli_backends.registry import CodexBackend, CursorBackend
+    from distr.core.project_cli_backends.registry import CodexBackend, CursorBackend, CursorIdeBackend
 
     monkeypatch.setattr(
         "distr.core.project_cli_backends.registry._first_executable",
@@ -55,13 +55,13 @@ def test_codex_and_cursor_status_expose_remote_handoff_readiness(monkeypatch):
 
     codex = CodexBackend().setup_status().to_dict()
     cursor = CursorBackend().setup_status().to_dict()
+    cursor_ide = CursorIdeBackend().setup_status().to_dict()
 
     assert codex["can_receive_remote_handoff"] is True
     assert codex["handoff_method"] == "one_shot_cli_with_callback"
-    assert codex["reporter_path"] == "/tmp/decisions-codex-reporter.py"
-    assert cursor["can_receive_remote_handoff"] is True
     assert cursor["handoff_method"] == "one_shot_cli_with_callback"
-    assert cursor["reporter_path"] == "/tmp/decisions-cursor-reporter.py"
+    assert cursor_ide["handoff_method"] == "ide_work_packet"
+    assert cursor_ide["can_receive_remote_handoff"] is True
 
 
 def test_cursor_status_blocks_remote_handoff_when_not_authenticated(monkeypatch):

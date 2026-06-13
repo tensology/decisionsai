@@ -89,13 +89,21 @@
     position: absolute;
     left: 0;
     top: calc(100% + 8px);
-    z-index: 2000;
+    z-index: 10050;
     width: min(330px, calc(100vw - 28px));
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 8px;
     background: #111944;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
     padding: 12px;
+}
+
+.decisions-datetime-popover.is-portaled {
+    position: fixed;
+    left: auto;
+    top: auto;
+    right: auto;
+    bottom: auto;
 }
 
 .decisions-datetime-popover[data-align="right"] {
@@ -110,6 +118,10 @@
 
 .decisions-datetime-popover.is-datetime {
     width: min(460px, calc(100vw - 28px));
+}
+
+.decisions-datetime-popover.is-time-only {
+    width: min(220px, calc(100vw - 28px));
 }
 
 .decisions-datetime-body.is-datetime {
@@ -309,7 +321,7 @@
 }
 
 @media (max-width: 520px) {
-    .decisions-datetime-popover {
+    .decisions-datetime-popover:not(.is-portaled) {
         position: fixed;
         left: 14px !important;
         right: 14px !important;

@@ -116,7 +116,9 @@ def _body_excerpt(skill_file: Path, *, limit: int = 220) -> str:
         if end != -1:
             text = text[end + 4 :]
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:limit]
+    text = re.sub(r"^(?:>\s*)+(?:[-*•]\s*)?", "", text)
+    text = re.sub(r"^[-*•]\s+", "", text)
+    return text[:limit].strip()
 
 
 def _local_row_directory(row: dict[str, Any]) -> Path:
@@ -309,7 +311,7 @@ def _matches_source(row: dict[str, Any], source: str) -> bool:
     return row_source == requested
 
 
-def hermes_skill_catalog(*, limit: int = 80, source: str | None = None) -> list[dict[str, str]]:
+def orchestrator_skill_catalog(*, limit: int = 80, source: str | None = None) -> list[dict[str, str]]:
     """Compact skill list for Hermes LLM routing prompts."""
     rows = load_registry()
     if source:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from distr.core.skills.catalog import (
     filter_known_skill_ids,
-    hermes_skill_catalog,
+    orchestrator_skill_catalog,
     infer_skills_for_ticket,
     is_google_skill,
     load_registry,
@@ -75,9 +75,9 @@ def test_registry_includes_ecc_skills_without_duplicate_native_ids():
     assert safety_rows[0]["source"] != "ecc_vendor"
 
 
-def test_hermes_skill_catalog_reserves_room_for_vendored_ecc_skills():
+def test_orchestrator_skill_catalog_reserves_room_for_vendored_ecc_skills():
     load_registry.cache_clear()
-    rows = hermes_skill_catalog(limit=20)
+    rows = orchestrator_skill_catalog(limit=20)
     sources = {row["source"] for row in rows}
     ids = {row["id"] for row in rows}
 

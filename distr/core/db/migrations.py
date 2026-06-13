@@ -778,14 +778,14 @@ def run_migrations():
     # Hermes orchestration setup columns. These control the workflow driving
     # brain separately from generic chat and coding defaults.
     for _col, _ddl in [
-        ("hermes_enabled", "BOOLEAN DEFAULT 1"),
-        ("hermes_orchestrator_provider", "VARCHAR DEFAULT ''"),
-        ("hermes_orchestrator_model", "VARCHAR DEFAULT ''"),
-        ("hermes_validator_provider", "VARCHAR DEFAULT ''"),
-        ("hermes_validator_model", "VARCHAR DEFAULT ''"),
-        ("hermes_correction_provider", "VARCHAR DEFAULT ''"),
-        ("hermes_correction_model", "VARCHAR DEFAULT ''"),
-        ("hermes_memory_export_enabled", "BOOLEAN DEFAULT 0"),
+        ("orchestrator_enabled", "BOOLEAN DEFAULT 1"),
+        ("orchestrator_provider", "VARCHAR DEFAULT ''"),
+        ("orchestrator_model", "VARCHAR DEFAULT ''"),
+        ("orchestrator_validator_provider", "VARCHAR DEFAULT ''"),
+        ("orchestrator_validator_model", "VARCHAR DEFAULT ''"),
+        ("orchestrator_correction_provider", "VARCHAR DEFAULT ''"),
+        ("orchestrator_correction_model", "VARCHAR DEFAULT ''"),
+        ("orchestrator_memory_export_enabled", "BOOLEAN DEFAULT 0"),
     ]:
         try:
             with Session() as session:
@@ -1094,6 +1094,23 @@ def run_migrations():
                 logger.info("Added coding_backend_model column to projects table")
             except Exception as e:
                 logger.warning(f"Could not add coding_backend_model column: {e}")
+
+    # Project columns required before any Project ORM queries below (board column seeding).
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"))
+            if result.fetchone():
+                existing = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
+                if "start_time_tracker" not in existing:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN start_time_tracker BOOLEAN DEFAULT 1"))
+                    conn.commit()
+                    logger.info("Added start_time_tracker column to projects table")
+                if "notes" not in existing:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN notes TEXT"))
+                    conn.commit()
+                    logger.info("Added notes column to projects table")
+    except Exception as e:
+        logger.warning(f"Could not add project notes/start_time_tracker columns: {e}")
 
     # Ensure board tables exist
     try:
@@ -1920,6 +1937,28 @@ def run_migrations():
     except Exception as e:
         logger.warning(f"Could not create whatsapp_phone_links table: {e}")
 
+    # ── WhatsApp compose drafts (unsent reply text per chat) ─────────────────
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='whatsapp_compose_drafts'"))
+            if not result.fetchone():
+                conn.execute(text("""
+                    CREATE TABLE whatsapp_compose_drafts (
+                        jid_phone VARCHAR PRIMARY KEY,
+                        jid VARCHAR,
+                        chat_type VARCHAR DEFAULT 'private',
+                        contact_name VARCHAR,
+                        draft_text TEXT NOT NULL DEFAULT '',
+                        source VARCHAR DEFAULT 'user',
+                        board_id INTEGER,
+                        updated_date DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.commit()
+                logger.info("Created whatsapp_compose_drafts table")
+    except Exception as e:
+        logger.warning(f"Could not create whatsapp_compose_drafts table: {e}")
+
     # ── Add whatsapp_message_id / whatsapp_message_wa_id to kanban_tickets ──
     for _wcol, _wtype, _wdef in [
         ("whatsapp_message_id", "INTEGER", "NULL"),
@@ -2180,35 +2219,25 @@ def run_migrations():
     try:
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE kanban_boards ADD COLUMN hermes_policy TEXT"))
+                conn.execute(text("ALTER TABLE kanban_boards ADD COLUMN orchestrator_policy TEXT"))
                 conn.commit()
-                logger.info("Added hermes_policy column to kanban_boards table")
+                logger.info("Added orchestrator_policy column to kanban_boards table")
             except Exception as e:
                 if "duplicate column" not in str(e).lower():
-                    logger.debug(f"Could not add hermes_policy to kanban_boards: {e}")
+                    logger.debug(f"Could not add orchestrator_policy to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Ticket Board hermes_policy migration: {e}")
+        logger.debug(f"Ticket Board orchestrator_policy migration: {e}")
 
     # Hermes learned rules table
     try:
-        from distr.core.hermes import ensure_hermes_tables
+        from distr.core.orchestrator import ensure_orchestrator_tables
 
-        ensure_hermes_tables()
-        logger.info("Ensured Hermes learned rules tables exist")
+        ensure_orchestrator_tables()
+        logger.info("Ensured orchestrator learned rules tables exist")
     except Exception as e:
-        logger.debug(f"Hermes learned rules migration: {e}")
+        logger.debug(f"Orchestrator learned rules migration: {e}")
 
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"))
-            if result.fetchone():
-                existing = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
-                if "start_time_tracker" not in existing:
-                    conn.execute(text("ALTER TABLE projects ADD COLUMN start_time_tracker BOOLEAN DEFAULT 1"))
-                    conn.commit()
-                    logger.info("Added start_time_tracker column to projects table")
-    except Exception as e:
-        logger.debug(f"Project start_time_tracker migration: {e}")
+    _migrate_legacy_hermes_schema_to_orchestrator(engine)
 
     try:
         from distr.core.db import schedule_blocks as _schedule_blocks  # noqa: F401
@@ -2217,3 +2246,67 @@ def run_migrations():
         logger.info("Ensured schedule_blocks table exists")
     except Exception as e:
         logger.debug(f"schedule_blocks migration: {e}")
+
+
+def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
+    """Rename legacy hermes_* tables and settings columns to orchestrator_*."""
+    table_renames = [
+        ("hermes_events", "orchestrator_events"),
+        ("hermes_user_memories", "orchestrator_user_memories"),
+        ("hermes_machine_activity", "orchestrator_machine_activity"),
+        ("hermes_maintenance_state", "orchestrator_maintenance_state"),
+        ("hermes_validation_records", "orchestrator_validation_records"),
+        ("hermes_visual_baseline_sets", "orchestrator_visual_baseline_sets"),
+        ("hermes_visual_baseline_screens", "orchestrator_visual_baseline_screens"),
+        ("hermes_correction_attempts", "orchestrator_correction_attempts"),
+        ("hermes_learned_rules", "orchestrator_learned_rules"),
+    ]
+    settings_renames = [
+        ("hermes_enabled", "orchestrator_enabled"),
+        ("hermes_orchestrator_provider", "orchestrator_provider"),
+        ("hermes_orchestrator_model", "orchestrator_model"),
+        ("hermes_validator_provider", "orchestrator_validator_provider"),
+        ("hermes_validator_model", "orchestrator_validator_model"),
+        ("hermes_correction_provider", "orchestrator_correction_provider"),
+        ("hermes_correction_model", "orchestrator_correction_model"),
+        ("hermes_memory_export_enabled", "orchestrator_memory_export_enabled"),
+    ]
+    try:
+        with engine.connect() as conn:
+            existing_tables = {
+                row[0]
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }
+            for old_name, new_name in table_renames:
+                if old_name in existing_tables and new_name not in existing_tables:
+                    conn.execute(text(f'ALTER TABLE "{old_name}" RENAME TO "{new_name}"'))
+                    existing_tables.discard(old_name)
+                    existing_tables.add(new_name)
+                    logger.info("Renamed table %s -> %s", old_name, new_name)
+            conn.commit()
+
+            settings_cols = set()
+            if "settings" in existing_tables:
+                settings_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(settings)"))}
+                for old_col, new_col in settings_renames:
+                    if old_col in settings_cols and new_col not in settings_cols:
+                        try:
+                            conn.execute(text(f'ALTER TABLE settings RENAME COLUMN "{old_col}" TO "{new_col}"'))
+                            settings_cols.discard(old_col)
+                            settings_cols.add(new_col)
+                            logger.info("Renamed settings column %s -> %s", old_col, new_col)
+                        except Exception as exc:
+                            logger.debug("Could not rename settings.%s: %s", old_col, exc)
+                conn.commit()
+
+            if "kanban_boards" in existing_tables:
+                board_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(kanban_boards)"))}
+                if "hermes_policy" in board_cols and "orchestrator_policy" not in board_cols:
+                    try:
+                        conn.execute(text('ALTER TABLE kanban_boards RENAME COLUMN hermes_policy TO orchestrator_policy'))
+                        conn.commit()
+                        logger.info("Renamed kanban_boards.hermes_policy -> orchestrator_policy")
+                    except Exception as exc:
+                        logger.debug("Could not rename kanban_boards.hermes_policy: %s", exc)
+    except Exception as exc:
+        logger.debug("Legacy hermes schema migration skipped: %s", exc)

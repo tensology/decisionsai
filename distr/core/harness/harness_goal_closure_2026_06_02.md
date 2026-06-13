@@ -244,7 +244,7 @@ Scheduled actions ticket:
 ## Verification
 
 - `python3 -m py_compile scripts/harness_live_proof.py distr/core/hermes.py distr/core/project_cli_backends/registry.py distr/gui/web/server.py distr/core/workflow/scheduler.py distr/core/actions/desktop.py distr/gui/web/routes/settings/workflows.py`
-- `pytest tests/core/test_scheduler_once_support.py tests/core/test_harness_operational_proof.py tests/core/test_hermes_learned_rules_context.py::test_backend_handoff_redacts_secrets_and_records_memory tests/core/test_codex_prefs.py tests/core/test_cursor_plugin_contract.py -q`
+- `pytest tests/core/test_scheduler_once_support.py tests/core/test_harness_operational_proof.py tests/core/test_orchestrator_learned_rules_context.py::test_backend_handoff_redacts_secrets_and_records_memory tests/core/test_codex_prefs.py tests/core/test_cursor_plugin_contract.py -q`
   - Result: `18 passed`
 - Broad non-e2e harness suite across routing, Hermes, workflow API, run audit, UI quality, scheduled actions, Codex prefs, and IDE ticket metadata:
   - Result: `139 passed`

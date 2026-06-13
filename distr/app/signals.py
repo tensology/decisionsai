@@ -297,6 +297,19 @@ class SignalBridgeMixin:
             })
         signal_manager.model_hot_reload.connect(on_model_hot_reload)
         logger.info("Connected model_hot_reload signal to hot_swap_llm command")
+
+        def on_voice_hot_reload(voice_provider, voice_model):
+            logger.info(
+                "App received voice_hot_reload: provider=%s model=%s",
+                voice_provider,
+                voice_model,
+            )
+            self._send_command_to_agent('hot_swap_tts', {
+                'voice_provider': voice_provider or 'kokoro',
+                'voice_model': voice_model or '',
+            })
+        signal_manager.voice_hot_reload.connect(on_voice_hot_reload)
+        logger.info("Connected voice_hot_reload signal to hot_swap_tts command")
         
         # Speak text directly signal - send text to agent for TTS
         def on_speak_text_directly(text):

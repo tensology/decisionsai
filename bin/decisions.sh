@@ -964,7 +964,13 @@ check_project_cli_presence() {
         echo -e "${YELLOW}Note: pi is not on PATH; Pi project routing is unavailable.${NC}"
     fi
 
-    echo -e "${YELLOW}To install or update project CLIs, run: scripts/setup_project_clis.sh${NC}"
+    if command -v rtk >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} RTK token proxy found ($(rtk --version 2>/dev/null | head -1 || echo "version unknown"))"
+    else
+        echo -e "${YELLOW}Note: rtk is not on PATH; install with scripts/setup_project_clis.sh rtk for token-efficient CLI output.${NC}"
+    fi
+
+    echo -e "${YELLOW}To install or update project CLIs and RTK, run: scripts/setup_project_clis.sh${NC}"
 }
 
 check_project_cli_presence

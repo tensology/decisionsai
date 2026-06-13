@@ -63,13 +63,13 @@
         <div class="chat-settings-header" id="chatSettingsHeader" style="display: none;">
             <div class="chat-settings-header-row">
                 <div class="chat-header-left">
-                    <button type="button" class="header-icon-btn" id="compactChatButton" title="Compact context">
+                    <button type="button" class="header-icon-btn chat-header-tooltip" id="compactChatButton" aria-label="Compact context" data-tooltip="Compact context">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l6-6"/><path d="M10 14l-6 6"/></svg>
                     </button>
-                    <button type="button" class="header-icon-btn" id="forkChatButton" title="Fork chat">
+                    <button type="button" class="header-icon-btn chat-header-tooltip" id="forkChatButton" aria-label="Fork chat" data-tooltip="Fork chat">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><path d="M18 6v3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
                     </button>
-                    <button type="button" class="context-ring" id="contextRing" title="Estimated context used">
+                    <button type="button" class="context-ring chat-header-tooltip" id="contextRing" aria-label="Estimated context used" data-tooltip="Estimated context used">
                         <span id="contextRingValue">0%</span>
                     </button>
                     <div class="chat-settings-title-wrap">
@@ -89,7 +89,7 @@
                     </div>
                     <span class="chat-header-save-status" id="headerSettingsStatus" aria-live="polite"></span>
                     <div class="chat-header-actions">
-                        <button type="button" class="header-icon-btn" id="configureChatButton" title="Configure chat (full panel)">
+                        <button type="button" class="header-icon-btn chat-header-tooltip" id="configureChatButton" aria-label="Configure chat" data-tooltip="Configure chat">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                         </button>
                     </div>
@@ -101,10 +101,10 @@
         <div class="empty-state" id="emptyState">
             <div class="empty-state-content" id="emptyStateSetup">
                 <p class="empty-state-kicker">Chat</p>
-                <h2 class="empty-state-setup-title">Setup your Agent</h2>
+                <h2 class="empty-state-setup-title">Chat settings</h2>
                 <div id="emptyStateLoader" class="empty-state-loader">
                     <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
-                    <p class="empty-state-loader-text">Loading configuration...</p>
+                    <p class="empty-state-loader-text">Loading chat settings...</p>
                 </div>
                 <div class="empty-state-form" id="emptyStateForm" style="display:none;">
                     {{ configure_chat_fields('empty') }}
@@ -112,7 +112,7 @@
                 <p class="empty-state-prompt" id="emptyStatePrompt" style="display:none;">How can I help you today?</p>
             </div>
             <div class="empty-state-agent-loading" id="emptyStateAgentLoading" style="display: none;">
-                <p class="empty-state-agent-loading-text">Agent is Loading</p>
+                <p class="empty-state-agent-loading-text">Starting chat...</p>
                 <div class="empty-state-agent-loading-spinner" aria-hidden="true"></div>
             </div>
         </div>
@@ -221,7 +221,7 @@
             <!-- Modal loader -->
             <div id="modalLoader" class="empty-state-loader">
                 <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
-                <p class="empty-state-loader-text">Loading configuration...</p>
+                <p class="empty-state-loader-text">Loading chat settings...</p>
             </div>
             <div id="modalFormContent" style="display:none;">
             {{ configure_chat_fields('modal') }}

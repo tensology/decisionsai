@@ -118,7 +118,7 @@ class AgentSession:
         },
         'audio': {
             'input_sample_rate': 16000,
-            'output_sample_rate': 24000,  # Kokoro TTS outputs at 24kHz
+            'output_sample_rate': 44100,  # Stable playback rate; transport resamples TTS to this
             'input_device': None,  # None = system default
             'output_device': None  # None = system default
         },
@@ -449,10 +449,10 @@ class AgentSession:
         elif self.settings.get('output_device') and self.settings.get('output_device') != 'System Default':
             config['audio']['output_device'] = self.settings.get('output_device')
         
-        # Update output sample rate based on TTS engine
-        from .constants import TTS_SAMPLE_RATES
-        tts_rate = TTS_SAMPLE_RATES.get(config['tts']['engine'], SAMPLE_RATE_KOKORO)
-        config['audio']['output_sample_rate'] = tts_rate
+        # Keep hardware output at 44.1 kHz (Bluetooth/macOS native). TTS engines
+        # emit at their own rates; transport resamples continuously to this rate.
+        from .constants import SAMPLE_RATE_PLAYBACK
+        config['audio']['output_sample_rate'] = SAMPLE_RATE_PLAYBACK
         
         return config
     
@@ -1034,6 +1034,9 @@ class AgentSession:
         from .constants import normalize_voice_provider
         from . import service_factory
         from distr.core.agent.services.tts.registry import tts_registry
+        from distr.core.settings import load_settings_from_db
+
+        self.settings = load_settings_from_db()
 
         vp = normalize_voice_provider(voice_provider)
         self.logger.debug("HOT-SWAP TTS: provider=%s model=%s", vp, voice_model)
@@ -1115,6 +1118,9 @@ class AgentSession:
                         old_service.set_reference_voice(_ref_path)
                         self._apply_agent_name(new_agent_name)
                         self.logger.debug("HOT-SWAP TTS: complete (voice cloning, ref=%s)", _ref_path)
+                        if self.chat_manager:
+                            self.chat_manager.current_voice_provider = vp
+                            self.chat_manager.current_voice_model = voice_model or ''
                         return
                 else:
                     from .constants import KOKORO_VOICES
@@ -1124,6 +1130,9 @@ class AgentSession:
                         old_service.set_reference_voice(None)
                         self._apply_agent_name(new_agent_name)
                         self.logger.debug("HOT-SWAP TTS: complete (in-place voice=%s)", resolved)
+                        if self.chat_manager:
+                            self.chat_manager.current_voice_provider = vp
+                            self.chat_manager.current_voice_model = voice_model or ''
                         return
 
             elif vp == 'f5tts':
@@ -1134,6 +1143,9 @@ class AgentSession:
                     old_service.set_reference_voice(ref_path or '', ref_text)
                     self._apply_agent_name(new_agent_name)
                     self.logger.debug("HOT-SWAP TTS: F5-TTS in-place voice swap complete (voice=%s)", voice_model)
+                    if self.chat_manager:
+                        self.chat_manager.current_voice_provider = vp
+                        self.chat_manager.current_voice_model = voice_model or ''
                     return
 
             elif vp == 'voxcpm':
@@ -1144,6 +1156,9 @@ class AgentSession:
                     old_service.set_reference_voice(ref_path, ref_text)
                     self._apply_agent_name(new_agent_name)
                     self.logger.debug("HOT-SWAP TTS: VoxCPM in-place voice swap complete (voice=%s)", voice_model)
+                    if self.chat_manager:
+                        self.chat_manager.current_voice_provider = vp
+                        self.chat_manager.current_voice_model = voice_model or ''
                     return
 
         # --- Full service replacement (non-in-place path) ---
@@ -1170,6 +1185,10 @@ class AgentSession:
             self.llm_service.set_tts_service(self.tts_service)
             if hasattr(self.llm_service, 'set_agent_name'):
                 self.llm_service.set_agent_name(self.agent_name)
+
+        if self.chat_manager:
+            self.chat_manager.current_voice_provider = vp
+            self.chat_manager.current_voice_model = voice_model or ''
 
         self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
 
@@ -1395,6 +1414,7 @@ class AgentSession:
                 self.transport.output()
             ]
         )
+        self.llm_service._audio_transport_output = self.transport.output()
         
         # Create task — disable idle timeout since this is a persistent desktop assistant,
         # not a temporary call session. Pipecat's default (300s) kills the pipeline.

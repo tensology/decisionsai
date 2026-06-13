@@ -498,12 +498,18 @@ def register_routes(router, templates):
         return out
 
     def _cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
-        enabled = bool(settings.get("cursor_enabled"))
-        api_key = (settings.get("cursor_key") or "").strip()
-        if not enabled:
-            return [], "disabled", "Enable Cursor in Third Party API Keys to load Cursor CLI models."
+        from distr.core.project_cli_backends.registry import _cursor_api_key
+
+        fallback = [
+            _model_entry("auto", "cursor", "Auto"),
+            _model_entry("composer-2.5", "cursor"),
+            _model_entry("composer-2.5-fast", "cursor"),
+            _model_entry("gpt-5.3-codex", "cursor"),
+            _model_entry("gpt-5.5-medium", "cursor"),
+        ]
+        api_key = _cursor_api_key()
         if not api_key:
-            return [], "no_key", "Add a Cursor API key in Third Party API Keys to load Cursor CLI models."
+            return fallback, "cursor-defaults", "No Cursor API key configured; showing Cursor defaults."
         req = urllib.request.Request(
             "https://api.cursor.com/v0/models",
             headers={
@@ -515,10 +521,13 @@ def register_routes(router, templates):
             with urllib.request.urlopen(req, timeout=12) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            return [], "error", f"Cursor models API returned HTTP {exc.code}."
+            return fallback, "cursor-defaults", f"Cursor models API returned HTTP {exc.code}; showing defaults."
         except Exception as exc:
-            return [], "error", f"Could not fetch Cursor models API: {exc}"
-        return [_model_entry(mid, "cursor") for mid in payload.get("models") or []], "cursor-api", ""
+            return fallback, "cursor-defaults", f"Could not fetch Cursor models API: {exc}; showing defaults."
+        models = [_model_entry(mid, "cursor") for mid in payload.get("models") or []]
+        if not models:
+            return fallback, "cursor-defaults", "Cursor models API returned no models; showing defaults."
+        return _dedupe_model_entries([fallback[0]] + models), "cursor-api", ""
 
     def _anthropic_models(settings: dict) -> tuple[list[dict], str, str]:
         api_key = (os.environ.get("ANTHROPIC_API_KEY") or settings.get("anthropic_key") or "").strip()
@@ -593,16 +602,24 @@ def register_routes(router, templates):
 
     def _models_for_cli_backend(backend_id: str, settings: dict | None = None):
         from distr.core.project_cli_backends import normalize_backend_id
+        from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
         backend_id = normalize_backend_id(backend_id)
         settings = settings or {}
-        if backend_id == "cursor":
+        if is_ide_backend(backend_id):
+            return {
+                "models": [],
+                "source": "ide",
+                "message": "IDE backends choose the model inside the editor.",
+            }
+        model_backend = backend_id
+        if model_backend == "cursor":
             models, source, message = _cursor_api_models(settings)
             return {"models": models, "source": source, "message": message}
-        if backend_id == "claude_code":
+        if model_backend == "claude_code":
             models, source, message = _anthropic_models(settings)
             return {"models": models, "source": source, "message": message}
-        if backend_id == "codex":
+        if model_backend == "codex":
             models, source, message = _codex_models(settings)
             return {"models": models, "source": source, "message": message}
         return {"models": _pi_cli_models(), "source": "pi-models", "message": ""}
@@ -634,8 +651,14 @@ def register_routes(router, templates):
         from distr.core.settings import load_settings_from_db
 
         settings = load_settings_from_db()
-        model_result = _models_for_cli_backend(backend_id, settings)
-        models = model_result.get("models") or []
+        try:
+            model_result = _models_for_cli_backend(backend_id, settings)
+            models = model_result.get("models") or []
+        except Exception as exc:
+            logger.exception("cli-models failed for backend=%s", backend_id)
+            model_result = {"models": [], "source": "error", "message": str(exc)}
+            models = []
+        from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
         # Get current Pi model from settings as the legacy/global fallback.
         try:
@@ -651,7 +674,10 @@ def register_routes(router, templates):
         if backend_id != "pi":
             current_provider = backend_id
         current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
-        if not current_model:
+        if is_ide_backend(backend_id):
+            current_model = ""
+            current_provider = backend_id
+        elif not current_model:
             current_model = "auto" if backend_id in ("cursor", "codex") else ("default" if backend_id == "claude_code" else "")
             current_provider = backend_id
 
@@ -786,26 +812,34 @@ def register_routes(router, templates):
 
         normalized_backend_id = normalize_backend_id(backend_id)
         if normalized_backend_id == "codex":
-            install = _install_local_codex_plugin()
+            try:
+                install = _install_local_codex_plugin()
+            except Exception as exc:
+                logger.exception("Codex plugin setup failed")
+                install = {"installed": False, "error": str(exc)}
             payload = install.get("backend") or get_backend("codex").setup_status().to_dict()
             payload.update({
                 "plugin_install": install,
                 "message": (
                     "Codex CLI is available and the DecisionsAI Codex plugin was installed."
                     if install.get("installed")
-                    else install.get("reason") or payload.get("message") or "Codex setup checked."
+                    else install.get("reason") or install.get("error") or payload.get("message") or "Codex setup checked."
                 ),
             })
             return JSONResponse(payload)
         if normalized_backend_id == "cursor":
-            install = _install_local_cursor_plugin()
+            try:
+                install = _install_local_cursor_plugin()
+            except Exception as exc:
+                logger.exception("Cursor plugin setup failed")
+                install = {"installed": False, "error": str(exc)}
             payload = install.get("backend") or get_backend("cursor").setup_status().to_dict()
             payload.update({
                 "plugin_install": install,
                 "message": (
                     "Cursor CLI is available and the DecisionsAI Cursor plugin was installed."
                     if install.get("installed")
-                    else install.get("reason") or payload.get("message") or "Cursor setup checked."
+                    else install.get("reason") or install.get("error") or payload.get("message") or "Cursor setup checked."
                 ),
             })
             return JSONResponse(payload)
@@ -824,10 +858,14 @@ def register_routes(router, templates):
 
         backend_id = normalize_backend_id(body.get("coding_backend") or body.get("backend_id"))
         plugin_install = None
-        if backend_id == "codex":
-            plugin_install = _install_local_codex_plugin()
-        elif backend_id == "cursor":
-            plugin_install = _install_local_cursor_plugin()
+        try:
+            if backend_id == "codex":
+                plugin_install = _install_local_codex_plugin()
+            elif backend_id == "cursor":
+                plugin_install = _install_local_cursor_plugin()
+        except Exception as exc:
+            logger.exception("Plugin install failed while setting coding backend %s", backend_id)
+            plugin_install = {"installed": False, "error": str(exc)}
 
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
@@ -924,7 +962,7 @@ def register_routes(router, templates):
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
         try:
-            from distr.core.hermes import list_project_activity
+            from distr.core.orchestrator import list_project_activity
 
             return JSONResponse(
                 list_project_activity(
@@ -953,6 +991,7 @@ def register_routes(router, templates):
                     "id": project.id,
                     "name": project.name or "",
                     "description": project.description or "",
+                    "notes": project.notes or "",
                     "folder_location": project.folder_location or "",
                     "in_use": bool(project.in_use),
                     "provider": project.provider or "",
@@ -1215,6 +1254,8 @@ def register_routes(router, templates):
                     project.name = payload.name
                 if payload.description is not None:
                     project.description = payload.description
+                if payload.notes is not None:
+                    project.notes = payload.notes
                 if payload.folder_location is not None:
                     project.folder_location = payload.folder_location
                 if payload.additional_trigger_words is not None:
@@ -1300,6 +1341,7 @@ def register_routes(router, templates):
                 project = Project(
                     name=name,
                     description="",
+                    notes="",
                     folder_location=folder,
                     additional_trigger_words="[]",
                     coding_backend=coding_backend,
@@ -1763,6 +1805,14 @@ def register_routes(router, templates):
                         instruction = (msg.get("message") or "").strip()
                         if not instruction:
                             continue
+                        model_override = (msg.get("model") or msg.get("coding_backend_model") or "").strip() or None
+                        setup = backend.setup_status()
+                        if not setup.ready:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": (setup.message or setup.setup_instructions or f"{backend.name} is not ready.").strip(),
+                            })
+                            continue
                         if running_task and not running_task.done():
                             await websocket.send_json({"type": "error", "message": f"{backend.name} is still running. Wait for it to finish before sending another task."})
                             continue
@@ -1791,9 +1841,15 @@ def register_routes(router, templates):
                                     name=project_name,
                                     folder_location=cwd,
                                     coding_backend=backend.id,
-                                    coding_backend_model=backend_model,
+                                    coding_backend_model=model_override or backend_model,
                                 )
-                                result = await run_project_task(p, instruction, on_event=_queue_event, origin="cli")
+                                result = await run_project_task(
+                                    p,
+                                    instruction,
+                                    on_event=_queue_event,
+                                    origin="cli",
+                                    model_override=model_override,
+                                )
                                 if not result.success:
                                     await _send_event({"type": "error", "message": result.error or f"{backend.name} failed"})
                             finally:
@@ -2014,12 +2070,30 @@ def register_routes(router, templates):
             commands = [str(command).strip() for command in commands if str(command).strip()]
         else:
             commands = None
+        startup_instructions = body.get("startup_instructions")
+        if startup_instructions is not None:
+            startup_instructions = str(startup_instructions)
+        start_time_tracker = body.get("start_time_tracker") if "start_time_tracker" in body else None
+        if start_time_tracker is not None:
+            start_time_tracker = bool(start_time_tracker)
 
         result = start_project_startup_terminals(
             project_id,
             commands=commands,
             announce=True,
+            startup_instructions=startup_instructions,
+            start_time_tracker=start_time_tracker,
         )
+        from distr.core.terminal import materialize_queued_startup_terminals
+
+        try:
+            await materialize_queued_startup_terminals(project_id)
+        except Exception as e:
+            logger.warning(
+                "Failed to materialize queued startup sessions for project %s: %s",
+                project_id,
+                e,
+            )
         sessions = get_startup_sessions_for_project(project_id, purpose="startup")
         return JSONResponse({
             "success": result.success,

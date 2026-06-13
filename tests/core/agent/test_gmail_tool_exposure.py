@@ -12,7 +12,7 @@ class _CoreHarness(LLMSharedMixin):
         self._tools = [
             SimpleNamespace(name="request_tool"),
             SimpleNamespace(name="google_workspace"),
-            SimpleNamespace(name="hermes_delegated_workflow"),
+            SimpleNamespace(name="delegated_workflow"),
         ]
         self._tools_dict = {t.name: t for t in self._tools}
         self._sticky_tool_names = set()
@@ -73,7 +73,7 @@ def test_get_filtered_tools_force_exposes_delegated_workflow_for_remote_email_do
     names = {t.name for t in out}
 
     assert "google_workspace" in names
-    assert "hermes_delegated_workflow" in names
+    assert "delegated_workflow" in names
 
 
 def test_get_filtered_tools_force_exposes_delegated_workflow_for_remote_browser_tasks(monkeypatch):
@@ -92,7 +92,7 @@ def test_get_filtered_tools_force_exposes_delegated_workflow_for_remote_browser_
     )
     names = {t.name for t in out}
 
-    assert "hermes_delegated_workflow" in names
+    assert "delegated_workflow" in names
 
 
 def test_get_filtered_tools_preserves_sticky_injected_google_workspace(monkeypatch):

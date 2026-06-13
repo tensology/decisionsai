@@ -48,6 +48,7 @@ multiprocessing.freeze_support()  # Required for frozen/packaged applications
 import logging
 import time
 import gc
+import json
 import subprocess
 import threading
 from queue import Queue
@@ -95,7 +96,13 @@ from distr.gui.oracle import OracleWindow
 from distr.gui.dialogs.about import AboutWindow
 from distr.gui.dialogs.eula import EulaWindow
 from distr.gui.dialogs.audio import DeviceSelectionDialog
-from distr.core.audio.utils import get_current_device_list_hash, restore_locked_devices, detect_devices
+from distr.core.audio.utils import (
+    get_current_device_list_hash,
+    get_system_default_device_fingerprint,
+    is_system_default_device_name,
+    restore_locked_devices,
+    detect_devices,
+)
 
 from distr.core.agent.session import AgentSession
 
@@ -133,12 +140,13 @@ class DeviceCheckWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
-            # Run the heavy subprocess call in this background thread
-            current_hash = get_current_device_list_hash()
-            self._safe_emit(current_hash)
+            payload = {
+                "device_hash": get_current_device_list_hash(),
+                "default_fingerprint": get_system_default_device_fingerprint(),
+            }
+            self._safe_emit(json.dumps(payload))
         except Exception as e:
             logging.getLogger(__name__).debug(f"DeviceCheckWorker error: {e}")
-            # Emit empty string on error
             self._safe_emit("")
 
 # ===========================================
@@ -589,6 +597,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         self.device_check_timer = QTimer()
         self.device_check_timer.timeout.connect(self.check_audio_device_changes)
         self._last_device_hash = None
+        self._last_default_device_fingerprint = None
         self._device_check_enabled = False  # Will be enabled after initialization
 
         # Run one-time StepRunner → Workflow data migration before any workflow operations
@@ -609,7 +618,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logger.warning("Orphaned workflow run cleanup failed: %s", _cleanup_err)
 
         try:
-            from distr.core.hermes_memory import run_weekly_machine_activity_compaction
+            from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
 
             run_weekly_machine_activity_compaction()
         except Exception as _memory_compaction_err:
@@ -709,81 +718,146 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     
     def check_audio_device_changes(self):
         """Check for audio device changes using a background thread."""
-        # Don't check if not enabled or if windows aren't initialized
         if not self._device_check_enabled:
             return
-        
+
         if not hasattr(self, 'oracle_window') or not self.oracle_window:
             return
-        
-        # Run if "Remember my Audio Settings" is enabled with locked devices, OR we have device lists to keep updated (for web UI)
+
         settings = load_settings_from_db()
         lock_sound_enabled = settings.get('lock_sound', False)
         locked_input = settings.get('locked_input')
         locked_output = settings.get('locked_output')
         has_locked_lists = bool(settings.get('locked_output_list') or settings.get('locked_input_list'))
+        uses_system_default = (
+            is_system_default_device_name(settings.get('input_device'))
+            or is_system_default_device_name(settings.get('output_device'))
+        )
 
         if lock_sound_enabled and (locked_input or locked_output):
-            pass  # Run: user has remembered devices
+            pass  # Remember my Audio Settings: restore named devices when they reappear
         elif has_locked_lists:
-            pass  # Run: we have device lists to keep updated (e.g. for web UI dropdown refresh)
+            pass  # Keep merged device lists fresh for the web UI
+        elif uses_system_default:
+            pass  # Follow OS default route even when the device list hash is unchanged
         else:
             return
-            
-        # Use QThreadPool to run the check in background
+
         worker = DeviceCheckWorker()
-        # Force QueuedConnection to ensure it runs on main thread
         worker.signals.result.connect(self._on_device_check_result, type=Qt.ConnectionType.QueuedConnection)
         QThreadPool.globalInstance().start(worker)
-            
-    def _on_device_check_result(self, current_hash):
+
+    def _sync_agent_audio_from_settings(self, settings: dict) -> None:
+        """Hot-swap the running agent to the saved input/output selections."""
+        input_device = settings.get('input_device', 'System Default')
+        output_device = settings.get('output_device', 'System Default')
+        self.settings['input_device'] = input_device
+        self.settings['output_device'] = output_device
+        self.selected_input_device = input_device
+        self.selected_output_device = output_device
+        if self.agent_command_queue:
+            try:
+                self.agent_command_queue.put(('update_audio_devices', {
+                    'input_device': input_device,
+                    'output_device': output_device,
+                }))
+                logger.info(
+                    "Queued agent audio refresh: input='%s' output='%s'",
+                    input_device,
+                    output_device,
+                )
+            except Exception as e:
+                logger.error(f"Error sending update_audio_devices command: {e}")
+        else:
+            logger.warning("Agent command queue not available, cannot refresh audio devices")
+
+    def _on_device_check_result(self, payload_raw):
         """Handle result from device check worker (runs on main thread)."""
         try:
-            # Verify we are on main thread
             if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
                 logger.error("CRITICAL: _on_device_check_result called on wrong thread!")
                 return
 
-            # Skip if empty hash (error occurred)
-            if not current_hash:
-                logger.debug("Device check returned empty hash")
+            if not payload_raw:
+                logger.debug("Device check returned empty payload")
                 return
-                
-            # Skip first check (initialize baseline)
+
+            try:
+                payload = json.loads(payload_raw)
+                device_hash = payload.get('device_hash') or ''
+                default_fingerprint = payload.get('default_fingerprint') or ''
+            except (json.JSONDecodeError, TypeError):
+                device_hash = payload_raw
+                default_fingerprint = ''
+
+            settings = load_settings_from_db()
+            uses_system_default = (
+                is_system_default_device_name(settings.get('input_device'))
+                or is_system_default_device_name(settings.get('output_device'))
+            )
+            track_defaults = uses_system_default or settings.get('lock_sound', False)
+
             if self._last_device_hash is None:
-                self._last_device_hash = current_hash
-                logger.info(f"Initialized device hash baseline (MD5): {current_hash}")
+                self._last_device_hash = device_hash or None
+                if track_defaults:
+                    self._last_default_device_fingerprint = default_fingerprint or None
+                logger.info(
+                    "Initialized audio monitor baseline (devices=%s, defaults=%s)",
+                    self._last_device_hash,
+                    self._last_default_device_fingerprint,
+                )
                 return
-            
-            # Check if devices changed
-            if current_hash != self._last_device_hash:
-                logger.debug(f"Device hash changed: {self._last_device_hash} -> {current_hash}")
-                
-                # Detect and add new devices to the locked lists so they appear in dropdowns
+
+            list_changed = bool(device_hash) and device_hash != self._last_device_hash
+            default_changed = (
+                track_defaults
+                and default_fingerprint
+                and default_fingerprint != self._last_default_device_fingerprint
+            )
+
+            if not list_changed and not default_changed:
+                return
+
+            if list_changed:
+                logger.debug(
+                    "Device hash changed: %s -> %s",
+                    self._last_device_hash,
+                    device_hash,
+                )
                 newly_added_outputs, newly_added_inputs, _, _ = detect_devices()
-                
-                # Emit signal to notify AudioTab to refresh if new devices were added
                 if newly_added_outputs or newly_added_inputs:
-                    logger.info(f"New devices detected - outputs: {[d['name'] for d in newly_added_outputs]}, inputs: {[d['name'] for d in newly_added_inputs]}")
+                    logger.info(
+                        "New devices detected - outputs: %s, inputs: %s",
+                        [d['name'] for d in newly_added_outputs],
+                        [d['name'] for d in newly_added_inputs],
+                    )
                     signal_manager.audio_device_lists_updated.emit(newly_added_outputs, newly_added_inputs)
-                # Always increment version when hash changes so web UI can refresh (devices added OR removed)
                 try:
                     from distr.gui.web.audio_events import increment_audio_devices_updated
                     increment_audio_devices_updated()
                 except Exception as e:
                     logger.debug("Could not increment audio devices version for web: %s", e)
-                
-                # Load settings and restore locked devices
-                settings = load_settings_from_db()
-                restore_locked_devices(settings)
-                
-                # Show popup notification only if oracle window is visible
-                if self.oracle_window.isVisible():
-                    # Use singleShot to decouple from current stack
-                    QTimer.singleShot(0, lambda: self._show_device_change_popup())
-                    
-                # Update hash
-                self._last_device_hash = current_hash
+                self._last_device_hash = device_hash
+
+            if default_changed:
+                logger.info(
+                    "System default audio route changed: %s -> %s",
+                    self._last_default_device_fingerprint,
+                    default_fingerprint,
+                )
+                self._last_default_device_fingerprint = default_fingerprint
+
+            restore_result = restore_locked_devices(settings)
+            self._sync_agent_audio_from_settings(settings)
+            logger.info(
+                "Audio monitor applied changes (list_changed=%s, default_changed=%s, restore=%s)",
+                list_changed,
+                default_changed,
+                restore_result,
+            )
+
+            if self.oracle_window.isVisible() and (list_changed or default_changed):
+                QTimer.singleShot(0, lambda: self._show_device_change_popup())
         except Exception as e:
             logger.debug(f"Error handling device check result: {e}")
 

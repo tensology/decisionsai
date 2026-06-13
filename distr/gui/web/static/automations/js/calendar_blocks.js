@@ -43,6 +43,7 @@
     var visibleRangeStart = null;
     var visibleRangeEnd = null;
     var suppressBlockClick = false;
+    var timerBlockWarnAt = 0;
 
     function escapeAttr(s) {
         if (!s) return "";
@@ -190,6 +191,40 @@
         el.style.zIndex = pos.zIndex;
     }
 
+    function blockProjectKey(block) {
+        if (!block) return null;
+        var pid = block.effective_project_id != null ? block.effective_project_id : block.project_id;
+        if (pid == null || pid === "") return null;
+        return String(pid);
+    }
+
+    function timedRangesOverlap(a, b) {
+        return a.startMin < b.endMin && a.endMin > b.startMin;
+    }
+
+    function timedItemsAllowSideBySide(a, b) {
+        if (!timedRangesOverlap(a, b)) return false;
+        var keyA = a.projectKey;
+        var keyB = b.projectKey;
+        if (keyA && keyB && keyA === keyB) return false;
+        return true;
+    }
+
+    function hasSameProjectTimeOverlap(blockId, dayDate, startMinute, endMinute, projectKey) {
+        if (!projectKey) return false;
+        return blocksForDay(dayDate).some(function(block) {
+            if (block.id === blockId) return false;
+            if (blockProjectKey(block) !== projectKey) return false;
+            var blockStart = minutesFromDate(parseBlockDate(block.start_at));
+            var blockEnd = minutesFromDate(parseBlockDate(block.end_at));
+            return startMinute < blockEnd && endMinute > blockStart;
+        });
+    }
+
+    function sameProjectOverlapMessage() {
+        return "This project already has a time block during that period.";
+    }
+
     function timedItemFromElement(el) {
         var top = parseFloat(el.style.top);
         var height = parseFloat(el.style.height);
@@ -205,7 +240,8 @@
             top: top,
             height: height,
             column: 0,
-            columnCount: 1
+            columnCount: 1,
+            projectKey: el.getAttribute("data-project-id") || null
         };
     }
 
@@ -239,13 +275,21 @@
 
             var usedColumns = {};
             active.forEach(function(entry) {
-                usedColumns[entry.column] = true;
+                if (timedItemsAllowSideBySide(entry, item)) {
+                    usedColumns[entry.column] = true;
+                }
             });
             var column = 0;
             while (usedColumns[column]) column += 1;
 
             item.column = column;
-            active.push({ sortedIndex: sortedIndex, endMin: item.endMin, column: column });
+            active.push({
+                sortedIndex: sortedIndex,
+                startMin: item.startMin,
+                endMin: item.endMin,
+                column: column,
+                projectKey: item.projectKey
+            });
             clusterIndices.push(sortedIndex);
             clusterMaxColumns = Math.max(clusterMaxColumns, active.length);
         });
@@ -311,6 +355,14 @@
         var hh = String(dt.getHours()).padStart(2, "0");
         var mm = String(dt.getMinutes()).padStart(2, "0");
         return y + "-" + m + "-" + d + "T" + hh + ":" + mm;
+    }
+
+    function toDateOnly(dt) {
+        if (!dt) return "";
+        var y = dt.getFullYear();
+        var m = String(dt.getMonth() + 1).padStart(2, "0");
+        var d = String(dt.getDate()).padStart(2, "0");
+        return y + "-" + m + "-" + d;
     }
 
     function parseBlockDate(value) {
@@ -997,6 +1049,21 @@
         menu.style.top = top + "px";
     }
 
+    function warnTimerBlocksCalendarDrag() {
+        var now = Date.now();
+        if (now - timerBlockWarnAt < 3000) return;
+        timerBlockWarnAt = now;
+        if (typeof showSnackbar === "function") {
+            showSnackbar("Stop the timer before you can move or edit time blocks.", "warning");
+        }
+    }
+
+    function blockCalendarDragWhileTimerRunning() {
+        if (!runningTimer) return false;
+        warnTimerBlocksCalendarDrag();
+        return true;
+    }
+
     function refreshTimerStatus() {
         return apiFetch("/api/schedule-blocks/timer").then(function(data) {
             runningTimer = data.running ? data.block : null;
@@ -1114,7 +1181,9 @@
         var metaHtml = ticket
             ? '<span class="sched-block-meta">' + escapeAttr(ticket) + "</span>"
             : "";
-        return '<button type="button" class="' + classes + '" data-id="' + block.id + '" style="' + blockInlineStyle(block, style) + '" title="' + escapeAttr((block.title || "Block") + " (" + timeLabel + ")") + '">' +
+        var projectKey = blockProjectKey(block);
+        var projectAttr = projectKey ? ' data-project-id="' + escapeAttr(projectKey) + '"' : "";
+        return '<button type="button" class="' + classes + '" data-id="' + block.id + '"' + projectAttr + ' style="' + blockInlineStyle(block, style) + '" title="' + escapeAttr((block.title || "Block") + " (" + timeLabel + ")") + '">' +
             '<span class="sched-block-header">' +
             '<span class="sched-block-title">' + escapeAttr(block.title || "Block") + "</span>" +
             metaHtml +
@@ -1153,7 +1222,7 @@
     }
 
     function onBlockMouseDown(e, blockEl) {
-        if (runningTimer || e.button !== 0) return;
+        if (blockCalendarDragWhileTimerRunning() || e.button !== 0) return;
         if (e.target.closest(".sched-block-resize-handle")) return;
         suppressBlockClick = false;
         var id = parseInt(blockEl.getAttribute("data-id"), 10);
@@ -1188,7 +1257,7 @@
     }
 
     function onResizeMouseDown(e, handleEl) {
-        if (runningTimer || e.button !== 0) return;
+        if (blockCalendarDragWhileTimerRunning() || e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
         suppressBlockClick = true;
@@ -1217,7 +1286,7 @@
     }
 
     function onColumnMouseDown(e) {
-        if (runningTimer || e.button !== 0) return;
+        if (blockCalendarDragWhileTimerRunning() || e.button !== 0) return;
         if (e.target.closest(".sched-block, .automation-cal-week-block, .sched-block-resize-handle")) return;
         var col = e.target.closest(".automation-cal-week-day-col");
         if (!col || gridPeriodStart == null) return;
@@ -1324,16 +1393,27 @@
                 if (resized) {
                     var resizeStartMinute = Math.min(finalResize.startMinute, finalResize.endMinute - interactionIncrement());
                     var resizeEndMinute = Math.max(finalResize.endMinute, resizeStartMinute + interactionIncrement());
-                    var startDt = dateWithMinutes(finalResize.dayDate, resizeStartMinute);
-                    var endDt = dateWithMinutes(finalResize.dayDate, resizeEndMinute);
-                    persistBlockTimes(
+                    var resizeProjectKey = blockProjectKey(resized);
+                    if (hasSameProjectTimeOverlap(
                         finalResize.blockId,
-                        startDt,
-                        endDt,
-                        resized.start_at,
-                        resized.end_at,
-                        "Time block updated"
-                    );
+                        finalResize.dayDate,
+                        resizeStartMinute,
+                        resizeEndMinute,
+                        resizeProjectKey
+                    )) {
+                        showSnackbar(sameProjectOverlapMessage(), "warning");
+                    } else {
+                        var startDt = dateWithMinutes(finalResize.dayDate, resizeStartMinute);
+                        var endDt = dateWithMinutes(finalResize.dayDate, resizeEndMinute);
+                        persistBlockTimes(
+                            finalResize.blockId,
+                            startDt,
+                            endDt,
+                            resized.start_at,
+                            resized.end_at,
+                            "Time block updated"
+                        );
+                    }
                 }
             }
             window.setTimeout(function() { suppressBlockClick = false; }, 0);
@@ -1349,16 +1429,29 @@
                 var moved = blocks.filter(function(b) { return b.id === finalMove.blockId; })[0];
                 var moveCol = columnRefs[finalMove.dayIndex];
                 if (moved && moveCol) {
-                    var moveStart = dateWithMinutes(moveCol.dayDate, finalMove.currentMinute);
-                    var moveEnd = dateWithMinutes(moveCol.dayDate, finalMove.currentMinute + finalMove.duration);
-                    persistBlockTimes(
+                    var moveStartMinute = finalMove.currentMinute;
+                    var moveEndMinute = finalMove.currentMinute + finalMove.duration;
+                    var moveProjectKey = blockProjectKey(moved);
+                    if (hasSameProjectTimeOverlap(
                         finalMove.blockId,
-                        moveStart,
-                        moveEnd,
-                        moved.start_at,
-                        moved.end_at,
-                        "Time block moved"
-                    );
+                        moveCol.dayDate,
+                        moveStartMinute,
+                        moveEndMinute,
+                        moveProjectKey
+                    )) {
+                        showSnackbar(sameProjectOverlapMessage(), "warning");
+                    } else {
+                        var moveStart = dateWithMinutes(moveCol.dayDate, moveStartMinute);
+                        var moveEnd = dateWithMinutes(moveCol.dayDate, moveEndMinute);
+                        persistBlockTimes(
+                            finalMove.blockId,
+                            moveStart,
+                            moveEnd,
+                            moved.start_at,
+                            moved.end_at,
+                            "Time block moved"
+                        );
+                    }
                 }
             }
             window.setTimeout(function() { suppressBlockClick = false; }, 0);
@@ -1670,6 +1763,13 @@
             if (totalEl) totalEl.textContent = formatSecondsDuration(monthTotalSeconds);
             if (totalLabel) totalLabel.textContent = "Month total";
         },
-        getRunningTimer: function() { return runningTimer; }
+        getRunningTimer: function() { return runningTimer; },
+        getVisibleExportRange: function() {
+            if (!visibleRangeStart || !visibleRangeEnd) return null;
+            return {
+                start_date: toDateOnly(visibleRangeStart),
+                end_date: toDateOnly(visibleRangeEnd),
+            };
+        }
     };
 })();

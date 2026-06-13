@@ -75,7 +75,7 @@ Hermes owns events and learning signals. It does not own WhatsApp, Telegram, Gma
 - [x] Add tests for route override approval approve/reject and run_data updates (`test_run_route_approval.py`).
 - [x] Add route_decided Hermes events for workflow/kanban/agent/initiative dispatch paths.
 - [x] Wire auto_dispatch_corrections run policy to re-run failed steps with correction packets.
-- [x] Honor hermes_enabled before emitting ledger events.
+- [x] Honor orchestrator_enabled before emitting ledger events.
 - [x] Resolve hermes_correction_* models when auto-dispatching corrections.
 
 ## UI Shape
@@ -131,6 +131,10 @@ Initiative approval surfacing now has a chat-context guard. Pending approvals ar
 4. ~~Channel intake events.~~
 5. ~~Learned rules storage and UI.~~
 6. ~~Route-policy integration based on ticket complexity and learned rules.~~
+
+## Remote app (mobile relay)
+
+The remote app (`www.decisionsai.net/remote-app`) mirrors **orchestrator run controls** on the Workflows **Runs** tab (route approval, steer, cancel, run preview). It does **not** ship the full desktop command center (executor/events subtabs, orchestrator events timeline, steering memory viewer). See [remote-app-drift-audit.md](./remote-app-drift-audit.md).
 
 ### Recommended next (pick one at a time)
 

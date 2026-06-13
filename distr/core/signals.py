@@ -164,6 +164,9 @@ class SignalManager(QObject):
     # Model hot-reload (change LLM model without restarting whole agent)
     model_hot_reload = pyqtSignal(str, str, object)  # provider, model_name, chat_id
 
+    # Voice hot-reload (change TTS voice without restarting whole agent)
+    voice_hot_reload = pyqtSignal(str, str)  # voice_provider, voice_model
+
     # Audio settings signals
     playback_speed_changed = pyqtSignal(float)
     speech_volume_changed = pyqtSignal(int)       # 0-100

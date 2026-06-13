@@ -223,7 +223,6 @@ class EventHandlerMixin:
             self._tts_non_interrupt_fallback_timer.timeout.connect(self._on_tts_non_interrupt_fallback_timeout)
         if not hasattr(self, '_tts_player_generation'):
             self._tts_player_generation = 0
-
         if event == 'tts_started':
             source = data.get("source") if isinstance(data, dict) else None
             if source != "transport":
@@ -406,10 +405,9 @@ class EventHandlerMixin:
         self._tts_active_sessions = 0
         if hasattr(self, '_tts_player_generation'):
             self._tts_player_generation += 1
-        if hasattr(self, 'player_window') and self.player_window and self.player_window.isVisible():
+        if hasattr(self, 'player_window') and self.player_window and self._player_is_on_screen():
             logger.warning("[EVENT QUEUE] Player safety timeout (5 min) - hiding player (playback_finished never received)")
-            signal_manager.player_stop.emit()
-            signal_manager.emit_hide_player_window()
+            self._hide_player_window_immediate("player_safety_timeout")
 
     def _on_tts_non_interrupt_fallback_timeout(self):
         """Fallback close for missing playback_finished on non-interrupt utterances."""
@@ -447,17 +445,43 @@ class EventHandlerMixin:
         elif action == "play":
             signal_manager.player_play.emit()
 
+    def _player_is_on_screen(self) -> bool:
+        """True when the desktop player is visible or stuck in a fade-out."""
+        player = getattr(self, 'player_window', None)
+        if not player:
+            return False
+        if hasattr(player, 'is_on_screen'):
+            return bool(player.is_on_screen())
+        return bool(player.isVisible())
+
+    def _hide_player_window_immediate(self, reason: str) -> None:
+        """Hide the desktop player without fade guards."""
+        player = getattr(self, 'player_window', None)
+        if player and hasattr(player, 'hide_window_immediate'):
+            player.hide_window_immediate()
+        else:
+            signal_manager.player_stop.emit()
+            signal_manager.emit_hide_player_window()
+        logger.info("[EVENT QUEUE] Hid player window (%s)", reason)
+
     def _close_player_if_tts_complete(self, reason: str):
         """Close player when no active TTS sessions remain."""
+        player_on_screen = self._player_is_on_screen()
         if self._tts_active_sessions != 0:
-            return
-        signal_manager.player_stop.emit()
-        player_already_hidden = hasattr(self, 'player_window') and self.player_window and not self.player_window.isVisible()
-        if player_already_hidden:
-            logger.info("[EVENT QUEUE] Skipped hide_player_window signal - player already hidden (%s)", reason)
+            if not player_on_screen:
+                return
+            logger.warning(
+                "[EVENT QUEUE] Force-closing visible player with active_sessions=%d (%s)",
+                self._tts_active_sessions,
+                reason,
+            )
+            self._tts_active_sessions = 0
+            self._tts_pending_non_interrupt_closes = 0
+        if player_on_screen:
+            self._hide_player_window_immediate(reason)
         else:
-            signal_manager.emit_hide_player_window()
-            logger.info("[EVENT QUEUE] Emitted hide_player_window signal (%s)", reason)
+            signal_manager.player_stop.emit()
+            logger.info("[EVENT QUEUE] Player not on screen (%s)", reason)
 
         # Defensive: if oracle is still in 'thinking' after playback is done,
         # force it back to idle so skin state cannot stick.

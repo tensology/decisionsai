@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from distr.core.orchestration_events import emit_orchestration_event, emit_user_notification
-from distr.core.hermes import record_learning_signal
+from distr.core.orchestrator import record_learning_signal
 
 
 @dataclass

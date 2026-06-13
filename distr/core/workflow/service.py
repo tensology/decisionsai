@@ -532,11 +532,118 @@ def build_combined_context_rules(workflow_id: int, base_context_rules: Optional[
     return base + "\n\n" + merged_items
 
 
+def _unlink_workflow_tickets(db, workflow_ids: List[int]) -> int:
+    """Clear workflow queue links on board tickets when workflows are removed."""
+    ids = [int(wid) for wid in (workflow_ids or []) if wid is not None]
+    if not ids:
+        return 0
+    updated = (
+        db.query(KanbanTicket)
+        .filter(KanbanTicket.linked_workflow_id.in_(ids))
+        .update(
+            {
+                KanbanTicket.linked_workflow_id: None,
+                KanbanTicket.workflow_queue_position: 0,
+            },
+            synchronize_session=False,
+        )
+    )
+    return int(updated or 0)
+
+
+def clear_ticket_workflow_links(
+    *,
+    workflow_id: Optional[int] = None,
+    orphaned_only: bool = False,
+    clear_status: bool = True,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Remove workflow queue bindings from kanban tickets.
+
+    Clears ``linked_workflow_id`` and ``workflow_queue_position``. When
+    ``clear_status`` is true, also clears ``workflow_status``.
+
+    Scope:
+    - ``workflow_id``: only tickets linked to that workflow.
+    - ``orphaned_only``: tickets whose ``linked_workflow_id`` no longer exists.
+    - otherwise: every ticket with a workflow link or non-zero queue position.
+    """
+    with get_session() as db:
+        q = db.query(KanbanTicket)
+        if workflow_id is not None:
+            q = q.filter(KanbanTicket.linked_workflow_id == int(workflow_id))
+        elif orphaned_only:
+            existing_ids = {row[0] for row in db.query(AutoWorkflow.id).all()}
+            q = q.filter(KanbanTicket.linked_workflow_id.isnot(None))
+            if existing_ids:
+                q = q.filter(~KanbanTicket.linked_workflow_id.in_(existing_ids))
+        else:
+            q = q.filter(
+                or_(
+                    KanbanTicket.linked_workflow_id.isnot(None),
+                    KanbanTicket.workflow_queue_position != 0,
+                )
+            )
+
+        rows = q.order_by(KanbanTicket.id.asc()).all()
+        ticket_ids = [int(t.id) for t in rows]
+        sample = [
+            {
+                "ticket_id": t.id,
+                "title": t.title or "",
+                "linked_workflow_id": t.linked_workflow_id,
+                "workflow_queue_position": t.workflow_queue_position or 0,
+                "workflow_status": t.workflow_status,
+            }
+            for t in rows[:25]
+        ]
+        if dry_run:
+            return {
+                "dry_run": True,
+                "count": len(rows),
+                "ticket_ids": ticket_ids,
+                "sample": sample,
+                "orphaned_only": orphaned_only,
+                "workflow_id": workflow_id,
+            }
+
+        if not ticket_ids:
+            return {
+                "dry_run": False,
+                "updated": 0,
+                "ticket_ids": [],
+                "cleared_status": clear_status,
+            }
+
+        values: Dict[Any, Any] = {
+            KanbanTicket.linked_workflow_id: None,
+            KanbanTicket.workflow_queue_position: 0,
+        }
+        if clear_status:
+            values[KanbanTicket.workflow_status] = None
+
+        updated = (
+            db.query(KanbanTicket)
+            .filter(KanbanTicket.id.in_(ticket_ids))
+            .update(values, synchronize_session=False)
+        )
+        db.commit()
+        return {
+            "dry_run": False,
+            "updated": int(updated or 0),
+            "ticket_ids": ticket_ids,
+            "cleared_status": clear_status,
+            "orphaned_only": orphaned_only,
+            "workflow_id": workflow_id,
+        }
+
+
 def delete_workflow(workflow_id: int) -> bool:
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return False
+        _unlink_workflow_tickets(db, [workflow_id])
         step_ids = [
             row[0]
             for row in db.query(AutoWorkflowStep.id)
@@ -588,6 +695,7 @@ def purge_all_workflows(*, include_audit: bool = False) -> int:
         workflows = query.all()
         wf_ids = [wf.id for wf in workflows]
         if wf_ids:
+            _unlink_workflow_tickets(db, wf_ids)
             step_ids = [
                 row[0]
                 for row in db.query(AutoWorkflowStep.id)
@@ -658,15 +766,35 @@ def duplicate_workflow(workflow_id: int) -> Optional[int]:
 
 # ── Step CRUD ──
 
-def add_step(workflow_id: int, name: str = "New Step", action_type: str = "agent_instruction",
-             position: Optional[int] = None) -> Optional[int]:
+def add_step(
+    workflow_id: int,
+    name: str = "New Step",
+    action_type: str = "agent_instruction",
+    position: Optional[int] = None,
+    instruction: str = "",
+    config: Optional[dict] = None,
+    validation_type: str = "none",
+    validation_prompt: str = "",
+    wait_for_continue: bool = False,
+) -> Optional[int]:
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return None
         if position is None:
             position = max((s.position for s in wf.steps), default=-1) + 1
-        step = AutoWorkflowStep(workflow_id=workflow_id, position=position, name=name, action_type=action_type)
+        step = AutoWorkflowStep(
+            workflow_id=workflow_id,
+            position=position,
+            name=name,
+            action_type=action_type,
+            step_type=action_type,
+            instruction=(instruction or "").strip(),
+            config=json.dumps(config or {}),
+            validation_type=validation_type or "none",
+            validation_prompt=(validation_prompt or "").strip(),
+            wait_for_continue=bool(wait_for_continue),
+        )
         db.add(step)
         db.commit()
         db.refresh(step)
@@ -813,7 +941,7 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
                 **current_route,
                 "backend": backend_id,
                 "model": model,
-                "source": "hermes_override",
+                "source": "orchestrator_override",
                 "rationale": rationale,
                 "requires_approval": False,
             }
@@ -823,7 +951,7 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
             event_type = "route_approval_rejected"
             summary = "Route override rejected; policy route will be used."
             run_data.pop("approved_route_override", None)
-            run_data["suppress_hermes_override"] = True
+            run_data["suppress_orchestrator_override"] = True
 
         run_data.pop("pending_route_approval", None)
         run_data.pop("route_approval_pending", None)
@@ -838,10 +966,10 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
         db.commit()
 
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.orchestrator import emit_event
 
         emit_event(
-            source="hermes",
+            source="orchestrator",
             event_type=event_type,
             status="approved" if approved else "rejected",
             workflow_id=workflow_id,
@@ -970,10 +1098,10 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
         logger.debug("Could not append harness steer execution event", exc_info=True)
 
     try:
-        from distr.core.hermes import emit_event, record_human_intervention_memory
+        from distr.core.orchestrator import emit_event, record_human_intervention_memory
 
         emit_event(
-            source="hermes",
+            source="orchestrator",
             event_type="harness_steer",
             status="delivered" if steer_result.get("delivered") else "queued",
             workflow_id=workflow_id,
@@ -1006,6 +1134,22 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
         logger.debug("Could not emit harness_steer event", exc_info=True)
 
     try:
+        from distr.core.workflow.steering_memory import record_run_steering_feedback
+
+        record_run_steering_feedback(
+            run_id=run_id,
+            message=instruction,
+            workflow_id=workflow_id,
+            board_id=board_id,
+            ticket_id=ticket_id,
+            project_id=int(project_id) if project_id else None,
+            source="workflow_ui",
+            event_type="user_steer",
+        )
+    except Exception:
+        logger.debug("Could not record harness steer in steering log", exc_info=True)
+
+    try:
         from distr.core.workflow.standards_memory import capture_feedback_as_standard
 
         if workflow_id:
@@ -1036,7 +1180,7 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         corrections_by_run: Dict[int, List[Dict[str, Any]]] = {}
         if run_ids:
             try:
-                from distr.core.hermes import list_correction_attempts
+                from distr.core.orchestrator import list_correction_attempts
 
                 for attempt in list_correction_attempts(workflow_id=workflow_id, limit=500):
                     run_id = attempt.get("run_id")
@@ -1115,6 +1259,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
                 "phase": run_data.get("phase"),
                 "waiting_kind": run_data.get("waiting_kind") or "",
+                "auto_queued_from_run_id": run_data.get("auto_queued_from_run_id"),
             })
         return results
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
-from distr.core.db.hermes import HermesVisualBaselineSet
+from distr.core.db.orchestrator import OrchestratorVisualBaselineSet
 
 
 def _session_ctx_factory():
@@ -47,7 +47,7 @@ def test_visual_baseline_tool_creates_gets_and_lists_baselines(monkeypatch):
     from distr.core.agent.tools.step_runner.workflow_tools import VisualBaselineTool
 
     session_ctx, factory = _session_ctx_factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", session_ctx)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", session_ctx)
     monkeypatch.setattr("distr.core.db.get_session", session_ctx)
 
     tool = VisualBaselineTool()
@@ -70,7 +70,7 @@ def test_visual_baseline_tool_creates_gets_and_lists_baselines(monkeypatch):
     assert "REFERENCE" in created
 
     with factory() as db:
-        baseline = db.query(HermesVisualBaselineSet).one()
+        baseline = db.query(OrchestratorVisualBaselineSet).one()
         baseline_id = baseline.id
         assert baseline.name == "Gold Admin"
         assert baseline.scope == "board"
@@ -89,7 +89,7 @@ def test_visual_baseline_tool_can_store_durable_screenshot_copy(monkeypatch, tmp
     from distr.core.agent.tools.step_runner.workflow_tools import VisualBaselineTool
 
     session_ctx, _factory = _session_ctx_factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", session_ctx)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", session_ctx)
     monkeypatch.setattr("distr.core.db.get_session", session_ctx)
 
     source_path = tmp_path / "dashboard.png"
@@ -115,7 +115,7 @@ def test_visual_baseline_tool_reports_readiness(monkeypatch, tmp_path):
     from distr.core.agent.tools.step_runner.workflow_tools import VisualBaselineTool
 
     session_ctx, _factory = _session_ctx_factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", session_ctx)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", session_ctx)
     monkeypatch.setattr("distr.core.db.get_session", session_ctx)
 
     existing_path = tmp_path / "dashboard.png"

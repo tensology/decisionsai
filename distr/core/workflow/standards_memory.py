@@ -68,7 +68,7 @@ def build_standards_context(context_rules: Optional[str] = None, board_id: int |
 
     if board_id:
         try:
-            from distr.core.hermes import build_learned_rules_context, build_visual_taste_context
+            from distr.core.orchestrator import build_learned_rules_context, build_visual_taste_context
 
             additions = []
             learned = build_learned_rules_context(int(board_id))

@@ -16,6 +16,7 @@ def test_project_details_does_not_surface_implementation_routing_block():
     assert 'id="detail-board"' in html
     assert 'id="detail-triggers-wrap"' in html
     assert 'id="detail-description"' in html
+    assert 'id="detail-notes"' in html
     assert html.index('id="detail-board"') < html.index('id="detail-description"')
 
 
@@ -71,6 +72,7 @@ def test_decisions_startup_checks_project_tools_without_installing_clis():
 
     assert "check_project_cli_presence" in script
     assert "check_codex_plugin_setup" in script
+    assert "RTK token proxy" in script
     assert "scripts/setup_project_clis.sh" in script
     assert "npm install -g @mariozechner/pi-coding-agent" not in script
     assert "brew install node" not in script
@@ -87,4 +89,6 @@ def test_project_cli_setup_script_installs_tools_outside_startup():
     assert "@openai/codex" in script
     assert "@anthropic-ai/claude-code" in script
     assert "@earendil-works/pi-coding-agent" in script
+    assert "install_rtk" in script
+    assert "init_rtk_agent_hooks" in script
     assert "decisions.sh" not in script

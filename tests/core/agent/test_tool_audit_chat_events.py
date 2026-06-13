@@ -33,6 +33,8 @@ def test_record_tool_execution_persists_chat_event(monkeypatch):
         session.add(chat)
         session.commit()
         chat_id = chat.id
+        chat.params = json.dumps({"active_turn_chat_row_id": chat_id})
+        session.commit()
 
     record_tool_execution(
         chat_id,
@@ -83,6 +85,8 @@ def test_record_tool_execution_marks_internal_probe_tools_compact(monkeypatch):
         session.add(chat)
         session.commit()
         chat_id = chat.id
+        chat.params = json.dumps({"active_turn_chat_row_id": chat_id})
+        session.commit()
 
     record_tool_execution(chat_id, "execute_code", "Output: (960, 540)", "completed")
     record_tool_execution(chat_id, "mode_control", "Error: Please specify action", "completed")
@@ -122,6 +126,8 @@ def test_record_tool_execution_does_not_create_audit_workflow(monkeypatch):
         session.add(chat)
         session.commit()
         chat_id = chat.id
+        chat.params = json.dumps({"active_turn_chat_row_id": chat_id})
+        session.commit()
 
     record_tool_execution(
         chat_id,
@@ -133,3 +139,39 @@ def test_record_tool_execution_does_not_create_audit_workflow(monkeypatch):
 
     with patched_get_session() as session:
         assert session.query(AutoWorkflow).count() == 0
+
+
+def test_record_tool_execution_hides_events_outside_active_turn(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def patched_get_session():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr("distr.core.db.get_session", patched_get_session)
+    monkeypatch.setattr(
+        "distr.core.workflow.service.append_audit_step",
+        lambda **kwargs: None,
+    )
+
+    with patched_get_session() as session:
+        chat = Chat(title="Test chat")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    record_tool_execution(chat_id, "smart_open", "Opened application: Finder", "completed")
+
+    with patched_get_session() as session:
+        chat = session.get(Chat, chat_id)
+        params = json.loads(chat.params)
+
+    events = params["tool_events"]
+    assert len(events) == 1
+    assert events[0]["chat_visible"] is False

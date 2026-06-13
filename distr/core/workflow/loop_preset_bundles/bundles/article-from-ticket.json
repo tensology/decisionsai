@@ -1,0 +1,184 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "article-from-ticket",
+  "name": "Article from Ticket",
+  "role": "content",
+  "category": "Content",
+  "archetype": "incremental_ship",
+  "description": "Brief → outline → draft → SEO → browser preview → publish-ready report.",
+  "kickoff": "Start the \"Article from Ticket\" loop.\nGoal: publish-ready article matching the ticket brief\nMax iterations: 5\nExit when: draft passes SEO and browser preview checks.\nOrientation: read the linked ticket brief for audience, angle, keywords, and CTA.\nStep 1: Ingest the content brief and list gaps to confirm.",
+  "loop_contract": {
+    "name": "Article from Ticket",
+    "goal": "publish-ready article matching ticket brief",
+    "exit_when": "draft passes SEO and browser preview",
+    "check_command": "SEO checklist + preview URL",
+    "max_iterations": 5,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read ticket brief: audience, angle, keywords, CTA, brand voice, deadline. List gaps to confirm.",
+    "archetype": "incremental_ship",
+    "role": "content"
+  },
+  "expected_check_command": "SEO checklist + preview URL",
+  "tags": [
+    "content",
+    "seo",
+    "blog"
+  ],
+  "steps": [
+    {
+      "name": "Ingest content brief",
+      "instruction": "Read ticket brief: audience, angle, keywords, CTA, brand voice, deadline. List gaps to confirm.",
+      "skills": [
+        "product-lens",
+        "brainstorming",
+        "content-engine"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Ingest content brief' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket + brand context"
+    },
+    {
+      "name": "Outline article",
+      "instruction": "Produce H2/H3 outline with keyword map and internal link targets. Use article-writing and writing-plans.",
+      "skills": [
+        "article-writing",
+        "writing-plans",
+        "seo"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Outline article' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Draft body",
+      "instruction": "Write the draft following the outline. Use content-engine and doc-coauthoring patterns.",
+      "skills": [
+        "content-engine",
+        "doc-coauthoring",
+        "article-writing"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Draft body' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "SEO and metadata pass",
+      "instruction": "Run seo skill: title, meta, headings, snippet. Fix readability issues.",
+      "skills": [
+        "seo",
+        "content-engine"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'SEO and metadata pass' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Preview in browser",
+      "instruction": "Render preview (local CMS, staging, or markdown preview). Check formatting, links, CTA.",
+      "skills": [
+        "browser-qa",
+        "webapp-testing"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Preview in browser' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate publish-ready",
+      "instruction": "Draft matches brief, SEO pass done, preview checked.",
+      "skills": [
+        "content-engine",
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate publish-ready' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Report",
+      "instruction": "Publish checklist and draft location for human approval.",
+      "skills": [
+        "social-publisher",
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator ticket update",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

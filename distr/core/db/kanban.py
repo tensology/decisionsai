@@ -28,7 +28,7 @@ class KanbanBoard(Base):
     in_use = Column(Boolean, default=False)  # only one board can be in_use at a time (default board for agent)
     color = Column(String, nullable=True)  # board accent color (hex, e.g. '#f97316')
     position = Column(Integer, default=0)  # sidebar display order
-    hermes_policy = Column(Text, nullable=True)  # JSON board overrides for routing/corrections
+    orchestrator_policy = Column(Text, nullable=True)  # JSON board overrides for routing/corrections
 
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -38,7 +38,7 @@ class KanbanBoard(Base):
 
     def _policy_dict(self):
         try:
-            data = json.loads(self.hermes_policy or "{}")
+            data = json.loads(self.orchestrator_policy or "{}")
             return data if isinstance(data, dict) else {}
         except Exception:
             return {}
@@ -46,7 +46,7 @@ class KanbanBoard(Base):
     def _set_policy_value(self, key: str, value: str) -> None:
         data = self._policy_dict()
         data[key] = value or ""
-        self.hermes_policy = json.dumps(data, sort_keys=True)
+        self.orchestrator_policy = json.dumps(data, sort_keys=True)
 
     @property
     def agent_source_lane(self):

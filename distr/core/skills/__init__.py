@@ -3,7 +3,7 @@
 from distr.core.skills.catalog import (
     bundled_skills_directory,
     filter_known_skill_ids,
-    hermes_skill_catalog,
+    orchestrator_skill_catalog,
     infer_skills_for_ticket,
     load_registry,
     merge_transfer_skills,
@@ -13,7 +13,7 @@ from distr.core.skills.catalog import (
 __all__ = [
     "bundled_skills_directory",
     "filter_known_skill_ids",
-    "hermes_skill_catalog",
+    "orchestrator_skill_catalog",
     "infer_skills_for_ticket",
     "load_registry",
     "merge_transfer_skills",

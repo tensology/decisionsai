@@ -79,7 +79,7 @@ class ProactiveOrchestratorTool(BaseTool):
         **kwargs,
     ) -> str:
         from distr.core.agent.tool_voice_format import voice_then_reference
-        from distr.core import hermes_proactive
+        from distr.core import orchestrator_proactive
 
         action_name = (action or "scan").strip().lower()
         if action_name in {"daily_plan", "daily plan", "plan", "day_plan", "morning_brief", "today"}:
@@ -87,14 +87,14 @@ class ProactiveOrchestratorTool(BaseTool):
         elif action_name in {"dispatch", "send", "approve"}:
             if not candidate_id:
                 return "Tell me which work candidate to dispatch first."
-            result = hermes_proactive.dispatch_proactive_candidate(
+            result = orchestrator_proactive.dispatch_proactive_candidate(
                 int(candidate_id),
                 approved_by=approved_by or "user",
                 backend_id=backend_id,
                 model=model,
             )
         else:
-            result = hermes_proactive.run_proactive_check(
+            result = orchestrator_proactive.run_proactive_check(
                 limit=limit,
                 source_filter=source or None,
                 project_id=project_id,
@@ -130,7 +130,7 @@ class ProactiveOrchestratorTool(BaseTool):
             "Build today's practical work plan from all connected Decisions intelligence. "
             "Use email and Gmail signals when available, WhatsApp and Telegram intake, "
             "ticket boards, Jira/Trello/local boards, active projects, Codex/Cursor developer "
-            "context, workflows, automations, Hermes triage, and long-term memory. "
+            "context, workflows, automations, orchestrator triage, and long-term memory. "
             "Prioritize what actually needs attention today, separate blocked items, and "
             "mention which source each important item came from."
         )

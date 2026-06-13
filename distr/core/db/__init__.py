@@ -109,14 +109,14 @@ class Settings(Base):
     project_cli_medium_codex_speed = Column(String, default='')
     project_cli_high_codex_intelligence = Column(String, default='')
     project_cli_high_codex_speed = Column(String, default='')
-    hermes_enabled = Column(Boolean, default=True)
-    hermes_orchestrator_provider = Column(String, default='')
-    hermes_orchestrator_model = Column(String, default='')
-    hermes_validator_provider = Column(String, default='')
-    hermes_validator_model = Column(String, default='')
-    hermes_correction_provider = Column(String, default='')
-    hermes_correction_model = Column(String, default='')
-    hermes_memory_export_enabled = Column(Boolean, default=False)
+    orchestrator_enabled = Column(Boolean, default=True)
+    orchestrator_provider = Column(String, default='')
+    orchestrator_model = Column(String, default='')
+    orchestrator_validator_provider = Column(String, default='')
+    orchestrator_validator_model = Column(String, default='')
+    orchestrator_correction_provider = Column(String, default='')
+    orchestrator_correction_model = Column(String, default='')
+    orchestrator_memory_export_enabled = Column(Boolean, default=False)
 
     # Advanced Settings
     excluded_files = Column(String, default='')
@@ -429,6 +429,20 @@ class WhatsAppPhoneLink(Base):
     contact_name = Column(String)  # display name from WhatsApp contacts
     auto_snapshot = Column(Boolean, default=False)  # auto-create ticket on new message?
     created_date = Column(DateTime, default=datetime.utcnow)
+
+
+class WhatsAppComposeDraft(Base):
+    """Unsent WhatsApp reply text for a chat (user typing or agent-prepared)."""
+    __tablename__ = 'whatsapp_compose_drafts'
+
+    jid_phone = Column(String, primary_key=True)
+    jid = Column(String)
+    chat_type = Column(String, default='private')
+    contact_name = Column(String)
+    draft_text = Column(Text, nullable=False, default='')
+    source = Column(String, default='user')
+    board_id = Column(Integer, nullable=True)
+    updated_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class WhatsAppMessage(Base):

@@ -294,6 +294,7 @@ def record_ticket_engagement_activity(
         status="completed",
         instruction_hint=display_message,
         routing_path=board_label or "ticket board",
+        chat_visible=False,
     )
 
 

@@ -88,6 +88,89 @@ def _find_device_in_list(devices, device_name: str, is_input: bool):
     return None, available
 
 
+def resolve_system_default_input_device() -> Tuple[Optional[int], Optional[str]]:
+    """Resolve the OS default input device from a fresh PortAudio init."""
+    script = """
+import json
+import sounddevice as sd
+try:
+    dev = sd.query_devices(kind='input')
+    print(json.dumps({"index": dev.get("index"), "name": dev.get("name", "")}))
+except Exception as exc:
+    print(json.dumps({"error": str(exc)}))
+"""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Fresh default input query subprocess failed: %s",
+                result.stderr or result.stdout,
+            )
+            return None, None
+        payload = json.loads(result.stdout.strip())
+        if payload.get("error"):
+            logger.warning("Fresh default input query error: %s", payload["error"])
+            return None, None
+        index = payload.get("index")
+        name = (payload.get("name") or "").strip() or None
+        if index is None:
+            return None, name
+        return int(index), name
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, TypeError, ValueError, OSError) as exc:
+        logger.warning("Could not query default input via subprocess: %s", exc)
+        return None, None
+
+
+def resolve_system_default_output_device() -> Tuple[Optional[int], Optional[str]]:
+    """Resolve the OS default output device from a fresh PortAudio init.
+
+    The agent's long-lived PyAudio instance can keep a stale default after the user
+    switches Bluetooth or changes macOS system output. A subprocess query picks up
+    the current default immediately without touching active streams.
+
+    Returns ``(index, name)`` or ``(None, None)`` on failure.
+    """
+    script = """
+import json
+import sounddevice as sd
+try:
+    dev = sd.query_devices(kind='output')
+    print(json.dumps({"index": dev.get("index"), "name": dev.get("name", "")}))
+except Exception as exc:
+    print(json.dumps({"error": str(exc)}))
+"""
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Fresh default output query subprocess failed: %s",
+                result.stderr or result.stdout,
+            )
+            return None, None
+        payload = json.loads(result.stdout.strip())
+        if payload.get("error"):
+            logger.warning("Fresh default output query error: %s", payload["error"])
+            return None, None
+        index = payload.get("index")
+        name = (payload.get("name") or "").strip() or None
+        if index is None:
+            return None, name
+        return int(index), name
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, TypeError, ValueError, OSError) as exc:
+        logger.warning("Could not query default output via subprocess: %s", exc)
+        return None, None
+
+
 def _query_devices_fresh_subprocess() -> Optional[List[Tuple[int, str, int, int]]]:
     """Query devices from a fresh Python subprocess (own PortAudio init = fresh device list).
     Returns [(index, name, max_input_ch, max_output_ch), ...] or None on failure.

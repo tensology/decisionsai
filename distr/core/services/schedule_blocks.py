@@ -8,7 +8,16 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.projects import Project
 from distr.core.db.schedule_blocks import ScheduleBlock
+from distr.core.services.schedule_timesheet_export import (
+    UNASSIGNED_BOARD_KEY,
+    board_key_for_block,
+    duration_minutes,
+    format_duration_label,
+)
+
+SAME_PROJECT_OVERLAP_MESSAGE = "This project already has a time block during that period."
 
 
 def _wall_now() -> datetime:
@@ -79,6 +88,77 @@ def _board_color(session: Session, block: ScheduleBlock) -> str:
     return _default_board_color(board)
 
 
+def _ranges_overlap(start_a: datetime, end_a: datetime, start_b: datetime, end_b: datetime) -> bool:
+    return start_a < end_b and end_a > start_b
+
+
+def resolve_block_project_id(session: Session, block: ScheduleBlock) -> Optional[int]:
+    """Resolve the project a schedule block belongs to, if any."""
+    if block.project_id:
+        return int(block.project_id)
+    if block.board_id:
+        project = (
+            session.query(Project)
+            .filter(Project.kanban_board_id == int(block.board_id))
+            .first()
+        )
+        if project:
+            return int(project.id)
+        board = session.query(KanbanBoard).filter(KanbanBoard.id == int(block.board_id)).first()
+        if board and board.default_project_id:
+            return int(board.default_project_id)
+    provider = (block.board_provider or "").strip().lower()
+    external_board_id = (block.external_board_id or "").strip()
+    if provider and provider != "local" and external_board_id:
+        project = (
+            session.query(Project)
+            .filter(Project.provider == provider, Project.board_id == external_board_id)
+            .first()
+        )
+        if project:
+            return int(project.id)
+    return None
+
+
+def find_same_project_overlap(
+    session: Session,
+    *,
+    project_id: int,
+    start: datetime,
+    end: datetime,
+    exclude_block_id: Optional[int] = None,
+) -> Optional[ScheduleBlock]:
+    if not project_id:
+        return None
+    for candidate in blocks_for_range(session, start, end):
+        if exclude_block_id and candidate.id == exclude_block_id:
+            continue
+        if resolve_block_project_id(session, candidate) == int(project_id):
+            if _ranges_overlap(start, end, candidate.start_at, candidate.end_at):
+                return candidate
+    return None
+
+
+def ensure_no_same_project_overlap(
+    session: Session,
+    block: ScheduleBlock,
+    *,
+    exclude_block_id: Optional[int] = None,
+) -> None:
+    project_id = resolve_block_project_id(session, block)
+    if not project_id:
+        return
+    conflict = find_same_project_overlap(
+        session,
+        project_id=project_id,
+        start=block.start_at,
+        end=block.end_at,
+        exclude_block_id=exclude_block_id or block.id,
+    )
+    if conflict:
+        raise ValueError(SAME_PROJECT_OVERLAP_MESSAGE)
+
+
 def _ticket_label(session: Session, block: ScheduleBlock) -> tuple[str, str]:
     if block.ticket_id:
         ticket = session.query(KanbanTicket).filter(KanbanTicket.id == block.ticket_id).first()
@@ -116,6 +196,7 @@ def serialize_block(session: Session, block: ScheduleBlock, *, extend_running_en
         "ticket_reference": ticket_ref,
         "ticket_title": ticket_title,
         "project_id": block.project_id,
+        "effective_project_id": resolve_block_project_id(session, block),
         "is_timer_running": bool(block.is_timer_running),
         "is_timer_entry": bool(block.is_timer_entry),
         "created_at": _iso(block.created_date),
@@ -247,6 +328,7 @@ def create_block(
         is_timer_entry=bool(is_timer_entry),
         is_timer_running=bool(is_timer_running),
     )
+    ensure_no_same_project_overlap(session, block)
     session.add(block)
     session.commit()
     session.refresh(block)
@@ -285,6 +367,7 @@ def update_block(
     if "external_ticket_key" in payload:
         block.external_ticket_key = (payload.get("external_ticket_key") or "").strip() or None
 
+    ensure_no_same_project_overlap(session, block)
     block.modified_date = _wall_now()
     session.commit()
     session.refresh(block)
@@ -335,17 +418,107 @@ def stop_timer(session: Session) -> Optional[ScheduleBlock]:
     return block
 
 
+def project_has_linked_board(project: Any) -> bool:
+    kanban_board_id = getattr(project, "kanban_board_id", None)
+    if kanban_board_id:
+        return True
+    provider = (getattr(project, "provider", None) or "").strip()
+    external_board_id = (getattr(project, "board_id", None) or "").strip()
+    return bool(provider and external_board_id)
+
+
+def resolve_block_project_name(session: Session, block: ScheduleBlock) -> str:
+    project_id = resolve_block_project_id(session, block)
+    if not project_id:
+        return ""
+    project = session.query(Project).filter(Project.id == project_id).first()
+    return (project.name or "").strip() if project else ""
+
+
+def _effective_block_end_at(block: ScheduleBlock, *, extend_running_end: bool = False) -> datetime:
+    end_at = block.end_at
+    if extend_running_end and block.is_timer_running and block.start_at:
+        now = _wall_now()
+        end_at = max(end_at, now + timedelta(minutes=1))
+    return end_at
+
+
+def boards_for_export_range(session: Session, start: datetime, end: datetime) -> list[dict[str, Any]]:
+    boards: dict[str, dict[str, Any]] = {}
+    for block in blocks_for_range(session, start, end):
+        key = board_key_for_block(block)
+        label = _board_label(session, block) or "No board"
+        if key == UNASSIGNED_BOARD_KEY:
+            label = "No board"
+        entry = boards.get(key)
+        if entry:
+            entry["block_count"] = int(entry.get("block_count") or 0) + 1
+            continue
+        boards[key] = {
+            "board_key": key,
+            "board_name": label,
+            "block_count": 1,
+        }
+    return sorted(boards.values(), key=lambda row: str(row.get("board_name") or "").lower())
+
+
+def timesheet_export_rows(
+    session: Session,
+    start: datetime,
+    end: datetime,
+    board_keys: list[str],
+    *,
+    extend_running_end: bool = True,
+) -> list[dict[str, Any]]:
+    selected = {str(key).strip() for key in board_keys if str(key).strip()}
+    rows: list[dict[str, Any]] = []
+    for block in blocks_for_range(session, start, end):
+        key = board_key_for_block(block)
+        if key not in selected:
+            continue
+        end_at = _effective_block_end_at(block, extend_running_end=extend_running_end)
+        minutes = duration_minutes(block.start_at, end_at)
+        ticket_ref, ticket_title = _ticket_label(session, block)
+        project_name = resolve_block_project_name(session, block) or "No project"
+        rows.append({
+            "project_name": project_name,
+            "project_sort": project_name.lower(),
+            "board_name": _board_label(session, block) or "No board",
+            "date": block.start_at.strftime("%Y-%m-%d"),
+            "start_time": block.start_at.strftime("%H:%M"),
+            "end_time": end_at.strftime("%H:%M"),
+            "duration_label": format_duration_label(minutes),
+            "title": (block.title or "").strip(),
+            "description": ticket_title,
+            "ticket": ticket_ref,
+            "start_at": block.start_at,
+        })
+    rows.sort(key=lambda row: (row["project_sort"], row["start_at"], row["title"].lower()))
+    for row in rows:
+        row.pop("project_sort", None)
+        row.pop("start_at", None)
+    return rows
+
+
 def start_project_time_tracker(session: Session, project: Any) -> Optional[ScheduleBlock]:
     if running_timer(session):
         return running_timer(session)
     if not getattr(project, "start_time_tracker", True):
         return None
+    if not project_has_linked_board(project):
+        return None
     board_id = getattr(project, "kanban_board_id", None)
+    board_provider = "local"
+    external_board_id = None
+    if not board_id:
+        board_provider = (getattr(project, "provider", None) or "local").strip() or "local"
+        external_board_id = (getattr(project, "board_id", None) or "").strip() or None
     title = (getattr(project, "name", None) or "Project work").strip() or "Project work"
     return start_timer(
         session,
         title=title,
         board_id=board_id,
-        board_provider="local",
+        board_provider=board_provider,
+        external_board_id=external_board_id,
         project_id=getattr(project, "id", None),
     )

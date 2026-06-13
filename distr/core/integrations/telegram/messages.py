@@ -326,7 +326,7 @@ class TelegramMessagesMixin:
                 return
 
             try:
-                from distr.core.hermes_delegated.continuation import handle_delegated_continuation_message
+                from distr.core.delegated_workflow.continuation import handle_delegated_continuation_message
 
                 if handle_delegated_continuation_message(self, text):
                     return
@@ -703,8 +703,8 @@ class TelegramMessagesMixin:
                     return True
                 return False
 
-            hermes_handled = self._handle_hermes_triage_reply(queue_obj, entries, text_lower)
-            if hermes_handled:
+            orchestrator_handled = self._handle_orchestrator_triage_reply(queue_obj, entries, text_lower)
+            if orchestrator_handled:
                 return True
 
             read_token = match_read_draft_by_id_request(text_lower)
@@ -766,15 +766,15 @@ class TelegramMessagesMixin:
         self.send_to_telegram("Rejected and removed from the Initiative queue." if removed else "That pending action was not found.")
         return True
 
-    def _handle_hermes_triage_reply(self, queue_obj, entries, text_lower: str) -> bool:
+    def _handle_orchestrator_triage_reply(self, queue_obj, entries, text_lower: str) -> bool:
         """Make work-scan approvals conversational instead of ID-first."""
         import re
 
-        hermes_entries = [
+        orchestrator_entries = [
             e for e in entries
-            if e.action_type == "hermes_triage_candidate"
+            if e.action_type == "orchestrator_triage_candidate"
         ]
-        if not hermes_entries:
+        if not orchestrator_entries:
             return False
 
         def _pending_items_phrase(count: int) -> str:
@@ -790,8 +790,11 @@ class TelegramMessagesMixin:
 
         decision = _decision_word(text_lower)
         if not decision:
-            if re.search(r"\b(what|show|read|list).*\b(hermes|standup|triage|decision|approval|pending|work)\b", text_lower):
-                self.send_to_telegram(self._format_hermes_triage_entries(hermes_entries))
+            if re.search(
+                r"\b(what|show|read|list).*\b(hermes|orchestrator|standup|triage|decision|approval|pending|work)\b",
+                text_lower,
+            ):
+                self.send_to_telegram(self._format_orchestrator_triage_entries(orchestrator_entries))
                 return True
             return False
 
@@ -799,11 +802,11 @@ class TelegramMessagesMixin:
         numbered = re.search(r"\b(?:approve|reject|yes|no|ignore|skip)\s+(\d{1,2})\b", text_lower)
         if numbered:
             idx = max(0, int(numbered.group(1)) - 1)
-        elif len(hermes_entries) > 1 and re.search(r"\b(all|everything)\b", text_lower):
+        elif len(orchestrator_entries) > 1 and re.search(r"\b(all|everything)\b", text_lower):
             acted = 0
-            for entry in list(hermes_entries):
+            for entry in list(orchestrator_entries):
                 if decision == "approve":
-                    if self._approve_hermes_triage_entry(queue_obj, entry):
+                    if self._approve_orchestrator_triage_entry(queue_obj, entry):
                         acted += 1
                 elif queue_obj.remove(entry.id):
                     acted += 1
@@ -811,15 +814,15 @@ class TelegramMessagesMixin:
             self.send_to_telegram(f"{verb} {_pending_items_phrase(acted)}.")
             return True
 
-        if idx >= len(hermes_entries):
+        if idx >= len(orchestrator_entries):
             self.send_to_telegram(
-                f"I only have {_pending_items_phrase(len(hermes_entries))} waiting. "
+                f"I only have {_pending_items_phrase(len(orchestrator_entries))} waiting. "
                 "Reply 'show pending items' to see them."
             )
             return True
 
-        entry = hermes_entries[idx]
-        if len(hermes_entries) > 1 and not numbered:
+        entry = orchestrator_entries[idx]
+        if len(orchestrator_entries) > 1 and not numbered:
             # The check-in message asks for a conversational reply. Treat a plain
             # approve/reject as the first/current pending item, then explain.
             prefix = "I’ll apply that to the first pending item."
@@ -827,7 +830,7 @@ class TelegramMessagesMixin:
             prefix = ""
 
         if decision == "approve":
-            ok = self._approve_hermes_triage_entry(queue_obj, entry)
+            ok = self._approve_orchestrator_triage_entry(queue_obj, entry)
             self.send_to_telegram(
                 f"{prefix + ' ' if prefix else ''}Approved: {entry.description}"
                 if ok else
@@ -843,12 +846,12 @@ class TelegramMessagesMixin:
         )
         return True
 
-    def _approve_hermes_triage_entry(self, queue_obj, entry) -> bool:
+    def _approve_orchestrator_triage_entry(self, queue_obj, entry) -> bool:
         from distr.core.initiative.draft_execute import approve_draft_in_queue
 
         return bool(approve_draft_in_queue(queue_obj, entry.id))
 
-    def _format_hermes_triage_entries(self, entries) -> str:
+    def _format_orchestrator_triage_entries(self, entries) -> str:
         lines = ["Pending items:"]
         for i, entry in enumerate(entries[:8], start=1):
             lines.append(f"{i}. {entry.description}")

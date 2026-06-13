@@ -249,7 +249,7 @@ class DeveloperContextAssembler:
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
         external_agent_context = _safe_call("external agent context", warnings, self._fetch_external_agent_context) or {}
-        user_memory_context = _safe_call("Hermes user memory", warnings, self._fetch_user_memory_context) or ""
+        user_memory_context = _safe_call("Orchestrator user memory", warnings, self._fetch_user_memory_context) or ""
         recommended_skills = _safe_call("skill recommendations", warnings, self._recommend_skills, user_request) or []
 
         return DeveloperWorkContext(
@@ -552,7 +552,7 @@ class DeveloperContextAssembler:
         return build_external_agent_context(limit=8)
 
     def _fetch_user_memory_context(self) -> str:
-        from distr.core.hermes_memory import build_memory_context
+        from distr.core.orchestrator_memory import build_memory_context
 
         return build_memory_context(limit=30)
 

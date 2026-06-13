@@ -6,7 +6,7 @@ import contextlib
 import json
 from unittest.mock import MagicMock
 
-import distr.core.db.hermes  # noqa: F401
+import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
-from distr.core.db.hermes import HermesEvent
+from distr.core.db.orchestrator import OrchestratorEvent
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep, AutoWorkflowVariable
 from distr.gui.web.routes.settings.workflows import register_routes
 
@@ -88,9 +88,9 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
 
     append_execution_event = MagicMock()
     monkeypatch.setattr("distr.core.db.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.get_session", get_session)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", get_session)
     monkeypatch.setattr("distr.core.workflow.standards_memory.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.is_hermes_enabled", lambda: True)
+    monkeypatch.setattr("distr.core.orchestrator.is_orchestrator_enabled", lambda: True)
     monkeypatch.setattr(
         "distr.core.kanban.project_execution.append_execution_event",
         append_execution_event,
@@ -141,7 +141,7 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
         assert run_data["live_agent_context"]["execution_session_id"] == 56
         assert run_data["live_agent_context"]["recent_events"][-1]["event_type"] == "user_steer"
 
-        event = session.query(HermesEvent).filter(HermesEvent.event_type == "needs_input").one()
+        event = session.query(OrchestratorEvent).filter(OrchestratorEvent.event_type == "needs_input").one()
         assert event.source == "codex"
         assert event.status == "observed"
         assert event.workflow_id == workflow_id

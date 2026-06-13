@@ -50,7 +50,7 @@
     /**
      * Show a temporary snackbar notification.
      * @param {string} message  - Text to display
-     * @param {string} [type]   - "success" (default), "error", or "info"
+     * @param {string} [type]   - "success" (default), "error", "warning", or "info"
      * @param {object} [opts]   - Optional overrides: { id, duration }
      */
     function showSnackbar(message, type, opts) {
@@ -83,6 +83,7 @@
         }
         el.style.background =
             type === "error" ? "#dc2626" :
+            type === "warning" ? "#ca8a04" :
             type === "info"  ? "#1a237e" :
                                "#16a34a";
         el.textContent = message;

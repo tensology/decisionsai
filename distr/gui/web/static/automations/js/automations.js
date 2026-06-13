@@ -44,12 +44,192 @@
         return Math.round(CALENDAR_GRID_ZOOM * 100);
     }
 
+    function isCalendarShowingToday() {
+        var today = startOfDay(new Date());
+        if (calendarMode === "day") {
+            return startOfDay(calendarAnchor).getTime() === today.getTime();
+        }
+        if (calendarMode === "week") {
+            return startOfWeek(calendarAnchor).getTime() === startOfWeek(today).getTime();
+        }
+        return startOfMonth(calendarAnchor).getTime() === startOfMonth(today).getTime();
+    }
+
+    function updateCalendarTodayUi() {
+        var btn = document.getElementById("automation-cal-today");
+        if (!btn) return;
+        btn.classList.toggle("hidden", isCalendarShowingToday());
+    }
+
+    function goToCalendarToday() {
+        var today = startOfDay(new Date());
+        if (calendarMode === "day") {
+            calendarAnchor = today;
+        } else if (calendarMode === "week") {
+            calendarAnchor = startOfWeek(today);
+        } else {
+            calendarAnchor = startOfMonth(today);
+        }
+        renderCalendar();
+    }
+
     function updateCalendarZoomUi() {
+        var wrap = document.getElementById("automation-cal-view-tools");
         var tools = document.getElementById("automation-cal-zoom-tools");
         var label = document.getElementById("automation-cal-zoom-label");
+        var todayBtn = document.getElementById("automation-cal-today");
+        var exportBtn = document.getElementById("automation-cal-export");
         var isTimeGrid = calendarMode === "week" || calendarMode === "day";
         if (tools) tools.classList.toggle("hidden", !isTimeGrid);
         if (label) label.textContent = calendarZoomPercent() + "%";
+        updateCalendarTodayUi();
+        if (wrap) {
+            var showToday = todayBtn && !todayBtn.classList.contains("hidden");
+            var showZoom = tools && !tools.classList.contains("hidden");
+            var showExport = !!exportBtn;
+            wrap.classList.toggle("hidden", !showToday && !showZoom && !showExport);
+        }
+    }
+
+    function formatExportPeriodLabel(startDate, endDate) {
+        if (!startDate || !endDate) return "";
+        if (startDate === endDate) return startDate;
+        return startDate + " to " + endDate;
+    }
+
+    function getCalendarExportRange() {
+        if (window.AutomationCalendarBlocks && window.AutomationCalendarBlocks.getVisibleExportRange) {
+            var range = window.AutomationCalendarBlocks.getVisibleExportRange();
+            if (range && range.start_date && range.end_date) return range;
+        }
+        var anchor = startOfDay(calendarAnchor);
+        var start = anchor;
+        var end = anchor;
+        if (calendarMode === "week") {
+            start = startOfWeek(anchor);
+            end = addDays(start, 6);
+        } else if (calendarMode === "month") {
+            start = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+            end = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0);
+        }
+        function toKey(d) {
+            var y = d.getFullYear();
+            var m = String(d.getMonth() + 1).padStart(2, "0");
+            var day = String(d.getDate()).padStart(2, "0");
+            return y + "-" + m + "-" + day;
+        }
+        return { start_date: toKey(start), end_date: toKey(end) };
+    }
+
+    function closeExportModal() {
+        var modal = document.getElementById("sched-export-modal");
+        if (modal) modal.classList.add("hidden");
+    }
+
+    function renderExportBoardList(boards) {
+        var list = document.getElementById("sched-export-board-list");
+        var empty = document.getElementById("sched-export-empty");
+        var downloadBtn = document.getElementById("sched-export-download");
+        if (!list) return;
+        if (!boards || !boards.length) {
+            list.innerHTML = "";
+            if (empty) empty.classList.remove("hidden");
+            if (downloadBtn) downloadBtn.disabled = true;
+            return;
+        }
+        if (empty) empty.classList.add("hidden");
+        if (downloadBtn) downloadBtn.disabled = false;
+        list.innerHTML = boards.map(function(board) {
+            var count = board.block_count ? " (" + board.block_count + ")" : "";
+            return (
+                '<label class="sched-export-board-item">' +
+                '<input type="checkbox" class="sched-export-board-check" value="' + escapeAttr(board.board_key) + '" checked>' +
+                "<span>" + escapeAttr(board.board_name || "No board") + count + "</span>" +
+                "</label>"
+            );
+        }).join("");
+    }
+
+    function setExportBoardChecks(checked) {
+        document.querySelectorAll(".sched-export-board-check").forEach(function(input) {
+            input.checked = !!checked;
+        });
+    }
+
+    function selectedExportBoardKeys() {
+        return Array.prototype.slice.call(document.querySelectorAll(".sched-export-board-check:checked"))
+            .map(function(input) { return input.value; })
+            .filter(Boolean);
+    }
+
+    function openExportModal() {
+        var modal = document.getElementById("sched-export-modal");
+        var period = document.getElementById("sched-export-period");
+        if (!modal) return;
+        var range = getCalendarExportRange();
+        if (period) {
+            period.textContent = "Export time blocks for " + formatExportPeriodLabel(range.start_date, range.end_date);
+        }
+        modal.classList.remove("hidden");
+        renderExportBoardList([]);
+        var downloadBtn = document.getElementById("sched-export-download");
+        if (downloadBtn) downloadBtn.disabled = true;
+        apiFetch(
+            "/api/schedule-blocks/export/boards?start_date=" + encodeURIComponent(range.start_date) +
+            "&end_date=" + encodeURIComponent(range.end_date)
+        ).then(function(data) {
+            renderExportBoardList((data && data.boards) || []);
+        }).catch(function(err) {
+            showSnackbar((err && err.message) || "Could not load boards for export.", "error");
+            closeExportModal();
+        });
+    }
+
+    function downloadTimesheetExport() {
+        var range = getCalendarExportRange();
+        var boardKeys = selectedExportBoardKeys();
+        if (!boardKeys.length) {
+            showSnackbar("Select at least one board.", "warning");
+            return;
+        }
+        var downloadBtn = document.getElementById("sched-export-download");
+        if (downloadBtn) downloadBtn.disabled = true;
+        fetch("/api/schedule-blocks/export/timesheet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                start_date: range.start_date,
+                end_date: range.end_date,
+                board_keys: boardKeys,
+            }),
+        }).then(function(res) {
+            if (!res.ok) {
+                return res.json().catch(function() { return {}; }).then(function(body) {
+                    throw new Error((body && body.detail) || res.statusText || "Export failed");
+                });
+            }
+            var disposition = res.headers.get("Content-Disposition") || "";
+            var match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+            var filename = (match && match[1]) || ("timesheet_" + range.start_date + "_to_" + range.end_date + ".xlsx");
+            return res.blob().then(function(blob) {
+                return { blob: blob, filename: filename };
+            });
+        }).then(function(result) {
+            var url = URL.createObjectURL(result.blob);
+            var link = document.createElement("a");
+            link.href = url;
+            link.download = result.filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+            showSnackbar("Timesheet downloaded.", "success");
+            closeExportModal();
+        }).catch(function(err) {
+            showSnackbar((err && err.message) || "Could not export timesheet.", "error");
+        }).finally(function() {
+            if (downloadBtn) downloadBtn.disabled = false;
+        });
     }
 
     function setCalendarGridZoom(nextZoom) {
@@ -115,7 +295,8 @@
             interval: "Every " + (cfg.interval || 15) + " " + (cfg.interval_unit === "seconds" ? "seconds" : "minutes"),
             hourly: "Hourly",
             daily: "Daily",
-            weekly: "Weekly"
+            weekly: "Weekly",
+            monthly: "Monthly"
         };
         if (kind === "once") return cfg.run_at ? "Once at " + shortDate(cfg.run_at) : "Once";
         if (kind === "interval") {
@@ -123,8 +304,112 @@
             if (cfg.kind === "30min" || cfg.kind === "30m") return "Every 30 minutes";
             return labels.interval;
         }
-        if (cfg.time && (kind === "daily" || kind === "weekly")) return (labels[kind] || kind) + " at " + cfg.time;
+        if (cfg.time && (kind === "daily" || kind === "weekly" || kind === "monthly")) {
+            var suffix = (labels[kind] || kind) + " at " + cfg.time;
+            if (kind === "weekly" && cfg.days) suffix += " on " + formatWeeklyDaysLabel(cfg.days);
+            if (kind === "monthly" && cfg.days) suffix += " on day " + cfg.days;
+            return suffix;
+        }
         return labels[kind] || kind;
+    }
+
+    var WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+    function formatWeeklyDaysLabel(raw) {
+        var days = String(raw || "").split(",").map(function(part) {
+            return parseInt(part.trim(), 10);
+        }).filter(function(n) { return !isNaN(n) && n >= 0 && n <= 6; });
+        if (!days.length) return "Mon";
+        return days.map(function(n) { return WEEKDAY_LABELS[n] || String(n); }).join(", ");
+    }
+
+    function renderMonthlyDayBadges(days) {
+        var wrap = document.getElementById("automation-monthly-badges");
+        if (!wrap) return;
+        wrap.innerHTML = "";
+        (days || []).forEach(function(day) {
+            var value = String(day).trim();
+            if (!value) return;
+            var badge = document.createElement("span");
+            badge.className = "automation-monthly-day-badge";
+            badge.setAttribute("data-day", value);
+            badge.innerHTML = '<span class="automation-monthly-day-text">' + escapeAttr(value) + '</span>' +
+                ' <button type="button" class="automation-monthly-day-remove text-gray-400 hover:text-white focus:outline-none" aria-label="Remove">&times;</button>';
+            var removeBtn = badge.querySelector(".automation-monthly-day-remove");
+            if (removeBtn) {
+                removeBtn.addEventListener("click", function() { badge.remove(); });
+            }
+            wrap.appendChild(badge);
+        });
+    }
+
+    function getMonthlyDaysArray() {
+        var wrap = document.getElementById("automation-monthly-badges");
+        var input = document.getElementById("automation-monthly-days-input");
+        var seen = {};
+        var days = [];
+        if (wrap) {
+            wrap.querySelectorAll(".automation-monthly-day-badge[data-day]").forEach(function(badge) {
+                var value = String(badge.getAttribute("data-day") || "").trim();
+                if (!value || seen[value]) return;
+                seen[value] = true;
+                days.push(value);
+            });
+        }
+        if (input && String(input.value || "").trim()) {
+            String(input.value || "").split(",").forEach(function(part) {
+                var value = part.trim();
+                if (!value || seen[value]) return;
+                seen[value] = true;
+                days.push(value);
+            });
+        }
+        return days;
+    }
+
+    function addMonthlyDaysFromInput() {
+        var input = document.getElementById("automation-monthly-days-input");
+        if (!input) return;
+        var raw = String(input.value || "").trim();
+        if (!raw) return;
+        var existing = getMonthlyDaysArray();
+        var seen = {};
+        existing.forEach(function(day) { seen[day] = true; });
+        raw.split(",").map(function(part) { return part.trim(); }).filter(Boolean).forEach(function(day) {
+            if (seen[day]) return;
+            seen[day] = true;
+            existing.push(day);
+        });
+        input.value = "";
+        renderMonthlyDayBadges(existing);
+    }
+
+    function setWeeklyDaySelection(raw) {
+        var selected = String(raw || "1").split(",").map(function(part) {
+            return parseInt(part.trim(), 10);
+        }).filter(function(n) { return !isNaN(n); });
+        if (!selected.length) selected = [1];
+        document.querySelectorAll(".automation-weekday-btn").forEach(function(btn) {
+            var day = parseInt(btn.getAttribute("data-day"), 10);
+            btn.classList.toggle("is-selected", selected.indexOf(day) !== -1);
+        });
+    }
+
+    function getWeeklyDaysCsv() {
+        var days = [];
+        document.querySelectorAll(".automation-weekday-btn.is-selected").forEach(function(btn) {
+            days.push(btn.getAttribute("data-day"));
+        });
+        return days.length ? days.join(",") : "1";
+    }
+
+    function monthlyDaysMatch(dayDate, schedule) {
+        var raw = String((schedule && schedule.days) || "1");
+        var days = raw.split(",").map(function(part) {
+            return parseInt(part.trim(), 10);
+        }).filter(function(n) { return !isNaN(n) && n >= 1 && n <= 31; });
+        if (!days.length) days = [1];
+        return days.indexOf(dayDate.getDate()) !== -1;
     }
 
     function emptyAutomation() {
@@ -470,6 +755,12 @@
             if (!weeklyDaysMatch(dayStart, schedule)) return [];
             var weeklyAt = parseScheduleTimeOnDay(dayStart, schedule.time);
             out.push({ at: weeklyAt, label: formatTimeShort(weeklyAt), compact: false });
+            return out;
+        }
+        if (kind === "monthly") {
+            if (!monthlyDaysMatch(dayStart, schedule)) return [];
+            var monthlyAt = parseScheduleTimeOnDay(dayStart, schedule.time);
+            out.push({ at: monthlyAt, label: formatTimeShort(monthlyAt), compact: false });
             return out;
         }
         if (kind === "hourly") {
@@ -818,6 +1109,14 @@
         setValue("automation-once-at", String(schedule.run_at || ""));
         setValue("automation-interval-value", interval);
         setValue("automation-interval-unit", intervalUnit === "seconds" ? "seconds" : "minutes");
+        setWeeklyDaySelection(kind === "weekly" ? (schedule.days || "1") : "1");
+        renderMonthlyDayBadges(
+            kind === "monthly"
+                ? String(schedule.days || "1").split(",").map(function(part) { return part.trim(); }).filter(Boolean)
+                : []
+        );
+        var monthlyInput = document.getElementById("automation-monthly-days-input");
+        if (monthlyInput) monthlyInput.value = "";
         setAutomationStatus(row.status || "active");
         document.getElementById("automation-detail-title").textContent = row.id ? (row.name || "Untitled Automation") : "New Automation";
         document.getElementById("automation-detail-meta").textContent = row.id ? ("Next run: " + shortDate(row.next_run_at)) : "Not saved yet";
@@ -892,9 +1191,15 @@
             var intervalValue = parseInt(document.getElementById("automation-interval-value").value, 10);
             schedule.interval = intervalValue > 0 ? intervalValue : 15;
             schedule.interval_unit = document.getElementById("automation-interval-unit").value || "minutes";
-        } else if (kind === "daily" || kind === "weekly") {
-        var time = document.getElementById("automation-time").value;
-        if (time) schedule.time = time;
+        } else if (kind === "daily" || kind === "weekly" || kind === "monthly") {
+            var time = document.getElementById("automation-time").value;
+            if (time) schedule.time = time;
+            if (kind === "weekly") {
+                schedule.days = getWeeklyDaysCsv();
+            } else if (kind === "monthly") {
+                var monthDays = getMonthlyDaysArray();
+                schedule.days = monthDays.length ? monthDays.join(",") : "1";
+            }
         }
         return {
             name: (document.getElementById("automation-name").value || "Untitled Automation").trim(),
@@ -927,7 +1232,7 @@
 
     function connectAutomationUpdatesSocket() {
         var proto = location.protocol === "https:" ? "wss:" : "ws:";
-        var url = proto + "//" + location.host + "/api/ws/workflows";
+        var url = proto + "//" + location.host + "/api/workflows/ws";
         var ws;
         var reconnectTimer;
         function connect() {
@@ -1089,18 +1394,25 @@
     }
 
     function updateScheduleControls() {
+        if (window.DecisionsDateTime && window.DecisionsDateTime.close) {
+            window.DecisionsDateTime.close();
+        }
         var kindEl = document.getElementById("automation-kind");
         var timeWrap = document.getElementById("automation-time-wrap");
         var onceWrap = document.getElementById("automation-once-wrap");
         var intervalWrap = document.getElementById("automation-interval-wrap");
+        var weeklyWrap = document.getElementById("automation-weekly-days-wrap");
+        var monthlyWrap = document.getElementById("automation-monthly-days-wrap");
         var time = document.getElementById("automation-time");
         var onceAt = document.getElementById("automation-once-at");
         if (!kindEl || !timeWrap || !onceWrap || !intervalWrap) return;
         var kind = kindEl.value || "daily";
-        var showTime = kind === "daily" || kind === "weekly";
+        var showTime = kind === "daily" || kind === "weekly" || kind === "monthly";
         timeWrap.classList.toggle("hidden", !showTime);
         onceWrap.classList.toggle("hidden", kind !== "once");
         intervalWrap.classList.toggle("hidden", kind !== "interval");
+        if (weeklyWrap) weeklyWrap.classList.toggle("hidden", kind !== "weekly");
+        if (monthlyWrap) monthlyWrap.classList.toggle("hidden", kind !== "monthly");
         if (time) time.disabled = !showTime;
         if (onceAt) onceAt.disabled = kind !== "once";
         [time, onceAt].forEach(function(el) {
@@ -1136,6 +1448,30 @@
                 setCalendarGridZoom(CALENDAR_GRID_ZOOM + CALENDAR_GRID_ZOOM_STEP);
             });
         }
+        var calToday = document.getElementById("automation-cal-today");
+        if (calToday) calToday.addEventListener("click", goToCalendarToday);
+        var calExport = document.getElementById("automation-cal-export");
+        if (calExport) calExport.addEventListener("click", openExportModal);
+        var exportCancel = document.getElementById("sched-export-cancel");
+        if (exportCancel) exportCancel.addEventListener("click", closeExportModal);
+        var exportDownload = document.getElementById("sched-export-download");
+        if (exportDownload) exportDownload.addEventListener("click", downloadTimesheetExport);
+        var exportSelectAll = document.getElementById("sched-export-select-all");
+        if (exportSelectAll) exportSelectAll.addEventListener("click", function() { setExportBoardChecks(true); });
+        var exportDeselectAll = document.getElementById("sched-export-deselect-all");
+        if (exportDeselectAll) exportDeselectAll.addEventListener("click", function() { setExportBoardChecks(false); });
+        var exportModal = document.getElementById("sched-export-modal");
+        if (exportModal) {
+            exportModal.addEventListener("click", function(e) {
+                if (e.target === exportModal) closeExportModal();
+            });
+            var exportPanel = exportModal.querySelector("div");
+            if (exportPanel) {
+                exportPanel.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                });
+            }
+        }
         document.getElementById("automation-new").addEventListener("click", createNewAutomation);
         document.getElementById("automation-create-big").addEventListener("click", createNewAutomation);
         document.getElementById("automation-detail").addEventListener("submit", saveAutomation);
@@ -1144,6 +1480,21 @@
         });
         document.getElementById("automation-run").addEventListener("click", runSelected);
         document.getElementById("automation-kind").addEventListener("change", updateScheduleControls);
+        document.querySelectorAll(".automation-weekday-btn").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                btn.classList.toggle("is-selected");
+            });
+        });
+        var monthlyInput = document.getElementById("automation-monthly-days-input");
+        if (monthlyInput) {
+            monthlyInput.addEventListener("keydown", function(e) {
+                if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addMonthlyDaysFromInput();
+                }
+            });
+            monthlyInput.addEventListener("blur", addMonthlyDaysFromInput);
+        }
         var statusSwitch = document.getElementById("automation-status-switch");
         if (statusSwitch) {
             statusSwitch.addEventListener("click", function() {

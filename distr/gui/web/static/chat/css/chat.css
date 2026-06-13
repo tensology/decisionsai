@@ -1821,6 +1821,41 @@
     color: rgba(236, 236, 241, 0.72);
 }
 
+.chat-header-tooltip {
+    position: relative;
+}
+
+.chat-header-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%) translateY(4px);
+    z-index: 30;
+    max-width: 220px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: rgba(8, 12, 32, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #ececf1;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+}
+
+.chat-header-tooltip:hover::after,
+.chat-header-tooltip:focus-visible::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+}
+
 .chat-settings-header-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

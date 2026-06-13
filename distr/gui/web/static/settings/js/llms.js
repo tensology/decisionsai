@@ -6,12 +6,11 @@ async function populateProviderDropdowns() {
         const response = await fetch('/api/llms/available-providers');
         const data = response.ok ? await response.json() : { providers: [] };
         const providers = data.providers || [];
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'];
-        const optionalTypes = ['workflow', 'computer_use', 'kanban'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
+        const optionalTypes = ['workflow', 'computer_use'];
         const emptyLabels = {
             'workflow': 'Inherit from Conversational',
             'computer_use': 'Disabled (accessibility tree only)',
-            'kanban': 'Inherit from Conversational',
         };
         for (const type of llmTypes) {
             const sel = document.getElementById(`${type}_provider`);
@@ -148,8 +147,8 @@ async function loadLLMsSettings() {
             instantDictation.checked = settings.instant_dictation !== undefined ? settings.instant_dictation : true;
         }
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'];
-        const optionalTypes = ['workflow', 'computer_use', 'kanban'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
+        const optionalTypes = ['workflow', 'computer_use'];
         for (const type of llmTypes) {
             const provider = (settings[`${type}_provider`] || '').toLowerCase();
             const model = (settings[`${type}_model`] || '').trim();
@@ -280,11 +279,11 @@ async function loadLLMModels(type, provider, opts) {
             if (provider !== 'ollama') {
                 const option = document.createElement('option');
                 option.value = '';
-                option.textContent = `Configure ${provider} API key in Third Party tab`;
+                option.textContent = `Configure ${provider} API key in API Keys`;
                 option.disabled = true;
                 modelSelect.appendChild(option);
                 if (notifyOnMissingProviderKey) {
-                    showNotification(`${provider} API key not configured. Go to Third Party tab.`, 'warning');
+                    showNotification(`${provider} API key not configured. Go to API Keys.`, 'warning');
                 }
             } else {
                 const option = document.createElement('option');
@@ -323,7 +322,7 @@ function openOllamaModelBrowser(type) {
     // Update modal title based on type
     const titleEl = document.getElementById('ollama_browser_modal_title');
     if (titleEl) {
-        const typeLabels = { conversational: 'Conversational', coding: 'Coding', vision: 'Vision', image: 'Image', workflow: 'Workflow', computer_use: 'Computer Use', kanban: 'Ticket Board Sub-agent' };
+        const typeLabels = { conversational: 'Conversational', coding: 'Coding', vision: 'Vision', image: 'Image', workflow: 'Workflow', computer_use: 'Computer Use' };
         titleEl.textContent = 'Download Ollama models — ' + (typeLabels[type] || type);
     }
     modal.classList.remove('hidden');
@@ -487,7 +486,7 @@ function filterOllamaBrowserList() {
 }
 
 function updateDownloadButtonVisibility() {
-    ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'].forEach(function (type) {
+    ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'].forEach(function (type) {
         const providerSelect = document.getElementById(type + '_provider');
         const downloadBtn = document.getElementById(type + '_download');
         if (!providerSelect || !downloadBtn) return;
@@ -533,7 +532,7 @@ if (document.readyState === 'loading') {
             updateDownloadButtonVisibility();
             initOllamaBrowserModal();
 
-            const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'];
+            const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
             llmTypes.forEach(type => {
                 const providerSelect = document.getElementById(`${type}_provider`);
                 if (providerSelect) {
@@ -565,7 +564,7 @@ if (document.readyState === 'loading') {
         updateDownloadButtonVisibility();
         initOllamaBrowserModal();
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
         llmTypes.forEach(type => {
             const providerSelect = document.getElementById(`${type}_provider`);
             if (providerSelect) {

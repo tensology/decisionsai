@@ -1,0 +1,103 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_manifest_v1",
+  "description": "Role-based loop presets (developer, content, sales) with full harness steps",
+  "presets": [
+    {
+      "slug": "ticket-to-prd-to-ship",
+      "name": "Ticket to PRD to Ship",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "incremental_ship",
+      "file": "bundles/ticket-to-prd-to-ship.json"
+    },
+    {
+      "slug": "scope-then-ship",
+      "name": "Scope Then Ship",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "review_cleanup",
+      "file": "bundles/scope-then-ship.json"
+    },
+    {
+      "slug": "de-sloppify-pass",
+      "name": "De-Sloppify Pass",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "review_cleanup",
+      "file": "bundles/de-sloppify-pass.json"
+    },
+    {
+      "slug": "e2e-until-green",
+      "name": "E2E Until Green",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "check_fix_until_green",
+      "file": "bundles/e2e-until-green.json"
+    },
+    {
+      "slug": "ship-pr-until-green",
+      "name": "Ship PR Until Green",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "ship_with_ci",
+      "file": "bundles/ship-pr-until-green.json"
+    },
+    {
+      "slug": "pr-babysitter",
+      "name": "PR Babysitter",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "watch_maintain",
+      "file": "bundles/pr-babysitter.json"
+    },
+    {
+      "slug": "pr-self-review",
+      "name": "PR Self-Review",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "review_cleanup",
+      "file": "bundles/pr-self-review.json"
+    },
+    {
+      "slug": "spec-first-ship",
+      "name": "Spec-First Ship",
+      "role": "developer",
+      "category": "Developer",
+      "archetype": "incremental_ship",
+      "file": "bundles/spec-first-ship.json"
+    },
+    {
+      "slug": "article-from-ticket",
+      "name": "Article from Ticket",
+      "role": "content",
+      "category": "Content",
+      "archetype": "incremental_ship",
+      "file": "bundles/article-from-ticket.json"
+    },
+    {
+      "slug": "seo-landing-page",
+      "name": "SEO Landing Page",
+      "role": "content",
+      "category": "Content",
+      "archetype": "incremental_ship",
+      "file": "bundles/seo-landing-page.json"
+    },
+    {
+      "slug": "cold-outreach-batch",
+      "name": "Cold Outreach Batch",
+      "role": "sales",
+      "category": "Sales",
+      "archetype": "incremental_ship",
+      "file": "bundles/cold-outreach-batch.json"
+    },
+    {
+      "slug": "follow-up-cadence",
+      "name": "Follow-up Cadence",
+      "role": "sales",
+      "category": "Sales",
+      "archetype": "watch_maintain",
+      "file": "bundles/follow-up-cadence.json"
+    }
+  ]
+}

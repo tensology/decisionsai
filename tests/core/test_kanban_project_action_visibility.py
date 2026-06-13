@@ -10,6 +10,7 @@ def test_kanban_project_bound_card_actions_are_hidden_without_project():
     assert "if (config.hidden) return \"\";" in js
     assert 'keyClass: "kb-act-copy"' in js
     assert 'keyClass: "kb-act-agent"' in js
+    assert 'keyClass: "kb-act-add-workflow"' in js
     assert 'keyClass: "kb-act-cli"' in js
     assert 'keyClass: "kb-act-project"' in js
     assert 'keyClass: "kb-act-workflow"' in js

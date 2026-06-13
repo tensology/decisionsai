@@ -105,11 +105,11 @@ class StepRouter:
             verified_passed = _run_verification(
                 step, result, passed, project_id=verify_project_id
             )
-            hermes_overlay = None
+            orchestrator_overlay = None
             standards_context = ""
             try:
                 from distr.core.db.kanban import KanbanTicket
-                from distr.core.hermes_validator import apply_hermes_validator_overlay
+                from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
                 from distr.core.workflow.standards_memory import build_standards_context
 
                 ticket_context = ""
@@ -121,7 +121,7 @@ class StepRouter:
                     getattr(run.workflow, "context_rules", None) if run and run.workflow else None,
                     board_id=getattr(run, "board_id", None) if run else None,
                 )
-                hermes_overlay = apply_hermes_validator_overlay(
+                orchestrator_overlay = apply_orchestrator_validator_overlay(
                     step=step,
                     result=result,
                     caller_passed=passed,
@@ -129,16 +129,16 @@ class StepRouter:
                     standards_context=standards_context,
                     ticket_context=ticket_context,
                 )
-                if hermes_overlay is not None:
-                    verified_passed = bool(hermes_overlay.get("passed"))
+                if orchestrator_overlay is not None:
+                    verified_passed = bool(orchestrator_overlay.get("passed"))
             except Exception:
                 logger.debug("Hermes validator overlay skipped", exc_info=True)
 
             validation_snapshot = build_validation_snapshot(
                 step, result, passed, verified_passed, project_id=verify_project_id
             )
-            if hermes_overlay:
-                validation_snapshot["hermes_validator"] = hermes_overlay
+            if orchestrator_overlay:
+                validation_snapshot["orchestrator_validator"] = orchestrator_overlay
             if standards_context:
                 validation_snapshot["standards_context"] = standards_context
 
@@ -200,7 +200,7 @@ class StepRouter:
             correction_packet: dict[str, Any] = {}
             try:
                 from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
-                from distr.core.hermes import (
+                from distr.core.orchestrator import (
                     build_correction_packet,
                     create_correction_attempt,
                     record_validation,
@@ -311,7 +311,7 @@ class StepRouter:
                     details=(result or "")[:3000],
                 )
             try:
-                from distr.core.hermes import emit_event
+                from distr.core.orchestrator import emit_event
 
                 emit_event(
                     source="workflow",
@@ -406,7 +406,7 @@ class StepRouter:
             run.status = "running"
             step.status = "running"
             try:
-                from distr.core.hermes import emit_event
+                from distr.core.orchestrator import emit_event
 
                 emit_event(
                     source="workflow",
@@ -493,6 +493,10 @@ class StepRouter:
         else:
             next_step_id = self._static_route(db, step, verified_passed)
 
+        next_step_id = self._apply_loop_iteration_routing(
+            db, run, step, next_step_id, verified_passed,
+        )
+
         # null / -1 → end run
         if next_step_id is None or next_step_id == -1:
             return self._end_run(run, status="completed" if verified_passed else "failed")
@@ -520,6 +524,64 @@ class StepRouter:
         }
 
     # ── Static routing ──────────────────────────────────────────────
+
+    def _apply_loop_iteration_routing(
+        self,
+        db,
+        run: Optional[AutoWorkflowRun],
+        step: AutoWorkflowStep,
+        next_step_id: Optional[int],
+        verified_passed: bool,
+    ) -> Optional[int]:
+        """Track loop iterations when routing back to an earlier step."""
+        if not run or next_step_id is None or verified_passed:
+            return next_step_id
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            return next_step_id
+        loop_contract = run_data.get("loop_contract") or {}
+        max_iterations = loop_contract.get("max_iterations")
+        if max_iterations is None:
+            return next_step_id
+        target = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == next_step_id).first()
+        if not target or target.position >= step.position:
+            return next_step_id
+        iteration = int(run_data.get("loop_iteration") or 0) + 1
+        run_data["loop_iteration"] = iteration
+        run.run_data = json.dumps(run_data)
+        db.flush()
+        if iteration >= int(max_iterations):
+            logger.info(
+                "Loop max iterations (%s) reached at step %s — ending run",
+                max_iterations,
+                step.id,
+            )
+            report_step = (
+                db.query(AutoWorkflowStep)
+                .filter(AutoWorkflowStep.workflow_id == step.workflow_id)
+                .order_by(AutoWorkflowStep.position.desc())
+                .first()
+            )
+            if report_step and report_step.id != step.id:
+                return report_step.id
+            return -1
+        try:
+            from distr.core.orchestrator import emit_event
+
+            emit_event(
+                source="workflow",
+                event_type="loop_iteration",
+                status="running",
+                workflow_id=step.workflow_id,
+                run_id=run.id,
+                step_id=step.id,
+                summary=f"Loop iteration {iteration} of {max_iterations}",
+                payload={"iteration": iteration, "max_iterations": max_iterations},
+            )
+        except Exception:
+            logger.debug("loop_iteration event failed", exc_info=True)
+        return next_step_id
 
     @staticmethod
     def _static_route(db, step: AutoWorkflowStep, passed: bool) -> Optional[int]:
@@ -783,7 +845,7 @@ class StepRouter:
             summary=result or "Workflow step is waiting for approval.",
         )
         try:
-            from distr.core.hermes import emit_approval_event
+            from distr.core.orchestrator import emit_approval_event
 
             emit_approval_event(
                 event_type="approval_requested",

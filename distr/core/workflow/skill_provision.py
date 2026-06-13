@@ -136,10 +136,10 @@ def provision_workflow_skills(
         if dest:
             pushed.append(skill_id)
             try:
-                from distr.core.hermes import emit_event
+                from distr.core.orchestrator import emit_event
 
                 emit_event(
-                    source="hermes",
+                    source="orchestrator",
                     event_type="skill_provisioned",
                     status="ok",
                     workflow_id=workflow_id or getattr(workflow, "id", None),

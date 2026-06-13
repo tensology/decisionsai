@@ -194,6 +194,9 @@ SAMPLE_RATE_INPUT = 16000
 SAMPLE_RATE_KOKORO = 24000
 SAMPLE_RATE_OPENAI_TTS = 24000
 SAMPLE_RATE_ELEVENLABS = 44100
+# Stable PortAudio output rate for local playback (Bluetooth/macOS native).
+# TTS engines emit at their own rates; transport resamples to this rate.
+SAMPLE_RATE_PLAYBACK = SAMPLE_RATE_ELEVENLABS
 SAMPLE_RATE_COQUI = 22050
 
 # VoxCPM sample rate: 16kHz for 0.5B (CPU/macOS), 48kHz for VoxCPM2 (CUDA).

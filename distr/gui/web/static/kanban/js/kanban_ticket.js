@@ -203,6 +203,12 @@
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>',
                 }),
                 actionButtonHtml({
+                    keyClass: "kb-act-add-workflow",
+                    tooltip: "Add to workflow queue",
+                    hidden: !opts.showAddToWorkflow,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+                }),
+                actionButtonHtml({
                     keyClass: "kb-act-cli",
                     tooltip: "Run with Cursor/Codex",
                     hidden: opts.layout === "list" || !opts.hasProject,
@@ -331,6 +337,16 @@
                     e.stopPropagation();
                     if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
                     else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project", null, "", projectBtn);
+                });
+            }
+            var addWorkflowBtn = rootEl.querySelector(".kb-act-add-workflow");
+            if (addWorkflowBtn) {
+                addWorkflowBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (typeof deps.addTicketToWorkflowQueue === "function") {
+                        deps.addTicketToWorkflowQueue(ticket, isLocal, addWorkflowBtn);
+                    }
                 });
             }
             var workflowBtn = rootEl.querySelector(".kb-act-workflow");
@@ -675,6 +691,7 @@
                 canTransfer: canTransfer,
                 canDelete: canDelete,
                 hideWorkflow: !!listOpts.hideWorkflow,
+                showAddToWorkflow: !!listOpts.showAddToWorkflow,
             });
             row.innerHTML =
                 '<div class="kb-ticket-list-prefix">' +
@@ -686,7 +703,7 @@
                     descHtml +
                 "</div>" +
                 '<div class="kb-ticket-list-actions">' + actionRowHtml + "</div>";
-            if (canDrag) {
+            if (canDrag && !listOpts.disableListDrag) {
                 var handle = row.querySelector(".kb-ticket-list-drag-handle");
                 if (handle) {
                     handle.draggable = true;

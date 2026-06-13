@@ -17,7 +17,8 @@ def test_ticket_boards_submenu_has_whatsapp_section():
     assert 'QAction("Messages"' not in menu
 
 
-def test_web_whatsapp_sync_announces_count():
+def test_web_whatsapp_sync_does_not_announce_tts():
+    """Web sync is used by background auto-sync; TTS belongs on tray menu only."""
     py = KANBAN_PY.read_text(encoding="utf-8")
-    assert "announce_whatsapp_sync" in py
     assert "sync_whatsapp_from_relay" in py
+    assert "announce_whatsapp_sync" not in py

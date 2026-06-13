@@ -76,21 +76,29 @@ def test_workflow_config_modal_exposes_run_policy_and_context_rules():
     html = (ROOT / "distr/gui/web/templates/workflows/workflows.html").read_text(encoding="utf-8")
     js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
 
-    assert "Workflow configuration" in html
+    assert "Global workflow configuration" in html
+    assert 'data-wf-config-tab="run-policy"' in html
+    assert 'data-wf-config-tab="context-rules"' in html
+    assert 'data-wf-config-tab="execution"' in html
     assert 'id="wf-config-run-execution-mode"' in html
     assert 'id="wf-config-run-concurrency-scope"' in html
     assert 'id="wf-config-run-max-parallel"' in html
     assert 'id="wf-config-run-branch-per-ticket"' in html
     assert 'id="wf-config-context-items-list"' in html
     assert 'id="wf-config-add-context-item-btn"' in html
+    assert 'id="wf-global-exec-routes"' in html
+    assert 'id="wf-global-exec-backend-pills"' in html
     assert "function refreshWorkflowConfigPanel" in js
     assert "function saveWorkflowRunSettings" in js
     assert "function renderContextRules" in js
+    assert "function refreshWorkflowGlobalExecutionPanel" in js
+    assert "function saveWorkflowGlobalExecutionRouting" in js
     assert "hermes-readiness-strip" not in html
-    assert "Ticket complexity routing" not in html
+    assert "Ticket complexity routing" in html
     assert "function workflowExecRouteHtml" in js
     assert "function saveWorkflowExecRouting" in js
-    assert 'data-tab="execution"' in js
+    assert "wf-board-edit-tab" not in js
+    assert 'data-wf-config-tab="execution"' in html
     assert "wf-board-hermes-routing-mode" not in js
     assert "max_correction_attempts" not in js
     assert "auto_dispatch_corrections" not in js
@@ -107,3 +115,8 @@ def test_workflow_config_modal_exposes_run_policy_and_context_rules():
     assert 'id="wf-learned-rules-list"' not in html
     assert 'id="wf-scheduled-actions-panel"' not in html
     assert 'id="wf-visual-baselines-panel"' not in html
+    assert 'data-runs-tab="memory"' in html
+    assert 'id="wf-steering-memory-body"' in html
+    assert "function loadWorkflowSteeringMemory" in js
+    assert "function renderSteeringMemory" in js
+    assert '"/runs/" + workflowMemoryRunId + "/steering-memory"' in js

@@ -1,0 +1,163 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "cold-outreach-batch",
+  "name": "Cold Outreach Batch",
+  "role": "sales",
+  "category": "Sales",
+  "archetype": "incremental_ship",
+  "description": "Lead context → research → personalized email sequence → compliance check.",
+  "kickoff": "Start the \"Cold Outreach Batch\" loop.\nGoal: personalized outreach ready for human send approval\nMax iterations: 5\nExit when: sequence is researched, personalized, and compliant.\nOrientation: read the linked ticket for lead list, ICP, and messaging constraints.\nStep 1: Ingest lead context and confirm personalization requirements.",
+  "loop_contract": {
+    "name": "Cold Outreach Batch",
+    "goal": "personalized outreach ready for approved send",
+    "exit_when": "sequence researched, personalized, and compliant",
+    "check_command": "compliance + personalization checklist",
+    "max_iterations": 5,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "From the ticket: company, persona, pain, prior touchpoints. List what is still unknown.",
+    "archetype": "incremental_ship",
+    "role": "sales"
+  },
+  "expected_check_command": "compliance + personalization checklist",
+  "tags": [
+    "sales",
+    "outreach",
+    "email"
+  ],
+  "steps": [
+    {
+      "name": "Ingest lead context",
+      "instruction": "From the ticket: company, persona, pain, prior touchpoints. List what is still unknown.",
+      "skills": [
+        "product-lens",
+        "brainstorming"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Ingest lead context' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "CRM / ticket fields"
+    },
+    {
+      "name": "Research prospect",
+      "instruction": "Gather 2–3 specific hooks (recent news, tech stack, role). No generic fluff.",
+      "skills": [
+        "research-ops",
+        "product-lens"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Research prospect' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Web research / LinkedIn / company site"
+    },
+    {
+      "name": "Draft outreach sequence",
+      "instruction": "Write initial email + one follow-up using email-ops patterns. Personalize with research hooks.",
+      "skills": [
+        "email-ops",
+        "internal-comms",
+        "writing-plans"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Draft outreach sequence' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Compliance and tone check",
+      "instruction": "No false claims, no spam triggers, clear CTA, unsubscribe if required.",
+      "skills": [
+        "internal-comms",
+        "safety-guard"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Compliance and tone check' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator review",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate ready to send",
+      "instruction": "Sequence is personalized, compliant, and tied to ticket goal.",
+      "skills": [
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate ready to send' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Report",
+      "instruction": "Paste-ready emails and send recommendation (human approves send).",
+      "skills": [
+        "email-ops"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": true,
+      "other_tool": "CRM note / ticket update",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

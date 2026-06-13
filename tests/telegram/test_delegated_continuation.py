@@ -10,7 +10,7 @@ class _Manager:
 
 
 def test_handle_delegated_continuation_message_records_linked_event(monkeypatch):
-    from distr.core.hermes_delegated.continuation import handle_delegated_continuation_message
+    from distr.core.delegated_workflow.continuation import handle_delegated_continuation_message
 
     latest = {
         "id": 41,
@@ -24,10 +24,10 @@ def test_handle_delegated_continuation_message_records_linked_event(monkeypatch)
     }
     emitted = []
     monkeypatch.setattr(
-        "distr.core.hermes_delegated.continuation.find_latest_delegated_run_report",
+        "distr.core.delegated_workflow.continuation.find_latest_delegated_run_report",
         lambda **kwargs: latest,
     )
-    monkeypatch.setattr("distr.core.hermes.emit_event", lambda **kwargs: emitted.append(kwargs) or 42)
+    monkeypatch.setattr("distr.core.orchestrator.emit_event", lambda **kwargs: emitted.append(kwargs) or 42)
     manager = _Manager()
 
     assert handle_delegated_continuation_message(manager, "retry with browser fallback") is True
@@ -39,10 +39,10 @@ def test_handle_delegated_continuation_message_records_linked_event(monkeypatch)
 
 
 def test_handle_delegated_continuation_message_ignores_without_latest_run(monkeypatch):
-    from distr.core.hermes_delegated.continuation import handle_delegated_continuation_message
+    from distr.core.delegated_workflow.continuation import handle_delegated_continuation_message
 
     monkeypatch.setattr(
-        "distr.core.hermes_delegated.continuation.find_latest_delegated_run_report",
+        "distr.core.delegated_workflow.continuation.find_latest_delegated_run_report",
         lambda **kwargs: None,
     )
     manager = _Manager()
@@ -52,8 +52,8 @@ def test_handle_delegated_continuation_message_ignores_without_latest_run(monkey
 
 
 def test_handle_delegated_continuation_message_executes_retry_with_runner(monkeypatch):
-    from distr.core.hermes_delegated.continuation import handle_delegated_continuation_message
-    from distr.core.hermes_delegated.models import DelegatedRunReport
+    from distr.core.delegated_workflow.continuation import handle_delegated_continuation_message
+    from distr.core.delegated_workflow.models import DelegatedRunReport
 
     latest = {
         "id": 41,
@@ -95,12 +95,12 @@ def test_handle_delegated_continuation_message_executes_retry_with_runner(monkey
             return report
 
     monkeypatch.setattr(
-        "distr.core.hermes_delegated.continuation.find_latest_delegated_run_report",
+        "distr.core.delegated_workflow.continuation.find_latest_delegated_run_report",
         lambda **kwargs: latest,
     )
-    monkeypatch.setattr("distr.core.hermes.emit_event", lambda **kwargs: 42)
+    monkeypatch.setattr("distr.core.orchestrator.emit_event", lambda **kwargs: 42)
     monkeypatch.setattr(
-        "distr.core.hermes_delegated.continuation.record_delegated_run_report",
+        "distr.core.delegated_workflow.continuation.record_delegated_run_report",
         lambda report, **kwargs: 99,
     )
     manager = _Manager()

@@ -127,10 +127,10 @@ def _workflow_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
             "interval": schedule.get("interval") or 30,
             "interval_unit": schedule.get("interval_unit") or "minutes",
         }
-    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly"}:
+    if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly", "monthly"}:
         kind = "daily"
     time_value = str(schedule.get("time") or "09:00")
-    if kind in {"daily", "weekly"}:
+    if kind in {"daily", "weekly", "monthly"}:
         try:
             time_value = normalize_schedule_time(time_value, default="09:00")
         except ValueError as exc:

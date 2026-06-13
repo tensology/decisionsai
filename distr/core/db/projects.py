@@ -9,6 +9,7 @@ class Project(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     description = Column(String)
+    notes = Column(Text)
     folder_location = Column(String)  # Path to the project folder
     additional_trigger_words = Column(Text)  # Store as JSON string
     startup_instructions = Column(Text)  # Startup commands, one per line, each runs in a new terminal

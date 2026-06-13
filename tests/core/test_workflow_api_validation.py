@@ -27,7 +27,7 @@ from distr.core.db.workflow import (
     AutoWorkflowStepResult,
     AutoWorkflowVariable,
 )
-from distr.core.db.hermes import HermesCorrectionAttempt, HermesEvent, HermesLearnedRule, HermesValidationRecord
+from distr.core.db.orchestrator import OrchestratorCorrectionAttempt, OrchestratorEvent, OrchestratorLearnedRule, OrchestratorValidationRecord
 from distr.gui.web.routes.settings.workflows import register_routes
 
 
@@ -72,7 +72,7 @@ def client(db_setup):
     register_routes(router, None)
     app.include_router(router, prefix="/api")
     with patch("distr.core.workflow.service.get_session", session_ctx), \
-        patch("distr.core.hermes.get_session", session_ctx), \
+        patch("distr.core.orchestrator.get_session", session_ctx), \
         patch("distr.core.db.get_session", session_ctx):
         yield TestClient(app), factory
 
@@ -121,7 +121,7 @@ class TestWorkflowTypeValidation422:
 
     def test_post_ui_feedback_label_records_harness_feedback(self, client):
         tc, _ = client
-        with patch("distr.core.hermes.record_ui_feedback_label", return_value=123) as record:
+        with patch("distr.core.orchestrator.record_ui_feedback_label", return_value=123) as record:
             resp = tc.post(
                 "/api/workflows/4/runs/9/ui-feedback",
                 json={
@@ -148,9 +148,9 @@ class TestWorkflowTypeValidation422:
         tc, _ = client
         after_path = tmp_path / "after.png"
         after_path.write_bytes(b"\x89PNG\r\n\x1a\n")
-        with patch("distr.core.hermes.record_ui_feedback_label", return_value=123), \
-            patch("distr.core.hermes.upsert_visual_baseline_screens", return_value=77) as upsert_baseline, \
-            patch("distr.core.hermes.get_visual_baseline_set", return_value={"id": 77, "name": "Gold Admin", "screens": []}):
+        with patch("distr.core.orchestrator.record_ui_feedback_label", return_value=123), \
+            patch("distr.core.orchestrator.upsert_visual_baseline_screens", return_value=77) as upsert_baseline, \
+            patch("distr.core.orchestrator.get_visual_baseline_set", return_value={"id": 77, "name": "Gold Admin", "screens": []}):
             resp = tc.post(
                 "/api/workflows/4/runs/9/ui-feedback",
                 json={
@@ -181,7 +181,7 @@ class TestWorkflowTypeValidation422:
         after_path = tmp_path / "after.png"
         after_path.write_bytes(b"\x89PNG\r\n\x1a\n")
         storage_dir = tmp_path / "baseline-store"
-        monkeypatch.setenv("HERMES_VISUAL_BASELINE_DIR", str(storage_dir))
+        monkeypatch.setenv("ORCHESTRATOR_VISUAL_BASELINE_DIR", str(storage_dir))
 
         resp = tc.post(
             "/api/workflows/4/runs/9/ui-feedback",
@@ -211,7 +211,7 @@ class TestWorkflowTypeValidation422:
         after_path = tmp_path / "after.png"
         after_path.write_bytes(b"\x89PNG\r\n\x1a\n")
         storage_dir = tmp_path / "baseline-store"
-        monkeypatch.setenv("HERMES_VISUAL_BASELINE_DIR", str(storage_dir))
+        monkeypatch.setenv("ORCHESTRATOR_VISUAL_BASELINE_DIR", str(storage_dir))
 
         resp = tc.post(
             "/api/workflows/4/runs/9/ui-feedback",
@@ -240,7 +240,7 @@ class TestWorkflowTypeValidation422:
         dashboard_path.write_bytes(b"\x89PNG\r\n\x1a\n")
         settings_path.write_bytes(b"\x89PNG\r\n\x1a\nsettings")
         storage_dir = tmp_path / "baseline-store"
-        monkeypatch.setenv("HERMES_VISUAL_BASELINE_DIR", str(storage_dir))
+        monkeypatch.setenv("ORCHESTRATOR_VISUAL_BASELINE_DIR", str(storage_dir))
 
         first = tc.post(
             "/api/workflows/4/runs/9/ui-feedback",
@@ -307,7 +307,7 @@ class TestWorkflowTypeValidation422:
         source_path = tmp_path / "dashboard.png"
         source_path.write_bytes(b"\x89PNG\r\n\x1a\n")
         storage_dir = tmp_path / "baseline-store"
-        monkeypatch.setenv("HERMES_VISUAL_BASELINE_DIR", str(storage_dir))
+        monkeypatch.setenv("ORCHESTRATOR_VISUAL_BASELINE_DIR", str(storage_dir))
 
         resp = tc.post(
             "/api/workflows/visual-baselines",
@@ -451,7 +451,7 @@ class TestWorkflowTypeValidation422:
             )
             session.add(run)
             session.flush()
-            validation = HermesValidationRecord(
+            validation = OrchestratorValidationRecord(
                 workflow_id=workflow.id,
                 run_id=run.id,
                 step_id=step.id,
@@ -461,7 +461,7 @@ class TestWorkflowTypeValidation422:
             session.add(validation)
             session.flush()
             session.add(
-                HermesCorrectionAttempt(
+                OrchestratorCorrectionAttempt(
                     validation_record_id=validation.id,
                     workflow_id=workflow.id,
                     run_id=run.id,
@@ -497,12 +497,12 @@ class TestWorkflowTypeValidation422:
             workflow = AutoWorkflow(name="UI Harness")
             session.add(workflow)
             session.flush()
-            queued = HermesCorrectionAttempt(
+            queued = OrchestratorCorrectionAttempt(
                 workflow_id=workflow.id,
                 status="queued",
                 attempt_number=1,
             )
-            dispatched = HermesCorrectionAttempt(
+            dispatched = OrchestratorCorrectionAttempt(
                 workflow_id=workflow.id,
                 status="dispatched",
                 attempt_number=1,
@@ -852,13 +852,13 @@ class TestWorkflowTypeValidation422:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).one()
             run_data = json.loads(run.run_data)
             intervention = (
-                db.query(HermesEvent)
-                .filter(HermesEvent.event_type == "human_intervention_recorded")
+                db.query(OrchestratorEvent)
+                .filter(OrchestratorEvent.event_type == "human_intervention_recorded")
                 .one()
             )
             learned = (
-                db.query(HermesLearnedRule)
-                .filter(HermesLearnedRule.rule_type == "human_intervention")
+                db.query(OrchestratorLearnedRule)
+                .filter(OrchestratorLearnedRule.rule_type == "human_intervention")
                 .one()
             )
 

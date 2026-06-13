@@ -752,14 +752,13 @@ class WorkflowOrchestrationMixin:
     def _exec_run_command(config: dict) -> tuple:
         import subprocess as _subprocess
 
+        from distr.core.rtk_support import run_shell_command
+
         cmd = config.get("command", "")
         cwd = config.get("working_directory") or None
         timeout = config.get("timeout_seconds", 60)
         try:
-            proc = _subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                timeout=timeout, cwd=cwd,
-            )
+            proc = run_shell_command(cmd, timeout=timeout, cwd=cwd)
             return (proc.stdout + proc.stderr).strip()[:2000], proc.returncode == 0
         except _subprocess.TimeoutExpired:
             return f"Command timed out after {timeout}s", False

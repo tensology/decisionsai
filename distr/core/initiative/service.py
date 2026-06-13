@@ -780,11 +780,11 @@ class InitiativeService:
         triage_markdown = ""
         if scope == "morning":
             try:
-                from distr.core.hermes import emit_event
-                from distr.core.hermes_daily_triage import enqueue_triage_candidates, format_triage_markdown
+                from distr.core.orchestrator import emit_event
+                from distr.core.orchestrator_daily_triage import enqueue_triage_candidates, format_triage_markdown
 
                 triage = (
-                    bundle.work_scan.get("hermes_triage")
+                    bundle.work_scan.get("orchestrator_triage")
                     if isinstance(bundle.work_scan, dict)
                     else {}
                 )
@@ -795,7 +795,7 @@ class InitiativeService:
                     added = enqueue_triage_candidates(self._draft_queue, candidates, limit=6)
                     triage_markdown = format_triage_markdown(triage, max_candidates=6) if isinstance(triage, dict) else ""
                     emit_event(
-                        source="hermes",
+                        source="orchestrator",
                         event_type="daily_triage_generated",
                         status="ready",
                         summary=triage.get("summary") if isinstance(triage, dict) else "",
@@ -1387,6 +1387,8 @@ class InitiativeService:
             "what needs approval",
             "show approvals",
             "show pending",
+            "orchestrator triage",
+            "orchestrator decisions",
             "hermes triage",
             "hermes decisions",
             "standup decisions",

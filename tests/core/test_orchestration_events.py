@@ -3,12 +3,12 @@ from __future__ import annotations
 import contextlib
 import json
 
-import distr.core.db.hermes  # noqa: F401
+import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
 from distr.core.db import Base
-from distr.core.db.hermes import HermesEvent
+from distr.core.db.orchestrator import OrchestratorEvent
 from distr.core.db.projects import Project
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -46,7 +46,7 @@ def test_orchestration_event_normalizes_legacy_names_and_keeps_voice_clean(monke
     )
 
     factory = _factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
 
     event_id = emit_orchestration_event(
         source="codex",
@@ -61,7 +61,7 @@ def test_orchestration_event_normalizes_legacy_names_and_keeps_voice_clean(monke
     )
 
     with _session_ctx(factory) as session:
-        row = session.query(HermesEvent).filter(HermesEvent.id == event_id).one()
+        row = session.query(OrchestratorEvent).filter(OrchestratorEvent.id == event_id).one()
         payload = json.loads(row.payload)
         assert row.event_type == "needs_input"
         assert payload["orchestration"]["event_type"] == "needs_input"
@@ -86,7 +86,7 @@ def test_project_execution_lifecycle_events_share_the_same_timeline(monkeypatch,
     from distr.core.orchestration_events import list_orchestration_timeline
 
     factory = _factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
     monkeypatch.setattr("distr.core.kanban.project_execution.get_session", lambda: _session_ctx(factory))
 
     with _session_ctx(factory) as session:
@@ -132,7 +132,7 @@ def test_user_notification_event_is_recorded_without_internal_branding(monkeypat
     from distr.core.orchestration_events import emit_user_notification, list_orchestration_timeline
 
     factory = _factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
 
     event_id = emit_user_notification(
         channel="telegram",
@@ -153,7 +153,7 @@ def test_orchestration_timeline_exposes_surface_subtype_and_attachment(monkeypat
     from distr.core.orchestration_events import emit_orchestration_event, list_orchestration_timeline
 
     factory = _factory()
-    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
 
     emit_orchestration_event(
         source="cursor",

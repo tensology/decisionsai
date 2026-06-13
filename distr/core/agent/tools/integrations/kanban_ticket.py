@@ -171,7 +171,7 @@ def _sanitize_ticket_title(title: str) -> str:
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
@@ -252,6 +252,9 @@ class KanbanTicketTool(BaseTool):
       whatsapp_snapshot_to_ticket — create a ticket snapshot from WhatsApp messages
       whatsapp_project_snapshot_to_ticket — create a backlog ticket from a project or board WhatsApp feed
       whatsapp_send_message     — send a WhatsApp message to a chat/group
+      whatsapp_set_draft        — leave a reply draft in WhatsApp for user review (does not send)
+      whatsapp_get_draft        — read the saved reply draft for a chat or board-linked WhatsApp
+      whatsapp_list_drafts      — list chats with outstanding reply drafts awaiting review
 
     REQUIRED PARAMETERS:
       action  — one of the actions above
@@ -330,6 +333,9 @@ class KanbanTicketTool(BaseTool):
         "Use action='whatsapp_snapshot_to_ticket' with board_name/board_id and jid_phone or message_ids to snapshot into a ticket. "
         "Use action='whatsapp_project_snapshot_to_ticket' only after the user confirms or explicitly says to create/snapshot the project WhatsApp feed. "
         "Use action='whatsapp_send_message' with jid or jid_phone plus text to reply in WhatsApp. "
+        "Use action='whatsapp_set_draft' with text plus jid_phone or a board linked to WhatsApp to leave a draft "
+        "for the user to review in the WhatsApp composer (does not send). "
+        "Use action='whatsapp_get_draft' or whatsapp_list_drafts to see drafts waiting for user approval. "
         "The tool automatically gathers conversation context and attaches any "
         "images/documents from the chat thread to the ticket. "
         "IMPORTANT: When user says 'create a ticket', call this tool with "
@@ -1475,6 +1481,22 @@ class KanbanTicketTool(BaseTool):
                 )
             elif action in ("whatsapp_send_message", "wa_send_message", "send_whatsapp"):
                 return self._action_whatsapp_send_message(jid=jid, jid_phone=jid_phone, text=text or description or title)
+            elif action in ("whatsapp_set_draft", "wa_set_draft", "set_whatsapp_draft"):
+                return self._action_whatsapp_set_draft(
+                    jid=jid,
+                    jid_phone=jid_phone,
+                    text=text or description or title,
+                    board_id=board_id or None,
+                    board_name=board_name,
+                )
+            elif action in ("whatsapp_get_draft", "wa_get_draft", "get_whatsapp_draft"):
+                return self._action_whatsapp_get_draft(
+                    jid_phone=jid_phone,
+                    board_id=board_id or None,
+                    board_name=board_name,
+                )
+            elif action in ("whatsapp_list_drafts", "wa_list_drafts", "list_whatsapp_drafts"):
+                return self._action_whatsapp_list_drafts()
             else:
                 ref = (
                     f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, create_board, delete_board, "
@@ -1484,7 +1506,8 @@ class KanbanTicketTool(BaseTool):
                     "delete_todo, add_link, delete_link, send_to_project, send_to_cli, workflow_overview, "
                     "whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, "
                     "whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, "
-                    "whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message"
+                    "whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, "
+                    "whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts"
                 )
                 return voice_then_reference(
                     "That ticket-board action name did not match anything I know how to run.",
@@ -2811,7 +2834,7 @@ class KanbanTicketTool(BaseTool):
             if t.lane:
                 board = orm_get_by_id(s, KB, t.lane.board_id)
 
-            from distr.core.hermes_orchestrator import resolve_execution_route
+            from distr.core.orchestrator_routing import resolve_execution_route
 
             decision = resolve_execution_route(
                 project=project,
@@ -2954,14 +2977,21 @@ class KanbanTicketTool(BaseTool):
         return f"{raw}@s.whatsapp.net"
 
     def _action_whatsapp_sync(self) -> str:
-        wm = self._get_whatsapp_manager()
-        if not wm:
+        from distr.core.kanban.whatsapp_relay_sync import (
+            is_whatsapp_account_connected,
+            sync_whatsapp_from_relay,
+        )
+
+        if not is_whatsapp_account_connected():
             return voice_then_reference(
-                "WhatsApp is not connected in this session.",
-                "WhatsApp manager is not available, so the agent cannot sync WhatsApp messages right now.",
+                "WhatsApp is not connected in Settings.",
+                "Link WhatsApp under Settings > Advanced before syncing messages.",
             )
         try:
-            result = wm.sync_from_relay(mark_processed=True) or {}
+            logger.info("Agent whatsapp_sync: starting relay pull")
+            # Match the kanban web sync button: import only, no per-message relay ACK.
+            result = sync_whatsapp_from_relay(mark_processed=False) or {}
+            logger.info("Agent whatsapp_sync: finished %s", result)
             synced = int(result.get("synced") or 0)
             total = int(result.get("total") or 0)
             if result.get("error"):
@@ -3716,6 +3746,163 @@ class KanbanTicketTool(BaseTool):
             title=ticket_title,
         )
 
+    def _resolve_whatsapp_draft_target(
+        self,
+        jid: str = "",
+        jid_phone: str = "",
+        board_id: Optional[int] = None,
+        board_name: str = "",
+    ) -> tuple:
+        """Return (phone, jid, board_id, contact_name) for draft actions."""
+        from distr.core.kanban.whatsapp_compose_drafts import resolve_board_linked_jid
+
+        phone = (jid_phone or "").strip()
+        resolved_jid = (jid or "").strip()
+        resolved_board_id = board_id or None
+        contact_name = ""
+
+        if not phone and (board_id or (board_name or "").strip()):
+            linked_phone, linked_jid, linked_board_id, linked_name = resolve_board_linked_jid(
+                board_id=board_id or None,
+                board_name=board_name,
+            )
+            if not linked_phone:
+                return None, None, linked_board_id, None
+            phone = linked_phone
+            resolved_jid = resolved_jid or linked_jid or ""
+            resolved_board_id = linked_board_id
+            contact_name = linked_name or ""
+
+        if not phone and resolved_jid:
+            phone = resolved_jid.split("@")[0]
+
+        if phone and not resolved_jid:
+            resolved_jid = self._jid_from_phone(phone)
+
+        return phone or None, resolved_jid or None, resolved_board_id, contact_name or None
+
+    def _action_whatsapp_set_draft(
+        self,
+        jid: str = "",
+        jid_phone: str = "",
+        text: str = "",
+        board_id: Optional[int] = None,
+        board_name: str = "",
+    ) -> str:
+        from distr.core.kanban.whatsapp_compose_drafts import WHATSAPP_DRAFT_STYLE_HINT, save_compose_draft
+
+        phone, resolved_jid, resolved_board_id, contact_name = self._resolve_whatsapp_draft_target(
+            jid=jid,
+            jid_phone=jid_phone,
+            board_id=board_id,
+            board_name=board_name,
+        )
+        if not phone:
+            if board_id or (board_name or "").strip():
+                return voice_then_reference(
+                    "That board is not linked to a WhatsApp chat.",
+                    f"No WhatsApp link found for board {board_name or board_id}.",
+                )
+            return voice_then_reference(
+                "I need a WhatsApp chat or a board linked to WhatsApp.",
+                "Provide jid_phone, jid, or board_name/board_id with a WhatsApp link for whatsapp_set_draft.",
+            )
+
+        body = (text or "").strip()
+        if not body:
+            return voice_then_reference(
+                "Say what draft message to leave in WhatsApp.",
+                "Provide text for whatsapp_set_draft.",
+            )
+
+        draft = save_compose_draft(
+            jid_phone=phone,
+            text=body,
+            jid=resolved_jid,
+            contact_name=contact_name,
+            source="agent",
+            board_id=resolved_board_id,
+            sanitize=True,
+        )
+        preview = (draft or {}).get("text", "")[:200]
+        label = contact_name or phone
+        return voice_then_reference(
+            f"Draft saved for {label}. Review it in WhatsApp before sending.",
+            (
+                f"WhatsApp draft for {phone} ({label}):\n{preview}\n\n"
+                f"Style note: {WHATSAPP_DRAFT_STYLE_HINT}\n"
+                "Draft is in the WhatsApp composer only; user must send from the UI."
+            ),
+        )
+
+    def _action_whatsapp_get_draft(
+        self,
+        jid_phone: str = "",
+        board_id: Optional[int] = None,
+        board_name: str = "",
+    ) -> str:
+        from distr.core.kanban.whatsapp_compose_drafts import get_compose_draft
+
+        phone, _, _, contact_name = self._resolve_whatsapp_draft_target(
+            jid_phone=jid_phone,
+            board_id=board_id,
+            board_name=board_name,
+        )
+        if not phone:
+            if board_id or (board_name or "").strip():
+                return voice_then_reference(
+                    "That board is not linked to a WhatsApp chat.",
+                    f"No WhatsApp link found for board {board_name or board_id}.",
+                )
+            return voice_then_reference(
+                "I need a WhatsApp chat or board link to read a draft.",
+                "Provide jid_phone or board_name/board_id for whatsapp_get_draft.",
+            )
+
+        draft = get_compose_draft(phone)
+        label = contact_name or phone
+        if not draft:
+            return voice_then_reference(
+                f"No draft waiting for {label}.",
+                f"No WhatsApp compose draft stored for {phone}.",
+            )
+
+        source = draft.get("source") or "user"
+        pending = " (awaiting user review)" if source == "agent" else ""
+        return voice_then_reference(
+            f"There is a draft for {label}{pending}.",
+            (
+                f"WhatsApp draft for {phone} ({label}){pending}:\n"
+                f"{draft.get('text', '')}\n"
+                f"source={source}"
+            ),
+        )
+
+    def _action_whatsapp_list_drafts(self) -> str:
+        from distr.core.kanban.whatsapp_compose_drafts import list_compose_drafts
+
+        drafts = list_compose_drafts()
+        if not drafts:
+            return voice_then_reference(
+                "No WhatsApp drafts are waiting.",
+                "No WhatsApp compose drafts stored.",
+            )
+
+        lines = []
+        for d in drafts[:25]:
+            label = d.get("contact_name") or d.get("jid_phone") or "chat"
+            preview = (d.get("text") or "")[:80].replace("\n", " ")
+            source = d.get("source") or "user"
+            flag = " [agent, needs review]" if source == "agent" else ""
+            lines.append(f"- {label} ({d.get('jid_phone')}): {preview}{flag}")
+
+        ref = "WhatsApp drafts awaiting send:\n" + "\n".join(lines)
+        agent_count = sum(1 for d in drafts if (d.get("source") or "") == "agent")
+        voice = f"{len(drafts)} WhatsApp draft{'s' if len(drafts) != 1 else ''} waiting."
+        if agent_count:
+            voice += f" {agent_count} need your review."
+        return voice_then_reference(voice, ref)
+
     def _action_whatsapp_send_message(self, jid: str, jid_phone: str, text: str) -> str:
         message_text = (text or "").strip()
         target_jid = (jid or "").strip() or self._jid_from_phone(jid_phone)
@@ -3730,28 +3917,40 @@ class KanbanTicketTool(BaseTool):
                 "Please provide text for whatsapp_send_message.",
             )
 
-        wm = self._get_whatsapp_manager()
-        if not wm:
+        from distr.core.integrations.whatsapp.relay_client import send_message_via_relay
+        from distr.gui.oracle.menu import is_whatsapp_enabled_in_settings
+
+        if not is_whatsapp_enabled_in_settings():
             return voice_then_reference(
-                "WhatsApp is not connected in this session.",
-                "WhatsApp manager is not available.",
+                "WhatsApp is not connected in Settings.",
+                "Link WhatsApp under Settings > Advanced before sending messages.",
             )
         try:
-            import requests
-            payload = {"jid": target_jid, "text": message_text, "caption": "", "audio": None}
-            payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-            headers = wm._relay_auth_headers(payload_str)
-            resp = requests.post(f"{wm.api_base}/send", json=payload, headers=headers, timeout=10)
-            data = {}
-            try:
-                data = resp.json()
-            except Exception:
-                data = {"raw": resp.text[:300]}
-            if resp.status_code == 200 and data.get("success", True):
+            wm = self._get_whatsapp_manager()
+            if wm:
+                import requests
+                payload = {"jid": target_jid, "text": message_text, "caption": "", "audio": None}
+                payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+                headers = wm._relay_auth_headers(payload_str)
+                resp = requests.post(f"{wm.api_base}/send", json=payload, headers=headers, timeout=10)
+                data = {}
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = {"raw": resp.text[:300]}
+                if resp.status_code == 200 and data.get("success", True):
+                    return voice_then_reference("WhatsApp message sent.", f"Sent WhatsApp message to {target_jid}.")
+                return voice_then_reference(
+                    "WhatsApp did not accept that send.",
+                    f"Failed to send WhatsApp message to {target_jid}: {data.get('error') or data}",
+                )
+
+            result = send_message_via_relay(jid=target_jid, text=message_text)
+            if result.get("success"):
                 return voice_then_reference("WhatsApp message sent.", f"Sent WhatsApp message to {target_jid}.")
             return voice_then_reference(
                 "WhatsApp did not accept that send.",
-                f"Failed to send WhatsApp message to {target_jid}: {data.get('error') or data}",
+                f"Failed to send WhatsApp message to {target_jid}: {result.get('error')}",
             )
         except Exception as e:
             logger.error("WhatsApp send via tool failed: %s", e, exc_info=True)

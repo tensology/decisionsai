@@ -1,0 +1,157 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "spec-first-ship",
+  "name": "Spec-First Ship",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "incremental_ship",
+  "description": "One spec.md checkbox per iteration: plan, implement, verify, mark done.",
+  "kickoff": "Start the \"Spec-First Ship\" loop.\nGoal: spec.md fully checked off\nMax iterations: 15\nBetween iterations run: project tests\nExit when: no unchecked requirements in spec.md.\nOrientation: read the linked ticket and locate spec.md before picking the next checkbox.\nStep 1: Read spec.md and select the next unchecked requirement.",
+  "loop_contract": {
+    "name": "Spec-First Ship",
+    "goal": "every requirement in spec.md is implemented and checked off",
+    "exit_when": "spec.md has no unchecked requirements",
+    "check_command": "project test suite",
+    "max_iterations": 15,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read spec.md (or project spec). Select the first unchecked requirement. Restate acceptance criteria.",
+    "archetype": "incremental_ship",
+    "role": "developer"
+  },
+  "expected_check_command": "project test suite",
+  "tags": [
+    "spec",
+    "planning"
+  ],
+  "steps": [
+    {
+      "name": "Pick unchecked spec item",
+      "instruction": "Read spec.md (or project spec). Select the first unchecked requirement. Restate acceptance criteria.",
+      "skills": [
+        "writing-plans",
+        "product-lens"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Pick unchecked spec item' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Plan the slice",
+      "instruction": "Write a short implementation plan for this item only: files, tests, risks.",
+      "skills": [
+        "writing-plans",
+        "executing-plans"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Plan the slice' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Implement and test",
+      "instruction": "Implement the item with tdd-workflow. Run relevant tests.",
+      "skills": [
+        "tdd-workflow",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Implement and test' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Mark spec and verify",
+      "instruction": "Mark requirement [x] in spec.md only after verification. Run project test suite.",
+      "skills": [
+        "verification-loop",
+        "doc-coauthoring"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Mark spec and verify' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate spec complete",
+      "instruction": "spec.md has no unchecked requirements OR this iteration's item is done and more remain.",
+      "skills": [
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate spec complete' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Report",
+      "instruction": "Spec progress and evidence.",
+      "skills": [
+        "learnings-keeper"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

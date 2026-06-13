@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from unittest.mock import MagicMock
 
-import distr.core.db.hermes  # noqa: F401
+import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
@@ -18,7 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
-from distr.core.db.hermes import HermesEvent, HermesLearnedRule, HermesValidationRecord
+from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorLearnedRule, OrchestratorValidationRecord
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
 from distr.gui.web.routes.settings.workflows import register_routes
 
@@ -61,11 +61,11 @@ def test_harness_proves_worker_handoff_human_pause_and_scheduled_action_lifecycl
         return _session_ctx(factory)
 
     monkeypatch.setattr("distr.core.db.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.get_session", get_session)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", get_session)
     monkeypatch.setattr("distr.core.workflow.service.get_session", get_session)
     monkeypatch.setattr("distr.core.workflow.scheduler.get_session", get_session)
     monkeypatch.setattr("distr.core.workflow.standards_memory.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.is_hermes_enabled", lambda: True)
+    monkeypatch.setattr("distr.core.orchestrator.is_orchestrator_enabled", lambda: True)
     monkeypatch.setattr(
         "distr.core.kanban.project_execution.append_execution_event",
         MagicMock(),
@@ -145,8 +145,8 @@ def test_harness_proves_worker_handoff_human_pause_and_scheduled_action_lifecycl
 
     with _session_ctx(factory) as db:
         run_data = json.loads(db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one().run_data)
-        intervention = db.query(HermesEvent).filter(HermesEvent.event_type == "human_intervention_recorded").one()
-        learned = db.query(HermesLearnedRule).filter(HermesLearnedRule.rule_type == "human_intervention").one()
+        intervention = db.query(OrchestratorEvent).filter(OrchestratorEvent.event_type == "human_intervention_recorded").one()
+        learned = db.query(OrchestratorLearnedRule).filter(OrchestratorLearnedRule.rule_type == "human_intervention").one()
 
     assert run_data["waiting_kind"] == "needs_human_input"
     assert run_data["next_action"] == "needs_human_input"
@@ -272,8 +272,8 @@ def test_live_proof_records_ui_change_artifacts_and_feedback(monkeypatch, tmp_pa
         return _session_ctx(factory)
 
     monkeypatch.setattr("distr.core.db.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.is_hermes_enabled", lambda: True)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", get_session)
+    monkeypatch.setattr("distr.core.orchestrator.is_orchestrator_enabled", lambda: True)
 
     before_png = tmp_path / "before.png"
     after_png = tmp_path / "after.png"
@@ -312,9 +312,9 @@ def test_live_proof_records_ui_change_artifacts_and_feedback(monkeypatch, tmp_pa
     assert (tmp_path / "ui-change-20260602_120000" / "flow.md").exists()
 
     with _session_ctx(factory) as db:
-        validation_event = db.query(HermesEvent).filter(HermesEvent.event_type == "validation_recorded").one()
-        validation = db.query(HermesValidationRecord).filter(HermesValidationRecord.id == proof["validation_id"]).one()
-        feedback = db.query(HermesEvent).filter(HermesEvent.event_type == "ui_feedback_labeled").one()
+        validation_event = db.query(OrchestratorEvent).filter(OrchestratorEvent.event_type == "validation_recorded").one()
+        validation = db.query(OrchestratorValidationRecord).filter(OrchestratorValidationRecord.id == proof["validation_id"]).one()
+        feedback = db.query(OrchestratorEvent).filter(OrchestratorEvent.event_type == "ui_feedback_labeled").one()
 
     validation_event_payload = json.loads(validation_event.payload)
     validation_payload = json.loads(validation.payload)
@@ -335,10 +335,10 @@ def test_live_proof_real_worker_edit_completes_run_with_result_packet(monkeypatc
         return _session_ctx(factory)
 
     monkeypatch.setattr("distr.core.db.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.get_session", get_session)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", get_session)
     monkeypatch.setattr("distr.core.workflow.dispatcher.get_session", get_session)
     monkeypatch.setattr("distr.core.workflow.service.get_session", get_session)
-    monkeypatch.setattr("distr.core.hermes.is_hermes_enabled", lambda: True)
+    monkeypatch.setattr("distr.core.orchestrator.is_orchestrator_enabled", lambda: True)
     monkeypatch.setattr(
         "distr.core.workflow.dispatcher.increment_workflow_updated",
         MagicMock(),

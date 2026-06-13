@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from distr.core.db import get_session
-from distr.core.db.hermes import HermesCorrectionAttempt, HermesValidationRecord
+from distr.core.db.orchestrator import OrchestratorCorrectionAttempt, OrchestratorValidationRecord
 from distr.core.db.workflow import AutoWorkflowRun
 from distr.core.workflow.service import add_step, create_workflow
 
@@ -109,7 +109,7 @@ def _seed_completed_run_with_evidence() -> tuple[int, str]:
             )
             s.add(run)
             s.flush()
-            validation = HermesValidationRecord(
+            validation = OrchestratorValidationRecord(
                 workflow_id=workflow_id,
                 run_id=run.id,
                 step_id=step_id,
@@ -120,7 +120,7 @@ def _seed_completed_run_with_evidence() -> tuple[int, str]:
             )
             s.add(validation)
             s.flush()
-            attempt = HermesCorrectionAttempt(
+            attempt = OrchestratorCorrectionAttempt(
                 validation_record_id=validation.id,
                 workflow_id=workflow_id,
                 run_id=run.id,
@@ -164,11 +164,6 @@ def test_workflows_runs_tab_shows_result_packet_evidence(page):
     assert row.count() > 0
     row.click()
     page.wait_for_timeout(1200)
-
-    page.locator(".wf-tab[data-tab='runs']").click()
-    page.wait_for_timeout(900)
-    page.locator(".wf-runs-subtab[data-runs-tab='recent']").click()
-    page.wait_for_timeout(900)
 
     evidence = page.locator('[data-testid="wf-run-evidence"]').first
     assert evidence.count() > 0

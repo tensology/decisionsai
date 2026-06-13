@@ -181,7 +181,7 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
                 project_folder=project.folder_location or "",
                 project_id=project.id,
             )
-            from distr.core.hermes_orchestrator import resolve_execution_route
+            from distr.core.orchestrator_routing import resolve_execution_route
 
             decision = resolve_execution_route(
                 project=project,

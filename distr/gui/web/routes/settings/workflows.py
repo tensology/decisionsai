@@ -1,7 +1,7 @@
 """
 Workflow routes — /workflows/*
 """
-from fastapi import Request, HTTPException, File, UploadFile
+from fastapi import Request, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List
@@ -193,6 +193,35 @@ class StepCreateRequest(BaseModel):
     name: str = "New Step"
     action_type: str = "agent_instruction"
     position: Optional[int] = None
+    instruction: str = ""
+    config: Optional[dict] = None
+    validation_type: str = "none"
+    validation_prompt: str = ""
+    wait_for_continue: bool = False
+
+
+class LoopPresetApplyRequest(BaseModel):
+    preset_name: str
+    mode: str = "replace"
+
+
+class LoopPresetSaveRequest(BaseModel):
+    name: str
+
+
+class StepHarnessSuggestRequest(BaseModel):
+    instruction: str = ""
+    action_type: str = ""
+    archetype: str = ""
+    loop_contract: Optional[dict] = None
+    step_role: str = ""
+
+
+class StepHarnessLlmSuggestRequest(BaseModel):
+    instruction: str = ""
+    guardrail: str = ""
+    validation_prompt: str = ""
+    loop_contract: Optional[dict] = None
 
 
 class StepReorderRequest(BaseModel):
@@ -206,6 +235,7 @@ class WorkflowGenerateRequest(BaseModel):
 class WorkflowPlanRequest(BaseModel):
     instruction: str
     chat_id: Optional[int] = None
+    name: Optional[str] = None
 
 
 class ProjectOpsPlanRequest(BaseModel):
@@ -445,7 +475,7 @@ def register_routes(router, templates):
     async def workflow_visual_baseline_create(data: VisualBaselineRequest):
         """Create a named visual baseline set for UI quality validation."""
         try:
-            from distr.core.hermes import create_visual_baseline_set, get_visual_baseline_set
+            from distr.core.orchestrator import create_visual_baseline_set, get_visual_baseline_set
 
             baseline_id = create_visual_baseline_set(
                 name=data.name,
@@ -473,7 +503,7 @@ def register_routes(router, templates):
     ):
         """List named visual baselines for board/project UI validation."""
         try:
-            from distr.core.hermes import list_visual_baseline_sets
+            from distr.core.orchestrator import list_visual_baseline_sets
 
             baselines = list_visual_baseline_sets(
                 board_id=board_id,
@@ -497,7 +527,7 @@ def register_routes(router, templates):
     ):
         """Check whether visual baseline screenshot files are present on disk."""
         try:
-            from distr.core.hermes import inspect_visual_baseline_readiness
+            from distr.core.orchestrator import inspect_visual_baseline_readiness
 
             readiness = inspect_visual_baseline_readiness(
                 board_id=board_id,
@@ -516,7 +546,7 @@ def register_routes(router, templates):
     async def workflow_visual_baseline_get(baseline_set_id: int):
         """Return one named visual baseline set and its reference screens."""
         try:
-            from distr.core.hermes import get_visual_baseline_set
+            from distr.core.orchestrator import get_visual_baseline_set
 
             baseline = get_visual_baseline_set(baseline_set_id=baseline_set_id)
             if not baseline:
@@ -830,7 +860,7 @@ def register_routes(router, templates):
         try:
             from distr.core.workflow.service import plan_workflow, get_workflow
             from distr.gui.web.workflow_events import increment_workflow_updated
-            wf_id = plan_workflow(data.instruction, chat_id=data.chat_id)
+            wf_id = plan_workflow(data.instruction, chat_id=data.chat_id, name=data.name)
             if not wf_id:
                 return JSONResponse({"detail": "Failed to plan workflow"}, status_code=500)
             increment_workflow_updated()
@@ -949,12 +979,12 @@ def register_routes(router, templates):
         save_settings_to_db(settings)
         return JSONResponse({"success": True})
 
-    @router.get("/workflows/hermes-setup")
-    async def get_hermes_setup():
-        """Return Hermes readiness and ticket complexity routing for workflow onboarding."""
+    @router.get("/workflows/orchestrator-setup")
+    async def get_orchestrator_setup():
+        """Return Orchestrator readiness and ticket complexity routing for workflow onboarding."""
         from distr.core.settings import load_settings_from_db
-        from distr.core.hermes import (
-            ensure_hermes_tables,
+        from distr.core.orchestrator import (
+            ensure_orchestrator_tables,
             list_correction_attempts,
             list_events,
             list_project_runtime_sessions,
@@ -966,7 +996,7 @@ def register_routes(router, templates):
         ledger_ready = True
         ledger_error = ""
         try:
-            ensure_hermes_tables()
+            ensure_orchestrator_tables()
         except Exception as exc:
             ledger_ready = False
             ledger_error = str(exc)
@@ -1040,38 +1070,58 @@ def register_routes(router, templates):
             except Exception:
                 pass
 
+        hermes_agent = next(
+            (item for item in (backends.get("backends") or []) if item.get("id") == "hermes_agent"),
+            None,
+        )
+
         return JSONResponse({
-            "enabled": bool(settings.get("hermes_enabled", True)),
-            "memory_export_enabled": bool(settings.get("hermes_memory_export_enabled", False)),
+            "enabled": bool(settings.get("orchestrator_enabled", True)),
+            "memory_export_enabled": bool(settings.get("orchestrator_memory_export_enabled", False)),
             "routing": routing,
             "readiness": readiness,
             "counts": counts,
             "backends": backends,
             "connected_sources": connected_sources,
+            "optional_backends": {
+                "hermes_agent": {
+                    "installed": bool(hermes_agent and hermes_agent.get("installed")),
+                    "ready": bool(hermes_agent and hermes_agent.get("ready")),
+                    "message": (hermes_agent or {}).get("message") or "",
+                    "setup_command": "NONINTERACTIVE=1 bash scripts/setup_project_clis.sh hermes-agent",
+                    "docs": "docs/nous-hermes-agent.md",
+                    "required_for_orchestrator": False,
+                }
+            },
         })
 
-    @router.post("/workflows/hermes-setup")
-    async def save_hermes_setup(request: Request):
-        """Save Hermes workflow onboarding settings."""
+    @router.post("/workflows/orchestrator-setup")
+    async def save_orchestrator_setup(request: Request):
+        """Save Orchestrator workflow onboarding settings."""
         from distr.core.settings import load_settings_from_db, save_settings_to_db
         from distr.core.project_cli_backends import normalize_backend_id
         from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
 
         data = await request.json()
         settings = load_settings_from_db()
-        settings["hermes_enabled"] = bool(data.get("enabled", True))
+        settings["orchestrator_enabled"] = bool(data.get("enabled", True))
         if "memory_export_enabled" in data:
-            settings["hermes_memory_export_enabled"] = bool(data.get("memory_export_enabled", False))
+            settings["orchestrator_memory_export_enabled"] = bool(data.get("memory_export_enabled", False))
 
         models = data.get("models") or {}
         if "models" in data:
+            from distr.core.orchestrator import ORCHESTRATOR_ROLE_SETTINGS_KEYS
+
             for role in ["orchestrator", "validator", "correction"]:
                 row = models.get(role) or {}
-                settings[f"hermes_{role}_provider"] = (row.get("provider") or "").strip()
-                settings[f"hermes_{role}_model"] = (row.get("model") or "").strip()
+                provider_key, model_key = ORCHESTRATOR_ROLE_SETTINGS_KEYS[role]
+                settings[provider_key] = (row.get("provider") or "").strip()
+                settings[model_key] = (row.get("model") or "").strip()
 
         routing = data.get("routing") or {}
         if "routing" in data:
+            from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+
             for level, default_backend, default_model in [
                 ("low", "cursor", "auto"),
                 ("medium", "codex", "auto"),
@@ -1079,8 +1129,13 @@ def register_routes(router, templates):
             ]:
                 row = routing.get(level) or {}
                 settings[f"project_cli_{level}_backend"] = normalize_backend_id(row.get("backend") or default_backend)
-                settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
                 backend_id = settings[f"project_cli_{level}_backend"]
+                if is_ide_backend(backend_id):
+                    settings[f"project_cli_{level}_model"] = ""
+                    settings.pop(f"project_cli_{level}_codex_intelligence", None)
+                    settings.pop(f"project_cli_{level}_codex_speed", None)
+                    continue
+                settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
                 if backend_id == "codex":
                     settings[f"project_cli_{level}_codex_intelligence"] = normalize_codex_intelligence(
                         row.get("codex_intelligence") or row.get("codex_reasoning_effort")
@@ -1196,6 +1251,12 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("List presets failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/loop-presets")
+    async def workflow_loop_presets():
+        from distr.core.workflow.loop_presets import list_loop_presets
+
+        return JSONResponse({"presets": list_loop_presets()})
 
     @router.post("/workflows/presets/{filename}/load")
     async def workflow_load_preset(filename: str):
@@ -1408,8 +1469,8 @@ def register_routes(router, templates):
             logger.error("Workflow runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
-    @router.get("/workflows/{workflow_id}/hermes-events")
-    async def workflow_hermes_events(
+    @router.get("/workflows/{workflow_id}/orchestrator-events")
+    async def workflow_orchestrator_events(
         workflow_id: int,
         limit: int = 100,
         ticket_id: Optional[int] = None,
@@ -1417,7 +1478,7 @@ def register_routes(router, templates):
         board_id: Optional[int] = None,
     ):
         try:
-            from distr.core.hermes import list_events
+            from distr.core.orchestrator import list_events
 
             return JSONResponse(list_events(
                 workflow_id=workflow_id,
@@ -1433,7 +1494,7 @@ def register_routes(router, templates):
     @router.get("/workflows/{workflow_id}/validations")
     async def workflow_validations(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None, verdict: Optional[str] = None):
         try:
-            from distr.core.hermes import list_validation_records
+            from distr.core.orchestrator import list_validation_records
 
             return JSONResponse(list_validation_records(
                 workflow_id=workflow_id,
@@ -1449,7 +1510,7 @@ def register_routes(router, templates):
     @router.get("/workflows/{workflow_id}/corrections")
     async def workflow_corrections(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None, validation_record_id: Optional[int] = None, status: Optional[str] = None):
         try:
-            from distr.core.hermes import list_correction_attempts
+            from distr.core.orchestrator import list_correction_attempts
 
             return JSONResponse(list_correction_attempts(
                 workflow_id=workflow_id,
@@ -1486,7 +1547,7 @@ def register_routes(router, templates):
             if _is_audit_workflow(workflow_id):
                 return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
             from distr.core.db import get_session
-            from distr.core.db.hermes import HermesEvent
+            from distr.core.db.orchestrator import OrchestratorEvent
             from distr.core.db.workflow import AutoWorkflow
             from distr.gui.web.workflow_events import increment_workflow_updated
 
@@ -1495,8 +1556,8 @@ def register_routes(router, templates):
                 if not wf:
                     return JSONResponse(_workflow_error_payload("Workflow not found", "clear_events"), status_code=404)
                 deleted_events = (
-                    db.query(HermesEvent)
-                    .filter(HermesEvent.workflow_id == workflow_id)
+                    db.query(OrchestratorEvent)
+                    .filter(OrchestratorEvent.workflow_id == workflow_id)
                     .delete(synchronize_session=False)
                 )
                 db.commit()
@@ -1660,7 +1721,7 @@ def register_routes(router, templates):
     async def workflow_ui_feedback(workflow_id: int, run_id: int, payload: UiFeedbackRequest):
         """Record the user's UI approval/rejection label for a run outcome."""
         try:
-            from distr.core.hermes import (
+            from distr.core.orchestrator import (
                 get_visual_baseline_set,
                 inspect_visual_baseline_readiness,
                 record_ui_feedback_label,
@@ -1776,7 +1837,7 @@ def register_routes(router, templates):
             from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
             from distr.core.kanban.project_execution import append_execution_event
             from distr.core.workflow.standards_memory import capture_feedback_as_standard
-            from distr.core.hermes import record_human_intervention_memory
+            from distr.core.orchestrator import record_human_intervention_memory
             from distr.core.orchestration_events import (
                 emit_orchestration_event,
                 normalize_orchestration_event_type,
@@ -1953,6 +2014,20 @@ def register_routes(router, templates):
             captured_standard = False
             if event_type in {"user_steer", "codex_interrupted", "codex_needs_input"} and message:
                 captured_standard = capture_feedback_as_standard(workflow_id, message)
+            if message:
+                try:
+                    from distr.core.workflow.steering_memory import append_run_steering_entry
+
+                    append_run_steering_entry(
+                        run_id,
+                        source="cursor" if "cursor" in lower_event_type else "codex",
+                        event_type=event_type,
+                        message=message,
+                        step_id=int(step_id) if step_id else None,
+                    )
+                except Exception:
+                    logger.debug("Could not append run steering entry", exc_info=True)
+
             mistake_event_id = None
             if message and (
                 event.mistake_label
@@ -1974,7 +2049,7 @@ def register_routes(router, templates):
                         else None
                     ),
                 )
-            hermes_event_id = emit_orchestration_event(
+            orchestrator_event_id = emit_orchestration_event(
                 source="codex",
                 event_type=event_type,
                 status=status,
@@ -1997,14 +2072,39 @@ def register_routes(router, templates):
                 "run_id": run_id,
                 "event_type": standard_event_type,
                 "legacy_event_type": event_type if event_type != standard_event_type else "",
-                "event_id": hermes_event_id,
-                "hermes_event_id": hermes_event_id,
+                "event_id": orchestrator_event_id,
+                "orchestrator_event_id": orchestrator_event_id,
                 "human_intervention_event_id": mistake_event_id,
                 "captured_standard": captured_standard,
             })
         except Exception as e:
             logger.error("Workflow Codex bridge event failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "codex_event"), status_code=500)
+
+    @router.get("/workflows/{workflow_id}/runs/{run_id}/steering-memory")
+    async def workflow_run_steering_memory(workflow_id: int, run_id: int):
+        """Return run steering log and board learned rules for the Runs memory panel."""
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.workflow import AutoWorkflowRun
+            from distr.core.workflow.steering_memory import get_run_steering_snapshot
+
+            with get_session() as db:
+                run = (
+                    db.query(AutoWorkflowRun)
+                    .filter(AutoWorkflowRun.id == int(run_id))
+                    .filter(AutoWorkflowRun.workflow_id == int(workflow_id))
+                    .first()
+                )
+                if not run:
+                    return JSONResponse(_workflow_error_payload("Run not found", "steering_memory"), status_code=404)
+            snapshot = get_run_steering_snapshot(int(run_id))
+            if not snapshot:
+                return JSONResponse(_workflow_error_payload("Run not found", "steering_memory"), status_code=404)
+            return JSONResponse({"success": True, **snapshot})
+        except Exception as e:
+            logger.error("Workflow steering memory failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "steering_memory"), status_code=500)
 
     @router.get("/workflows/{workflow_id}/runs/{run_id}/timeline")
     async def workflow_run_timeline(workflow_id: int, run_id: int, limit: int = 100):
@@ -2102,12 +2202,144 @@ def register_routes(router, templates):
             logger.error("Workflow delete context item failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.post("/workflows/{workflow_id}/apply-loop-preset")
+    async def workflow_apply_loop_preset(workflow_id: int, data: LoopPresetApplyRequest):
+        try:
+            from distr.core.workflow.loop_presets import apply_loop_preset
+
+            result = apply_loop_preset(workflow_id, data.preset_name, mode=data.mode)
+            if not result.get("success"):
+                return JSONResponse(
+                    {"detail": result.get("error") or "Failed"},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            from distr.core.workflow.service import get_workflow
+
+            return JSONResponse({"success": True, **result, "workflow": get_workflow(workflow_id)})
+        except Exception as e:
+            logger.error("Workflow apply loop preset failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/{workflow_id}/export-loop-preset")
+    async def workflow_export_loop_preset(workflow_id: int):
+        """Download current loop steps as a loop preset JSON bundle."""
+        try:
+            import re
+
+            from distr.core.workflow.loop_presets import export_loop_preset_json
+            from starlette.responses import Response
+
+            bundle = export_loop_preset_json(workflow_id)
+            if not bundle:
+                return JSONResponse(
+                    {"detail": "Workflow not found or has no steps to export"},
+                    status_code=404,
+                )
+            safe_name = re.sub(
+                r"[^a-z0-9_-]+",
+                "-",
+                str(bundle.get("slug") or bundle.get("name") or "loop").lower(),
+            ).strip("-") or "loop"
+            payload = json.dumps(bundle, indent=2, ensure_ascii=False)
+            return Response(
+                content=payload.encode("utf-8"),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{safe_name}.loop-preset.json"'
+                },
+            )
+        except Exception as e:
+            logger.error("Workflow export loop preset failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/import-loop-preset")
+    async def workflow_import_loop_preset(
+        workflow_id: int,
+        file: UploadFile = File(...),
+        mode: str = "replace",
+    ):
+        """Import a loop preset JSON file into the current workflow."""
+        try:
+            from distr.core.workflow.loop_presets import import_loop_preset_json
+            from distr.core.workflow.service import get_workflow
+
+            raw = await file.read()
+            try:
+                bundle_data = json.loads(raw.decode("utf-8"))
+            except Exception:
+                return JSONResponse({"detail": "Invalid JSON file"}, status_code=400)
+
+            result = import_loop_preset_json(workflow_id, bundle_data, mode=mode)
+            if not result.get("success"):
+                return JSONResponse(
+                    {"detail": result.get("error") or "Import failed"},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            return JSONResponse({"success": True, **result, "workflow": get_workflow(workflow_id)})
+        except Exception as e:
+            logger.error("Workflow import loop preset failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/save-loop-preset")
+    async def workflow_save_loop_preset(workflow_id: int, data: LoopPresetSaveRequest):
+        """Save current workflow steps as a reusable user loop preset."""
+        try:
+            from distr.core.workflow.loop_presets import save_loop_preset_from_workflow
+
+            result = save_loop_preset_from_workflow(workflow_id, data.name)
+            if not result.get("success"):
+                return JSONResponse(
+                    {"detail": result.get("error") or "Save failed"},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            return JSONResponse({"success": True, **result})
+        except Exception as e:
+            logger.error("Workflow save loop preset failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/steps/suggest-harness")
+    async def workflow_suggest_step_harness(data: StepHarnessSuggestRequest):
+        from distr.core.workflow.step_harness import suggest_step_harness
+
+        return JSONResponse(
+            suggest_step_harness(
+                instruction=data.instruction,
+                action_type=data.action_type,
+                archetype=data.archetype,
+                loop_contract=data.loop_contract or {},
+                step_role=data.step_role,
+            )
+        )
+
+    @router.post("/workflows/steps/suggest-harness-llm")
+    async def workflow_suggest_step_harness_llm(data: StepHarnessLlmSuggestRequest):
+        from distr.core.workflow.step_harness import suggest_step_harness_llm
+
+        return JSONResponse(
+            suggest_step_harness_llm(
+                instruction=data.instruction,
+                guardrail=data.guardrail,
+                validation_prompt=data.validation_prompt,
+                loop_contract=data.loop_contract or {},
+            )
+        )
+
     # Steps
     @router.post("/workflows/{workflow_id}/steps")
     async def workflow_add_step(workflow_id: int, data: StepCreateRequest):
         try:
             from distr.core.workflow.service import add_step, get_workflow
-            step_id = add_step(workflow_id, name=data.name, action_type=data.action_type, position=data.position)
+            step_id = add_step(
+                workflow_id,
+                name=data.name,
+                action_type=data.action_type,
+                position=data.position,
+                instruction=data.instruction,
+                config=data.config,
+                validation_type=data.validation_type,
+                validation_prompt=data.validation_prompt,
+                wait_for_continue=data.wait_for_continue,
+            )
             if not step_id:
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
             return JSONResponse(get_workflow(workflow_id))
@@ -2412,11 +2644,9 @@ def register_routes(router, templates):
             logger.error("Workflow export preset failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
-    @router.websocket("/ws/workflows")
-    async def workflows_websocket(websocket):
+    async def _workflows_websocket_handler(websocket: WebSocket):
         """WebSocket stream for realtime workflow UI refresh."""
         import asyncio
-        from fastapi import WebSocketDisconnect
         from distr.gui.web.security import is_allowed_local_origin
         from distr.gui.web.workflow_events import register_wf_websocket, unregister_wf_websocket
 
@@ -2439,3 +2669,11 @@ def register_routes(router, templates):
             pass
         finally:
             unregister_wf_websocket(websocket)
+
+    @router.websocket("/workflows/ws")
+    async def workflows_websocket(websocket: WebSocket):
+        await _workflows_websocket_handler(websocket)
+
+    @router.websocket("/ws/workflows")
+    async def workflows_websocket_legacy(websocket: WebSocket):
+        await _workflows_websocket_handler(websocket)

@@ -1,0 +1,138 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "follow-up-cadence",
+  "name": "Follow-up Cadence",
+  "role": "sales",
+  "category": "Sales",
+  "archetype": "watch_maintain",
+  "description": "Review open sales threads, draft follow-ups, log next steps in CRM/ticket.",
+  "kickoff": "Start the \"Follow-up Cadence\" loop.\nGoal: no overdue threads without a drafted touch\nMax iterations: 10\nExit when: each open thread has next action scheduled.\nOrientation: read the linked ticket for which accounts or threads this cadence covers.\nStep 1: Review open threads and identify overdue follow-ups.",
+  "loop_contract": {
+    "name": "Follow-up Cadence",
+    "goal": "open threads have drafted follow-up and next date",
+    "exit_when": "no overdue threads without draft or pause reason",
+    "check_command": "CRM/ticket thread review",
+    "max_iterations": 10,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "List open conversations from ticket/CRM: last touch, stage, next action date.",
+    "archetype": "watch_maintain",
+    "role": "sales"
+  },
+  "expected_check_command": "CRM/ticket thread review",
+  "tags": [
+    "sales",
+    "follow-up"
+  ],
+  "steps": [
+    {
+      "name": "Review open threads",
+      "instruction": "List open conversations from ticket/CRM: last touch, stage, next action date.",
+      "skills": [
+        "plan-orchestrate",
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Review open threads' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "CRM / ticket history"
+    },
+    {
+      "name": "Draft follow-ups",
+      "instruction": "Write follow-up for the highest-priority thread. Reference prior context. One ask only.",
+      "skills": [
+        "email-ops",
+        "internal-comms"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Draft follow-ups' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false
+    },
+    {
+      "name": "Log next step",
+      "instruction": "Record next follow-up date and outcome in ticket/CRM note.",
+      "skills": [
+        "email-ops",
+        "plan-orchestrate"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Log next step' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "CRM / ticket update"
+    },
+    {
+      "name": "Evaluate cadence",
+      "instruction": "No overdue threads without a drafted touch or explicit pause reason.",
+      "skills": [
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate cadence' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Report",
+      "instruction": "Threads touched and next dates.",
+      "skills": [
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

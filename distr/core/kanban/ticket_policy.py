@@ -87,6 +87,10 @@ def _global_complexity_route(level: str) -> dict[str, str]:
         settings = {}
     backend = normalize_backend_id(settings.get(f"project_cli_{level}_backend") or defaults["backend"])
     model = (settings.get(f"project_cli_{level}_model") or defaults["model"]).strip()
+    from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+
+    if is_ide_backend(backend):
+        model = ""
     route: dict[str, str] = {"backend": backend, "model": model}
     if backend == "codex":
         route["codex_reasoning_effort"] = normalize_codex_intelligence(
@@ -106,7 +110,7 @@ def resolve_ticket_cli_route(
     """Return the intended backend/model for a ticket complexity.
 
     Ticket complexity is global routing policy by default. Boards may override
-    per-complexity backend/model via ``hermes_policy.complexity_routing``.
+    per-complexity backend/model via ``orchestrator_policy.complexity_routing``.
     """
     from distr.core.project_cli_backends import get_backend
 
@@ -115,9 +119,9 @@ def resolve_ticket_cli_route(
 
     if board is not None:
         try:
-            from distr.core.hermes import parse_board_hermes_policy
+            from distr.core.orchestrator import parse_board_orchestrator_policy
 
-            policy = parse_board_hermes_policy(getattr(board, "hermes_policy", None))
+            policy = parse_board_orchestrator_policy(getattr(board, "orchestrator_policy", None))
             board_routes = policy.get("complexity_routing") or {}
             if isinstance(board_routes, dict):
                 override = board_routes.get(level) or {}

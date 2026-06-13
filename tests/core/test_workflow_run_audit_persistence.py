@@ -242,7 +242,7 @@ def test_complete_run_allows_ui_heavy_packet_with_taste_aware_validation():
 
 
 def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifacts(tmp_path):
-    from distr.core.db.hermes import HermesValidationRecord, HermesVisualBaselineScreen, HermesVisualBaselineSet
+    from distr.core.db.orchestrator import OrchestratorValidationRecord, OrchestratorVisualBaselineScreen, OrchestratorVisualBaselineSet
     from distr.core.db.workflow import AutoWorkflowRun
     from distr.core.workflow.dispatcher import complete_run
 
@@ -257,7 +257,7 @@ def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifac
         return _session_ctx(factory)
 
     with get_session() as session:
-        baseline = HermesVisualBaselineSet(
+        baseline = OrchestratorVisualBaselineSet(
             name="Gold Admin",
             scope="board",
             scope_id=ids["board_id"],
@@ -266,7 +266,7 @@ def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifac
         session.add(baseline)
         session.flush()
         session.add(
-            HermesVisualBaselineScreen(
+            OrchestratorVisualBaselineScreen(
                 baseline_set_id=baseline.id,
                 screen_name="Dashboard",
                 screenshot_path=str(baseline_path),
@@ -292,7 +292,7 @@ def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifac
         run.run_data = json.dumps(run_data)
 
     with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
-        "distr.core.hermes.get_session", get_session
+        "distr.core.orchestrator.get_session", get_session
     ), patch("distr.core.db.get_session", get_session), patch(
         "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
     ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
@@ -304,7 +304,7 @@ def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifac
         run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
         run_data = json.loads(run.run_data or "{}")
         packet = run_data["result_packet"]
-        validations = session.query(HermesValidationRecord).all()
+        validations = session.query(OrchestratorValidationRecord).all()
         validation_types = [row.validation_type for row in validations]
 
     assert len(validations) == 1
@@ -317,11 +317,11 @@ def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifac
 
 
 def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tmp_path):
-    from distr.core.db.hermes import (
-        HermesCorrectionAttempt,
-        HermesValidationRecord,
-        HermesVisualBaselineScreen,
-        HermesVisualBaselineSet,
+    from distr.core.db.orchestrator import (
+        OrchestratorCorrectionAttempt,
+        OrchestratorValidationRecord,
+        OrchestratorVisualBaselineScreen,
+        OrchestratorVisualBaselineSet,
     )
     from distr.core.db.workflow import AutoWorkflowRun
     from distr.core.workflow.dispatcher import complete_run
@@ -337,7 +337,7 @@ def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tm
         return _session_ctx(factory)
 
     with get_session() as session:
-        baseline = HermesVisualBaselineSet(
+        baseline = OrchestratorVisualBaselineSet(
             name="Gold Admin",
             scope="board",
             scope_id=ids["board_id"],
@@ -346,7 +346,7 @@ def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tm
         session.add(baseline)
         session.flush()
         session.add(
-            HermesVisualBaselineScreen(
+            OrchestratorVisualBaselineScreen(
                 baseline_set_id=baseline.id,
                 screen_name="Dashboard",
                 screenshot_path=str(baseline_path),
@@ -371,7 +371,7 @@ def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tm
         run.run_data = json.dumps(run_data)
 
     with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
-        "distr.core.hermes.get_session", get_session
+        "distr.core.orchestrator.get_session", get_session
     ), patch("distr.core.db.get_session", get_session), patch(
         "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
     ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
@@ -384,8 +384,8 @@ def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tm
         run_status = run.status
         run_data = json.loads(run.run_data or "{}")
         packet = run_data["result_packet"]
-        validations = session.query(HermesValidationRecord).all()
-        attempts = session.query(HermesCorrectionAttempt).all()
+        validations = session.query(OrchestratorValidationRecord).all()
+        attempts = session.query(OrchestratorCorrectionAttempt).all()
         attempt_ids = [row.id for row in attempts]
         attempt_statuses = [row.status for row in attempts]
         correction_packets = [json.loads(row.correction_packet or "{}") for row in attempts]
@@ -406,10 +406,10 @@ def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tm
 
 
 def test_complete_run_does_not_auto_dispatch_failed_visual_baseline_correction(tmp_path):
-    from distr.core.db.hermes import (
-        HermesCorrectionAttempt,
-        HermesVisualBaselineScreen,
-        HermesVisualBaselineSet,
+    from distr.core.db.orchestrator import (
+        OrchestratorCorrectionAttempt,
+        OrchestratorVisualBaselineScreen,
+        OrchestratorVisualBaselineSet,
     )
     from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
     from distr.core.workflow.dispatcher import complete_run
@@ -430,7 +430,7 @@ def test_complete_run_does_not_auto_dispatch_failed_visual_baseline_correction(t
             "auto_dispatch_corrections": True,
             "max_correction_attempts": 2,
         })
-        baseline = HermesVisualBaselineSet(
+        baseline = OrchestratorVisualBaselineSet(
             name="Gold Admin",
             scope="board",
             scope_id=ids["board_id"],
@@ -439,7 +439,7 @@ def test_complete_run_does_not_auto_dispatch_failed_visual_baseline_correction(t
         session.add(baseline)
         session.flush()
         session.add(
-            HermesVisualBaselineScreen(
+            OrchestratorVisualBaselineScreen(
                 baseline_set_id=baseline.id,
                 screen_name="Dashboard",
                 screenshot_path=str(baseline_path),
@@ -464,7 +464,7 @@ def test_complete_run_does_not_auto_dispatch_failed_visual_baseline_correction(t
         run.run_data = json.dumps(run_data)
 
     with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
-        "distr.core.hermes.get_session", get_session
+        "distr.core.orchestrator.get_session", get_session
     ), patch("distr.core.db.get_session", get_session), patch(
         "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
     ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
@@ -480,7 +480,7 @@ def test_complete_run_does_not_auto_dispatch_failed_visual_baseline_correction(t
         run_status = run.status
         completed_at = run.completed_at
         run_data = json.loads(run.run_data or "{}")
-        attempts = session.query(HermesCorrectionAttempt).all()
+        attempts = session.query(OrchestratorCorrectionAttempt).all()
         attempt_ids = [row.id for row in attempts]
         attempt_statuses = [row.status for row in attempts]
         dispatch_results = [json.loads(row.dispatch_result or "{}") for row in attempts]

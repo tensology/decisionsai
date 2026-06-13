@@ -253,9 +253,9 @@ def _fallback_planner_markdown(
 ) -> str:
     """Create a useful planner when configured LLM providers are unavailable."""
     work_scan = bundle.work_scan if isinstance(bundle.work_scan, dict) else {}
-    hermes_triage = work_scan.get("hermes_triage") if isinstance(work_scan.get("hermes_triage"), dict) else {}
+    orchestrator_triage = work_scan.get("orchestrator_triage") if isinstance(work_scan.get("orchestrator_triage"), dict) else {}
     triage_candidates = [
-        c for c in hermes_triage.get("candidates", []) if isinstance(c, dict)
+        c for c in orchestrator_triage.get("candidates", []) if isinstance(c, dict)
     ]
     proposals = [p for p in work_scan.get("proposals", []) if isinstance(p, dict)]
     connected_sources = [
@@ -468,7 +468,7 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
             "- Use Current lane items as active commitments before looking at Backlog.\n"
             "- If Current is empty or thin, infer achievable outcomes from Backlog and connected-source pressure.\n"
             "- Pull signal from Telegram, WhatsApp, Gmail/email, Slack, Jira, Trello, ClickUp, Monday, workflows, developer context, and memory when present.\n"
-            "- Use work_scan.hermes_triage.candidates as the primary source of decisions, but do not mention internal system names.\n"
+            "- Use work_scan.orchestrator_triage.candidates as the primary source of decisions, but do not mention internal system names.\n"
             "- Ask concrete questions, e.g. 'Should I create a ticket from this WhatsApp thread?'\n"
             "- If source context is thin, say exactly which connector or permission is missing.\n"
             "- Do not say only that a proactive brief ran.\n"

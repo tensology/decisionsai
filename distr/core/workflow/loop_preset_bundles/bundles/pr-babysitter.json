@@ -1,0 +1,141 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "pr-babysitter",
+  "name": "PR Babysitter",
+  "role": "developer",
+  "category": "Developer",
+  "archetype": "watch_maintain",
+  "description": "Watch labeled PRs: triage, fix CI once, rebase, escalate stale.",
+  "kickoff": "Start the \"PR Babysitter\" loop.\nGoal: watched PRs healthy or escalated\nMax iterations: 20\nBetween iterations run: gh pr list --label codex-watch\nExit when: each watched PR green and current, or escalated.\nOrientation: read the linked ticket for which PRs or labels to watch.\nStep 1: List open PRs with the watch label and triage the first stale or failing one.",
+  "loop_contract": {
+    "name": "PR Babysitter",
+    "goal": "open PRs labeled codex-watch are healthy (CI green, rebased, not stale)",
+    "exit_when": "each watched PR is green and current, or escalated",
+    "check_command": "gh pr list --label \"codex-watch\"",
+    "max_iterations": 20,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Run gh pr list with the watch label (or project equivalent). Note stale, failing, or behind-main PRs.",
+    "archetype": "watch_maintain",
+    "role": "developer"
+  },
+  "expected_check_command": "gh pr list --label \"codex-watch\"",
+  "tags": [
+    "pr",
+    "ci"
+  ],
+  "steps": [
+    {
+      "name": "List watched PRs",
+      "instruction": "Run gh pr list with the watch label (or project equivalent). Note stale, failing, or behind-main PRs.",
+      "skills": [
+        "plan-orchestrate",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'List watched PRs' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "gh pr list --label codex-watch"
+    },
+    {
+      "name": "Triage each PR",
+      "instruction": "For each watched PR: CI status, review state, behind-main. One action per PR this iteration.",
+      "skills": [
+        "product-lens",
+        "qa-tester"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Triage each PR' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "gh pr view / gh pr checks"
+    },
+    {
+      "name": "Remediate once",
+      "instruction": "Fix CI once, rebase if behind, or comment if stale. Escalate repeated failures.",
+      "skills": [
+        "systematic-debugging",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Remediate once' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Evaluate watch health",
+      "instruction": "Each watched PR green and current, or escalated with owner tagged.",
+      "skills": [
+        "plan-orchestrate"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Evaluate watch health' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator judgment",
+      "on_fail_goto_position": 0
+    },
+    {
+      "name": "Report",
+      "instruction": "Status table per watched PR.",
+      "skills": [
+        "internal-comms"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs and concrete evidence over broad rewrites",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Step 'Report' completed with evidence.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator summary",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "elorm": "https://loops.elorm.xyz/loops"
+  }
+}

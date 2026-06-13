@@ -182,20 +182,9 @@ def _json_menu_config(raw: Any) -> dict:
 
 def is_whatsapp_enabled_in_settings() -> bool:
     """Return True when WhatsApp is connected in app settings."""
-    try:
-        settings = load_settings_from_db()
-        raw = settings.get("connected_accounts") or "[]"
-        accounts = json.loads(raw) if isinstance(raw, str) else raw
-        if not isinstance(accounts, list):
-            return False
-        return any(
-            isinstance(acc, dict)
-            and acc.get("provider") == "whatsapp"
-            and acc.get("status") == "connected"
-            for acc in accounts
-        )
-    except Exception:
-        return False
+    from distr.core.kanban.whatsapp_relay_sync import is_whatsapp_account_connected
+
+    return is_whatsapp_account_connected()
 
 
 def _is_automation_workflow(workflow: AutoWorkflow) -> bool:
@@ -546,22 +535,33 @@ class MenuTrayMixin:
         )
         self.preferences_submenu.addAction(self.manage_preferences_action)
         self.preferences_submenu.addSeparator()
-        preference_sections = [
-            ("Initiative", "/settings#initiative"),
-            ("Audio", "/settings#audio"),
-            ("Third Party Providers", "/settings#thirdparty"),
-            ("LLMs", "/settings#llms"),
-            ("MCP Servers", "/settings#mcp"),
-            ("Shortcut Keys", "/settings#shortcuts"),
-            ("Advanced", "/settings#advanced"),
-            ("Activity Log", "/settings#logs"),
+        preference_section_groups = [
+            [
+                ("General", "/settings#general"),
+                ("API Keys", "/settings#thirdparty"),
+                ("Audio", "/settings#audio"),
+                ("LLMs", "/settings#llms"),
+                ("Initiative", "/settings#initiative"),
+            ],
+            [
+                ("Shortcuts", "/settings#shortcuts"),
+                ("Skins", "/settings#skins"),
+            ],
+            [
+                ("Advanced", "/settings#advanced"),
+                ("MCP Servers", "/settings#mcp"),
+                ("Activity Logs", "/settings#logs"),
+            ],
         ]
         self._preferences_section_actions: list[QAction] = []
-        for label, url in preference_sections:
-            action = QAction(label, self.preferences_submenu)
-            action.triggered.connect(lambda checked=False, path=url: self._open_web_url(path))
-            self.preferences_submenu.addAction(action)
-            self._preferences_section_actions.append(action)
+        for group_index, group in enumerate(preference_section_groups):
+            if group_index > 0:
+                self.preferences_submenu.addSeparator()
+            for label, url in group:
+                action = QAction(label, self.preferences_submenu)
+                action.triggered.connect(lambda checked=False, path=url: self._open_web_url(path))
+                self.preferences_submenu.addAction(action)
+                self._preferences_section_actions.append(action)
 
         self.menu.addSeparator()
 

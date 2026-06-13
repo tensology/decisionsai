@@ -35,6 +35,66 @@ from PyQt6.QtCore import Qt, QUrl
 import os
 from datetime import datetime
 
+# Shared typography for About / Changelog / Credits tab bodies
+_TAB_FONT_FAMILY = "Arial, sans-serif"
+_TAB_FONT_SIZE_PX = 14
+_TAB_LINE_HEIGHT = 1.5
+_TAB_PADDING_PX = 20
+_TAB_TEXT_COLOR = "#ffffff"
+_TAB_MUTED_COLOR = "#aab4c4"
+_TAB_LINK_COLOR = "#4a9eff"
+_TAB_PANEL_BG = "#1a2a3c"
+
+
+def _tab_body_stylesheet() -> str:
+    return f"""
+            QTextBrowser {{
+                background-color: {_TAB_PANEL_BG};
+                color: {_TAB_TEXT_COLOR};
+                border: none;
+                padding: {_TAB_PADDING_PX}px;
+                font-size: {_TAB_FONT_SIZE_PX}px;
+                line-height: {_TAB_LINE_HEIGHT};
+                font-family: {_TAB_FONT_FAMILY};
+            }}
+            QTextBrowser a {{
+                color: {_TAB_LINK_COLOR};
+                text-decoration: underline;
+            }}
+            QTextBrowser a:visited {{
+                color: {_TAB_LINK_COLOR};
+            }}
+        """
+
+
+def _html_paragraph(inner_html: str, *, margin: str = "10px 0", muted: bool = False) -> str:
+    color = _TAB_MUTED_COLOR if muted else _TAB_TEXT_COLOR
+    return (
+        f'<p style="margin: {margin}; font-size: {_TAB_FONT_SIZE_PX}px; '
+        f'line-height: {_TAB_LINE_HEIGHT}; font-weight: 400; font-family: {_TAB_FONT_FAMILY}; '
+        f'color: {color};">{inner_html}</p>'
+    )
+
+
+def _html_section_title(text: str) -> str:
+    return (
+        f'<p style="margin: 16px 0 8px 0; font-size: {_TAB_FONT_SIZE_PX}px; '
+        f'line-height: {_TAB_LINE_HEIGHT}; font-weight: 600; font-family: {_TAB_FONT_FAMILY}; '
+        f'color: #cccccc;">{text}</p>'
+    )
+
+
+def _html_link(url: str, label: str) -> str:
+    return f'<a href="{url}" style="color:{_TAB_LINK_COLOR}; text-decoration: underline;">{label}</a>'
+
+
+def _wrap_tab_html(inner_html: str) -> str:
+    return (
+        f'<div style="color: {_TAB_TEXT_COLOR}; font-family: {_TAB_FONT_FAMILY}; '
+        f'font-size: {_TAB_FONT_SIZE_PX}px; line-height: {_TAB_LINE_HEIGHT};">{inner_html}</div>'
+    )
+
+
 # ===========================================
 # 1. Link Management
 # ===========================================
@@ -255,37 +315,21 @@ class AboutWindow(QtWidgets.QMainWindow):
         # Set tab bar to left-align by using document mode and ensuring it doesn't stretch
         tab_widget.setDocumentMode(False)
         
+        tab_body_style = _tab_body_stylesheet()
+
         # Create About tab (FIRST) - simple QTextBrowser with its own scrolling
         about_tab = QtWidgets.QWidget()
         about_tab.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         about_layout = QtWidgets.QVBoxLayout(about_tab)
         about_layout.setContentsMargins(0, 0, 0, 0)
         about_layout.setSpacing(0)
-        
-        # Use QTextBrowser directly - it handles scrolling itself
+
         about_content = QtWidgets.QTextBrowser()
         about_content.setOpenExternalLinks(True)
         about_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
-        about_content.setStyleSheet("""
-            QTextBrowser {
-                background-color: #1a2a3c;
-                color: #ffffff;
-                border: none;
-                padding: 20px;
-                font-size: 16px;
-                line-height: 1.2;
-                font-family: Arial, sans-serif;
-            }
-            QTextBrowser a {
-                color: #4a9eff;
-                text-decoration: underline;
-            }
-            QTextBrowser a:visited {
-                color: #4a9eff;
-            }
-        """)
-        
-        hermes_url = local_doc_url("docs", "hermes.md")
+        about_content.setStyleSheet(tab_body_style)
+
+        orchestrator_url = local_doc_url("docs", "orchestrator.md")
         readme_url = local_doc_url("README.md")
         codex_url = local_doc_url("codex_plugin", "decisions-codex", "README.md")
         cursor_url = local_doc_url("cursor_plugin", "decisions-cursor", "README.md")
@@ -293,39 +337,37 @@ class AboutWindow(QtWidgets.QMainWindow):
         ecc_url = local_doc_url("vendor", "ecc", "README.md")
         sidecar_url = local_doc_url("sidecar", "README.md")
 
-        # Convert descriptions to HTML
-        descriptions = [
-            ("<b>Welcome to DecisionsAI.</b> This is a local, voice-first workspace assistant for getting real work done: "
-             "talk to it, type to it, send it tickets, ask it to inspect what is on screen, or have it run workflows "
-             "and automations without making every request feel like a separate little island."),
-            (f"The purpose is simple: make your computer feel coordinated. Chat, Ticket Boards, Automations, Workflows, "
-             f"browser evidence, project folders, and IDE conversations can all meet inside "
-             f"<a href='{hermes_url}' style='color:#4a9eff;'>Hermes</a>, the orchestration layer that keeps context, "
-             f"progress, useful memory, and handoffs connected."),
-            (f"For software work, DecisionsAI can link into <a href='{codex_url}' style='color:#4a9eff;'>Codex</a>, "
-             f"<a href='{cursor_url}' style='color:#4a9eff;'>Cursor</a>, "
-             f"<a href='{claude_url}' style='color:#4a9eff;'>Claude-compatible harnessing</a>, and the vendored "
-             f"<a href='{ecc_url}' style='color:#4a9eff;'>ECC harness</a>. The goal is that a ticket, workflow, "
-             f"or ordinary project conversation can move into the right developer surface and still report back "
-             f"to the main orchestrator."),
-            (f"Under the hood, DecisionsAI stays practical: a local web UI, connected accounts you choose, "
-             f"voice and text routes, browser evidence, machine-control through the "
-             f"<a href='{sidecar_url}' style='color:#4a9eff;'>Sidecar</a>, and memory that should help without getting noisy. "
-             f"It should be useful, quiet when nothing valuable needs saying, and clear when something actually needs your attention."),
-            (f"<b>Useful links:</b> <a href='{readme_url}' style='color:#4a9eff;'>README</a> · "
-             f"<a href='https://www.decisionsai.net/' style='color:#4a9eff;'>Website</a> · "
-             f"<a href='https://www.decisionsai.net/privacy' style='color:#4a9eff;'>Privacy</a> · "
-             f"<a href='https://www.decisionsai.net/terms' style='color:#4a9eff;'>Terms</a> · "
-             f"<a href='https://github.com/tensology/decisionsai' style='color:#4a9eff;'>GitHub</a>"),
+        about_paragraphs = [
+            _html_paragraph("<b>Hey.</b> You clicked the llama. Respect."),
+            _html_paragraph(
+                "DecisionsAI is a local, voice-first workspace — chat, boards, automations, workflows, "
+                "and whatever you dragged in from the rest of your digital life. "
+                "One machine, fewer tabs screaming at you."
+            ),
+            _html_paragraph(
+                "Winamp-era energy, modern problems: skimmable when you want speed, deep when you want proof. "
+                f"The {_html_link(orchestrator_url, 'orchestrator')} keeps the thread so handoffs do not evaporate."
+            ),
+            _html_paragraph(
+                f"Build work routes through {_html_link(codex_url, 'Codex')}, "
+                f"{_html_link(cursor_url, 'Cursor')}, {_html_link(claude_url, 'Claude harnessing')}, "
+                f"and {_html_link(ecc_url, 'ECC')} — then back to the orchestrator like a responsible adult. "
+                f"Screen and machine control via {_html_link(sidecar_url, 'Sidecar')} when you need hands."
+            ),
+            _html_paragraph(
+                f"<b>Links:</b> {_html_link(readme_url, 'README')} · "
+                f"{_html_link('https://www.decisionsai.net/', 'Website')} · "
+                f"{_html_link('https://github.com/tensology/decisionsai', 'GitHub')} · "
+                f"{_html_link('https://www.decisionsai.net/privacy', 'Privacy')} · "
+                f"{_html_link('https://www.decisionsai.net/terms', 'Terms')}"
+            ),
+            _html_paragraph(
+                "<em>It really whips Ollama's ass.</em> — vintage internet compliment. "
+                "We are legally required to inform you the llama consented.",
+                muted=True,
+            ),
         ]
-        
-        # Build HTML content from descriptions
-        about_html = "<div style='color: #ffffff;'>"
-        for text in descriptions:
-            about_html += f'<p style="margin: 15px 0; font-size: 16px; line-height: 1.35; font-weight: 300;">{text}</p>'
-        about_html += "</div>"
-        
-        about_content.setHtml(about_html)
+        about_content.setHtml(_wrap_tab_html("".join(about_paragraphs)))
         about_layout.addWidget(about_content)
         tab_widget.addTab(about_tab, "About")
         
@@ -340,24 +382,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         changelog_content = QtWidgets.QTextBrowser()
         changelog_content.setOpenExternalLinks(True)
         changelog_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
-        changelog_content.setStyleSheet("""
-            QTextBrowser {
-                background-color: #1a2a3c;
-                color: #ffffff;
-                border: none;
-                padding: 20px;
-                font-size: 13px;
-                line-height: 1.6;
-                font-family: Arial, sans-serif;
-            }
-            QTextBrowser a {
-                color: #4a9eff;
-                text-decoration: underline;
-            }
-            QTextBrowser a:visited {
-                color: #4a9eff;
-            }
-        """)
+        changelog_content.setStyleSheet(tab_body_style)
         
         # Load changelog file (CHANGELOG.md is in the project root)
         changelog_path = os.path.join(project_root, "CHANGELOG.md")
@@ -387,24 +412,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         credits_content = QtWidgets.QTextBrowser()
         credits_content.setOpenExternalLinks(True)
         credits_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
-        credits_content.setStyleSheet("""
-            QTextBrowser {
-                background-color: #1a2a3c;
-                color: #ffffff;
-                border: none;
-                padding: 20px;
-                font-size: 13px;
-                line-height: 1.6;
-                font-family: Arial, sans-serif;
-            }
-            QTextBrowser a {
-                color: #4a9eff;
-                text-decoration: underline;
-            }
-            QTextBrowser a:visited {
-                color: #4a9eff;
-            }
-        """)
+        credits_content.setStyleSheet(tab_body_style)
         
         # Convert credits dictionary to HTML
         credits = {
@@ -436,21 +444,20 @@ class AboutWindow(QtWidgets.QMainWindow):
             "Krystalgy": "https://dribbble.com/Krystalgy/about",
         }
         
-        # Build HTML content from credits
-        credits_html = "<div style='color: #ffffff;'>"
-        for title, url in credits.items():
-            credits_html += f'<p style="margin: 10px 0;"><a href="{url}" style="color: #4a9eff; text-decoration: underline;">{title}</a></p>'
-        
-        # Add separator and animation credits section
-        credits_html += '<p style="margin: 20px 0 10px 0; color: #cccccc; font-weight: bold;">Oracle Globe Animation Credits:</p>'
+        credits_parts = [
+            _html_paragraph(_html_link(url, title), margin="8px 0")
+            for title, url in credits.items()
+        ]
+        credits_parts.append(_html_section_title("Oracle Globe Animation Credits"))
         for title, url in animation_credits.items():
             if url:
-                credits_html += f'<p style="margin: 5px 0 5px 20px;"><a href="{url}" style="color: #4a9eff; text-decoration: underline;">{title}</a></p>'
+                credits_parts.append(
+                    _html_paragraph(_html_link(url, title), margin="6px 0 6px 16px")
+                )
             else:
-                credits_html += f'<p style="margin: 10px 0 5px 0; color: #cccccc; font-weight: bold;">{title}</p>'
-        credits_html += "</div>"
-        
-        credits_content.setHtml(credits_html)
+                credits_parts.append(_html_section_title(title))
+
+        credits_content.setHtml(_wrap_tab_html("".join(credits_parts)))
         credits_layout.addWidget(credits_content)
         tab_widget.addTab(credits_tab, "Credits")
         
@@ -482,9 +489,32 @@ class AboutWindow(QtWidgets.QMainWindow):
             str: HTML formatted text
         """
         import re
-        
+
+        body = (
+            f"color: {_TAB_TEXT_COLOR}; font-family: {_TAB_FONT_FAMILY}; "
+            f"font-size: {_TAB_FONT_SIZE_PX}px; line-height: {_TAB_LINE_HEIGHT};"
+        )
+        link = f"color: {_TAB_LINK_COLOR}; text-decoration: underline;"
+        h1 = (
+            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX + 4}px; "
+            f"margin: 16px 0 8px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+        )
+        h2 = (
+            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX + 2}px; "
+            f"margin: 14px 0 6px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+        )
+        h3 = (
+            f"color: #6ab4ff; font-size: {_TAB_FONT_SIZE_PX + 1}px; "
+            f"margin: 12px 0 4px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+        )
+        h4 = (
+            f"color: #6ab4ff; font-size: {_TAB_FONT_SIZE_PX}px; "
+            f"margin: 10px 0 4px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+        )
+        li = f"margin: 4px 0; color: {_TAB_TEXT_COLOR}; line-height: {_TAB_LINE_HEIGHT};"
+        li_nested = f"margin: 2px 0; margin-left: 16px; color: #e0e0e0; line-height: {_TAB_LINE_HEIGHT};"
+
         # Replace emojis with text equivalents (do this FIRST, before any other processing)
-        # Process the raw markdown text to replace emojis
         html = markdown_text
         
         # Define emoji replacements - order matters for compound emojis
@@ -512,13 +542,13 @@ class AboutWindow(QtWidgets.QMainWindow):
         html = re.sub(r'^---+$', r'<hr style="border: none; border-top: 1px solid #2a3a4c; margin: 20px 0;">', html, flags=re.MULTILINE)
         
         # Convert headers (must be done before other conversions)
-        html = re.sub(r'^# (.+)$', r'<h1 style="color: #4a9eff; font-size: 24px; margin-top: 20px; margin-bottom: 10px; font-weight: bold;">\1</h1>', html, flags=re.MULTILINE)
-        html = re.sub(r'^## (.+)$', r'<h2 style="color: #4a9eff; font-size: 20px; margin-top: 18px; margin-bottom: 8px; font-weight: bold;">\1</h2>', html, flags=re.MULTILINE)
-        html = re.sub(r'^### (.+)$', r'<h3 style="color: #6ab4ff; font-size: 16px; margin-top: 15px; margin-bottom: 6px; font-weight: bold;">\1</h3>', html, flags=re.MULTILINE)
-        html = re.sub(r'^#### (.+)$', r'<h4 style="color: #6ab4ff; font-size: 14px; margin-top: 12px; margin-bottom: 5px; font-weight: bold;">\1</h4>', html, flags=re.MULTILINE)
-        
+        html = re.sub(rf'^# (.+)$', rf'<h1 style="{h1}">\1</h1>', html, flags=re.MULTILINE)
+        html = re.sub(rf'^## (.+)$', rf'<h2 style="{h2}">\1</h2>', html, flags=re.MULTILINE)
+        html = re.sub(rf'^### (.+)$', rf'<h3 style="{h3}">\1</h3>', html, flags=re.MULTILINE)
+        html = re.sub(rf'^#### (.+)$', rf'<h4 style="{h4}">\1</h4>', html, flags=re.MULTILINE)
+
         # Convert links first (before bold/italic)
-        html = re.sub(r'\[([^\]]+)\]\(([^\)]+)\)', r'<a href="\2" style="color: #4a9eff; text-decoration: underline;">\1</a>', html)
+        html = re.sub(rf'\[([^\]]+)\]\(([^\)]+)\)', rf'<a href="\2" style="{link}">\1</a>', html)
         
         # Convert bold (after links to avoid conflicts)
         html = re.sub(r'\*\*(.+?)\*\*', r'<strong style="color: #ffffff; font-weight: bold;">\1</strong>', html)
@@ -548,7 +578,7 @@ class AboutWindow(QtWidgets.QMainWindow):
                     result.append('<ul style="margin: 10px 0; padding-left: 25px;">')
                     in_list = True
                 list_text = stripped[2:].strip()
-                result.append(f'<li style="margin: 5px 0; color: #ffffff;">{list_text}</li>')
+                result.append(f'<li style="{li}">{list_text}</li>')
             else:
                 if in_list:
                     result.append('</ul>')
@@ -559,8 +589,8 @@ class AboutWindow(QtWidgets.QMainWindow):
         html = '\n'.join(result)
         
         # Convert remaining markdown list items
-        html = re.sub(r'^- (.+)$', r'<li style="margin: 5px 0; color: #ffffff;">\1</li>', html, flags=re.MULTILINE)
-        html = re.sub(r'^  - (.+)$', r'<li style="margin: 3px 0; margin-left: 20px; color: #e0e0e0;">\1</li>', html, flags=re.MULTILINE)
+        html = re.sub(rf'^- (.+)$', rf'<li style="{li}">\1</li>', html, flags=re.MULTILINE)
+        html = re.sub(rf'^  - (.+)$', rf'<li style="{li_nested}">\1</li>', html, flags=re.MULTILINE)
         
         # Convert line breaks (but preserve HTML tags)
         lines = html.split('\n')
@@ -578,9 +608,8 @@ class AboutWindow(QtWidgets.QMainWindow):
         # Clean up double breaks
         html = re.sub(r'<br>\s*<br>', '<br><br>', html)
         
-        # Wrap in body tag with styling
-        html = f'<body style="color: #ffffff; font-family: Arial, sans-serif; line-height: 1.6;">{html}</body>'
-        
+        html = f'<body style="{body}">{html}</body>'
+
         return html
 
     def _setup_image_content(self):

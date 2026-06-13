@@ -11,16 +11,14 @@ def _sine_pcm16(sample_rate: int, duration_seconds: float, frequency: float = 44
     return (wave * 32767.0).astype(np.int16).tobytes()
 
 
-def test_transport_resamples_elevenlabs_rate_to_output_rate():
+def test_transport_decodes_pcm16_mono():
     decoded = HotSwappableLocalAudioOutputTransport._decode_pcm16_mono(
         _sine_pcm16(44100, 1.0),
-        source_rate=44100,
         source_channels=1,
-        target_rate=24000,
     )
 
     assert decoded.dtype == np.float32
-    assert abs(len(decoded) - 24000) <= 1
+    assert abs(len(decoded) - 44100) <= 1
     assert float(np.max(np.abs(decoded))) > 0.1
 
 
@@ -31,12 +29,10 @@ def test_transport_downmixes_stereo_before_resampling():
 
     decoded = HotSwappableLocalAudioOutputTransport._decode_pcm16_mono(
         stereo,
-        source_rate=44100,
         source_channels=2,
-        target_rate=24000,
     )
 
-    assert abs(len(decoded) - 12000) <= 1
+    assert abs(len(decoded) - 22050) <= 1
     assert decoded.ndim == 1
 
 
@@ -61,14 +57,24 @@ class _FakePyAudio:
     def get_device_count(self):
         return 3
 
+    def get_format_from_width(self, width):
+        return width
+
+    def open(self, **kwargs):
+        return _FakeStream(active=True)
+
 
 def test_transport_refreshes_when_system_default_output_changes():
     transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
     transport._py_audio = _FakePyAudio(default_index=2)
-    transport._params = SimpleNamespace(output_device_index=1)
+    transport._params = SimpleNamespace(output_device_index=1, audio_out_channels=1)
     transport._output_device_name = "System Default"
     transport._resolved_output_device_index = 1
+    transport._resolved_default_output_name = "Built-in Output"
+    transport._last_opened_default_output_name = "Built-in Output"
     transport._out_stream = _FakeStream(active=True)
+    transport._sample_rate = 24000
+    transport._original_sample_rate = 24000
 
     reopened = []
 
@@ -82,3 +88,29 @@ def test_transport_refreshes_when_system_default_output_changes():
 
     assert reopened == [2]
     assert transport._params.output_device_index == 2
+
+
+def test_transport_refreshes_when_system_default_name_changes_at_same_index():
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    transport._py_audio = _FakePyAudio(default_index=2)
+    transport._params = SimpleNamespace(output_device_index=2, audio_out_channels=1)
+    transport._output_device_name = "System Default"
+    transport._resolved_output_device_index = 2
+    transport._resolved_default_output_name = "AirPods Pro"
+    transport._last_opened_default_output_name = "Built-in Output"
+    transport._out_stream = _FakeStream(active=True)
+    transport._sample_rate = 24000
+    transport._original_sample_rate = 24000
+
+    reopened = []
+
+    def fake_reopen(device_index):
+        reopened.append(device_index)
+        transport._resolved_output_device_index = device_index
+
+    transport._reopen_output_stream = fake_reopen
+
+    transport._ensure_output_stream_for_configured_device(reason="default-name-changed")
+
+    assert reopened == [2]
+

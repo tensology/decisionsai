@@ -28,6 +28,44 @@ from distr.core.chat import (
 logger = logging.getLogger(__name__)
 
 
+def _load_chat_params(raw: Optional[str]) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _set_active_turn_chat_row_id(root: Chat, row_id: int) -> None:
+    """Mark which chat row the agent is currently answering."""
+    params = _load_chat_params(root.params)
+    params["active_turn_chat_row_id"] = int(row_id)
+    root.params = json.dumps(params)
+
+
+def _clear_active_turn_chat_row_id(root: Chat) -> None:
+    params = _load_chat_params(root.params)
+    params.pop("active_turn_chat_row_id", None)
+    root.params = json.dumps(params)
+
+
+def _thread_root_id(session, chat_id: int) -> int:
+    root_row = session.execute(
+        text("""
+            WITH RECURSIVE parents(id, parent_id) AS (
+                SELECT id, parent_id FROM chats WHERE id = :start_id
+                UNION ALL
+                SELECT c.id, c.parent_id FROM chats c JOIN parents p ON c.id = p.parent_id
+            )
+            SELECT id FROM parents WHERE parent_id IS NULL
+        """),
+        {"start_id": chat_id},
+    ).fetchone()
+    return int(root_row[0]) if root_row else int(chat_id)
+
+
 class RAGInterface:
     """Interface for RAG context operations. Override with real implementation."""
 
@@ -74,6 +112,8 @@ class ChatManagerCore:
         self._listeners: dict[str, list[Callable]] = {}
         self.current_model = model_name
         self.current_provider = "Ollama"
+        self.current_voice_provider: Optional[str] = None
+        self.current_voice_model: Optional[str] = None
         self.chat_histories: LRUDict = LRUDict(
             maxsize=50
         )  # LRU cache with max 50 chats
@@ -373,6 +413,13 @@ class ChatManagerCore:
                         self.current_model = chat.model_name
                     if chat.provider:
                         self.current_provider = _normalize_provider(chat.provider)
+                    vp = (getattr(chat, "voice_provider", None) or "").strip() or None
+                    vm = (getattr(chat, "voice_model", None) or "").strip() or None
+                    if vp:
+                        from distr.core.agent.constants import normalize_voice_provider
+                        self.current_voice_provider = normalize_voice_provider(vp)
+                    if vm:
+                        self.current_voice_model = vm
                 settings = session.query(Settings).first()
                 if settings:
                     settings.last_chat_id = chat_id
@@ -635,6 +682,7 @@ class ChatManagerCore:
                         root.params = json.dumps(p)
                     except (json.JSONDecodeError, TypeError):
                         root.params = json.dumps({"source_platform": source_platform})
+                _set_active_turn_chat_row_id(root, int(root.id))
                 session.commit()
                 record_chat_audit_event(
                     chat_id=int(root_id),
@@ -657,6 +705,9 @@ class ChatManagerCore:
                     modified_date=datetime.now(timezone.utc),
                 )
                 session.add(new_chat)
+                session.commit()
+                session.refresh(new_chat)
+                _set_active_turn_chat_row_id(root, int(new_chat.id))
                 session.commit()
                 record_chat_audit_event(
                     chat_id=int(root_id),
@@ -704,6 +755,11 @@ class ChatManagerCore:
                 target.response = text_content
                 target.is_hidden = is_hidden
                 target.modified_date = datetime.now(timezone.utc)
+                if chat:
+                    root_id = _thread_root_id(session, int(chat_id))
+                    root = session.get(Chat, root_id)
+                    if root:
+                        _clear_active_turn_chat_row_id(root)
                 session.commit()
                 record_chat_audit_event(
                     chat_id=int(chat_id),
@@ -714,6 +770,12 @@ class ChatManagerCore:
                 )
             if not is_hidden:
                 self.emit("chat_updated", chat_id)
+                try:
+                    from distr.core.chat_title_auto import schedule_chat_title_refresh
+
+                    schedule_chat_title_refresh(chat_id, emit_update=True)
+                except Exception:
+                    logger.debug("Could not schedule chat title refresh", exc_info=True)
         except Exception as e:
             logger.error("Error adding assistant message: %s", e)
         finally:

@@ -281,6 +281,14 @@ def schedule_to_cron(
             return f"{m} {h} * * {days_str}"
         except (ValueError, IndexError):
             return f"0 9 * * {days_str}"
+    if s == "monthly":
+        days_str = (schedule_days or "1").strip()
+        try:
+            time_str = normalize_schedule_time(schedule_time, default="09:00")
+            h, m = [int(part) for part in time_str.split(":", 1)]
+            return f"{m} {h} {days_str} * *"
+        except (ValueError, IndexError):
+            return f"0 9 {days_str} * *"
     return schedule.strip()
 
 
