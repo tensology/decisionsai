@@ -327,14 +327,14 @@ class TelegramRemoteControlMixin:
                                 }
                             )
 
-                elif command == "screenshot":
+                elif command == "set_mouse_position":
                     x = command_data.get("x")
                     y = command_data.get("y")
                     screen_number = command_data.get("screen_number")
                     button = command_data.get("button", "left")
 
                     logger.info(
-                        f"DEBUG: set_mouse_position received: x={x}, y={y}, screen={screen_number}"
+                        f"set_mouse_position received: x={x}, y={y}, screen={screen_number}"
                     )
 
                     # Validate required fields per specification
