@@ -4,25 +4,7 @@
 
 ## [What's to Come]
 
-### From connected workspace to daily operating system
-
-2.8 delivered the connected local workspace: unified web UI, Loops workflows, calendar automations, board-to-orchestrator handoff, in-thread model and voice changes, WhatsApp board linking, IRC, remote control, and a stronger IDE harness. The next phase turns that foundation into something you can run your day from.
-
-**Daily planning across every linked surface.** The orchestrator will pull together Telegram, WhatsApp, Gmail, boards, projects, automations, workflow runs, browser evidence, and IDE activity into one useful plan: what moved overnight, what is blocked, what deserves a nudge, and what can safely wait. The goal is connected intelligence you can act on, not another feed of status noise.
-
-**Initiative that earns trust.** Initiative already has clearer scan, suggest, ask-first, and channel boundaries. Next up is smarter proactive behavior: better stuck-work detection, approval flows that stay lightweight, and suggestions that arrive with enough context to accept or dismiss in one glance.
-
-**Loops and automations that compound.** Loops presets and the Step Runner spine are in place. The focus now is deeper validation, richer run memory, tighter steering between waiting harness steps, and automation schedules that respect calendar blocks, ticket state, and project context without manual babysitting.
-
-**Boards and projects that stay in sync.** Ticket boards, WhatsApp intake, time-entry blocks, and project folders should read as one execution graph. Expect stronger ticket-to-project linking, clearer lane semantics, better timesheet export back to boards, and orchestrator threads that remember which board, ticket, and repo started the work.
-
-**IDE handoffs with full round-trip context.** Codex, Cursor, and the Claude-compatible harness surface are first-class development paths. Next is richer session reporting, faster plugin repair, cleaner skill projection across ECC and local packs, and orchestrator continuity whether work started in chat, a board, an automation, a workflow loop, or an IDE conversation.
-
-**More channels, same assistant.** IRC joined Telegram and WhatsApp as a local surface. Slack, Discord, ClickUp, Monday, and deeper Jira/Trello board behavior are the next expansion targets, using the same routing rules so inbound work lands on the right board or project instead of a generic inbox.
-
-**Remote and desktop control at full speed.** Snippets, Agent, and Dictate are the remote control core. Next is lower-latency audio, sharper screen streaming, and tray/shortcut paths that can launch the right chat, board, workflow, or automation without opening the browser first.
-
-**Quieter when it matters, louder when you need proof.** Engagement policy, system activity trails, and structured run timelines are the pattern. The product will keep pushing low-value chatter into logs while making real execution, validation failures, and handoff results easy to inspect when you are debugging or approving work.
+2.8 shipped the connected workspace. Next up: daily planning from one orchestrator view across chat, boards, projects, automations, Loops, IDE handoffs, and linked channels like Telegram, WhatsApp, Gmail, and IRC — plus smarter Initiative, deeper workflow memory, and more integrations without another inbox.
 
 ---
 
