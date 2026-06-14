@@ -9,7 +9,7 @@ Named "Auto" to avoid conflict with the existing Workflow model (template/job ca
 from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from . import Base
-from datetime import datetime
+from .time import utc_now_naive
 
 
 class AutoWorkflow(Base):
@@ -53,8 +53,8 @@ class AutoWorkflow(Base):
     next_run_at = Column(DateTime, nullable=True)
     last_run_at = Column(DateTime, nullable=True)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     start_step_position = Column(Integer, default=0)
 
     steps = relationship(
@@ -128,8 +128,8 @@ class AutoWorkflowStep(Base):
     # Runtime state
     status = Column(String, default='pending')  # pending, running, passed, failed, cancelled, skipped, waiting
     result = Column(Text, nullable=True)  # LLM response / execution result
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     workflow = relationship("AutoWorkflow", back_populates="steps")
 
@@ -156,7 +156,7 @@ class AutoWorkflowStepResult(Base):
     run_id = Column(Integer, ForeignKey('auto_workflow_runs.id'), nullable=True)
     agent_response = Column(Text, nullable=True)
     status = Column(String, default='pending')  # pending, passed, failed, cancelled
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
 
     step = relationship("AutoWorkflowStep", backref="results")
     run = relationship("AutoWorkflowRun", backref="step_result_records")
@@ -171,7 +171,7 @@ class AutoWorkflowRun(Base):
     board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=True)
     ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
     parent_run_id = Column(Integer, ForeignKey('auto_workflow_runs.id'), nullable=True)  # Subagent hierarchy
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=utc_now_naive)
     completed_at = Column(DateTime, nullable=True)
     status = Column(String, default='running')  # running, completed, failed, cancelled, waiting
     current_step_id = Column(Integer, nullable=True)  # Which step is currently executing

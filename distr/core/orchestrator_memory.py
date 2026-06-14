@@ -14,6 +14,7 @@ from typing import Any
 
 from distr.core.db import Base, engine, get_session
 from distr.core.db.orchestrator import OrchestratorMachineActivity, OrchestratorMaintenanceState, OrchestratorUserMemory
+from distr.core.db.time import utc_from_timestamp_naive, utc_now_naive
 
 
 WEEK_SECONDS = 7 * 24 * 60 * 60
@@ -73,10 +74,10 @@ def _now_dt(at: float | int | datetime | None = None) -> datetime:
         return at.replace(tzinfo=None)
     if at is not None:
         try:
-            return datetime.utcfromtimestamp(float(at))
+            return utc_from_timestamp_naive(float(at))
         except Exception:
             pass
-    return datetime.utcnow()
+    return utc_now_naive()
 
 
 def _ts(at: float | int | datetime | None = None) -> float:
@@ -204,7 +205,7 @@ def record_user_memory(
             row.source_id = source_id or row.source_id or ""
             row.source_chat_id = source_chat_id if source_chat_id is not None else row.source_chat_id
             row.payload_json = _json_dumps(_redact(payload or _json_loads(row.payload_json, {})))
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now_naive()
         else:
             row = OrchestratorUserMemory(
                 memory_uid=uuid.uuid4().hex,
@@ -428,7 +429,7 @@ def set_user_memory_enabled(memory_uid: str, enabled: bool) -> bool:
         if not row:
             return False
         row.enabled = 1 if enabled else 0
-        row.updated_at = datetime.utcnow()
+        row.updated_at = utc_now_naive()
         session.commit()
     return True
 
@@ -497,7 +498,7 @@ def record_machine_activity(
             row.evidence_count = int(row.evidence_count or 0) + 1
             row.last_seen_at = captured
             row.metadata_json = metadata_json
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now_naive()
         else:
             row = OrchestratorMachineActivity(
                 activity_uid=uuid.uuid4().hex,
@@ -618,7 +619,7 @@ def compact_machine_activity(
         )
         groups: dict[tuple[Any, ...], list[OrchestratorMachineActivity]] = defaultdict(list)
         for row in rows:
-            day = (row.captured_at or row.last_seen_at or datetime.utcnow()).date().isoformat()
+            day = (row.captured_at or row.last_seen_at or utc_now_naive()).date().isoformat()
             groups[(day, row.surface or "", row.app_name or "", row.workspace_path or "", row.project_id)].append(row)
 
         for (day, surface, app_name, workspace_path, project_id), group in groups.items():
@@ -653,7 +654,7 @@ def compact_machine_activity(
                 existing.evidence_count = int(existing.evidence_count or 0) + evidence_count
                 existing.metadata_json = _json_dumps(summary_payload)
                 existing.last_seen_at = max((row.last_seen_at for row in group if row.last_seen_at), default=existing.last_seen_at)
-                existing.updated_at = datetime.utcnow()
+                existing.updated_at = utc_now_naive()
             else:
                 existing = OrchestratorMachineActivity(
                     activity_uid="compact:" + uuid.uuid4().hex,
@@ -667,8 +668,8 @@ def compact_machine_activity(
                     content_hash=content_hash,
                     evidence_count=evidence_count,
                     compacted=1,
-                    captured_at=min((row.captured_at for row in group if row.captured_at), default=datetime.utcnow()),
-                    last_seen_at=max((row.last_seen_at for row in group if row.last_seen_at), default=datetime.utcnow()),
+                    captured_at=min((row.captured_at for row in group if row.captured_at), default=utc_now_naive()),
+                    last_seen_at=max((row.last_seen_at for row in group if row.last_seen_at), default=utc_now_naive()),
                 )
                 session.add(existing)
                 summary_rows += 1
@@ -714,7 +715,7 @@ def run_weekly_machine_activity_compaction(
         value = {"last_run_at": now_ts, "result": result}
         if state:
             state.value_json = _json_dumps(value)
-            state.updated_at = datetime.utcnow()
+            state.updated_at = utc_now_naive()
         else:
             session.add(OrchestratorMaintenanceState(key="machine_activity_weekly_compaction", value_json=_json_dumps(value)))
         session.commit()

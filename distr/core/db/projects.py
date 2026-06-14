@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from . import Base
-from datetime import datetime
+from .time import utc_now_naive
 
 class Project(Base):
     __tablename__ = 'projects'
@@ -22,8 +22,8 @@ class Project(Base):
     coding_backend = Column(String, nullable=False, default="pi")  # Project coding CLI backend
     coding_backend_model = Column(String, nullable=True)  # Optional per-project model/alias for the selected CLI backend
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     
     # Relationships
     context_items = relationship("ProjectContextItem", back_populates="project", cascade="all, delete-orphan")
@@ -39,8 +39,8 @@ class ProjectContextItem(Base):
     title = Column(String, nullable=False)
     content = Column(Text)  # The text blob content
     
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     
     # Relationships
     project = relationship("Project", back_populates="context_items")
@@ -55,8 +55,8 @@ class ProjectFile(Base):
     description = Column(String)
     file_path = Column(String, nullable=False)  # Full path to the file
     
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     
     # Relationships
     project = relationship("Project", back_populates="files")
@@ -71,8 +71,8 @@ class BoardColumn(Base):
     position = Column(Integer, default=0)  # For ordering columns
     trello_list_id = Column(String, nullable=True)  # If synced with Trello
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     # Relationships
     project = relationship("Project", back_populates="board_columns")
@@ -96,8 +96,8 @@ class BoardTicket(Base):
     position = Column(Integer, default=0)  # For ordering within column
     trello_card_id = Column(String, nullable=True)  # If synced with Trello
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     # Relationships
     column = relationship("BoardColumn", back_populates="tickets")

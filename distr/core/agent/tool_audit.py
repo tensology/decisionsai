@@ -14,6 +14,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Any, Dict
 
+from distr.core.db.time import utc_now_naive
+
 logger = logging.getLogger(__name__)
 _activity_logger = logging.getLogger("distr.agent.activity")
 
@@ -214,7 +216,7 @@ def _persist_chat_tool_event(event: Dict[str, Any], limit: int = 200) -> bool:
             events.append(event)
             params["tool_events"] = events[-limit:]
             chat.params = json.dumps(params)
-            chat.modified_date = datetime.utcnow()
+            chat.modified_date = utc_now_naive()
             session.commit()
             return True
     except Exception as e:

@@ -10,10 +10,10 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from distr.core.db import get_session
+from distr.core.db.time import utc_now_naive
 from distr.core.db.orchestrator import OrchestratorEvent
 from distr.core.db.workflow import (
     AutoWorkflow,
@@ -1015,7 +1015,7 @@ class StepRouter:
     ) -> Dict[str, Any]:
         """Mark run as completed and return end_run decision."""
         run.status = status
-        run.completed_at = datetime.utcnow()
+        run.completed_at = utc_now_naive()
         decision: Dict[str, Any] = {
             "action": "end_run",
             "status": status,

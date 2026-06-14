@@ -1,7 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, text as sa_text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship, backref
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, backref
 from sqlalchemy.dialects.sqlite import CHAR
 from uuid import uuid4
 import hashlib
@@ -9,8 +8,8 @@ import os
 import logging
 from distr.core.paths import DB_DIR
 from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
-from datetime import datetime
 import atexit
+from distr.core.db.time import utc_now_naive
 
 Base = declarative_base()
 
@@ -264,8 +263,8 @@ class Chat(Base):
     provider = Column(String, nullable=True)  # Store the provider used for this chat (e.g., 'Ollama', 'OpenAI')
     voice_provider = Column(String, nullable=True)  # Store the TTS provider (e.g., 'Kokoro', 'OpenAI', 'ElevenLabs')
     voice_model = Column(String, nullable=True)  # Store the voice/speaker used (e.g., 'af_sky', 'alloy')
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     children = relationship("Chat", 
                           backref=backref("parent", remote_side=[id]),
@@ -296,8 +295,8 @@ class Action(Base):
     recording_filename = Column(String)  # Filename of the recording JSON file
     last_run_date = Column(DateTime)  # When the action was last played/run (for list ordering)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class Snippet(Base):
@@ -312,8 +311,8 @@ class Snippet(Base):
     remote_hotkey = Column(String, default="")
     snippet = Column(Text)  # Store as JSON string
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class CustomVoice(Base):
@@ -331,8 +330,8 @@ class CustomVoice(Base):
     status = Column(String, default='pending')            # pending | processing | ready | failed
     error_message = Column(Text, default='')              # Error details if status == failed
     gender = Column(String, default='female')             # 'female' or 'male' — picks Kokoro base voice for cloning
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class TrelloTicket(Base):
@@ -351,8 +350,8 @@ class TrelloTicket(Base):
     attachments = Column(Text)  # JSON string of attachment URLs/names
     status = Column(String)  # e.g., list name or card status
     
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     # Relationships
     chat = relationship("Chat")
@@ -406,8 +405,8 @@ class TelegramGroupMessage(Base):
     processed_date = Column(DateTime, nullable=True)  # When it was processed
     
     # Timestamps
-    created_date = Column(DateTime, default=datetime.utcnow)  # When stored in database
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)  # When stored in database
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     
     # Index for faster lookups
     __table_args__ = (
@@ -428,7 +427,7 @@ class WhatsAppPhoneLink(Base):
     phone_number = Column(String)  # e.g. '27634103646'
     contact_name = Column(String)  # display name from WhatsApp contacts
     auto_snapshot = Column(Boolean, default=False)  # auto-create ticket on new message?
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
 
 
 class WhatsAppComposeDraft(Base):
@@ -442,7 +441,7 @@ class WhatsAppComposeDraft(Base):
     draft_text = Column(Text, nullable=False, default='')
     source = Column(String, default='user')
     board_id = Column(Integer, nullable=True)
-    updated_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class WhatsAppMessage(Base):
@@ -486,8 +485,8 @@ class WhatsAppMessage(Base):
     agent_chat_id = Column(Integer, nullable=True)  # Link to Chat row if message was added to a chat
 
     # Timestamps
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     __table_args__ = (
         {'sqlite_autoincrement': True},

@@ -1,10 +1,9 @@
 """User-created schedule blocks for the automations calendar."""
 
-from datetime import datetime
-
 from sqlalchemy import Boolean, Column, DateTime, Integer, String
 
 from . import Base
+from .time import utc_now_naive
 
 
 class ScheduleBlock(Base):
@@ -22,5 +21,5 @@ class ScheduleBlock(Base):
     project_id = Column(Integer, nullable=True)
     is_timer_running = Column(Boolean, default=False)
     is_timer_entry = Column(Boolean, default=False)
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)

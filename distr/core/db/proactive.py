@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 
 from distr.core.db import Base
+from distr.core.db.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +35,8 @@ class ProactiveTask(Base):
     run_count = Column(Integer, nullable=False, default=0)
     conditions = Column(Text, nullable=False, default="{}")  # JSON
     outcome_history = Column(Text, nullable=False, default="[]")  # JSON
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at = Column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 # Single owner for seed rows (DESIGN §2.3). Names are soft-unique for idempotent upsert.

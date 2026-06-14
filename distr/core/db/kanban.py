@@ -5,7 +5,7 @@ Supports local (database) boards with full CRUD, plus read-only Trello/Jira boar
 from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from . import Base
-from datetime import datetime
+from .time import utc_now_naive
 import json
 
 
@@ -30,8 +30,8 @@ class KanbanBoard(Base):
     position = Column(Integer, default=0)  # sidebar display order
     orchestrator_policy = Column(Text, nullable=True)  # JSON board overrides for routing/corrections
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     lanes = relationship("KanbanLane", back_populates="board", cascade="all, delete-orphan",
                          order_by="KanbanLane.position")
@@ -73,8 +73,8 @@ class KanbanLane(Base):
     name = Column(String, nullable=False)
     position = Column(Integer, default=0)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     board = relationship("KanbanBoard", back_populates="lanes")
     tickets = relationship("KanbanTicket", back_populates="lane", cascade="all, delete-orphan",
@@ -129,8 +129,8 @@ class KanbanTicket(Base):
     # Subagent hierarchy — parent ticket that spawned this one (if any)
     parent_ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
     lane = relationship("KanbanLane", back_populates="tickets")
     files = relationship("KanbanTicketFile", back_populates="ticket", cascade="all, delete-orphan")
@@ -154,7 +154,7 @@ class KanbanTicketFile(Base):
     file_path = Column(String, nullable=False)
     description = Column(String)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
 
     ticket = relationship("KanbanTicket", back_populates="files")
 
@@ -167,7 +167,7 @@ class KanbanTicketLink(Base):
     title = Column(String, nullable=False)
     url = Column(String, nullable=False)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
 
     ticket = relationship("KanbanTicket", back_populates="links")
 
@@ -181,7 +181,7 @@ class KanbanTicketTodo(Base):
     done = Column(Boolean, default=False)
     position = Column(Integer, default=0)
 
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
 
     ticket = relationship("KanbanTicket", back_populates="todos")
 
@@ -199,7 +199,7 @@ class KanbanTicketAuditEntry(Base):
     final_verdict = Column(String, nullable=True)
     summary = Column(Text, nullable=True)
     details = Column(Text, nullable=True)
-    created_date = Column(DateTime, default=datetime.utcnow)
+    created_date = Column(DateTime, default=utc_now_naive)
 
 
 class ProjectExecutionSession(Base):
@@ -225,8 +225,8 @@ class ProjectExecutionSession(Base):
     output_packet = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
 
-    started_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    started_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
     completed_at = Column(DateTime, nullable=True)
 
     events = relationship(
@@ -246,7 +246,7 @@ class ProjectExecutionEvent(Base):
     status = Column(String, nullable=True)
     message = Column(Text, nullable=True)
     payload = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
 
     session = relationship("ProjectExecutionSession", back_populates="events")
 

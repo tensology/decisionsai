@@ -6,11 +6,11 @@ import json
 import logging
 import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 from sqlalchemy import or_
 
 from distr.core.db import get_session
+from distr.core.db.time import utc_now_naive
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.db.kanban import KanbanBoard, KanbanTicket, KanbanTicketAuditEntry
 from distr.core.db.projects import Project
@@ -1301,7 +1301,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             ticket_rows = db.query(KanbanTicket.id, KanbanTicket.title).filter(KanbanTicket.id.in_(ticket_ids)).all()
             ticket_title_by_id = {tid: title for tid, title in ticket_rows}
 
-        now = datetime.utcnow()
+        now = utc_now_naive()
         results = []
         for r in rows:
             run_data = _safe_json_loads(r.run_data) or {}
@@ -1435,7 +1435,7 @@ def reset_workflow_steps(workflow_id: int) -> Dict[str, Any]:
         )
         for run in lingering:
             run.status = "cancelled"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = utc_now_naive()
             cancelled_runs += 1
 
         if step_ids:
@@ -1561,7 +1561,7 @@ def complete_step(step_id: int, result_text: str, passed: bool, _from_continue: 
 
         if not next_step:
             run.status = "completed"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = utc_now_naive()
             run_id = run.id
             workflow_id = run.workflow_id
             db.commit()

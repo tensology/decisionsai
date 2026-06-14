@@ -1,10 +1,9 @@
 """Orchestrator ledger SQLAlchemy models (orchestrator_* tables)."""
 
-from datetime import datetime
-
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
 
 from . import Base
+from .time import utc_now_naive
 
 
 class OrchestratorEvent(Base):
@@ -30,7 +29,7 @@ class OrchestratorEvent(Base):
     summary = Column(Text, nullable=True)
     payload = Column(Text, nullable=True)
     evidence = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class OrchestratorUserMemory(Base):
@@ -57,8 +56,8 @@ class OrchestratorUserMemory(Base):
     payload_json = Column(Text, nullable=True)
     enabled = Column(Integer, nullable=False, default=1)
     manually_added = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class OrchestratorMachineActivity(Base):
@@ -78,10 +77,10 @@ class OrchestratorMachineActivity(Base):
     content_hash = Column(String, nullable=False)
     evidence_count = Column(Integer, nullable=False, default=1)
     compacted = Column(Integer, nullable=False, default=0)
-    captured_at = Column(DateTime, default=datetime.utcnow)
-    last_seen_at = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    captured_at = Column(DateTime, default=utc_now_naive)
+    last_seen_at = Column(DateTime, default=utc_now_naive)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class OrchestratorMaintenanceState(Base):
@@ -92,7 +91,7 @@ class OrchestratorMaintenanceState(Base):
     id = Column(Integer, primary_key=True)
     key = Column(String, nullable=False, unique=True)
     value_json = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class ProjectRuntimeSession(Base):
@@ -112,8 +111,8 @@ class ProjectRuntimeSession(Base):
     urls = Column(Text, nullable=True)
     last_buffer_preview = Column(Text, nullable=True)
     safe_restart_policy = Column(Text, nullable=True)
-    started_at = Column(DateTime, default=datetime.utcnow)
-    last_seen_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=utc_now_naive)
+    last_seen_at = Column(DateTime, default=utc_now_naive)
     ended_at = Column(DateTime, nullable=True)
     created_at_epoch = Column(Float, nullable=True)
 
@@ -142,7 +141,7 @@ class OrchestratorValidationRecord(Base):
     verdict = Column(String, nullable=False, default="unknown")
     correction_hint = Column(Text, nullable=True)
     payload = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class OrchestratorVisualBaselineSet(Base):
@@ -157,8 +156,8 @@ class OrchestratorVisualBaselineSet(Base):
     description = Column(Text, nullable=True)
     version = Column(String, nullable=False, default="v1")
     enabled = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 class OrchestratorVisualBaselineScreen(Base):
@@ -173,7 +172,7 @@ class OrchestratorVisualBaselineScreen(Base):
     flow_name = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     metadata_json = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
 
 
 class OrchestratorCorrectionAttempt(Base):
@@ -197,7 +196,7 @@ class OrchestratorCorrectionAttempt(Base):
     target_model = Column(String, nullable=True)
     correction_packet = Column(Text, nullable=True)
     dispatch_result = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
     dispatched_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
 
@@ -246,8 +245,8 @@ class OrchestratorLearnedRule(Base):
     confidence = Column(Float, nullable=False, default=0.5)
     evidence_count = Column(Integer, nullable=False, default=1)
     enabled = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now_naive)
+    updated_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
 
 
 Index("ix_orchestrator_events_board_id", OrchestratorEvent.board_id)

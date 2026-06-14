@@ -12,10 +12,10 @@ import logging
 import os
 import threading
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from distr.core.db import get_session
+from distr.core.db.time import utc_now_naive
 from distr.core.workflow_engine.context_assembly import WorkflowRunContext
 from distr.core.db.workflow import (
     AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun,
@@ -431,7 +431,7 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             return
         for run in orphans:
             run.status = "cancelled"
-            run.completed_at = datetime.utcnow()
+            run.completed_at = utc_now_naive()
         db.commit()
         logger.info(
             "Cancelled %d orphaned workflow run(s) from previous session: %s",
@@ -681,7 +681,7 @@ def start_workflow_run(
                 workflow_id,
             )
             active_run.status = "cancelled"
-            active_run.completed_at = datetime.utcnow()
+            active_run.completed_at = utc_now_naive()
             db.flush()
 
         # Validate all steps before starting
@@ -930,7 +930,7 @@ def cancel_run(run_id: int) -> bool:
         if not run:
             return False
         run.status = "cancelled"
-        run.completed_at = datetime.utcnow()
+        run.completed_at = utc_now_naive()
         if run.current_step_id:
             step = db.query(AutoWorkflowStep).filter(
                 AutoWorkflowStep.id == run.current_step_id,
@@ -1188,7 +1188,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             run_data["result_packet"] = updated_packet
             run.run_data = json.dumps(run_data)
         run.status = status
-        run.completed_at = None if auto_retry else datetime.utcnow()
+        run.completed_at = None if auto_retry else utc_now_naive()
         db.commit()
     increment_workflow_updated()
     if auto_retry:

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from . import Base
+from .time import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class PlannerOutput(Base):
     date_info = Column(Text, nullable=False, default="{}")  # JSON
     content = Column(Text, nullable=False, default="")
     proactive_task_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now_naive)
 
 
 def save_planner_row(
