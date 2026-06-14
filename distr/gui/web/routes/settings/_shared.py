@@ -4,7 +4,6 @@ Shared Pydantic models, constants, and helpers used across settings route module
 from functools import wraps
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
-from pathlib import Path
 import json
 import logging
 import os
@@ -16,10 +15,10 @@ from fastapi.responses import JSONResponse
 from distr.core.paths import DB_DIR
 from distr.gui.web.security import (
     mask_secret,
+    rate_limiter,
     redact_connected_account,
     redact_thirdparty_settings,
     validate_safe_outbound_url,
-    rate_limiter,
 )
 
 PROJECT_UPLOADS_DIR = os.path.join(DB_DIR, "project_uploads")

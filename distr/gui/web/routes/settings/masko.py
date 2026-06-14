@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ._shared import logger, route_handler
+from ._shared import route_handler
 
 
 # ---------------------------------------------------------------------------

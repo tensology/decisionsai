@@ -79,7 +79,6 @@ class MouseMovementTool(BaseTool):
                 # Try to convert cached screen info to QScreen object if Qt is available
                 if QT_AVAILABLE:
                     try:
-                        from PyQt6.QtGui import QScreen
                         from PyQt6.QtCore import QRect, QPoint
                         from PyQt6.QtWidgets import QApplication
                         
@@ -105,7 +104,6 @@ class MouseMovementTool(BaseTool):
                     
                     # If QApplication.screens() didn't work, try to match by geometry
                     try:
-                        from PyQt6.QtGui import QScreen
                         from PyQt6.QtCore import QRect, QPoint
                         from PyQt6.QtWidgets import QApplication
                         
@@ -159,7 +157,7 @@ class MouseMovementTool(BaseTool):
         
         try:
             from PyQt6.QtWidgets import QApplication
-            from PyQt6.QtGui import QCursor, QScreen
+            from PyQt6.QtGui import QCursor
             from PyQt6.QtCore import QPoint
             
             app = QApplication.instance()

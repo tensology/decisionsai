@@ -1,20 +1,18 @@
-import hashlib
 import json
 import logging
 import os
 import queue
-import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
+from typing import Optional
+from datetime import datetime
 import platform
 import subprocess
 from urllib.parse import quote
 
 # Qt Imports
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer, QUrl, QThread
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QUrl
 
 try:
     from PyQt6.QtWebSockets import QWebSocket
@@ -35,7 +33,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility
-from distr.core.integrations.telegram.utils import hash_channel_id, relay_internal_token
+from distr.core.integrations.telegram.utils import relay_internal_token
 
 from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 from distr.core.integrations.telegram.sender import TelegramSenderMixin
@@ -1011,7 +1009,6 @@ class TelegramWebSocketManager(
 
     def _on_binary_message(self, data):
         """Handle incoming binary WebSocket message (file upload chunks from server)."""
-        import os
         try:
             # Convert QByteArray to bytes
             if hasattr(data, 'data'):

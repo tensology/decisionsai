@@ -3,7 +3,6 @@ Unified FastAPI server for GUI components (Board, Settings, Chat)
 
 This server runs once when the app starts and serves all web UIs.
 """
-import sys
 import threading
 import re
 import os
@@ -27,8 +26,6 @@ from distr.gui.web.security import (
     INTERNAL_AUTH_HEADER,
     get_internal_api_token,
     require_internal_token_request,
-    is_allowed_local_origin,
-    rate_limiter,
 )
 
 logger = logging.getLogger(__name__)

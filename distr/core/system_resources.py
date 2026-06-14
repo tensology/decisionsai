@@ -5,7 +5,6 @@ so low-memory machines (8 GB) don't choke on the default 8B model.
 """
 
 import logging
-import os
 import platform
 import subprocess
 

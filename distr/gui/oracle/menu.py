@@ -20,7 +20,6 @@ from distr.core.hotkeys import (
     DEFAULTS as HOTKEY_DEFAULTS,
     chord_to_qt_sequence,
     format_remote_hotkey_display,
-    parse_remote_hotkey,
 )
 from sqlalchemy import desc, nulls_last
 

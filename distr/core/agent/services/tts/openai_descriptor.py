@@ -123,7 +123,6 @@ class OpenAIDescriptor(TTSProviderDescriptor):
 
         Replicates _generate_openai() from tts_handler.py.
         """
-        import numpy as np
         import soundfile as sf
         from openai import OpenAI
         from distr.core.utils import load_settings_from_db

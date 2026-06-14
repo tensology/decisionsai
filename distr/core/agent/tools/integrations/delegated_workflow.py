@@ -54,7 +54,6 @@ class DelegatedWorkflowTool(BaseTool):
     ) -> str:
         from distr.core.delegated_workflow.events import record_delegated_plan
         from distr.core.delegated_workflow.planner import plan_delegated_workflow
-        from distr.core.delegated_workflow.runner import DelegatedWorkflowRunner
 
         plan = plan_delegated_workflow(source_surface, text)
         event_id = record_delegated_plan(

@@ -7,7 +7,6 @@ for fast execution.
 
 import logging
 import os
-import subprocess
 from typing import Optional, List, Any
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field

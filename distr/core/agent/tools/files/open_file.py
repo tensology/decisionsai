@@ -5,14 +5,13 @@ This tool searches for and opens files by name, handling file path resolution,
 folder references, and fuzzy matching.
 """
 
-from typing import Any, Optional
+from typing import Optional
 from langchain.tools import BaseTool
 from pydantic import Field, BaseModel
 import logging
 import os
 import subprocess
 import platform
-import glob
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)

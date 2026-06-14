@@ -8,7 +8,6 @@ from typing import Any, Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import logging
-from distr.core.signals import signal_manager
 
 logger = logging.getLogger(__name__)
 

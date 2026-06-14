@@ -12,7 +12,7 @@ The detector distinguishes between:
 
 import re
 import logging
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
 

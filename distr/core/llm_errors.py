@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 
 _SECRET_RE = re.compile(r"\b(?:sk|sk-proj|or|gsk|AIza)[A-Za-z0-9_\-]{12,}\b")

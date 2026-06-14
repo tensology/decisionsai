@@ -20,7 +20,6 @@ import logging
 import os
 import re
 import time
-from typing import Optional
 
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE, LLMService,
@@ -30,12 +29,11 @@ from distr.core.agent.libs import (
 )
 from distr.core.agent.services.llm.tool_format import convert_tools_to_openai_format
 from distr.core.agent.services.llm.prompt import (
-    load_system_prompt_template, build_tools_description,
+    load_system_prompt_template,
 )
 from distr.core.agent.services.llm.text_utils import (
     clean_text_for_tts, parse_tool_calls_from_content,
 )
-from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
 from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
 from ..core_mixin import LLMSharedMixin
 from ..mixins.ollama_response import OllamaResponseMixin

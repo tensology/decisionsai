@@ -14,10 +14,8 @@ import logging
 import os
 import json
 import subprocess
-import platform
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -210,9 +208,6 @@ class OpenAIWhisperBackend(TranscriptionBackend):
     def transcribe(self, audio_path: str, output_path: Optional[str] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         try:
             from openai import OpenAI
-            import wave
-            import io
-            import numpy as np
             
             client = OpenAI(api_key=self.api_key)
             

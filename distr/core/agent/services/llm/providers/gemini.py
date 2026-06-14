@@ -6,7 +6,6 @@ Uses the OpenAI-compatible endpoint at generativelanguage.googleapis.com.
 """
 
 import logging
-from typing import Optional
 
 from ..openai_compat import OpenAICompatibleLLMService
 

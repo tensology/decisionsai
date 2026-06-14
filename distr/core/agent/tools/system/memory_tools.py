@@ -16,7 +16,6 @@ from distr.core.memory.files import (
     CAP_AGENT_BYTES,
     CAP_MEMORY_BYTES,
     CAP_USER_BYTES,
-    EVENTS_MD,
     MEMORY_MD,
     SECTION_SPLIT_RE,
     USER_MD,

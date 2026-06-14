@@ -185,7 +185,7 @@ def _connected_work_sources(settings: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:
     from distr.core.db import get_session
-    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.kanban import KanbanBoard, KanbanTicket
 
     with get_session() as session:
         boards = (

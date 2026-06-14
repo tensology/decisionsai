@@ -16,8 +16,7 @@ from datetime import datetime
 import numpy as np
 from distr.core.agent.tools.base import get_platform_modifier_key
 from distr.core.agent.libs import (
-    pyautogui, PYAUTOGUI_AVAILABLE,
-    sf, SOUNDFILE_AVAILABLE,
+    pyautogui, sf, SOUNDFILE_AVAILABLE,
     wavfile, SCIPY_AVAILABLE
 )
 

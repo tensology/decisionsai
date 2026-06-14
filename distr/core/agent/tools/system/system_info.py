@@ -13,8 +13,6 @@ Useful for queries like "what are your models", "what is your setup", "show me y
 import logging
 import platform
 import sys
-import os
-import json
 from typing import Optional, Any
 from langchain.tools import BaseTool
 from pydantic import Field

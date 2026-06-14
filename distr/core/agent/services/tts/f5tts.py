@@ -1,19 +1,15 @@
 import asyncio
 import logging
-import re
 import time
 import numpy as np
 import os
-import io
 
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE, TTSService,
     TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
-    TTSStartedFrame, TTSStoppedFrame, ErrorFrame, StartFrame, EndFrame,
-    CancelFrame, InterruptionFrame, UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame, AudioRawFrame, OutputAudioRawFrame,
-    sf, SOUNDFILE_AVAILABLE,
-    AudioSegment, PYDUB_AVAILABLE,
+    StartFrame, CancelFrame, InterruptionFrame, OutputAudioRawFrame,
+    SOUNDFILE_AVAILABLE,
+    PYDUB_AVAILABLE,
 )
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
@@ -73,7 +69,6 @@ def _get_default_ref_audio() -> str:
     if _DEFAULT_REF_AUDIO and os.path.isfile(_DEFAULT_REF_AUDIO):
         return _DEFAULT_REF_AUDIO
     try:
-        import importlib.resources as pkg_resources
         import f5_tts
         pkg_dir = os.path.dirname(f5_tts.__file__)
         candidate = os.path.join(pkg_dir, "infer", "examples", "basic", "basic_ref_en.wav")

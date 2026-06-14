@@ -9,7 +9,6 @@ Extracted from LLMSharedMixin to keep shared.py focused on core LLM logic.
 
 import asyncio
 import logging
-import os
 import platform
 import re
 import subprocess
@@ -43,7 +42,6 @@ class FastActionMixin:
 
         Returns True if action was handled, False to fall back to LLM.
         """
-        from distr.core.agent.services.llm.fast_action_detector import ActionType
 
         logger.debug("LLM: _execute_fast_action for %s, tool=%s", fast_action.action_type.value, fast_action.tool_name)
 

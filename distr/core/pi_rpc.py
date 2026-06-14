@@ -14,14 +14,13 @@ giving us:
 """
 
 import os
-import sys
 import json
 import logging
 import asyncio
 import subprocess
 import threading
 from collections import deque
-from typing import Optional, Dict, List, Callable, Any
+from typing import Optional, Dict, List, Callable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)

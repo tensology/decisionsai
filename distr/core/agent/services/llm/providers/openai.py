@@ -11,8 +11,6 @@ Only contains:
 """
 
 import logging
-import os
-from typing import Optional
 
 from ..openai_compat import OpenAICompatibleLLMService
 

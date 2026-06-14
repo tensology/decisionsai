@@ -4,7 +4,7 @@ LLMs routes — /llms, /llms/*, /ollama/*
 import asyncio
 from fastapi.responses import JSONResponse
 
-from ._shared import logger, OllamaPullRequest, LLMSettings, route_handler
+from ._shared import OllamaPullRequest, LLMSettings, route_handler
 
 
 def _is_available_model_entry(model) -> bool:
@@ -97,7 +97,7 @@ def register_routes(router, templates):
     async def get_llms_settings():
         """Get current LLMs settings from DB (conversational_llm_*, coding_llm_*, vision_llm_*, image_llm_*)."""
         from distr.core.settings import load_settings_from_db
-        from distr.core.agent.constants import DEFAULT_MODELS, DEFAULT_OLLAMA_MODELS_BY_TYPE
+        from distr.core.agent.constants import DEFAULT_OLLAMA_MODELS_BY_TYPE
         settings = load_settings_from_db()
 
         def _provider(val):

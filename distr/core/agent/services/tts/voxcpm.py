@@ -9,7 +9,6 @@ Install: pip install voxcpm
 
 import asyncio
 import logging
-import re
 import time
 import numpy as np
 import os
@@ -18,11 +17,7 @@ import platform
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE, TTSService,
     TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
-    TTSStartedFrame, TTSStoppedFrame, ErrorFrame, StartFrame, EndFrame,
-    CancelFrame, InterruptionFrame, UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame, AudioRawFrame, OutputAudioRawFrame,
-    sf, SOUNDFILE_AVAILABLE,
-    AudioSegment, PYDUB_AVAILABLE,
+    TTSStartedFrame, TTSStoppedFrame, ErrorFrame, StartFrame, CancelFrame, InterruptionFrame, AudioRawFrame, OutputAudioRawFrame,
 )
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 

@@ -4,7 +4,7 @@ Rework Clipboard Tool for LangChain.
 This tool reworks/improves clipboard content using an independent LLM and places it back in the clipboard.
 """
 
-from typing import Any, Optional
+from typing import Optional
 from langchain.tools import BaseTool
 from pydantic import Field
 import logging
@@ -12,7 +12,6 @@ import pyautogui
 # Disable pyautogui FAILSAFE to prevent mouse operations from being blocked
 pyautogui.FAILSAFE = False
 import time
-import asyncio
 from distr.core.agent.tools.base import get_platform_modifier_key
 
 logger = logging.getLogger(__name__)

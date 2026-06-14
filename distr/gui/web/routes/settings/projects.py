@@ -1729,7 +1729,7 @@ def register_routes(router, templates):
     async def terminal_websocket(websocket: WebSocket, project_id: int):
         """WebSocket for real-time pi RPC transcript. Connects to a pi --mode rpc session."""
         import asyncio
-        from distr.core.pi_rpc import get_or_create_rpc_session, get_rpc_session, kill_rpc_session, PiRpcSession
+        from distr.core.pi_rpc import get_or_create_rpc_session, kill_rpc_session
         from distr.gui.web.security import websocket_has_valid_internal_token, is_allowed_local_origin
 
         # Auth check

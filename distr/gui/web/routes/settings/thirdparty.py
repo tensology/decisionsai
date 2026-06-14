@@ -6,7 +6,6 @@ import asyncio
 from fastapi.responses import JSONResponse
 
 from ._shared import (
-    logger,
     ThirdPartySettings,
     ValidateRequest,
     resolve_secret_update,

@@ -4,7 +4,7 @@ Project Management Tools for LangChain.
 Tools for managing projects, switching contexts, adding files, and creating tickets.
 """
 
-from typing import Any, Optional, List
+from typing import Any, List
 from langchain.tools import BaseTool
 from pydantic import Field, BaseModel
 import logging
@@ -1031,7 +1031,6 @@ class CreateProjectFromFolderTool(BaseTool):
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
-            from distr.core.signals import signal_manager
             from distr.core.agent.services.rag.project import activate_project
 
             if not os.path.exists(folder_path):
@@ -1120,7 +1119,6 @@ class AddFilesToProjectTool(BaseTool):
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import ProjectFile
-            from distr.core.signals import signal_manager
             from distr.core.agent.services.rag.project import get_active_project, reindex_project
 
             # Get active project
@@ -1654,7 +1652,6 @@ class StartProjectTool(BaseTool):
             # Extract project name from text (e.g. "start project auctionnow" → "auctionnow")
             search_name = ""
             if text:
-                import re
                 text_lower = text.lower().strip().rstrip('.')
                 # Strip common prefixes to get the project name
                 for prefix in ['start project', 'start the project', 'open project', 'open and start project',

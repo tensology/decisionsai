@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import os
 import queue
 import re
 import tempfile
@@ -63,7 +62,6 @@ class TelegramMessagesMixin:
                 self._processed_message_ids.pop()
 
         # 2. Content Hash Deduplication
-        import hashlib
 
         # Create a hash of the critical content — include message_id to avoid
         # false deduplication of voice notes (which have no text and similar dates)
@@ -684,7 +682,6 @@ class TelegramMessagesMixin:
     def _handle_initiative_draft_command(self, text_lower: str) -> bool:
         """Approve/reject/read Initiative drafts from Telegram private chat."""
         try:
-            from distr.core.initiative.draft_execute import approve_draft_in_queue
             from distr.core.initiative.draft_queue import DraftQueue
             from distr.core.initiative.voice_commands import (
                 match_draft_decision,
@@ -1242,7 +1239,6 @@ class TelegramMessagesMixin:
             # Pass image path for photos (enables vision analysis), None for other types
             # (documents/videos are referenced by path in the agent_text itself)
             try:
-                from distr.core.signals import signal_manager
                 logger.info(
                     "[Telegram] 📤 Forwarding %s to agent: '%s'",
                     media_type, agent_text[:80],

@@ -51,7 +51,6 @@ import gc
 import json
 import subprocess
 import threading
-from queue import Queue
 
 # ===========================================
 # 2. Third Party Imports
@@ -165,7 +164,7 @@ def clear_log_files():
             if os.path.isfile(file_path):
                 try:
                     os.remove(file_path)
-                except Exception as e:
+                except Exception:
                     # Silently fail if we can't remove a log file
                     pass
     
@@ -177,7 +176,7 @@ def clear_log_files():
             if os.path.isfile(file_path):
                 try:
                     os.remove(file_path)
-                except Exception as e:
+                except Exception:
                     # Silently fail if we can't remove a log file
                     pass
 
@@ -1329,7 +1328,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         logger.info(f"🎤 Updating STT model to: '{transcription_model}'")
 
         # Update settings in DB
-        from distr.core.utils import load_settings_from_db, save_settings_to_db
+        from distr.core.utils import load_settings_from_db
         settings = load_settings_from_db()
         settings['transcription_model'] = transcription_model
         save_settings_to_db(settings)
@@ -1881,7 +1880,6 @@ def run():
     
     # Qt WebEngine requires OpenGL context sharing - must be set BEFORE QApplication
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     
     setup_logging()

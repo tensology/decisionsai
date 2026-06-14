@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 
-from ._shared import logger, ActionUpdate, ActionCreate, route_handler
+from ._shared import ActionUpdate, ActionCreate, route_handler
 
 
 class LastChatIdUpdate(BaseModel):

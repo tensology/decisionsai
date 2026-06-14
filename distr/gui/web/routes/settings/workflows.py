@@ -1,7 +1,7 @@
 """
 Workflow routes — /workflows/*
 """
-from fastapi import Request, HTTPException, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Request, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List

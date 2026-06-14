@@ -8,8 +8,6 @@ prompt so it knows what tools it has and when to use them.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Dict, Any
 
 
 def get_skill_routing_rules() -> str:

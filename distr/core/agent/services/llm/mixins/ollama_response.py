@@ -16,9 +16,7 @@ from distr.core.agent.services.llm.prompt import build_tools_description
 from distr.core.agent.services.llm.text_utils import (
     clean_text_for_tts,
     humanize_silent_navigation_json,
-    parse_tool_calls_from_content,
 )
-from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
 from distr.core.signals import signal_manager
 
 logger = logging.getLogger(__name__)
@@ -439,7 +437,7 @@ class OllamaResponseMixin:
         should_return=True means the caller should ``return`` immediately.
         """
         from distr.core.agent.libs import (
-            TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
+            TextFrame, LLMFullResponseEndFrame,
         )
 
         clipboard_tool_called = False

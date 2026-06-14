@@ -10,8 +10,6 @@ from pydantic import BaseModel, Field
 import logging
 import re
 import json
-from distr.core.db import get_session, Action
-from distr.core.signals import signal_manager
 
 logger = logging.getLogger(__name__)
 

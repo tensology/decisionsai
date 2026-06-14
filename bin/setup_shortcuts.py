@@ -1,6 +1,5 @@
 """Create Windows Start Menu shortcuts and convert favicon to .ico."""
 import os
-import sys
 import struct
 
 def png_to_ico(png_path, ico_path):

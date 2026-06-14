@@ -419,12 +419,11 @@ class GetProjectStatusTool(BaseTool):
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
-            from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+            from distr.core.db.kanban import KanbanBoard
             from distr.core.db.workflow import (
                 AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep,
                 AutoWorkflowStepResult,
             )
-            from distr.core.workflow.dispatcher import _active_runs, _runs_lock
 
             sections = []
 

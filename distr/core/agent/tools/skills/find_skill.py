@@ -7,7 +7,6 @@ When query is empty: lists all skills (optionally filtered by tag).
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Type
 

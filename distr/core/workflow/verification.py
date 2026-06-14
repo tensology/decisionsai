@@ -5,7 +5,7 @@ Extracted from service.py as part of the module decomposition.
 """
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from distr.core.db.workflow import AutoWorkflowStep
 

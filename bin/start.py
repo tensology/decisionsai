@@ -263,7 +263,7 @@ def kill_existing_decisions_processes():
                             
             except subprocess.CalledProcessError:
                 pass
-            except Exception as e:
+            except Exception:
                 # Silently fail - don't block startup if we can't check
                 pass
                 

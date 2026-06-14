@@ -7,7 +7,6 @@ respective animation files, and optional transitions for animated mode.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Dict, Literal, Optional

@@ -11,7 +11,7 @@ from typing import Dict, Optional
 
 from PyQt6.QtCore import QTimer
 
-from distr.core.settings import load_settings_from_db, save_settings_to_db
+from distr.core.settings import load_settings_from_db
 from distr.core.signals import signal_manager
 from distr.core.workflow_agent import WorkflowAgent
 from distr.core.human_engagement import EngagementIntent, HumanEngagementService

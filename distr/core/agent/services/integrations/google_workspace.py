@@ -18,9 +18,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import requests
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
 import base64
 import re
 

@@ -7,7 +7,6 @@ action_recording_started/action_recording_stopped for tray icon and set_action_n
 import json
 import logging
 import sys
-import threading
 from datetime import datetime
 from pathlib import Path
 

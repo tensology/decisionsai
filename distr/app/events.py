@@ -7,7 +7,6 @@ handler stays readable.
 
 import logging
 import os
-import base64
 import tempfile
 import threading
 import time
@@ -1386,7 +1385,6 @@ class EventHandlerMixin:
         """Capture a screenshot of the screen where the mouse is."""
         try:
             from distr.core.agent.tools.vision.screenshot_analyzer import get_current_mouse_screen, capture_screenshot
-            from PyQt6.QtWidgets import QApplication
             import platform
             import subprocess
 

@@ -24,7 +24,6 @@ import logging
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE, LLMService,
 )
-from distr.core.agent.services.llm.prompt import load_system_prompt_template
 from distr.core.agent.tools import load_tools
 from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
 from distr.core.signals import signal_manager

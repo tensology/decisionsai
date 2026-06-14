@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
-from ._shared import logger, route_handler, SkinSelectRequest
+from ._shared import route_handler, SkinSelectRequest
 
 
 # ---------------------------------------------------------------------------

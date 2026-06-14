@@ -7,12 +7,12 @@ logic in one place.
 
 import logging
 
-from .constants import DEFAULT_MODELS, API_KEY_NAMES
+from .constants import DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
 # LLM service class imports
-from .services import WhisperSTTService, OllamaLLMService
+from .services import OllamaLLMService
 try:
     from .services import (
         OpenAILLMService, OpenRouterLLMService,

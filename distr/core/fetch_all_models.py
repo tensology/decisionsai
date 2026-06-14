@@ -6,8 +6,6 @@ It runs at application startup and handles errors gracefully without corrupting 
 """
 
 import logging
-from datetime import datetime, timedelta
-from distr.core.paths import MODELS_DIR
 from distr.core.settings import load_settings_from_db
 
 logger = logging.getLogger(__name__)

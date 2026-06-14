@@ -4,7 +4,6 @@ Window management tool — minimize, maximize, close, move windows between scree
 import logging
 import platform
 import subprocess
-import time
 from typing import Optional
 
 from langchain.tools import BaseTool

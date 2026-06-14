@@ -1,4 +1,4 @@
-from distr.core.paths import CORE_DIR, MODELS_DIR
+from distr.core.paths import MODELS_DIR
 from distr.core.db import Session, Settings, ScreenPosition
 from distr.core.db import get_session
 from PyQt6.QtWidgets import QApplication

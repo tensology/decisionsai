@@ -1,7 +1,6 @@
 """Signal bridging mixin — connects Qt signals to the agent subprocess command queue."""
 
 import logging
-import os
 import json
 import re
 import threading

@@ -35,7 +35,6 @@ Plus:
 import re
 import logging
 from enum import Enum
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

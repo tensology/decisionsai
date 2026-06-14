@@ -6,10 +6,8 @@ Supports interactive commands:
   - A number: Set countdown to that many minutes, restart, and reset countdown
 """
 
-import os
 import sys
 import time
-import signal
 import subprocess
 import threading
 from pathlib import Path

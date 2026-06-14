@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Callable, Generic, TypeVar
 
 from distr.core.integrations.outbound_queue import BoundedOutboundQueue

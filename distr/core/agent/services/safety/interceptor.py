@@ -6,13 +6,14 @@ and require confirmation for any write/destructive operations.
 """
 
 import logging
+import os
 import re
 import time
 from typing import List, Tuple, Optional, Dict
 from distr.core.files.safety import get_file_safety, OperationType
 from distr.core.files.user_library_guard import is_protected_library_root
 from distr.gui.dialogs.file_operation import confirm_file_operations_with_plan
-from distr.gui.dialogs.rename_preview import show_rename_preview, extract_renames_from_code
+from distr.gui.dialogs.rename_preview import show_rename_preview
 
 logger = logging.getLogger(__name__)
 
@@ -156,33 +157,6 @@ def _ensure_response_dict_initialized():
         _response_dict = {}
         _response_lock = threading.Lock()
         logger.debug("[GUARDRAIL] Initialized _response_dict and _response_lock for fallback confirmation mechanism")
-
-
-def extract_code_blocks(text: str) -> List[Tuple[str, str]]:
-    """
-    Extract code blocks from text (Python, bash, etc.).
-    
-    Returns:
-        List of (language, code) tuples
-    """
-    code_blocks = []
-    
-    # Find Python code blocks
-    python_blocks = re.findall(r'```python\n?(.*?)```', text, re.DOTALL | re.IGNORECASE)
-    for code in python_blocks:
-        code_blocks.append(('python', code.strip()))
-    
-    # Find bash code blocks
-    bash_blocks = re.findall(r'```bash\n?(.*?)```', text, re.DOTALL | re.IGNORECASE)
-    for code in bash_blocks:
-        code_blocks.append(('bash', code.strip()))
-    
-    # Find shell code blocks
-    shell_blocks = re.findall(r'```sh\n?(.*?)```', text, re.DOTALL | re.IGNORECASE)
-    for code in shell_blocks:
-        code_blocks.append(('bash', code.strip()))
-    
-    return code_blocks
 
 
 def extract_rename_operations(code: str) -> List[Dict[str, str]]:
@@ -753,7 +727,6 @@ def check_and_confirm_direct_file_operation(
         (allowed, plan) - allowed=True if operation can proceed, plan dict if confirmation needed
     """
     import os
-    from pathlib import Path
     
     logger.info(f"[GUARDRAIL] Operation requested: {operation_type} on {source_path} (pathway: {originating_pathway})")
     
@@ -901,7 +874,7 @@ def check_and_confirm_direct_file_operation(
     
     try:
         from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QCoreApplication, QMetaObject, Qt, QThread
+        from PyQt6.QtCore import QCoreApplication, QThread
         import threading
         
         # Try to get QApplication instance - may be in different thread
@@ -1074,7 +1047,6 @@ def _request_confirmation_via_queue(
     This is used when running in a subprocess that doesn't have QApplication.
     """
     import time
-    import queue as queue_module
     
     logger.debug(f"[GUARDRAIL] Sending confirmation request to main process via event queue")
     
@@ -1282,98 +1254,4 @@ def _request_confirmation_via_queue(
             'confirmation_time_seconds': elapsed_time
         })
         return (False, plan)
-
-
-def check_code_blocks_before_execution(code_blocks: List[Tuple[str, str]], task: str = "") -> Tuple[bool, Optional[Dict], List[str]]:
-    """
-    Check multiple code blocks before execution.
-    Combines all file operations from all code blocks into a single plan and shows ONE dialog.
-    
-    Args:
-        code_blocks: List of (language, code) tuples
-        task: Optional task description
-        
-    Returns:
-        (allowed, plan, blocked_codes) - allowed=True if all can proceed, combined plan, list of blocked code snippets
-    """
-    file_safety = get_file_safety()
-    all_operations = []
-    blocked_codes = []
-    
-    # Collect all file operations from all code blocks
-    for language, code in code_blocks:
-        op_type = file_safety.classify_operation(code, task)
-        
-        # READ_ONLY operations can proceed without confirmation
-        if op_type == OperationType.READ_ONLY:
-            continue
-        
-        # Extract file operations from this code block
-        operations = file_safety.extract_file_operations(code)
-        
-        if not operations:
-            # Classified as write but no operations extracted - block for safety
-            blocked_codes.append(code)
-            continue
-        
-        # Add operations to the combined list
-        all_operations.extend(operations)
-    
-    # If no file operations found, allow execution
-    if not all_operations:
-        return (True, None, blocked_codes)
-    
-    # Generate combined plan for all operations
-    combined_plan = file_safety.generate_plan(all_operations, task)
-    
-    # Check for high-risk conditions
-    is_high_risk, risk_reasons = file_safety.check_high_risk(all_operations)
-    if is_high_risk:
-        logger.warning(f"High-risk operation detected: {risk_reasons}")
-        combined_plan['high_risk'] = True
-        combined_plan['risk_reasons'] = risk_reasons
-    
-    # Log the combined plan
-    file_safety.log_operation('plan_generated', {
-        'plan': combined_plan,
-        'code_blocks_count': len(code_blocks),
-        'task': task
-    })
-    
-    # Show ONE confirmation dialog for all operations
-    try:
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QCoreApplication
-        
-        app_instance = QCoreApplication.instance()
-        if app_instance is None:
-            logger.warning("No QApplication - denying file operations for safety")
-            file_safety.log_operation('blocked_no_gui', {'plan': combined_plan})
-            return (False, combined_plan, [code for lang, code in code_blocks])
-        
-        is_qapplication = isinstance(app_instance, QApplication) if app_instance else False
-        if not is_qapplication:
-            logger.warning("No QApplication (only QCoreApplication) - denying file operations for safety")
-            file_safety.log_operation('blocked_no_gui', {'plan': combined_plan})
-            return (False, combined_plan, [code for lang, code in code_blocks])
-        
-        # Show confirmation dialog with combined plan
-        confirmed = confirm_file_operations_with_plan(
-            combined_plan,
-            require_confirmation_phrase=True,
-            confirmation_phrase=file_safety.CONFIRM_FILE_CHANGES
-        )
-        
-        if confirmed:
-            file_safety.log_operation('confirmed', {'plan': combined_plan})
-            return (True, combined_plan, [])
-        else:
-            file_safety.log_operation('cancelled', {'plan': combined_plan})
-            return (False, combined_plan, [code for lang, code in code_blocks])
-            
-    except Exception as e:
-        logger.error(f"Error showing confirmation dialog: {e}", exc_info=True)
-        file_safety.log_operation('error', {'plan': combined_plan, 'error': str(e)})
-        # On error, default to deny for safety
-        return (False, combined_plan, [code for lang, code in code_blocks])
 

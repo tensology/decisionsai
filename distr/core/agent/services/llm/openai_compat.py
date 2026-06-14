@@ -21,11 +21,9 @@ import json
 import logging
 import re
 import time
-from typing import Optional
 
 from distr.core.agent.libs import (
     TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
-    ErrorFrame,
 )
 from distr.core.agent.services.llm.tool_format import convert_tools_to_openai_format
 from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
@@ -603,7 +601,6 @@ class OpenAICompatibleLLMService(BaseLLMService):
         
         If tools_list is provided, the LLM can call more tools in the next round.
         """
-        import threading
 
         messages = self._prepare_api_messages()
         stream = await self._call_stream(messages, tools_list=tools_list, max_retries=3)

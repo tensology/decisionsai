@@ -20,12 +20,10 @@ from typing import List, Dict, Any, Optional
 
 from distr.core.agent.libs import (
     TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame,
-    ErrorFrame,
 )
 from distr.core.agent.services.llm.prompt import (
     load_system_prompt_template, build_tools_description,
 )
-from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
 from ..base_service import BaseLLMService
 
 logger = logging.getLogger(__name__)
@@ -38,7 +36,6 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
     logger.warning("Anthropic library not available")
 
-from distr.core.signals import signal_manager
 
 
 def convert_tools_to_anthropic_format(tools: List) -> List[Dict[str, Any]]:

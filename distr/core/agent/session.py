@@ -20,7 +20,6 @@ import logging
 import signal
 import time
 import threading
-import json
 from typing import Optional, Dict, Any
 from queue import Queue, Empty
 
@@ -43,7 +42,7 @@ warnings.filterwarnings(
 from .libs import (
     Pipeline, PipelineRunner, PipelineTask,
     LocalAudioTransportParams, SileroVADAnalyzer, VADParams,
-    sd, ElevenLabs,
+    sd,
 )
 from distr.core.agent.transport import HotSwappableLocalAudioTransport
 from distr.core.audio.echo_canceller import ReferenceBuffer, NLMSEchoCanceller
@@ -76,16 +75,8 @@ logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility (importers of session.KOKORO_VOICES still work)
 from distr.core.agent.constants import (
-    KOKORO_VOICES,
     DEFAULT_KOKORO_VOICE, DEFAULT_KOKORO_AGENT,
-    DEFAULT_OPENAI_VOICE, DEFAULT_OPENAI_AGENT,
-    DEFAULT_COQUI_VOICE, DEFAULT_COQUI_AGENT,
-    DEFAULT_ELEVENLABS_AGENT,
-    TTS_KOKORO, TTS_ELEVENLABS, TTS_OPENAI, TTS_COQUI,
     DEFAULT_MODELS, PROVIDER_TO_ENGINE, API_KEY_NAMES,
-    KOKORO_MODEL_FILE, KOKORO_VOICES_FILE,
-    SAMPLE_RATE_KOKORO, SAMPLE_RATE_ELEVENLABS, SAMPLE_RATE_OPENAI_TTS,
-    SPEED_BOUNDS, ELEVENLABS_DEFAULTS,
     VAD_DEFAULT_THRESHOLD, VAD_CONFIDENCE_MIN, VAD_CONFIDENCE_MAX, VAD_START_SECS,
     DEFAULT_OPENAI_WHISPER_MODEL, DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_VOSK_MODEL_DIR, WELCOME_DELAY_SECS, COMMAND_POLL_TIMEOUT,
@@ -1106,7 +1097,6 @@ class AgentSession:
         if hot_swap_cfg.get('in_place') and old_service is not None:
             if vp == 'kokoro':
                 from .services import KokoroTTSService
-                from .constants import KOKORO_VOICE_BY_DISPLAY_NAME
                 resolved = hot_swap_cfg['voice_name']
                 self._load_custom_voice_personality('kokoro', resolved)
 

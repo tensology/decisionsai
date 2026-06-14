@@ -8,7 +8,6 @@ that does the actual coding work, communicating via structured JSONL events.
 Replaces the old kiro_cli.py which used kiro-cli in fire-and-forget mode.
 """
 import logging
-import shutil
 from typing import Any, Optional, List
 
 from langchain.tools import BaseTool

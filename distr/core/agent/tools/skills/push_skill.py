@@ -5,12 +5,11 @@ For pi: copies into .pi/skills/<skill_id>/SKILL.md (Agent Skills spec — auto-l
 For others: copies as flat .md command files.
 """
 
-import json
 import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Optional, Type
+from typing import Optional, Type
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field

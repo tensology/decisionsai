@@ -24,7 +24,7 @@ import time
 import uuid
 import re
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from datetime import datetime, timezone, timedelta
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
@@ -33,8 +33,6 @@ from distr.core.initiative.context import ContextAssembler
 from distr.core.initiative.draft_queue import DraftQueue, DraftEntry
 from distr.core.initiative.proposed_action import (
     ProposedAction,
-    VALID_ACTION_TYPES,
-    deserialize,
     parse_llm_response,
     serialize,
 )
@@ -521,7 +519,7 @@ class InitiativeService:
             self._last_cycle_at = time.time()
             self._cycle_count += 1
             from distr.core.utils import load_settings_from_db
-            from distr.core.initiative.policy import evaluate, migrate_initiative_level, PolicyDecision
+            from distr.core.initiative.policy import evaluate, migrate_initiative_level
 
             try:
                 settings = load_settings_from_db()

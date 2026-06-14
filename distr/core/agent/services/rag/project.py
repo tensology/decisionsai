@@ -15,7 +15,6 @@ import re
 import logging
 import pathspec
 from typing import Optional, Dict, Any, List
-from pathlib import Path
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -328,7 +327,6 @@ def activate_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str,
     global _active_project_id
     from distr.core.db import get_session
     from distr.core.db.projects import Project
-    from distr.core.signals import signal_manager
 
     session = get_session()
     try:

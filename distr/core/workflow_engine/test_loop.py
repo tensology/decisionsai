@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List
 
 from distr.core.workflow_engine.code_generator import CodeGeneratorService

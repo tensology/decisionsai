@@ -197,7 +197,7 @@ class ContextAssembler:
         return [w for w in workflows if w.get("schedule_enabled")]
 
     def _fetch_kanban_summary(self, now: datetime) -> list:
-        from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+        from distr.core.db.kanban import KanbanBoard, KanbanTicket
         from distr.core.db import get_session
 
         overdue_cutoff = now - timedelta(days=7)

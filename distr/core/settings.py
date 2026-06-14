@@ -19,7 +19,6 @@ import re
 from typing import Dict, Any
 
 # Import database utilities
-from distr.core.db import get_session, Settings
 from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
 
 # Default settings

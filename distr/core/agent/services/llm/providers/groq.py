@@ -6,7 +6,6 @@ Uses OpenAI-compatible API format.
 """
 
 import logging
-from typing import Optional
 
 from ..openai_compat import OpenAICompatibleLLMService
 

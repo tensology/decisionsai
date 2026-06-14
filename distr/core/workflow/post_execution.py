@@ -8,9 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import threading
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult

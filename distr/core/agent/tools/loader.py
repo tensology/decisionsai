@@ -8,7 +8,7 @@ circular imports and keep the module lightweight.
 import importlib
 import logging
 import threading
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 from distr.core.agent.tools.base import BaseActionTool
 from distr.core.agent.tools.registry import get_tool_registry

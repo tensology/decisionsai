@@ -567,7 +567,7 @@ def build_prompt_for_intent(
     Returns (enhanced_prompt, is_action_request) tuple.
     is_action_request=True means we expect JSON with coordinates.
     """
-    from distr.core.agent.services.vision.intent_classifier import VisionIntent, ACTION_INTENTS, LOCATE_INTENTS, INFO_INTENTS
+    from distr.core.agent.services.vision.intent_classifier import VisionIntent, ACTION_INTENTS, LOCATE_INTENTS
 
     # Action intents — need coordinates
     if intent == VisionIntent.CLICK_ELEMENT:

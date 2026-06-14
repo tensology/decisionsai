@@ -17,7 +17,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -158,8 +157,7 @@ def _md_to_docx(md_text: str, output_path: str) -> str:
 def _md_to_docx_fallback(md_text: str, output_path: str) -> str:
     """Fallback DOCX conversion using python-docx with table support."""
     from docx import Document
-    from docx.shared import Pt, Inches
-    from docx.oxml.ns import qn
+    from docx.shared import Pt
 
     doc = Document()
     lines = md_text.split("\n")
@@ -338,7 +336,6 @@ class ConvertDocumentTool(BaseTool):
         try:
             from distr.core.agent.tools.integrations.markdown_to_google_doc import (
                 MarkdownToGoogleDocTool,
-                get_clipboard_content,
             )
             # The Google Doc tool reads from clipboard, so we need to put content there
             import platform

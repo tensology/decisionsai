@@ -155,7 +155,6 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
     from distr.core.db.projects import Project
     from distr.core.kanban.ticket_audit import append_ticket_audit_entry
     from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
-    from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
     from distr.core.project_cli_backends import run_project_task
 
     ticket_ids = _ticket_ids(payload)

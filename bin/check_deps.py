@@ -63,7 +63,6 @@ def main():
 
     # Check metadata-only packages via pip (avoids importing heavy deps)
     try:
-        from importlib.metadata import packages_distributions, PackageNotFoundError
         import importlib.metadata as _meta
         for pkg_name in METADATA_ONLY:
             try:

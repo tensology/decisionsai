@@ -450,9 +450,6 @@ def capture_screenshot(output_path: str, region: str = "full") -> bool:
         logger.error(f"Error capturing screenshot: {e}", exc_info=True)
         return False
 
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Image conversion
 # ---------------------------------------------------------------------------

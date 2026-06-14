@@ -10,7 +10,6 @@ import queue
 import re
 import tempfile
 import time
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -192,9 +191,6 @@ class TelegramSenderMixin:
             )
 
         # Outgoing Deduplication
-        import hashlib
-        import base64
-        import mimetypes
 
         message_content = f"{text or ''}|{audio_file_path or ''}|{screenshot_path or ''}|{document_path or ''}|{video_path or ''}"
         message_hash = hashlib.md5(message_content.encode()).hexdigest()

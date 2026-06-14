@@ -8,9 +8,7 @@ Useful when the system has gone to sleep and needs to be awakened.
 import logging
 import platform
 import subprocess
-from typing import Optional, Any
 from langchain.tools import BaseTool
-from pydantic import Field
 
 # PyAutoGUI - import at module level and disable FAILSAFE
 try:

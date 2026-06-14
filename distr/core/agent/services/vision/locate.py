@@ -6,7 +6,7 @@ without calling the vision LLM (~100-300ms vs 1-5s).
 """
 
 import logging
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 

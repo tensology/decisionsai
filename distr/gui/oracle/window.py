@@ -3,7 +3,7 @@ from distr.core.utils import load_settings_from_db, save_settings_to_db, get_scr
 from distr.core.paths import AVATARS_DIR
 from distr.core.db import get_session, ScreenPosition, Chat
 from distr.core.signals import signal_manager
-from distr.core.skin_config import EventResponse, SkinConfig
+from distr.core.skin_config import EventResponse
 from distr.core.skin_discovery import get_skin_by_name
 from distr.core.skin_migration import migrate_selected_oracle
 from distr.core.hotkeys import (
@@ -19,7 +19,7 @@ from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
 from distr.gui.oracle.glow_engine import GlowEngine
 from distr.gui.oracle.menu import MenuTrayMixin
 from distr.gui.oracle.lifecycle import LifecycleMixin
-from distr.gui.oracle.render_strategy import create_renderer, RenderStrategy
+from distr.gui.oracle.render_strategy import create_renderer
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtWidgets import QApplication
 import logging

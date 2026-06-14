@@ -4,10 +4,9 @@ API routes/endpoints for Board server
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from pathlib import Path
 import logging
-import json
 
 from distr.core.integrations.board_manager import BoardManager
 

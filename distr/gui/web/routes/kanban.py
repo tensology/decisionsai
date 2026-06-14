@@ -1,7 +1,7 @@
 """
 API routes for Ticket Board management.
 """
-from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, File, UploadFile, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
@@ -33,7 +33,6 @@ from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
     normalize_source_provider,
     normalize_ticket_complexity,
-    resolve_ticket_cli_route,
 )
 from distr.core.db import get_session
 from distr.core.db.orm_compat import orm_get_by_id
@@ -5164,7 +5163,7 @@ source: kanban_ticket_{t.id}
         # modal still gets the draft immediately instead of blocking creation.
         try:
             from distr.core.utils import load_settings_from_db
-            from distr.core.llm_factory import resolve_settings_keys, create_stream, normalize_provider
+            from distr.core.llm_factory import resolve_settings_keys, create_stream
 
             settings = load_settings_from_db()
             provider, model = resolve_settings_keys(settings)

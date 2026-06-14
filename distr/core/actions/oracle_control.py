@@ -6,7 +6,7 @@ These functions communicate with the GUI process via event_queue
 """
 
 import logging
-from distr.core.utils import load_settings_from_db, save_settings_to_db
+from distr.core.utils import load_settings_from_db
 
 logger = logging.getLogger(__name__)
 

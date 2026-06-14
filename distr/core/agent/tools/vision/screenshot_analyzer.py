@@ -646,7 +646,6 @@ class ScreenshotAnalyzerTool(BaseTool):
                 else:
                     return path if capture_screenshot(path, "full") else None
             else:
-                from PyQt6.QtGui import QPixmap
                 pixmap = target.grabWindow(0)
                 return path if pixmap.save(path, 'PNG') else None
         else:
@@ -736,7 +735,6 @@ class ScreenshotAnalyzerTool(BaseTool):
                             if capture_screenshot(path, "full"):
                                 screenshot_paths = [path]
                     else:
-                        from PyQt6.QtGui import QPixmap
                         if current_screen.grabWindow(0).save(path, 'PNG'):
                             screenshot_paths = [path]
                 except Exception as e:
@@ -771,7 +769,6 @@ class ScreenshotAnalyzerTool(BaseTool):
                             if capture_screenshot(path, "full"):
                                 screenshot_paths = [path]
                     else:
-                        from PyQt6.QtGui import QPixmap
                         if target.grabWindow(0).save(path, 'PNG'):
                             screenshot_paths = [path]
             except (ValueError, IndexError):
@@ -804,7 +801,7 @@ class ScreenshotAnalyzerTool(BaseTool):
         Try element detection + OCR before falling back to the vision LLM.
         Returns a JSON result string if a match is found, else None.
         """
-        from distr.core.agent.services.vision.intent_classifier import VisionIntent, LOCATE_INTENTS, ACTION_INTENTS
+        from distr.core.agent.services.vision.intent_classifier import LOCATE_INTENTS, ACTION_INTENTS
         if vision_intent not in LOCATE_INTENTS and vision_intent not in ACTION_INTENTS:
             return None
         if not screenshot_paths:
@@ -1862,7 +1859,7 @@ class ScreenshotAnalyzerTool(BaseTool):
         prompt = _extract_prompt(prompt, original_text)
 
         # ── Vision intent classification ──
-        from distr.core.agent.services.vision.intent_classifier import classify_vision_intent, VisionIntent, ACTION_INTENTS, LOCATE_INTENTS, INFO_INTENTS
+        from distr.core.agent.services.vision.intent_classifier import classify_vision_intent, VisionIntent, ACTION_INTENTS, LOCATE_INTENTS
         vision_intent = classify_vision_intent(original_text or prompt)
         if vision_intent == VisionIntent.MULTI_STEP:
             return (

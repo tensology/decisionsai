@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,7 +21,6 @@ from distr.core.db.workflow import (
     AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun,
     AutoWorkflowStepResult,
 )
-from distr.core.workflow.verification import _run_verification
 from distr.core.workflow.context_limits import truncate_step_summary
 from distr.core.kanban.result_packet import (
     build_result_packet,

@@ -5,7 +5,7 @@ These tools handle natural language requests for window management,
 application opening, and system navigation.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from langchain.tools import BaseTool
 from pydantic import Field, BaseModel
 import logging
@@ -320,7 +320,6 @@ class OpenWindowTool(BaseTool):
     
     def _extract_app_name(self, text: str) -> str:
         """Extract application name from natural language text with improved parsing."""
-        import re
         
         # Remove common prefixes and articles
         prefixes = [

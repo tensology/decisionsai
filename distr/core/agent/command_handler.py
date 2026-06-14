@@ -15,7 +15,7 @@ import requests
 from distr.core.util.speak_flag import coerce_speak_enabled
 
 from .constants import (
-    SPEED_BOUNDS, ENGINE_TO_PROVIDER, DEFAULT_MODELS,
+    SPEED_BOUNDS, DEFAULT_MODELS,
     VAD_CONFIDENCE_MIN, VAD_CONFIDENCE_MAX,
 )
 

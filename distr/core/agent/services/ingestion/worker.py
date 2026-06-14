@@ -11,7 +11,6 @@ This module provides the IngestionWorker class that handles:
 
 import logging
 import os
-import re
 import mimetypes
 import threading
 from typing import Optional, List, Dict, Any, Callable

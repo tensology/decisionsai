@@ -10,7 +10,6 @@ This tool extracts text content from various document formats:
 - RAR archives (.rar, .rar5)
 """
 
-from typing import Optional, List
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import logging
@@ -237,7 +236,6 @@ class DocumentExtractorTool(BaseTool):
         """Extract text from Excel file (.xls or .xlsx). Supports file path or BytesIO."""
         try:
             import pandas as pd
-            import openpyxl  # For .xlsx support
             import io
             
             is_bytes = isinstance(file_path_or_bytes, (io.BytesIO, bytes))

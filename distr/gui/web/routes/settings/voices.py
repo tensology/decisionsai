@@ -1,9 +1,8 @@
 """
 Voices routes — /tts/providers, /voices/*, /custom-voices/*, /elevenlabs-voices/*
 """
-from fastapi import Request, HTTPException
+from fastapi import Request
 from fastapi.responses import JSONResponse
-from typing import Optional
 import os
 
 from distr.core.paths import DB_DIR

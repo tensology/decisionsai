@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from distr.core.agent.tool_voice_format import voice_then_reference
@@ -23,7 +22,6 @@ from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
     normalize_source_provider,
     normalize_ticket_complexity,
-    resolve_ticket_cli_route,
 )
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -2602,7 +2600,7 @@ class KanbanTicketTool(BaseTool):
                 "No ticket ID provided.",
             )
         logger.info("send_to_project tool: begin ticket_id=%s", ticket_id)
-        from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+        from distr.core.db.kanban import KanbanTicket, KanbanBoard as KB
         from distr.core.db.projects import Project
 
         with self._get_session() as s:
@@ -2770,7 +2768,7 @@ class KanbanTicketTool(BaseTool):
         if not ticket_id:
             # Try to find the most recent ticket from the in_use board
             try:
-                from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+                from distr.core.db.kanban import KanbanTicket, KanbanBoard as KB
                 with self._get_session() as s:
                     board = s.query(KB).filter(KB.in_use == True).first()
                     if board:
@@ -2787,7 +2785,7 @@ class KanbanTicketTool(BaseTool):
                     "No ticket ID provided and no tickets found on the active board.",
                 )
 
-        from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+        from distr.core.db.kanban import KanbanTicket, KanbanBoard as KB
         from distr.core.db.projects import Project
 
         with self._get_session() as s:

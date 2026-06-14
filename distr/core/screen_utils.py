@@ -9,7 +9,6 @@ We use a Manager dict for cross-process communication.
 """
 
 import logging
-import platform
 import pyautogui
 # Disable pyautogui FAILSAFE to prevent mouse operations from being blocked
 pyautogui.FAILSAFE = False

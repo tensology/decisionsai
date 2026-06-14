@@ -6,7 +6,7 @@ This module provides a standalone EULA window that forces the user to accept
 the End User License Agreement before using the application.
 """
 
-from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtCore import Qt
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.signals import signal_manager

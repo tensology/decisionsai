@@ -11,10 +11,10 @@ User must confirm before the renames are executed.
 
 import os
 import logging
-from typing import List, Dict, Optional, Tuple
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QCheckBox, QFrame, QScrollArea, QWidget)
+from typing import List, Dict
+from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QFrame)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QColor
 
 logger = logging.getLogger(__name__)
 

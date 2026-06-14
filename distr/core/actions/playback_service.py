@@ -8,7 +8,6 @@ This service is always available and can trigger playback via signals.
 import logging
 import json
 import threading
-import time
 from distr.core.db import get_session, Action
 from distr.core.paths import RECORDINGS_DIR
 from distr.core.signals import speak_text_directly_event_queue

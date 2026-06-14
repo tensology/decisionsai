@@ -733,7 +733,7 @@ def pitch_preserving_time_stretch(audio, speed, sample_rate=24000):
         import llvmlite.binding
             
         return librosa.effects.time_stretch(audio, rate=speed)
-    except (OSError, ImportError, Exception) as e:
+    except (OSError, ImportError, Exception):
         # Fail silently and use fallback
         pass
 

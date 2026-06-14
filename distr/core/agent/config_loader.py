@@ -7,7 +7,6 @@ and to make config logic testable independently.
 
 import json
 import logging
-import os
 import subprocess
 import sys
 from typing import Optional, List, Tuple

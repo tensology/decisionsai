@@ -62,7 +62,6 @@ def detect_elements(
 
     try:
         import cv2
-        import numpy as np
 
         img = cv2.imread(image_path)
         if img is None:

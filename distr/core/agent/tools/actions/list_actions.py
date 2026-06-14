@@ -4,7 +4,7 @@ List Actions Tool for LangChain.
 This tool lists all available actions with their descriptions.
 """
 
-from typing import Any, Optional
+from typing import Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import logging

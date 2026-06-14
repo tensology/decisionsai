@@ -8,10 +8,8 @@ import json
 import time
 import logging
 from datetime import datetime
-from pathlib import Path
 from pynput import mouse, keyboard
 from pynput.keyboard import Key, KeyCode
-from distr.core.paths import RECORDINGS_DIR
 
 logger = logging.getLogger(__name__)
 

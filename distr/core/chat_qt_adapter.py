@@ -5,7 +5,7 @@ Exposes pyqtSignals for desktop GUI consumption while delegating all
 logic to the pure-Python ChatManagerCore.
 """
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal
 from distr.core.chat_manager import ChatManagerCore
 
 import logging

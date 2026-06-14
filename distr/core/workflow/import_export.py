@@ -530,7 +530,6 @@ def import_workflow_bundle(bundle_bytes: bytes) -> int:
 def list_presets() -> List[Dict[str, str]]:
     """List available preset files (.dwf bundles and .json) from steprunner/presets/."""
     import zipfile
-    import io
     presets_dir = _get_presets_dir()
     if not os.path.isdir(presets_dir):
         return []

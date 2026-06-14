@@ -1,6 +1,5 @@
 from distr.core.agent.tools.base import BaseActionTool
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 

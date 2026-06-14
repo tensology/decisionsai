@@ -5,11 +5,9 @@ Advanced routes — /advanced, /advanced/directories/*, /advanced/files/*,
 """
 from fastapi import Request, HTTPException, File, UploadFile, Form
 from fastapi.responses import JSONResponse
-from pathlib import Path
 from typing import Dict, Any
 import json
 import os
-import logging
 
 from distr.core.integrations.telegram.utils import relay_internal_token
 
@@ -63,7 +61,6 @@ def register_routes(router, templates):
     @route_handler("load advanced settings")
     async def get_advanced_settings():
         """Get current advanced settings (indexed_folders + excluded_files, same as native advanced tab)."""
-        import json
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
 
@@ -803,8 +800,6 @@ def register_routes(router, templates):
     @router.get("/advanced/google/callback")
     async def google_oauth_callback(request: Request):
         """Exchange code for tokens and save to DB; redirect to settings with success."""
-        import json
-        import time
         import requests as req
         from datetime import datetime
         from fastapi.responses import RedirectResponse
@@ -821,7 +816,6 @@ def register_routes(router, templates):
         try:
             from distr.gui.web.oauth import load_google_oauth_config
             from distr.core.settings import load_settings_from_db, save_settings_to_db
-            from distr.core.db import get_session, Settings
             oauth_config = load_google_oauth_config()
             if not oauth_config:
                 return RedirectResponse(url="/settings#advanced", status_code=302)
@@ -894,10 +888,8 @@ def register_routes(router, templates):
     async def post_account(request: Request):
         """Add or update Jira/Trello account; validate before save."""
         try:
-            import json
             from datetime import datetime
             from distr.core.settings import load_settings_from_db, save_settings_to_db
-            from distr.core.db import get_session, Settings
             body = await request.json()
             provider = (body.get("provider") or "").strip()
             if provider not in ("jira", "trello"):
@@ -984,7 +976,6 @@ def register_routes(router, templates):
         try:
             import os
             import requests as req
-            import base64
 
             if os.environ.get("DEBUG", "").upper() == "TRUE":
                 server_base = "http://localhost:8090"
@@ -1027,7 +1018,7 @@ def register_routes(router, templates):
                 return JSONResponse({"status": "error"})
             data = response.json()
             return JSONResponse({"status": data.get("status"), "user_id": data.get("user_id")})
-        except Exception as e:
+        except Exception:
             return JSONResponse({"status": "error"})
 
     @router.post("/advanced/telegram/save")

@@ -130,7 +130,7 @@ def _local_row_directory(row: dict[str, Any]) -> Path:
 
 
 def _registry_scan():
-    from distr.core.skills.registry import SkillEntry, SkillRegistry
+    from distr.core.skills.registry import SkillRegistry
 
     return SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
 

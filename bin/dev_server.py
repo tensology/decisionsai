@@ -12,7 +12,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from distr.gui.web.server import create_app, DEFAULT_HOST, DEFAULT_PORT
+from distr.gui.web.server import DEFAULT_HOST, DEFAULT_PORT
 import uvicorn
 
 if __name__ == "__main__":

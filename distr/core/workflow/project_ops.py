@@ -282,7 +282,7 @@ def gather_project_ops_context(
 ) -> dict[str, Any]:
     """Load project, board, queue, and execution status for the workflow harness."""
     from distr.core.db import get_session
-    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.kanban import KanbanBoard, KanbanTicket
     from distr.core.db.projects import Project
     from distr.core.db.workflow import AutoWorkflowRun
     from distr.core.workflow.service import get_workflow
@@ -402,7 +402,7 @@ def execute_project_ops_plan(
         }
 
     from distr.core.db import get_session
-    from distr.core.db.kanban import KanbanBoard, KanbanTicket
+    from distr.core.db.kanban import KanbanTicket
     from distr.core.kanban.ticket_policy import infer_ticket_complexity, normalize_ticket_complexity
     from distr.core.workflow.dispatcher import start_workflow_run
 

@@ -8,8 +8,7 @@ from collections import deque
 
 from distr.core.agent.libs import (
     STTService,
-    InterruptionFrame, UserStartedSpeakingFrame, UserStoppedSpeakingFrame,
-    TranscriptionFrame,
+    InterruptionFrame, UserStartedSpeakingFrame, TranscriptionFrame,
     SpeakingStartedFrames, SpeakingStoppedFrames,
 )
 

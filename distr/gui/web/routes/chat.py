@@ -22,7 +22,6 @@ _chat_ws_lock = threading.Lock()
 
 from distr.core.db import get_session, Chat
 from distr.core.chat import ChatService, record_chat_audit_event
-from distr.core.llm_factory import normalize_provider as _normalize_provider
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
 from distr.core.agent.constants import normalize_voice_provider
@@ -1779,7 +1778,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     filename=f"tts_{timestamp_id}.mp3",
                 )
             return FileResponse(out_path, media_type="audio/wav", filename="tts.wav")
-        except ValueError as e:
+        except ValueError:
             raise HTTPException(status_code=400, detail="Invalid request")
         except Exception as e:
             logger.error("TTS generate error: %s", e, exc_info=True)

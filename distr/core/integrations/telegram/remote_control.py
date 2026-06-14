@@ -1,15 +1,10 @@
 """Remote control mixin — mouse, keyboard, screenshots via Telegram."""
 
 import difflib
-import json
 import logging
 import os
-import platform
-import subprocess
-import threading
 import time
-from pathlib import Path
-from typing import Optional, Set
+from typing import Optional
 
 try:
     import pyautogui
@@ -991,7 +986,7 @@ class TelegramRemoteControlMixin:
                 elif command == "file_download":
                     # Stream a file from desktop to server as binary WS chunks
                     # Server will forward these to the phone as HTTP response
-                    import os, struct
+                    import os
                     file_path = command_data.get("path", "")
                     home = os.path.realpath(os.path.expanduser("~"))
                     try:
@@ -1586,7 +1581,6 @@ class TelegramRemoteControlMixin:
         """
         try:
             import io
-            from PIL import Image
 
             screens_info = self._get_screens_list()
 
