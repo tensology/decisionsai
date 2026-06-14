@@ -4,7 +4,7 @@
 
 ## [What's to Come]
 
-2.8 shipped the connected workspace. Right now we are battle testing the end to end loop: work comes in from WhatsApp, boards, tickets, email, or an ideation with the agent, runs through automations and Loops workflows with harness reporting from Codex and Cursor, then comes back with evidence, validation, and tests. Next up is hardening Automations and Workflows, including WhatsApp draft saves so agent replies wait for your review before they go out.
+2.8 shipped the connected workspace. Right now we are battle testing the end to end loop: work comes in from WhatsApp, boards, tickets, emails, or ideation with the agent, runs through Automations and Loops workflows with harness reporting from Codex and Cursor, then comes back with evidence, validation, and tests. Next up is hardening Automations and Workflows, including WhatsApp draft saves so agent replies wait for your review before they go out.
 
 ---
 
