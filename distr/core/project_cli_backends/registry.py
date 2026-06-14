@@ -333,7 +333,7 @@ class CursorBackend(OneShotCliBackend):
     name = "Cursor CLI"
     description = "Cursor's project coding CLI backend."
     executable_candidates = ["cursor-agent"]
-    command_args = ["-p"]
+    command_args = ["--trust", "-p"]
     setup_instructions = (
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
     )

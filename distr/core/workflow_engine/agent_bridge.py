@@ -99,17 +99,26 @@ class WorkflowAgentBridge:
         steps_summary = run_result.get("steps_summary", [])
         total = len(steps_summary)
 
+        all_steps_ok = bool(steps_summary) and all(
+            str(s.get("status") or "").strip().lower() in ("completed", "passed")
+            for s in steps_summary
+        )
+        saw_green = any(
+            re.search(r"(?i)\bgreen\b|\bvalidation passed\b", str(s.get("result") or ""))
+            for s in steps_summary
+        )
+
         if cancelled:
             status_line = f"Done - the workflow was cancelled. Session {session_id}, run {run_id}."
-        elif success:
+        elif success or (all_steps_ok and saw_green):
             status_line = f"Done - the workflow finished successfully. Session {session_id}, run {run_id}."
         else:
             status_line = f"The workflow failed. Session {session_id}, run {run_id}."
 
-        # Failed steps: include enough detail for diagnosis (tracebacks, stderr).
-        # Passed steps: shorter lines keep voice follow-ups and logs manageable.
+        # Failed steps retain a useful error clue. Completed steps are summarized
+        # so chat follow-ups do not receive CLI transcripts or callback payloads.
         _PASS_SNIPPET = 600
-        _FAIL_SNIPPET = 12000
+        _FAIL_SNIPPET = 900
 
         step_lines = []
         for i, s in enumerate(steps_summary, 1):
@@ -140,4 +149,48 @@ class WorkflowAgentBridge:
         if re.search(r"(?i)\bvoice note sent\b", clean):
             return "It sent a Telegram voice note with the requested message."
         clean = re.sub(r"(?i)^voice note sent:\s*", "Sent the Telegram voice note.", clean).strip()
+        if re.search(r"(?i)\bproject cli backend:\s*", clean):
+            return WorkflowAgentBridge._summarize_project_cli_result(clean)
+        if re.search(r"(?i)\bnode --test\b|\bpytest\b|\btests?\s+\d+\b", clean):
+            return WorkflowAgentBridge._summarize_test_result(clean)
+        if re.search(r"(?i)\bgreen\b.*\bvalidation passed\b|\bvalidation passed\b", clean):
+            return "Green evidence was recorded."
         return clean
+
+    @staticmethod
+    def _summarize_project_cli_result(clean: str) -> str:
+        backend_match = re.search(r"(?i)\bProject CLI backend:\s*([A-Za-z0-9_-]+)", clean)
+        status_match = re.search(r"(?i)\bStatus:\s*([A-Za-z0-9_-]+)", clean)
+        backend = backend_match.group(1).replace("_", " ").title() if backend_match else "The selected CLI backend"
+        status = (status_match.group(1).lower() if status_match else "")
+
+        if status in ("completed", "passed", "success"):
+            return f"{backend} completed the implementation handoff."
+        if status:
+            return f"{backend} reported status: {status}."
+        return f"{backend} started the implementation handoff."
+
+    @staticmethod
+    def _summarize_test_result(clean: str) -> str:
+        tests = WorkflowAgentBridge._extract_int_after_label(clean, "tests")
+        passed = WorkflowAgentBridge._extract_int_after_label(clean, "pass")
+        failed = WorkflowAgentBridge._extract_int_after_label(clean, "fail")
+
+        if passed is not None or failed is not None:
+            total = tests if tests is not None else ((passed or 0) + (failed or 0))
+            return f"Validation passed: {total} tests, {failed or 0} failures." if (failed or 0) == 0 else (
+                f"Validation found {failed} failing test(s) out of {total}."
+            )
+        if re.search(r"(?i)\bpass(ed)?\b|✔", clean):
+            return "Validation checks passed."
+        return "Validation checks ran."
+
+    @staticmethod
+    def _extract_int_after_label(text: str, label: str) -> Optional[int]:
+        match = re.search(rf"(?i)(?:^|\s|ℹ)\b{re.escape(label)}\s+(\d+)\b", text)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None

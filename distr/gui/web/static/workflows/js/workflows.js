@@ -1873,7 +1873,65 @@
         return api("GET", "/projects/cli-backends");
     }
 
-    function renderWorkflowConfigExecutorPills(container, setup, routeRoot) {
+    var _wfExecutorInstallContext = { optionalBackends: {}, backendRows: [] };
+
+    function clearWorkflowExecutorInstallCallout() {
+        var existing = document.getElementById("wf-executor-install-callout");
+        if (existing) existing.remove();
+        document.querySelectorAll(".wf-config-exec-pill.is-callout-open").forEach(function (btn) {
+            btn.classList.remove("is-callout-open");
+        });
+    }
+
+    function workflowExecutorInstallCalloutPayload(backendId) {
+        var rows = _wfExecutorInstallContext.backendRows || [];
+        var row = rows.find(function (b) { return String(b.id) === String(backendId); }) || {};
+        var optional = (_wfExecutorInstallContext.optionalBackends || {})[backendId] || {};
+        var ready = !!(row.ready || row.available || optional.ready);
+        if (ready) return null;
+        var name = row.name || optional.name || backendId;
+        var message = optional.message || row.message || row.setup_instructions || (name + " is not installed.");
+        var setupCommand = optional.setup_command || row.setup_command || "";
+        return { name: name, message: message, setupCommand: setupCommand };
+    }
+
+    function showWorkflowExecutorInstallCallout(backendId) {
+        var pills = document.getElementById("wf-global-exec-backend-pills");
+        if (!pills) return;
+        var payload = workflowExecutorInstallCalloutPayload(backendId);
+        if (!payload) {
+            clearWorkflowExecutorInstallCallout();
+            return;
+        }
+        var existing = document.getElementById("wf-executor-install-callout");
+        if (existing && existing.dataset.backendId === String(backendId)) {
+            clearWorkflowExecutorInstallCallout();
+            return;
+        }
+        clearWorkflowExecutorInstallCallout();
+        var el = document.createElement("div");
+        el.id = "wf-executor-install-callout";
+        el.className = "wf-config-optional-hint";
+        el.dataset.backendId = String(backendId);
+        var html = "<span>" + esc(payload.name) + ": " + esc(payload.message) + "</span>";
+        if (payload.setupCommand) {
+            html += '<button type="button" class="wf-copy-executor-setup">Copy install command</button>';
+        }
+        el.innerHTML = html;
+        pills.insertAdjacentElement("afterend", el);
+        var pill = pills.querySelector('.wf-config-exec-pill[data-backend-id="' + backendId + '"]');
+        if (pill) pill.classList.add("is-callout-open");
+        var copyBtn = el.querySelector(".wf-copy-executor-setup");
+        if (copyBtn && payload.setupCommand) {
+            copyBtn.addEventListener("click", function () {
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(payload.setupCommand).then(function () { snack("Copied"); });
+                }
+            });
+        }
+    }
+
+    function renderWorkflowConfigExecutorPills(container, setup, routeRoot, optionalBackends) {
         if (!container) return;
         setup = setup || {};
         routeRoot = routeRoot || document;
@@ -1892,6 +1950,10 @@
             container.innerHTML = '<span class="text-[10px] text-gray-500">Checking executors...</span>';
             return;
         }
+        _wfExecutorInstallContext.backendRows = backends;
+        if (optionalBackends) {
+            _wfExecutorInstallContext.optionalBackends = optionalBackends;
+        }
         container.innerHTML = backends.map(function (row) {
             var ready = !!(row.ready || row.available);
             var setupRequired = !!row.setup_required && !ready;
@@ -1900,20 +1962,15 @@
             if (setupRequired) cls += " is-setup";
             if (routeIds[row.id]) cls += " is-active-route";
             var title = row.message || row.setup_instructions || "";
-            return '<button type="button" class="' + cls + '" data-backend-id="' + esc(row.id) + '" title="' + esc(title) + '" ' + (ready ? "" : "disabled") + '>' +
+            return '<button type="button" class="' + cls + '" data-backend-id="' + esc(row.id) + '" title="' + esc(title) + '">' +
                 '<span class="wf-config-exec-pill-dot" aria-hidden="true"></span>' +
                 '<span>' + esc(row.name || row.id) + "</span>" +
             "</button>";
         }).join("");
-        container.querySelectorAll(".wf-config-exec-pill.is-ready").forEach(function (btn) {
+        container.querySelectorAll(".wf-config-exec-pill").forEach(function (btn) {
             btn.addEventListener("click", function () {
-                var backendId = btn.dataset.backendId || "";
-                var mediumBackend = workflowExecRouteEl(routeRoot, "medium", "backend");
-                if (mediumBackend && backendId) {
-                    mediumBackend.value = backendId;
-                    mediumBackend.dispatchEvent(new Event("change", { bubbles: true }));
-                }
-                renderWorkflowConfigExecutorPills(container, { routing: collectWorkflowExecRouting(routeRoot), backends: { backends: backends } }, routeRoot);
+                if (btn.classList.contains("is-ready")) return;
+                showWorkflowExecutorInstallCallout(btn.dataset.backendId || "");
             });
         });
     }
@@ -1934,7 +1991,7 @@
                 backendRows = setup.backends.backends;
             }
             setup.backends = { backends: backendRows };
-            renderWorkflowConfigExecutorPills(container, setup, routeRoot);
+            renderWorkflowConfigExecutorPills(container, setup, routeRoot, (results[0] || {}).optional_backends || {});
         });
     }
 
@@ -2489,11 +2546,13 @@
             }
             updateWorkflowExecBackendSelects(modal, backendRows);
             return populateWorkflowExecRouting(setup, results[1] || {}, modal).then(function () {
-                renderOptionalBackendCallout(setup.optional_backends || {});
+                clearWorkflowExecutorInstallCallout();
+                _wfExecutorInstallContext.optionalBackends = setup.optional_backends || {};
                 return refreshWorkflowConfigExecutorPills(modal);
             });
         }).catch(function () {
             populateWorkflowExecRouting({}, {}, modal);
+            clearWorkflowExecutorInstallCallout();
             return refreshWorkflowConfigExecutorPills(modal);
         });
     }
@@ -2504,32 +2563,6 @@
         var modal = document.getElementById("sr-llm-modal");
         if (!modal) return Promise.resolve();
         return saveWorkflowExecRouting(modal);
-    }
-
-    function renderOptionalBackendCallout(optionalBackends) {
-        var execPane = document.getElementById("wf-config-tab-execution");
-        if (!execPane) return;
-        var existing = document.getElementById("wf-optional-backend-callout");
-        if (existing) existing.remove();
-        var hermes = (optionalBackends || {}).hermes_agent || {};
-        if (hermes.ready) return;
-        var el = document.createElement("div");
-        el.id = "wf-optional-backend-callout";
-        el.className = "rounded border border-white/10 bg-[#10183f]/80 px-3 py-2 text-xs text-gray-300";
-        el.innerHTML = '<p class="text-white font-medium mb-1">Optional: Hermes Agent</p>' +
-            '<p class="text-gray-400 mb-2">Not required for the Orchestrator. Install only if you want the Nous Hermes Agent as an execution backend.</p>' +
-            '<code class="block text-[10px] text-gray-500 mb-2">' + esc(hermes.setup_command || "bash scripts/setup_project_clis.sh hermes-agent") + '</code>' +
-            '<button type="button" id="wf-copy-optional-backend-setup" class="px-2 py-1 rounded border border-white/20 text-gray-200 hover:bg-white/10">Copy install command</button>';
-        execPane.insertBefore(el, execPane.firstChild);
-        var copyBtn = document.getElementById("wf-copy-optional-backend-setup");
-        if (copyBtn) {
-            copyBtn.addEventListener("click", function () {
-                var cmd = hermes.setup_command || "";
-                if (navigator.clipboard && cmd) {
-                    navigator.clipboard.writeText(cmd).then(function () { snack("Copied"); });
-                }
-            });
-        }
     }
 
     window.refreshWorkflowGlobalExecutionPanel = refreshWorkflowGlobalExecutionPanel;
@@ -3901,6 +3934,67 @@
         };
     }
 
+    function workflowQueueTicketById(ticketId) {
+        if (ticketId == null || ticketId === "") return null;
+        return (workflowQueueTickets || []).filter(function (ticket) {
+            return ticket && String(ticket.id) === String(ticketId);
+        })[0] || null;
+    }
+
+    function workflowTicketLabel(ticketId, fallbackTitle) {
+        var ticket = workflowQueueTicketById(ticketId);
+        if (ticket && ticket.title) return ticket.title;
+        if (fallbackTitle) return fallbackTitle;
+        return ticketId ? ("Ticket #" + ticketId) : "";
+    }
+
+    function loopRunTicketContextRun() {
+        var active = currentWorkflowActiveRun();
+        if (active && (active.ticket_id || active.ticket_title)) return active;
+        var feedRun = loopFeedActiveRun();
+        if (feedRun && (feedRun.ticket_id || feedRun.ticket_title)) return feedRun;
+        return (latestWorkflowRunHistory || []).filter(function (run) {
+            return run && (run.ticket_id || run.ticket_title);
+        })[0] || null;
+    }
+
+    function loopRunTicketContextHtml(run, mode) {
+        if (!run || !(run.ticket_id || run.ticket_title)) return "";
+        var ticket = workflowQueueTicketById(run.ticket_id);
+        var title = workflowTicketLabel(run.ticket_id, run.ticket_title);
+        var meta = runMetaText(run, currentWorkflow && currentWorkflow.name);
+        var stepText = run.current_step_name || (run.current_step_id ? ("Step #" + run.current_step_id) : "");
+        var bits = [];
+        if (run.id) bits.push("Run #" + run.id);
+        if (run.status) bits.push(run.status);
+        if (ticket && ticket.priority) bits.push("Priority " + ticket.priority);
+        if (ticket && ticket.complexity) bits.push("Complexity " + ticket.complexity);
+        if (stepText) bits.push(stepText);
+        if (mode !== "feed" && meta.boardText && meta.boardText !== "No board") bits.push(meta.boardText);
+        return '' +
+            '<div class="wf-loop-ticket-kicker"><span>Ticket in run</span></div>' +
+            '<span class="wf-loop-ticket-title" title="' + esc(title) + '">' + esc(title) + '</span>' +
+            '<div class="wf-loop-ticket-meta">' + bits.slice(0, mode === "feed" ? 4 : 6).map(function (bit) {
+                return '<span>' + esc(bit) + '</span>';
+            }).join("") + '</div>';
+    }
+
+    function renderLoopRunTicketContext() {
+        var run = loopRunTicketContextRun();
+        var mainEl = document.getElementById("wf-loop-run-ticket-context");
+        var feedEl = document.getElementById("wf-loop-feed-ticket-context");
+        var mainHtml = loopRunTicketContextHtml(run, "main");
+        var feedHtml = loopRunTicketContextHtml(loopFeedActiveRun() || run, "feed");
+        if (mainEl) {
+            mainEl.classList.toggle("hidden", !mainHtml);
+            mainEl.innerHTML = mainHtml;
+        }
+        if (feedEl) {
+            feedEl.classList.toggle("hidden", !feedHtml);
+            feedEl.innerHTML = feedHtml;
+        }
+    }
+
     function workflowHasActiveRuns() {
         return (latestActiveRuns || []).some(function (r) {
             return currentWorkflowId && r && String(r.workflow_id) === String(currentWorkflowId);
@@ -3999,8 +4093,7 @@
         branchEl.checked = !!settings.branch_per_ticket;
         var locked = workflowHasActiveRuns();
         if (panelEl) {
-            panelEl.classList.toggle("opacity-70", locked);
-            panelEl.classList.toggle("border-amber-500/30", locked);
+            panelEl.classList.toggle("is-locked", locked);
         }
         document.querySelectorAll(".wf-config-run-setting").forEach(function (el) { el.disabled = locked; });
         if (noteEl) {
@@ -4103,6 +4196,7 @@
             renderBoardConsumers(latestActiveRuns);
             renderRunCommandCenter(latestActiveRuns);
             renderWorkflowRunBar(latestActiveRuns);
+            renderLoopRunTicketContext();
             syncSteeringRunSelect();
             syncLoopFeedRunSelect();
             loadLoopActivityFeed({ quiet: true });
@@ -4351,6 +4445,7 @@
         if (!currentWorkflowId) {
             workflowQueueTickets = [];
             renderWorkflowTickets([]);
+            renderLoopRunTicketContext();
             return;
         }
         api("GET", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets")
@@ -4358,6 +4453,7 @@
                 workflowQueueTickets = Array.isArray(tickets) ? tickets : [];
                 rebuildWorkflowQueueExternalLinkIndex();
                 renderWorkflowTickets(workflowQueueTickets);
+                renderLoopRunTicketContext();
                 refreshWorkflowBoardTicketsFromQueue();
             })
             .catch(function (e) {
@@ -6964,6 +7060,7 @@
             renderLoopRingView(steps);
         }
         enableLoopStepDragAndDrop(steps);
+        renderLoopRunTicketContext();
         syncLoopFeedPanelHeight();
     }
 
@@ -7785,6 +7882,7 @@
             return status !== "running" && status !== "waiting";
         });
         latestWorkflowRunHistory = runs;
+        renderLoopRunTicketContext();
         if (currentWorkflowId && runs.length) {
             workflowRunsSeenByWorkflowId[String(currentWorkflowId)] = true;
         }
@@ -8188,6 +8286,7 @@
                 select.value = String(loopFeedRunId || runs[0].id);
             }
         }
+        renderLoopRunTicketContext();
         updateLoopFeedComposeState();
     }
 
@@ -8245,6 +8344,11 @@
         var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
         var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
         var lines = [];
+        var ticketId = event && (event.ticket_id || payload.ticket_id);
+        var ticketTitle = payload.ticket_title || payload.title || "";
+        if (ticketId || ticketTitle) {
+            lines.push("Ticket: " + workflowTicketLabel(ticketId, ticketTitle));
+        }
         if (payload.step_name) lines.push("Step: " + payload.step_name);
         if (payload.decision && payload.decision.backend) {
             lines.push("Route: " + payload.decision.backend + (payload.decision.model ? " / " + payload.decision.model : ""));

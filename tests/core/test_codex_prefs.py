@@ -118,6 +118,7 @@ def test_cursor_build_command_embeds_decisions_callback(monkeypatch):
     cmd = backend._build_command("cursor-agent", task)
     instruction = cmd[-1]
 
+    assert cmd[:3] == ["cursor-agent", "--trust", "-p"]
     assert "[DECISIONS CURSOR CALLBACK]" in instruction
     assert "/api/workflows/2/runs/9/codex-events" in instruction
     assert "internal_token=test-internal-token" in instruction

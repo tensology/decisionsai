@@ -631,6 +631,63 @@ body.wf-board-pointer-dragging * {
     color: #fff;
     font-size: 0.6875rem;
 }
+.wf-loop-run-ticket-context,
+.wf-loop-feed-ticket-context {
+    flex-shrink: 0;
+    border: 1px solid rgba(34, 197, 94, 0.42);
+    background: rgba(34, 197, 94, 0.08);
+    color: #d1fae5;
+}
+.wf-loop-run-ticket-context {
+    margin-top: 0.75rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 0.375rem;
+}
+.wf-loop-feed-ticket-context {
+    margin: 0 0.65rem 0.45rem;
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.3rem;
+}
+.wf-loop-ticket-kicker {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.2rem;
+    color: #86efac;
+    font-size: 0.64rem;
+    font-weight: 700;
+    line-height: 1;
+    text-transform: uppercase;
+}
+.wf-loop-ticket-title {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    color: #ffffff;
+    font-size: 0.82rem;
+    font-weight: 650;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wf-loop-ticket-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+    color: #9ca3af;
+    font-size: 0.68rem;
+    line-height: 1.2;
+}
+.wf-loop-ticket-meta span {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0.12rem 0.35rem;
+    border-radius: 0.25rem;
+    background: rgba(255, 255, 255, 0.07);
+}
 .wf-loop-feed-messages {
     flex: 1 1 auto;
     min-height: 0;
@@ -792,12 +849,27 @@ body.wf-board-pointer-dragging * {
 }
 .wf-config-exec-pill.is-ready,
 .wf-cli-backend-pill.is-ready {
+    cursor: default;
+}
+.wf-config-exec-pill:not(.is-ready),
+.wf-cli-backend-pill:not(.is-ready) {
     cursor: pointer;
+}
+.wf-config-exec-pill:not(.is-ready):hover,
+.wf-cli-backend-pill:not(.is-ready):hover {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.08);
+}
+.wf-config-exec-pill.is-callout-open,
+.wf-cli-backend-pill.is-callout-open {
+    border-color: rgba(245, 158, 11, 0.65);
+    background: rgba(245, 158, 11, 0.12);
+    color: #fff;
 }
 .wf-config-exec-pill.is-ready:hover,
 .wf-cli-backend-pill.is-ready:hover {
-    border-color: rgba(249, 115, 22, 0.45);
-    background: rgba(249, 115, 22, 0.08);
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.03);
 }
 .wf-config-exec-pill.is-active-route,
 .wf-cli-backend-pill.is-active {
@@ -1019,7 +1091,7 @@ body.wf-board-pointer-dragging * {
 }
 .wf-loop-step-status--running { border-color: rgba(34, 197, 94, 0.65) !important; }
 .wf-loop-step-status--waiting { border-color: rgba(245, 158, 11, 0.65) !important; }
-.wf-loop-step-status--done { border-color: rgba(34, 197, 94, 0.45) !important; }
+.wf-loop-step-status--done { border-color: rgba(34, 197, 94, 0.98) !important; box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.36), 0 10px 26px rgba(34, 197, 94, 0.12) !important; }
 .wf-loop-step-status--failed { border-color: rgba(239, 68, 68, 0.55) !important; }
 .wf-loop-step-modal {
     width: min(1120px, 96vw);
@@ -1366,6 +1438,7 @@ body.wf-split-dragging * {
                                 <div id="wf-loop-list-view" class="wf-loop-view hidden">
                                     <div id="wf-steps-list" class="space-y-2"></div>
                                 </div>
+                                <div id="wf-loop-run-ticket-context" class="wf-loop-run-ticket-context hidden" aria-live="polite"></div>
                             </div>
                             <aside id="wf-loop-feed-panel" class="wf-loop-feed-panel" aria-label="Run activity feed">
                                 <div class="wf-loop-feed-compose">
@@ -1381,6 +1454,7 @@ body.wf-split-dragging * {
                                     <button type="button" id="wf-loop-feed-steer-btn" class="wf-loop-feed-steer-btn" disabled>Steer</button>
                                 </div>
                                 <select id="wf-loop-feed-run-select" class="wf-loop-feed-run-select hidden" title="Active run"></select>
+                                <div id="wf-loop-feed-ticket-context" class="wf-loop-feed-ticket-context hidden" aria-live="polite"></div>
                                 <div id="wf-loop-feed-messages" class="wf-loop-feed-messages" role="log" aria-live="polite" aria-relevant="additions">
                                     <p class="wf-loop-feed-empty">No run activity yet. Start a queued ticket.</p>
                                 </div>
@@ -1852,66 +1926,59 @@ body.wf-split-dragging * {
     var modalHtml = [
         '<div id="sr-llm-modal" class="fixed inset-0 z-[10000] hidden items-center justify-center bg-black/60">',
         '<div class="wf-global-config-shell bg-[#1a1f3a] border border-[#565869] rounded-xl w-full max-w-3xl min-h-[32rem] max-h-[86vh] shadow-2xl flex flex-col overflow-hidden">',
-        '<div id="wf-global-config-header" class="flex items-center justify-between px-4 pt-4 pb-2 flex-shrink-0">',
-        '<h3 class="text-white font-semibold text-lg">Global workflow configuration</h3>',
+        '<div id="wf-global-config-header" class="flex items-center justify-between px-4 py-2.5 flex-shrink-0">',
+        '<h3 class="text-white font-semibold text-base">Global workflow configuration</h3>',
         '<button id="sr-llm-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>',
         '</div>',
-        '<div id="wf-global-config-tabs" class="flex gap-6 px-4 mt-3 pt-1 border-b border-white/10 flex-shrink-0">',
-        '<button type="button" class="wf-global-config-tab pb-2 text-sm text-white border-b-2 border-[#f97316]" data-wf-config-tab="run-policy">Run policy</button>',
-        '<button type="button" class="wf-global-config-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-wf-config-tab="context-rules">Global context rules</button>',
-        '<button type="button" class="wf-global-config-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-wf-config-tab="execution">Execution</button>',
+        '<div id="wf-global-config-tabs" class="flex gap-4 px-4 border-b border-white/10 flex-shrink-0">',
+        '<button type="button" class="wf-global-config-tab pb-2 text-xs text-white border-b-2 border-[#f97316]" data-wf-config-tab="run-policy">Run policy</button>',
+        '<button type="button" class="wf-global-config-tab pb-2 text-xs text-gray-400 border-b-2 border-transparent hover:text-white" data-wf-config-tab="context-rules">Context rules</button>',
+        '<button type="button" class="wf-global-config-tab pb-2 text-xs text-gray-400 border-b-2 border-transparent hover:text-white" data-wf-config-tab="execution">Execution</button>',
         '</div>',
         '<div id="wf-global-config-body" class="relative w-full flex-1 min-h-0">',
-        '<div id="wf-config-tab-run-policy" class="wf-global-config-pane is-active space-y-4">',
-        '<p class="wf-config-needs-workflow-hint hidden text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2">Select a workflow to edit run policy.</p>',
-        '<div class="wf-config-tab-body space-y-4">',
-        '<div id="wf-config-run-settings-panel" class="rounded border border-white/10 bg-[#152054]/40 p-3">',
-        '<div class="mb-3">',
-        '<p class="text-sm font-semibold text-white">Run policy</p>',
-        '<p id="wf-config-run-lock-note" class="text-xs text-gray-500 mt-0.5">Controls how queued tickets are scheduled before a run starts.</p>',
-        '</div>',
-        '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">',
-        '<label class="space-y-1"><span class="text-xs text-gray-400">Ticket execution</span>',
-        '<select id="wf-config-run-execution-mode" class="wf-config-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">',
-        '<option value="sequential">One at a time</option><option value="parallel">Async batch</option></select></label>',
-        '<label class="space-y-1"><span class="text-xs text-gray-400">Concurrency scope</span>',
-        '<select id="wf-config-run-concurrency-scope" class="wf-config-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">',
-        '<option value="workflow">One run for this workflow</option><option value="project">One at a time per project</option></select></label>',
-        '<label class="space-y-1"><span class="text-xs text-gray-400">Async ticket limit</span>',
-        '<input id="wf-config-run-max-parallel" type="number" min="1" max="12" value="3" class="wf-config-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs"></label>',
-        '<label class="flex min-h-[2.75rem] items-center gap-2 rounded border border-white/10 bg-[#0d1333]/70 px-3 py-2">',
-        '<input id="wf-config-run-branch-per-ticket" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
-        '<span class="text-xs text-gray-200">Create branch per ticket</span></label>',
+        '<div id="wf-config-tab-run-policy" class="wf-global-config-pane is-active">',
+        '<p class="wf-config-needs-workflow-hint hidden text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 mb-2">Select a workflow to edit run policy.</p>',
+        '<div id="wf-config-run-settings-panel" class="wf-config-tab-body space-y-2">',
+        '<p id="wf-config-run-lock-note" class="text-[11px] text-gray-500">Controls how queued tickets are scheduled before a run starts.</p>',
+        '<div class="wf-config-field-row"><span class="wf-config-field-label">Ticket execution</span>',
+        '<select id="wf-config-run-execution-mode" class="wf-config-run-setting wf-config-control">',
+        '<option value="sequential">One at a time</option><option value="parallel">Async batch</option></select></div>',
+        '<div class="wf-config-field-row"><span class="wf-config-field-label">Concurrency scope</span>',
+        '<select id="wf-config-run-concurrency-scope" class="wf-config-run-setting wf-config-control">',
+        '<option value="workflow">One run for this workflow</option><option value="project">One at a time per project</option></select></div>',
+        '<div class="wf-config-field-row"><span class="wf-config-field-label">Async ticket limit</span>',
+        '<input id="wf-config-run-max-parallel" type="number" min="1" max="12" value="3" class="wf-config-run-setting wf-config-control wf-config-control-narrow"></div>',
+        '<div class="wf-config-field-row wf-config-field-row-checkbox"><span class="wf-config-field-label">Branch per ticket</span>',
+        '<label class="wf-config-checkbox"><input id="wf-config-run-branch-per-ticket" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
+        '<span>Create a branch for each ticket</span></label></div>',
         '</div></div>',
-        '</div></div>',
-        '<div id="wf-config-tab-context-rules" class="wf-global-config-pane flex flex-col min-h-0 space-y-4">',
-        '<p class="wf-config-needs-workflow-hint hidden flex-shrink-0 text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2">Select a workflow to edit global context rules.</p>',
-        '<div class="wf-config-tab-body flex flex-col flex-1 min-h-0 rounded border border-white/10 bg-[#152054]/40 p-3">',
-        '<div class="flex items-center justify-between gap-3 mb-2 flex-shrink-0">',
-        '<div><p class="text-sm font-semibold text-white">Global context rules</p>',
-        '<p class="text-xs text-gray-500 mt-0.5">Rules the agent follows for the selected workflow.</p></div>',
-        '<button type="button" id="wf-config-add-context-item-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add rule</button>',
+        '<div id="wf-config-tab-context-rules" class="wf-global-config-pane flex flex-col min-h-0">',
+        '<p class="wf-config-needs-workflow-hint hidden flex-shrink-0 text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 mb-2">Select a workflow to edit context rules.</p>',
+        '<div class="wf-config-tab-body flex flex-col flex-1 min-h-0">',
+        '<div class="flex items-center justify-between gap-2 mb-2 flex-shrink-0">',
+        '<p class="text-[11px] text-gray-500">Rules the agent follows for this workflow.</p>',
+        '<button type="button" id="wf-config-add-context-item-btn" class="px-2.5 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add rule</button>',
         '</div>',
         '<div id="wf-config-context-table-wrap" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10">',
-        '<table class="w-full table-fixed text-sm"><colgroup><col><col style="width:9rem;"></colgroup>',
+        '<table class="w-full table-fixed text-sm"><colgroup><col><col style="width:7rem;"></colgroup>',
         '<thead class="bg-[#0d1333] border-b border-white/10 sticky top-0 z-[1]"><tr>',
-        '<th class="text-left text-xs font-medium text-gray-400 px-3 py-2">Rule</th>',
-        '<th class="text-right text-xs font-medium text-gray-400 px-3 py-2">Actions</th>',
+        '<th class="text-left text-[11px] font-medium text-gray-400 px-2 py-1.5">Rule</th>',
+        '<th class="text-right text-[11px] font-medium text-gray-400 px-2 py-1.5">Actions</th>',
         '</tr></thead><tbody id="wf-config-context-items-list" class="divide-y divide-white/10"></tbody></table>',
-        '</div><p id="wf-config-context-save-status" class="text-xs text-gray-500 mt-2 flex-shrink-0"></p></div>',
+        '</div><p id="wf-config-context-save-status" class="text-[11px] text-gray-500 mt-1.5 flex-shrink-0"></p></div>',
         '</div>',
-        '<div id="wf-config-tab-execution" class="wf-global-config-pane space-y-3">',
-        '<div><p class="text-sm font-semibold text-white">Executors</p>',
-        '<p class="text-xs text-gray-500 mt-0.5">Ready executors for the board\'s linked project. Click a pill to set the medium complexity route.</p></div>',
-        '<div id="wf-global-exec-backend-pills" class="flex flex-wrap gap-1.5"></div>',
-        '<div><p class="text-sm font-semibold text-white">Ticket complexity routing</p>',
-        '<p class="text-xs text-gray-500 mt-0.5">Ticket complexity chooses the implementation agent for every workflow run. CLI backends also pick a model; IDE backends use whatever model you choose in the editor.</p></div>',
-        '<div id="wf-global-exec-routes" class="space-y-2"></div>',
+        '<div id="wf-config-tab-execution" class="wf-global-config-pane space-y-2">',
+        '<p class="wf-config-section-label">Executors</p>',
+        '<p class="wf-config-section-hint">Green badges are ready. Click an orange badge for install help.</p>',
+        '<div id="wf-global-exec-backend-pills" class="flex flex-wrap gap-1"></div>',
+        '<p class="wf-config-section-label mt-1">Complexity routing</p>',
+        '<p class="wf-config-section-hint">Low / medium / high routes for every workflow run.</p>',
+        '<div id="wf-global-exec-routes" class="space-y-1.5"></div>',
         '</div>',
         '</div>',
-        '<div id="wf-global-config-footer" class="flex gap-2 justify-end px-4 py-3 border-t border-white/10 flex-shrink-0">',
-        '<button id="sr-llm-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>',
-        '<button id="sr-llm-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Save</button>',
+        '<div id="wf-global-config-footer" class="flex gap-2 justify-end px-4 py-2 border-t border-white/10 flex-shrink-0">',
+        '<button id="sr-llm-cancel" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Cancel</button>',
+        '<button id="sr-llm-save" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]">Save</button>',
         '</div>',
         '</div>',
         '</div>'
@@ -1920,12 +1987,29 @@ body.wf-split-dragging * {
 
     var globalConfigHeightStyle = document.createElement('style');
     globalConfigHeightStyle.textContent = [
-        '#wf-global-config-body { position: relative; width: 100%; flex: 1 1 auto; min-height: 0; }',
-        '.wf-global-config-pane { position: absolute; inset: 0; overflow-y: auto; padding: 1rem; box-sizing: border-box; }',
-        '.wf-global-config-pane:not(.is-active) { visibility: hidden; pointer-events: none; }',
-        '#wf-config-tab-context-rules.wf-global-config-pane { display: flex; flex-direction: column; overflow: hidden; }',
+        '.wf-global-config-shell { width: 100%; max-width: 36rem; max-height: 78vh; display: flex; flex-direction: column; overflow: hidden; }',
+        '#wf-global-config-body { position: relative; width: 100%; flex: 0 1 auto; min-height: 0; overflow: hidden; }',
+        '.wf-global-config-pane { display: none; padding: 0.75rem 1rem; box-sizing: border-box; max-height: calc(78vh - 6.5rem); overflow-y: auto; }',
+        '.wf-global-config-pane.is-active { display: block; }',
+        '#wf-config-tab-context-rules.wf-global-config-pane.is-active { display: flex; flex-direction: column; min-height: 11rem; }',
         '#wf-config-tab-context-rules .wf-config-tab-body { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }',
-        '#wf-config-context-table-wrap { flex: 1 1 auto; min-height: 12rem; overflow-y: auto; }'
+        '#wf-config-context-table-wrap { flex: 1 1 auto; min-height: 7rem; overflow-y: auto; }',
+        '.wf-config-field-row { display: grid; grid-template-columns: 8.75rem minmax(0, 1fr); gap: 0.375rem 0.625rem; align-items: center; }',
+        '.wf-config-field-label { font-size: 0.75rem; line-height: 1.2; color: #9ca3af; }',
+        '.wf-config-control { width: 100%; padding: 0.375rem 0.5rem; background: #152054; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.375rem; color: #fff; font-size: 0.75rem; line-height: 1.2; }',
+        '.wf-config-control:focus { border-color: #f97316; outline: none; }',
+        '.wf-config-control-narrow { max-width: 5rem; }',
+        '.wf-config-field-row-checkbox .wf-config-checkbox { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; color: #e5e7eb; }',
+        '#wf-config-run-settings-panel.is-locked { opacity: 0.7; }',
+        '.wf-config-section-label { font-size: 0.75rem; font-weight: 600; color: #fff; margin: 0; }',
+        '.wf-config-section-hint { font-size: 0.6875rem; line-height: 1.35; color: #6b7280; margin: 0.125rem 0 0.375rem; }',
+        '.wf-config-optional-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.5rem; font-size: 0.6875rem; line-height: 1.35; color: #9ca3af; margin-bottom: 0.375rem; }',
+        '.wf-config-optional-hint button { font-size: 0.6875rem; padding: 0.125rem 0.375rem; border-radius: 0.25rem; border: 1px solid rgba(255,255,255,0.18); color: #d1d5db; background: transparent; }',
+        '.wf-config-optional-hint button:hover { background: rgba(255,255,255,0.08); color: #fff; }',
+        '#wf-global-exec-routes .wf-exec-route-block { margin: 0; }',
+        '#wf-global-exec-routes .wf-exec-route-block > .grid { grid-template-columns: 4.5rem minmax(0, 1fr) minmax(0, 1fr) auto !important; gap: 0.375rem !important; }',
+        '#wf-global-exec-routes .wf-exec-backend, #wf-global-exec-routes .wf-exec-model { padding: 0.375rem 0.5rem; font-size: 0.75rem; }',
+        '#wf-global-exec-routes .wf-exec-codex-cog { height: 1.75rem; width: 1.75rem; font-size: 0.75rem; }'
     ].join('\n');
     document.head.appendChild(globalConfigHeightStyle);
 

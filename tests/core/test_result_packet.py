@@ -162,6 +162,43 @@ def test_append_workflow_step_to_packet_populates_ui_quality_artifacts():
     ]
 
 
+def test_spotify_green_evidence_step_populates_terminal_ui_quality_artifacts():
+    packet = create_initial_result_packet_for_run(
+        ticket_id="9",
+        board_id="2",
+        board_name="Spotify E2E",
+        project_id="4",
+        project_name="Spotify remake",
+        execution_lane="codex",
+    )
+    step_result = (
+        "Before screenshot: /tmp/decisions/workflow_screenshots/spotify-before.png\n"
+        "After screenshot: /tmp/decisions/workflow_screenshots/spotify-after.png\n"
+        "GREEN validation passed: Spotify remake ticket reached complete.\n"
+        "Flow summary: Created the Spotify remake ticket slice, ran the project checks, "
+        "and confirmed the workflow loop moved the ticket to green evidence.\n"
+        "Layout hierarchy notes: The workflow UI keeps the loop, active ticket, run details, "
+        "and activity log visually distinct while the Spotify project keeps navigation, "
+        "content, and persistent player controls clear."
+    )
+
+    packet = append_workflow_step_to_packet(
+        packet,
+        step_name="Report green evidence",
+        step_status="passed",
+        step_result=step_result,
+        run_status="completed",
+    )
+
+    ui_quality = packet["artifacts"]["ui_quality"]
+    assert packet["status"] == "completed"
+    assert packet["audit"]["final_verdict"] == "pass"
+    assert ui_quality["before_screenshot"] == "/tmp/decisions/workflow_screenshots/spotify-before.png"
+    assert ui_quality["after_screenshot"] == "/tmp/decisions/workflow_screenshots/spotify-after.png"
+    assert "workflow loop moved the ticket to green evidence" in ui_quality["flow_summary"]
+    assert "persistent player controls" in ui_quality["layout_hierarchy_notes"]
+
+
 def test_append_workflow_step_to_packet_parses_visual_baseline_selection():
     packet = create_initial_result_packet_for_run(
         ticket_id="9",

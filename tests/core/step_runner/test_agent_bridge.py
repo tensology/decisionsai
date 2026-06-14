@@ -104,6 +104,49 @@ class TestGenerateReport:
         assert "That's what happened" not in report
         assert "Give a brief spoken" not in report
 
+    def test_project_cli_workflow_report_is_plain_english_without_raw_cli_dump(self):
+        report = WorkflowAgentBridge._generate_report({
+            "session_id": 355,
+            "run_id": 75,
+            "success": False,
+            "cancelled": False,
+            "steps_summary": [
+                {
+                    "title": "Implement ticket with selected CLI backend",
+                    "status": "completed",
+                    "result": (
+                        "Project CLI backend: codex Project: 10 Status: completed "
+                        "Reading additional input from stdin... OpenAI Codex v0.140.0-alpha.2 "
+                        "callback_url=http://127.0.0.1:8765/api/workflows/355/runs/75/codex-events"
+                    ),
+                },
+                {
+                    "title": "Validate Spotify remake with project checks",
+                    "status": "completed",
+                    "result": (
+                        "> test > node --test tests/smoke.test.mjs "
+                        "✔ spotify remake satisfies the current ticket contract "
+                        "ℹ tests 4 ℹ pass 4 ℹ fail 0 ℹ duration_ms 85.1125"
+                    ),
+                },
+                {
+                    "title": "Report green evidence",
+                    "status": "completed",
+                    "result": "GREEN validation passed: Spotify remake ticket reached complete.",
+                },
+            ],
+        })
+
+        assert "Done - the workflow finished successfully." in report
+        assert "Codex completed the implementation handoff." in report
+        assert "Validation passed: 4 tests, 0 failures." in report
+        assert "Green evidence was recorded." in report
+        assert "marked failed" not in report
+        assert "Reading additional input from stdin" not in report
+        assert "callback_url" not in report
+        assert "OpenAI Codex" not in report
+        assert "node --test" not in report
+
 
 class TestQueueReportToAgent:
     """Tests for queue_report_to_agent and get_pending_reports."""
