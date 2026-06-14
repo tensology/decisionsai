@@ -347,7 +347,7 @@ class AboutWindow(QtWidgets.QMainWindow):
             _html_paragraph(
                 "Winamp-era energy, modern problems: skimmable when you want speed, deep when you want proof. "
                 f"The {_html_link(orchestrator_url, 'orchestrator')} keeps the thread so handoffs do not evaporate. "
-                "Version 2.8 tightens the web UI, adds Loops workflows, calendar automations, board-to-orchestrator handoff, "
+                "Version 2.8 delivers a unified web workspace, Loops workflows, calendar automations, board-to-orchestrator handoff, "
                 "in-thread model and voice changes, chat compaction, WhatsApp-to-board linking, IRC, and a rebuilt remote control."
             ),
             _html_paragraph(

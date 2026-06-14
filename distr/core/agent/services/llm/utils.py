@@ -8,8 +8,42 @@ to work.  New code should import from the specific module directly:
                           should_inject_clipboard, _build_tool_triggers, _TOOL_TRIGGERS, etc.
 """
 
-# prompt
+from distr.core.agent.services.llm.prompt import (
+    build_tools_description,
+    load_system_prompt_template,
+)
+from distr.core.agent.services.llm.text_utils import (
+    brief_tool_completion_message,
+    clean_model_text_for_chat,
+    clean_text_for_tts,
+    humanize_silent_navigation_json,
+    normalize_text,
+    parse_tool_calls_from_content,
+    redact_filesystem_paths_for_conversation,
+)
+from distr.core.agent.services.llm.tool_routing import (
+    _TOOL_TRIGGERS,
+    _build_tool_triggers,
+    detect_request_type,
+    filter_tools_by_context,
+    get_clipboard_content_fast,
+    should_inject_clipboard,
+)
 
-# text utilities
-
-# tool routing
+__all__ = [
+    "build_tools_description",
+    "load_system_prompt_template",
+    "brief_tool_completion_message",
+    "clean_model_text_for_chat",
+    "clean_text_for_tts",
+    "humanize_silent_navigation_json",
+    "normalize_text",
+    "parse_tool_calls_from_content",
+    "redact_filesystem_paths_for_conversation",
+    "_TOOL_TRIGGERS",
+    "_build_tool_triggers",
+    "detect_request_type",
+    "filter_tools_by_context",
+    "get_clipboard_content_fast",
+    "should_inject_clipboard",
+]

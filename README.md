@@ -88,7 +88,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **Chat** | Switch model and voice inside a thread, compact context, fork chats, and read system activity inline |
 | **Actions** | View, edit, rename, and trigger recorded macros |
 | **Snippets** | Manage text or code snippets with trigger words |
-| **Projects** | Simpler project workspace with context blocks, linked files, and IDE/coding backend setup |
+| **Projects** | Project workspace with context blocks, linked files, and IDE/coding backend setup |
 | **Ticket Boards** | Manage local, Jira, and Trello work; link WhatsApp numbers to a board; send tickets straight into the orchestrator |
 | **Automations** | Scheduled instruction workflows with Run Now, history, and a calendar for time-entry blocks linked to tickets |
 | **Workflows** | Multi-step workflows with **Loops** presets, Step Runner execution, validation, harness steering, browser evidence, and scheduling |
