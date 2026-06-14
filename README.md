@@ -5,7 +5,7 @@
 <h1 align="center">DecisionsAI</h1>
 
 <p align="center">
-  A voice-first desktop assistant and local orchestration harness that listens, reasons, speaks back, and acts — opening apps, editing text, running macros, managing workflows, and keeping project work connected — all on your machine, with your choice of AI.
+  A voice-first desktop assistant that runs on your machine. It transcribes speech, calls the LLM you configured, speaks replies, and drives the desktop through the sidecar: app launches, text entry, recorded macros, workflows, and project-linked work.
 </p>
 
 <p align="center">
@@ -32,9 +32,9 @@
 
 | | Feature | Description |
 |---|---|---|
-| 🔒 | **Private by default** | Everything runs locally — offline STT (Whisper.cpp), local LLM (Ollama), offline TTS (Kokoro). Nothing leaves your machine unless you add API keys |
-| 🤖 | **Every major AI provider** | OpenAI, Anthropic, ElevenLabs, OpenRouter — swap models anytime, never locked in |
-| 🎭 | **Animated skins** | Clippy, Nugget, Rusty, Masko, Madame Patate — each with idle, thinking, working, and attention animations. Drop a folder with `skin.json` for your own |
+| 🔒 | **Private by default** | Offline STT (Whisper.cpp), local LLM (Ollama), offline TTS (Kokoro) by default. Data stays on disk unless you add cloud API keys |
+| 🤖 | **Every major AI provider** | OpenAI, Anthropic, ElevenLabs, OpenRouter. Swap models in Settings |
+| 🎭 | **Animated skins** | Clippy, Nugget, Rusty, Masko, Madame Patate. Each skin has idle, thinking, working, and attention states. Drop a folder with `skin.json` for your own |
 
 <p align="center">
   <img src="assets/readme/avatar.webp" alt="DecisionsAI Skins" />
@@ -42,19 +42,19 @@
 
 | | | |
 |---|---|---|
-| 📱 | **Control from your phone** | Connect Telegram — send voice or text, get replies and screenshots back, stream your screen live, transfer files |
-| 📧 | **Google Workspace** | Gmail, Calendar, Drive, Docs, Sheets — direct API access, no third-party routing |
+| 📱 | **Control from your phone** | Link Telegram. Send voice or text, get replies and screenshots, stream the screen, transfer files |
+| 📧 | **Google Workspace** | Gmail, Calendar, Drive, Docs, Sheets over direct API access |
 | 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
-| 🔄 | **Recorded macros** | Capture keyboard and mouse sequences, replay them by voice — perfect for repetitive tasks |
-| 👁️ | **Vision** | Share screenshots, photos, or diagrams — the assistant reasons about what it sees |
+| 🔄 | **Recorded macros** | Record keyboard and mouse sequences, replay them by voice |
+| 👁️ | **Vision** | Send screenshots, photos, or diagrams; the assistant uses your vision model on them |
 | 🔀 | **Workflows + Loops** | Multi-step workflows with loop presets, Step Runner execution, validation, harness steering, recording, browser evidence, and scheduling |
 | 📅 | **Automations + calendar** | Itemized automations with scheduling, time-entry blocks, live timers, and timesheet export |
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
-| 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
+| 🐍 | **Python executor** | The agent can write and run Python for file ops, image processing, scraping, and other scripted tasks |
 | 🧭 | **[Orchestrator](docs/orchestrator.md)** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
 | 🔧 | **[IDE + coding agents](#ide-integration)** | Work with [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), [Claude-compatible harnessing](plugins/ecc/docs/HERMES-SETUP.md), and coding backends through local plugins and harness reporting so project context does not disappear |
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
-| 🌐 | **Remote control** | HMAC-encrypted browser UI with Snippets, Agent, and Dictate — hold to talk or tap for a text box |
+| 🌐 | **Remote control** | HMAC-encrypted browser UI with Snippets, Agent, and Dictate. Hold to talk or tap for a text box |
 
 ## How It Works
 
@@ -70,10 +70,10 @@
                                      └─────────────┘
 ```
 
-1. **Install and launch** — the bundled launcher handles dependencies, Python, model downloads, and startup.
-2. **Pick your AI** — local (Ollama) for privacy, cloud (OpenAI / Anthropic / OpenRouter) for power, or mix both.
-3. **Talk naturally** — speak a command, the assistant reasons and acts. Interrupt mid-sentence if you want.
-4. **Choose a skin** — pick an animated avatar or stick with the classic Oracle orb.
+1. **Install and launch.** The bundled launcher installs dependencies, Python, models, and starts the app.
+2. **Pick your AI.** Local Ollama, cloud APIs (OpenAI, Anthropic, OpenRouter), or a mix. Set each slot in Preferences.
+3. **Talk or type.** Push-to-talk, dictation, or Chat. The agent calls tools through the sidecar when a step needs desktop control.
+4. **Choose a skin.** Animated avatar or the default Oracle orb.
 
 ---
 
@@ -109,11 +109,11 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 |---|---|
 | [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) | Fast, accurate offline speech recognition |
 | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | High-quality offline TTS + custom voice cloning (on-device) |
-| [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK voices — 100+ speakers with accents) |
+| [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK, 100+ speakers) |
 | [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
 | **[Orchestrator](docs/orchestrator.md)** | Internal orchestration ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
-| **[Sidecar (Go)](sidecar/README.md)** | Machine control — accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
+| **[Sidecar (Go)](sidecar/README.md)** | Machine control: accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
 
 **Optional cloud services:**
 
@@ -160,9 +160,9 @@ logs, model-provider requests, workflow audit trails, and the internal
 | **System deps** | PortAudio, FFmpeg |
 | **Disk** | ~200 MB for cloud models; ~6 GB for full local models |
 
-> DecisionsAI detects your system RAM at first launch and picks models that fit. Cloud models (marked `:cloud`) run on Ollama's servers — zero local RAM needed.
+> DecisionsAI detects your system RAM at first launch and picks models that fit. Cloud models (marked `:cloud`) run on Ollama's servers with zero local RAM for the weights.
 >
-> **Recommended (cloud — any Mac):**
+> **Recommended (cloud, any Mac):**
 >
 > | Role | Model | RAM needed |
 > |---|---|---|
@@ -186,7 +186,7 @@ logs, model-provider requests, workflow audit trails, and the internal
 | **Disk** | ~200 MB |
 | **Internet** | Stable connection required |
 
-No large model downloads. Only Whisper.cpp and Kokoro install locally. Mix and match — use local models for sensitive tasks, cloud models for heavy reasoning.
+No large model downloads. Only Whisper.cpp and Kokoro install locally. Use local models for sensitive work and cloud models when you need bigger weights.
 
 <p align="center">
   <img src="assets/readme/about.webp" alt="DecisionsAI About" />
@@ -251,7 +251,7 @@ python bin/start.py
 
 ### Voice commands
 
-Speak naturally — exact phrasing can vary.
+Exact phrasing can vary.
 
 | Category | Examples |
 |---|---|
@@ -288,7 +288,7 @@ Defaults are editable in **Preferences → Shortcut Keys**.
 
 ### Telegram
 
-Connect in **Preferences → Advanced → Telegram**. Send voice or text to your bot and get replies, voice notes, and screenshots back. Type "remote" for an HMAC-encrypted link to the full remote control UI — stream your screen, click, type, scroll, and transfer files from anywhere.
+Connect in **Preferences → Advanced → Telegram**. Send voice or text to your bot and get replies, voice notes, and screenshots back. Type `remote` for an HMAC-encrypted link to the full remote control UI: screen stream, click, type, scroll, file transfer.
 
 ### Google Workspace
 
@@ -304,29 +304,29 @@ Connect via **Preferences → Advanced → Google** (OAuth 2.0).
 
 ### IDE Integration
 
-[Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md), and other coding backends are wired through project context so ticket-board work, free-form IDE chats, workflow runs, automation runs, and orchestrator updates can stay attached to the right project where possible. The CLI path still exists, but DecisionsAI now treats the IDEs as first-class development surfaces.
+[Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md), and other coding backends attach to project context. Ticket-board work, IDE chats, workflow runs, and automation runs can report back to the orchestrator when the project link is set.
 
-The local [Codex](plugins/codex-ide/README.md) and [Cursor](plugins/cursor-ide/README.md) plugins are installed or repaired during setup when those tools are detected. They report project/session events back into [Orchestrator](docs/orchestrator.md), which lets the main orchestrator continue a thread, see whether a project is moving, attach browser or workflow evidence, and speak to you from the right channel instead of losing the work inside a separate editor chat.
+Setup installs or repairs the local [Codex](plugins/codex-ide/README.md) and [Cursor](plugins/cursor-ide/README.md) plugins when those tools are present. They emit session events into [Orchestrator](docs/orchestrator.md) so the desktop agent can see IDE progress instead of losing it inside the editor.
 
-[Orchestrator](docs/orchestrator.md) acts as the shared harness for that loop: tickets, boards, automations, workflows, browser runs, local project folders, and IDE conversations all feed the same project-aware ledger. The vendored [ECC](plugins/ecc/README.md) surface adds skills, harness patterns, and setup references without blindly duplicating local skills. Together, that is what lets DecisionsAI answer questions like "what is my daily plan?", "what is stuck?", or "what happened in Codex on this project?" using more than the last chat message.
+[Orchestrator](docs/orchestrator.md) holds tickets, boards, automations, workflows, browser runs, project folders, and IDE sessions in one ledger. The vendored [ECC](plugins/ecc/README.md) pack adds skills and harness references without duplicating local skills.
 
 ---
 
 ## Workflows
 
-Build multi-step workflows the agent executes in sequence — now centered on **Loops** presets that sit on top of the Step Runner. Each step has an action, optional validation, and routing logic. Import a loop preset for common agentic patterns (check/fix until green, ship with CI, incremental ship, and more), steer a waiting harness mid-run, and watch active runs with validation, steering history, and executor context. The workflow agent has full tool access — screenshots, browser evidence, Python scripts, web search, and IDE/coding-agent handoff through the orchestrator.
+Multi-step workflows run on the **Step Runner**. **Loops** are importable preset bundles on top of that runner. Each step has an action, optional validation, and routing. Import a loop preset, steer a waiting harness mid-run, and inspect active runs (validation, steering history, executor context). Steps can call screenshots, browser evidence, Python, web search, and IDE handoff through the orchestrator.
 
 | Concept | How it works |
 |---|---|
 | **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, or Playwright scripts |
-| **Tool-calling agent** | Each step runs through a dedicated LLM with native tool calling — it actually does things instead of describing what it would do |
+| **Tool-calling agent** | Each step uses an LLM with native tool calling |
 | **Validation** | Text matching, rule-based checks, LLM judgment, or screenshot comparison |
 | **Static routing** | Pick a "go to" step for pass/fail |
-| **Agent routing** | Give the agent a prompt — it picks the next step dynamically |
+| **Agent routing** | Prompt the agent; it picks the next step |
 | **Recording** | 3-2-1 countdown, captures keyboard + mouse, replays automatically |
-| **Presets** | Export/import `.dwf` bundles — workflow + recordings + screenshots in one file |
+| **Presets** | Export/import `.dwf` bundles (workflow + recordings + screenshots) |
 | **Scheduling** | Hourly, daily, or weekly on specific days |
-| **Agent Context** | One central context block for rules, credentials, conventions, and reusable guidance prepended to step prompts |
+| **Agent Context** | One context block for rules, credentials, and conventions prepended to step prompts |
 
 <p align="center">
   <img src="assets/readme/steprunner.webp" alt="Workflows" />
@@ -345,7 +345,7 @@ distr/
 │   ├── oracle/      # Oracle overlay and tray
 │   └── web/         # Local web UI (templates, static, API)
 plugins/             # IDE bridge plugins (codex-ide, cursor-ide) and vendored ECC harness pack
-sidecar/             # Go binary — machine control agent (macOS/Windows)
+sidecar/             # Go binary: machine control (macOS/Windows)
 assets/
 ├── avatars/         # Skin packs (Clippy, Nugget, Rusty, Masko, etc.)
 └── readme/          # README images

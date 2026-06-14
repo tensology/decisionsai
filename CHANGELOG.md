@@ -14,65 +14,41 @@ Current focus is hardening **Automations** and **Workflows** for that loop: clea
 
 ## [2.8.0] - 2026-06-14
 
-### One workspace, Loops workflows, calendar automations, and stronger orchestration
+### Web UI, Loops, calendar automations, orchestration
 
-**The local web UI is now a single connected workspace.** Chat, Projects, Ticket Boards, Automations, and Workflows share clearer layout, faster primary actions, and consistent navigation so you can move between planning, execution, and review without context switching.
-
-**Chat keeps up as your setup changes.** Switch LLM and voice settings inside an existing thread. Use **Compact** from the header, chat menu, or automatic compaction when context grows. A dedicated **system activity** trail shows tool runs, workflow progress, and orchestration events as structured activity alongside the conversation.
-
-**Projects bring repo context, CLI setup, and backend wiring into one place.** Backend selection, folder context, CLI setup, and project details live on one surface with a direct path from project selection to running work against it.
-
-**Ticket Boards connect straight to the orchestrator.** Send a ticket from the board into a live agent conversation with speech, linked project context, and a thread you can continue. Board chrome, lane tools, and workflow hooks are tuned for day-to-day ticket work.
-
-**WhatsApp numbers can be tied to a board.** Link one or more numbers to a board so inbound chats, snapshots, and ticket creation stay attached to the right lane.
-
-**Automations now include a shared calendar.** Itemized instruction workflows with create, edit, run, and history. Schedule automations, record **time-entry blocks**, link blocks to tickets and completed work, run a live timer, naturalize rough time notes, and export timesheet-style summaries back to boards.
-
-**Workflows are built around Loops.** The Workflows UI centers on **Loops**: reusable preset patterns on top of the **Step Runner** spine. Import loop presets, append or replace steps, export your own presets, steer a waiting harness mid-run, and watch active runs with executor choice, validation, steering history, and planned next steps. The harness layer gives the orchestrator fuller project, IDE, browser, and run-memory context while a loop is in flight.
-
-**IRC chat is a first-class local surface.** Built-in IRC chat page and API proxy so shared rooms sit beside Telegram, WhatsApp, boards, and chat.
-
-**Desktop control is sharper at the edges.** Shortcuts and **dictate mode** are more reliable: hold-to-dictate, consistent modifier-only combos, and dictation routed as text entry. The **system tray menu** opens chats, projects, boards, automations, workflows, snippets, skins, navigation, and controls without opening the browser first.
-
-**Initiative mode has clearer boundaries.** Settings focus on what the agent may scan, what it may suggest, what requires asking first, and which channels it may use.
-
-**Remote control centers on three actions: Snippets, Agent, and Dictate.** Hold for push-to-talk dictation, tap for a text box, stream remote audio with an explicit stop control, and reliable pointer routing for remote clicks.
-
-**IDE harness setup is easier to maintain.** ECC harness pack bootstrap, Codex/Cursor plugin repair, and a cleaner `plugins/` layout (`codex-ide`, `cursor-ide`, `ecc`) keep IDE reporting and skill projection in one place. Local checkout drift like committed `.tickets`, `.pi`, and scratch docs moved into gitignored `.artifacts/`.
-
-**Telegram, Oracle, and Sidecar polish.** Telegram desktop intercom requests, clearer online notices, smoother Oracle skin idle/animation behavior, file-drop glow fixes, and Sidecar remote click routing through the correct mouse-position path.
-
-**Regression coverage expanded across the new surfaces.** Added and extended tests for chat compaction and activity contracts, loop preset application and run matrices, schedule blocks and calendar timers, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness pack bootstrap, and plugin path consolidation.
+- Shared navigation across Chat, Projects, Ticket Boards, Automations, and Workflows
+- Chat: switch LLM and voice inside an existing thread; **Compact** from header, menu, or auto-compaction; **system activity** row for tool runs and workflow events
+- Projects: backend selection, folder context, CLI setup, and project details on one page
+- Ticket Boards: send a ticket into a live agent thread with speech and linked project context
+- WhatsApp: link one or more numbers to a board so inbound chats and ticket creation stay on that board
+- Automations: itemized instruction workflows with create, edit, run, history; shared calendar for scheduled runs and **time-entry blocks**; live timer; timesheet export to boards
+- Workflows: UI centered on **Loops** (importable presets on the Step Runner); append/replace steps; export presets; steer a waiting harness mid-run; active-run view with executor, validation, steering history, planned next steps
+- IRC: local chat page and API proxy beside Telegram, WhatsApp, boards, and Chat
+- Shortcuts: hold-to-dictate, modifier-only combos, dictation routed as text entry; system tray opens chats, projects, boards, automations, workflows, snippets, skins without opening the browser first
+- Initiative: settings split by what the agent may scan, suggest, ask about, or send on which channels
+- Remote: Snippets, Agent, and Dictate as the three primary actions; hold PTT, tap for text box, explicit stop for streamed audio; fixed pointer routing for remote clicks
+- IDE harness: ECC pack bootstrap; Codex/Cursor plugin repair; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`; runtime scratch moved under gitignored `.artifacts/`
+- Telegram intercom requests; Oracle skin idle/animation and file-drop glow fixes; Sidecar remote click uses the correct mouse-position path
+- Tests added for chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness bootstrap, plugin paths
 
 ---
 
 ## [2.7.17] - 2026-06-05
 
-### Orchestration backbone, IDE handoff, human engagement, and Automation
+### Orchestration, IDE handoff, Automations
 
-**Hermes is closer to being the shared orchestration spine.** Workflow runs, automations, IDE activity, browser evidence, proactive nudges, and ticket-board handoffs now have a clearer event shape so the system can understand what work belongs together instead of treating everything as loose progress noise.
-
-**Cursor and Codex handoffs became more project-aware.** IDE conversations can now report back into DecisionsAI with project and session context, including chats that were not started from a workflow. That gives the orchestrator a better chance of knowing which project is moving, which one is idle, and where a response belongs.
-
-**Ticket Boards now start a real orchestrator conversation.** Sending a ticket to the orchestrator no longer just drops context into chat and leaves you to find it. It loads the agent, sends the ticket with speech enabled, opens the right chat thread, and includes linked project details so the assistant can talk through the ticket, inspect the project, and suggest a useful next step.
-
-**A new Automations section was added.** Automations are now itemized instruction workflows with create, edit, remove, scheduling, Run Now, and per-automation history. Scheduled runs use the same workflow spine as the rest of the app, so automation work stays connected to Hermes and the orchestrator.
-
-**ECC and skill setup moved into a cleaner registry model.** The ECC surface is vendored with provenance, skills are deduped instead of blindly copied, and setup can repair Codex, Cursor, and Claude wiring without spraying duplicate skills everywhere.
-
-**Codex and Cursor plugin setup is now part of the harness story.** Local setup can verify and repair the DecisionsAI IDE plugins when Codex or Cursor is present, while Claude receives the compatible harness surface. That gives the IDEs a way to report back into Hermes instead of acting like disconnected command-line helpers.
-
-**Browser and Playwright work is less isolated.** Browser runs can keep per-session evidence, including screenshots and console/network context, and tie that evidence back to the same project, workflow, automation, or IDE conversation that started it.
-
-**The assistant got a quieter, more human engagement layer.** Telegram and desktop responses now route through a central policy so low-value status gets logged instead of spammed, voice is preferred when it is useful, repeated idle nudges are suppressed, raw provider errors are summarized, and lifecycle messages are shorter.
-
-**Telegram and automation delivery were hardened.** Inbound Telegram messages wait for the agent bridge during startup instead of being dropped, outbound rate limits defer messages instead of losing them, remote-control link requests stay intact, and scheduled automation reports no longer create noisy secondary chat or Telegram summaries.
-
-**Internal project and workflow records stopped leaking into user surfaces.** Orphaned IDE bridge sessions are cleaned up, placeholder project labels are replaced with real workspace names or neutral labels, and internal audit/project-execution workflows stay out of the normal workflow list.
-
-**Hermes memory started separating conversation history from durable preferences.** The memory layer can keep useful long-term style and taste signals while letting old chat transcripts be removed or compacted, with weekly compaction groundwork added so the system does not slowly bloat.
-
-**The Ticket Boards UI was tightened around real work.** Board loading, Messages/Boards switching, ticket controls, modal actions, and project-linked ticket context were cleaned up so the board is usable as a work surface again rather than just a place tickets happen to exist.
+- Orchestrator events for workflow runs, automations, IDE activity, browser evidence, nudges, and ticket-board handoffs share a clearer shape
+- Cursor and Codex sessions report project and session context back, including chats not started from a workflow
+- Ticket Boards: sending a ticket opens a live agent thread with speech, linked project details, and the correct chat id
+- Automations section added: itemized instruction workflows with create, edit, remove, scheduling, Run Now, and per-automation history
+- ECC vendored with provenance; skills deduped; setup repairs Codex, Cursor, and Claude wiring
+- Codex/Cursor plugin verify/repair during setup; Claude gets the compatible harness surface
+- Browser/Playwright runs keep per-session evidence (screenshots, console/network) tied to the starting project, workflow, automation, or IDE chat
+- Telegram/desktop responses routed through a central policy: log low-value status, prefer voice when useful, suppress repeated idle nudges, summarize provider errors
+- Telegram: inbound messages wait for the agent bridge at startup; outbound rate limits defer instead of drop; remote link requests preserved; scheduled automation reports no longer duplicate into chat/Telegram
+- Internal audit/project-execution workflows hidden from the normal workflow list; orphaned IDE bridge sessions cleaned; placeholder project labels replaced
+- Memory layer splits conversation history from durable preferences; weekly compaction groundwork
+- Ticket Boards UI: loading, Messages/Boards switch, ticket controls, modals, project-linked context
 
 ---
 
