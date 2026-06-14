@@ -63,7 +63,7 @@ This makes the agent smarter without context rot.
 
 ### ECC harness pack
 
-DecisionsAI vendors ECC under vendor/ecc and exposes it through the merged skill
+DecisionsAI vendors ECC under plugins/ecc and exposes it through the merged skill
 registry. ECC adds cross-harness agents, commands, rules, hooks, MCP configs,
 and ecosystem skills. Do not duplicate ECC source files into native DecisionsAI
 skills unless a skill is intentionally merged. Generated Codex, Claude, Cursor,

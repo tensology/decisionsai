@@ -8,6 +8,9 @@
 .kiro/
 .vscode/
 .idea/
+
+# --- Local runtime artifacts (never commit) ---
+.artifacts/
 *.swp
 *.swo
 *~
@@ -76,9 +79,14 @@ db/*
 db/backups/
 db/whatsapp_media/
 
-# --- Docs (auto-generated / to be rewritten) ---
+# --- Docs (local notes only; tracked canonical docs are allowlisted) ---
 docs/*
-!docs/hermes.md
+!docs/orchestrator.md
+!docs/nous-hermes-agent.md
+
+# --- Dev scratch at repo root ---
+test.js
+server.log
 
 # --- Installer build artifacts ---
 installer/build/

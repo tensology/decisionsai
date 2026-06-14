@@ -35,7 +35,7 @@ def test_harness_pack_bootstrap_projects_vendor_context_to_detected_harnesses(tm
     registry_path = tmp_path / ".decisions" / "harness" / "ecc-skills-registry.json"
     registry_text = registry_path.read_text(encoding="utf-8")
     assert "react-patterns" in registry_text
-    assert "vendor/ecc" in registry_text
+    assert "plugins/ecc" in registry_text
 
     manifest_path = tmp_path / ".decisions" / "harness" / "ecc-surface-manifest.json"
     manifest_text = manifest_path.read_text(encoding="utf-8")
@@ -53,7 +53,7 @@ def test_harness_pack_bootstrap_projects_vendor_context_to_detected_harnesses(tm
         assert path.exists(), relative
         text = path.read_text(encoding="utf-8")
         assert "DecisionsAI ECC Harness Pack" in text
-        assert "vendor/ecc" in text
+        assert "plugins/ecc" in text
         assert "surface manifest" in text
 
 

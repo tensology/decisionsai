@@ -9,7 +9,7 @@ from typing import Any
 from distr.core.workflow.loop_catalog import LOOP_ARCHETYPES, infer_loop_archetype
 from distr.core.workflow.planning import parse_loop_contract
 
-# ECC skill bundles keyed by loop archetype (ids under vendor/ecc/skills or skills/).
+# ECC skill bundles keyed by loop archetype (ids under plugins/ecc/skills or skills/).
 ARCHETYPE_SKILL_BUNDLES: dict[str, list[str]] = {
     "check_fix_until_green": ["tdd-workflow", "build-error-resolver", "verification-loop"],
     "review_cleanup": ["code-reviewer", "refactor-cleaner", "finishing-a-development-branch"],

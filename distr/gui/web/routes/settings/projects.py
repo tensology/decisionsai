@@ -28,13 +28,15 @@ def _backend_id_for_project(project) -> str:
 
 
 def _codex_plugin_candidates() -> list[Path]:
+    from distr.core.plugins import CODEX_PLUGIN_NAME, codex_ide_source
+
     codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
     agents_home = Path(os.environ.get("AGENTS_HOME") or (Path.home() / ".agents"))
     return [
-        _repo_root() / "codex_plugin" / "decisions-codex",
-        Path.home() / "plugins" / "decisions-codex",
-        codex_home / "plugins" / "decisions-codex",
-        agents_home / "plugins" / "decisions-codex",
+        codex_ide_source(),
+        Path.home() / "plugins" / CODEX_PLUGIN_NAME,
+        codex_home / "plugins" / CODEX_PLUGIN_NAME,
+        agents_home / "plugins" / CODEX_PLUGIN_NAME,
     ]
 
 
@@ -50,11 +52,13 @@ def _codex_plugin_state() -> dict:
 
 
 def _cursor_plugin_candidates() -> list[Path]:
+    from distr.core.plugins import CURSOR_PLUGIN_NAME, cursor_ide_source
+
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
     return [
-        _repo_root() / "cursor_plugin" / "decisions-cursor",
-        cursor_home / "plugins" / "local" / "decisions-cursor",
-        Path.home() / "plugins" / "decisions-cursor",
+        cursor_ide_source(),
+        cursor_home / "plugins" / "local" / CURSOR_PLUGIN_NAME,
+        Path.home() / "plugins" / CURSOR_PLUGIN_NAME,
     ]
 
 
@@ -97,7 +101,9 @@ def _install_local_codex_plugin() -> dict:
             "plugin": _codex_plugin_state(),
         }
 
-    source = _repo_root() / "codex_plugin" / "decisions-codex"
+    from distr.core.plugins import CODEX_PLUGIN_NAME, codex_ide_source
+
+    source = codex_ide_source()
     installer = source / "scripts" / "install_local.py"
     manifest = source / ".codex-plugin" / "plugin.json"
     if not manifest.exists() or not installer.exists():
@@ -109,7 +115,7 @@ def _install_local_codex_plugin() -> dict:
             "plugin": _codex_plugin_state(),
         }
 
-    target = Path.home() / "plugins" / "decisions-codex"
+    target = Path.home() / "plugins" / CODEX_PLUGIN_NAME
     marketplace = Path.home() / ".agents" / "plugins" / "marketplace.json"
     try:
         result = subprocess.run(
@@ -165,7 +171,9 @@ def _install_local_cursor_plugin() -> dict:
             "plugin": _cursor_plugin_state(),
         }
 
-    source = _repo_root() / "cursor_plugin" / "decisions-cursor"
+    from distr.core.plugins import CURSOR_PLUGIN_NAME, cursor_ide_source
+
+    source = cursor_ide_source()
     manifest = source / ".cursor-plugin" / "plugin.json"
     if not manifest.exists():
         return {
@@ -177,7 +185,7 @@ def _install_local_cursor_plugin() -> dict:
         }
 
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
-    target = cursor_home / "plugins" / "local" / "decisions-cursor"
+    target = cursor_home / "plugins" / "local" / CURSOR_PLUGIN_NAME
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() or target.is_symlink():
         if target.is_symlink() or target.is_file():

@@ -867,7 +867,7 @@ fi
 
 # Check and install the local DecisionsAI Cursor plugin when Cursor is present.
 check_cursor_plugin_setup() {
-    local cursor_plugin_source="$SCRIPT_DIR/cursor_plugin/decisions-cursor"
+    local cursor_plugin_source="$SCRIPT_DIR/plugins/cursor-ide"
     local cursor_plugin_target="$HOME/.cursor/plugins/local/decisions-cursor"
 
     if [ ! -d "$cursor_plugin_source" ]; then
@@ -890,13 +890,13 @@ check_cursor_plugin_setup() {
         echo -e "${YELLOW}Reload Cursor once so it picks up the local plugin.${NC}"
     else
         echo -e "${YELLOW}⚠${NC}  Could not install DecisionsAI Cursor plugin automatically."
-        echo -e "${YELLOW}   Run: python3 cursor_plugin/decisions-cursor/scripts/install_local.py${NC}"
+        echo -e "${YELLOW}   Run: python3 plugins/cursor-ide/scripts/install_local.py${NC}"
     fi
 }
 
 # Check and register the local DecisionsAI Codex plugin when Codex is present.
 check_codex_plugin_setup() {
-    local codex_plugin_source="$SCRIPT_DIR/codex_plugin/decisions-codex"
+    local codex_plugin_source="$SCRIPT_DIR/plugins/codex-ide"
     local codex_plugin_target="$HOME/plugins/decisions-codex"
 
     if [ ! -d "$codex_plugin_source" ]; then
@@ -919,7 +919,7 @@ check_codex_plugin_setup() {
         echo -e "${YELLOW}Reload Codex once so it picks up the local plugin.${NC}"
     else
         echo -e "${YELLOW}⚠${NC}  Could not install DecisionsAI Codex plugin automatically."
-        echo -e "${YELLOW}   Run: python3 codex_plugin/decisions-codex/scripts/install_local.py${NC}"
+        echo -e "${YELLOW}   Run: python3 plugins/codex-ide/scripts/install_local.py${NC}"
     fi
 }
 

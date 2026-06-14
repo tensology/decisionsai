@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PLUGIN_ROOT = ROOT / "codex_plugin" / "decisions-codex"
+PLUGIN_ROOT = ROOT / "plugins" / "codex-ide"
 
 
 def test_codex_plugin_documents_ide_first_and_cli_fallback():

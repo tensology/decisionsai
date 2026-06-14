@@ -30,8 +30,8 @@ def test_cursor_plugin_setup_state_replaces_editor_extension_contract():
 
     state = _cursor_plugin_state()
 
-    assert state["path"].endswith("cursor_plugin/decisions-cursor")
-    assert any(path.endswith("cursor_plugin/decisions-cursor") for path in state["candidates"])
+    assert state["path"].endswith("plugins/cursor-ide")
+    assert any(path.endswith("plugins/cursor-ide") for path in state["candidates"])
     assert "manifest_exists" in state
 
 

@@ -39,8 +39,8 @@ def test_harness_event_route_accepts_ambient_events_without_internal_token(monke
 def test_reporter_fails_silently_when_decisions_is_off():
     script = (
         Path(__file__).resolve().parents[2]
-        / "codex_plugin"
-        / "decisions-codex"
+        / "plugins"
+        / "codex-ide"
         / "scripts"
         / "report_decisions_event.py"
     )

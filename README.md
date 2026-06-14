@@ -23,7 +23,7 @@
   <a href="#voice-commands"><strong>Voice Commands</strong></a> ·
   <a href="#workflows"><strong>Workflows</strong></a> ·
   <a href="#ide-integration"><strong>IDE Harness</strong></a> ·
-  <a href="docs/hermes.md"><strong>Hermes</strong></a>
+  <a href="docs/orchestrator.md"><strong>Orchestrator</strong></a>
 </p>
 
 ---
@@ -50,8 +50,8 @@
 | 🔀 | **Workflows + automations** | Multi-step workflows with validation, agent routing, recording, presets, scheduling, and itemized automations |
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
 | 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
-| 🧭 | **[Hermes orchestration](docs/hermes.md)** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
-| 🔧 | **[IDE + coding agents](#ide-integration)** | Work with [Codex](codex_plugin/decisions-codex/README.md), [Cursor](cursor_plugin/decisions-cursor/README.md), [Claude-compatible harnessing](vendor/ecc/docs/HERMES-SETUP.md), and coding backends through local plugins and harness reporting so project context does not disappear |
+| 🧭 | **[Orchestrator](docs/orchestrator.md)** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
+| 🔧 | **[IDE + coding agents](#ide-integration)** | Work with [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), [Claude-compatible harnessing](plugins/ecc/docs/HERMES-SETUP.md), and coding backends through local plugins and harness reporting so project context does not disappear |
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
 | 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, drag, and transfer files from anywhere |
 
@@ -91,7 +91,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **Ticket Boards** | Manage local, Jira, and Trello work, then send tickets into the orchestrator with linked project context |
 | **Automations** | Create scheduled instruction workflows with Run Now and per-automation history |
 | **Workflows** | Build multi-step workflows with validation, routing, recording, browser evidence, presets, and scheduling |
-| **Skills** | Browse local and vendored skills, including [ECC-backed capabilities](vendor/ecc/README.md), without duplicate setup |
+| **Skills** | Browse local and vendored skills, including [ECC-backed capabilities](plugins/ecc/README.md), without duplicate setup |
 
 <p align="center">
   <img src="assets/readme/chat.webp" alt="DecisionsAI Web Interface" />
@@ -110,7 +110,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK voices — 100+ speakers with accents) |
 | [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
-| **[Hermes](docs/hermes.md)** | Internal orchestration ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
+| **[Orchestrator](docs/orchestrator.md)** | Internal orchestration ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
 | **[Sidecar (Go)](sidecar/README.md)** | Machine control — accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
 
 **Optional cloud services:**
@@ -142,7 +142,7 @@ The legal pages should explicitly cover connected accounts and external streams
 such as WhatsApp, Telegram, Gmail, Jira, Trello, IRC/shared chat rooms, uploaded
 files, voice notes/transcriptions, images, project folders, CLI/IDE execution
 logs, model-provider requests, workflow audit trails, and the internal
-[orchestration ledger](docs/hermes.md) used for validation and correction memory.
+[orchestration ledger](docs/orchestrator.md) used for validation and correction memory.
 
 ---
 
@@ -215,7 +215,7 @@ cd decisionsai
 
 The launcher handles dependency checks, Python setup, model downloads, and launch automatically.
 
-When [Codex](codex_plugin/decisions-codex/README.md), [Cursor](cursor_plugin/decisions-cursor/README.md), or the [Claude-compatible harness surface](vendor/ecc/docs/HERMES-SETUP.md) are available on the machine, setup also verifies the DecisionsAI harness wiring for them. Codex and Cursor receive local DecisionsAI plugin/reporting files so IDE conversations and project work can speak back to [Hermes](docs/hermes.md); Claude receives the compatible [ECC harness surface](vendor/ecc/docs/HERMES-SETUP.md). If an IDE is not installed or DecisionsAI is not running, those checks fail quietly instead of blocking launch.
+When [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), or the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md) are available on the machine, setup also verifies the DecisionsAI harness wiring for them. Codex and Cursor receive local DecisionsAI plugin/reporting files so IDE conversations and project work can speak back to [Orchestrator](docs/orchestrator.md); Claude receives the compatible [ECC harness surface](plugins/ecc/docs/HERMES-SETUP.md). If an IDE is not installed or DecisionsAI is not running, those checks fail quietly instead of blocking launch.
 
 ### Manual installation
 
@@ -302,11 +302,11 @@ Connect via **Preferences → Advanced → Google** (OAuth 2.0).
 
 ### IDE Integration
 
-[Codex](codex_plugin/decisions-codex/README.md), [Cursor](cursor_plugin/decisions-cursor/README.md), the [Claude-compatible harness surface](vendor/ecc/docs/HERMES-SETUP.md), and other coding backends are wired through project context so ticket-board work, free-form IDE chats, workflow runs, automation runs, and orchestrator updates can stay attached to the right project where possible. The CLI path still exists, but DecisionsAI now treats the IDEs as first-class development surfaces.
+[Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md), and other coding backends are wired through project context so ticket-board work, free-form IDE chats, workflow runs, automation runs, and orchestrator updates can stay attached to the right project where possible. The CLI path still exists, but DecisionsAI now treats the IDEs as first-class development surfaces.
 
-The local [Codex](codex_plugin/decisions-codex/README.md) and [Cursor](cursor_plugin/decisions-cursor/README.md) plugins are installed or repaired during setup when those tools are detected. They report project/session events back into [Hermes](docs/hermes.md), which lets the main orchestrator continue a thread, see whether a project is moving, attach browser or workflow evidence, and speak to you from the right channel instead of losing the work inside a separate editor chat.
+The local [Codex](plugins/codex-ide/README.md) and [Cursor](plugins/cursor-ide/README.md) plugins are installed or repaired during setup when those tools are detected. They report project/session events back into [Orchestrator](docs/orchestrator.md), which lets the main orchestrator continue a thread, see whether a project is moving, attach browser or workflow evidence, and speak to you from the right channel instead of losing the work inside a separate editor chat.
 
-[Hermes](docs/hermes.md) acts as the shared harness for that loop: tickets, boards, automations, workflows, browser runs, local project folders, and IDE conversations all feed the same project-aware ledger. The vendored [ECC](vendor/ecc/README.md) surface adds skills, harness patterns, and setup references without blindly duplicating local skills. Together, that is what lets DecisionsAI answer questions like "what is my daily plan?", "what is stuck?", or "what happened in Codex on this project?" using more than the last chat message.
+[Orchestrator](docs/orchestrator.md) acts as the shared harness for that loop: tickets, boards, automations, workflows, browser runs, local project folders, and IDE conversations all feed the same project-aware ledger. The vendored [ECC](plugins/ecc/README.md) surface adds skills, harness patterns, and setup references without blindly duplicating local skills. Together, that is what lets DecisionsAI answer questions like "what is my daily plan?", "what is stuck?", or "what happened in Codex on this project?" using more than the last chat message.
 
 ---
 
@@ -342,14 +342,13 @@ distr/
 │   ├── dialogs/     # About, preferences windows
 │   ├── oracle/      # Oracle overlay and tray
 │   └── web/         # Local web UI (templates, static, API)
-codex_plugin/        # Codex bridge plugin and reporting setup
-cursor_plugin/       # Cursor bridge plugin and reporting setup
+plugins/             # IDE bridge plugins (codex-ide, cursor-ide) and vendored ECC harness pack
 sidecar/             # Go binary — machine control agent (macOS/Windows)
-vendor/ecc/          # Vendored ECC skills, harness docs, and command surface
 assets/
 ├── avatars/         # Skin packs (Clippy, Nugget, Rusty, Masko, etc.)
 └── readme/          # README images
-docs/                # Hermes and implementation notes
+docs/                # Orchestrator docs (local planning notes stay gitignored)
+.artifacts/          # Gitignored local runtime output (tickets, pi skills, cursor handoffs)
 tests/               # Property-based and unit tests
 ```
 

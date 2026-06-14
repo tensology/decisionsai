@@ -52,7 +52,8 @@ def test_project_routes_install_codex_plugin_when_codex_backend_setup_runs():
     py = (ROOT / "distr/gui/web/routes/settings/projects.py").read_text(encoding="utf-8")
 
     assert "def _install_local_codex_plugin" in py
-    assert 'Path.home() / "plugins" / "decisions-codex"' in py
+    assert "CODEX_PLUGIN_NAME" in py
+    assert 'Path.home() / "plugins" / CODEX_PLUGIN_NAME' in py
     assert 'Path.home() / ".agents" / "plugins" / "marketplace.json"' in py
     assert 'if normalized_backend_id == "codex"' in py
     assert '"plugin_install": install' in py
@@ -63,7 +64,7 @@ def test_decisions_startup_checks_cursor_plugin_setup():
     script = (ROOT / "bin/decisions.sh").read_text(encoding="utf-8")
 
     assert "check_cursor_plugin_setup" in script
-    assert "cursor_plugin/decisions-cursor/scripts/install_local.py" in script
+    assert "cursor-ide/scripts/install_local.py" in script
     assert "DecisionsAI Cursor plugin" in script
 
 

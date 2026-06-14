@@ -331,10 +331,10 @@ class AboutWindow(QtWidgets.QMainWindow):
 
         orchestrator_url = local_doc_url("docs", "orchestrator.md")
         readme_url = local_doc_url("README.md")
-        codex_url = local_doc_url("codex_plugin", "decisions-codex", "README.md")
-        cursor_url = local_doc_url("cursor_plugin", "decisions-cursor", "README.md")
-        claude_url = local_doc_url("vendor", "ecc", "docs", "HERMES-SETUP.md")
-        ecc_url = local_doc_url("vendor", "ecc", "README.md")
+        codex_url = local_doc_url("plugins", "codex-ide", "README.md")
+        cursor_url = local_doc_url("plugins", "cursor-ide", "README.md")
+        claude_url = local_doc_url("plugins", "ecc", "docs", "HERMES-SETUP.md")
+        ecc_url = local_doc_url("plugins", "ecc", "README.md")
         sidecar_url = local_doc_url("sidecar", "README.md")
 
         about_paragraphs = [

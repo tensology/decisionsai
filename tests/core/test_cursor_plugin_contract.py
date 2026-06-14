@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PLUGIN_ROOT = ROOT / "cursor_plugin" / "decisions-cursor"
+PLUGIN_ROOT = ROOT / "plugins" / "cursor-ide"
 
 
 def test_cursor_plugin_manifest_and_worker_skill_exist():

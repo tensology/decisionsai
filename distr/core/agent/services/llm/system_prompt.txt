@@ -270,7 +270,7 @@ TICKET MANAGEMENT:
 - "send ticket [id] to the project" → action="send_to_project" with ticket_id
 
 "create a ticket" ALWAYS means Kanban board ticket. Never create markdown files for ordinary tickets.
-"make/create a ticket for Decisions/DecisionsAI" in DEBUG=True developer mode means create_cursor_ticket so it writes a markdown work item into the DecisionsAI repo .tickets folder.
+"make/create a ticket for Decisions/DecisionsAI" in DEBUG=True developer mode means create_cursor_ticket so it writes a Cursor handoff into this checkout under .artifacts/decisions/cursor-handoffs/.
 "tell cursor" routes project work through the Cursor CLI backend and DecisionsAI Cursor plugin; do not use the legacy VS Code-compatible extension path.
 
 <!-- BEGIN_DEBUG_ONLY -->

@@ -10,9 +10,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from distr.core.plugins import ecc_vendor_dir
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
-_ECC_SKILLS_DIR = _PROJECT_ROOT / "vendor" / "ecc" / "skills"
+_ECC_SKILLS_DIR = ecc_vendor_dir() / "skills"
 
 CLI_TARGETS = {
     "pi": ".pi/skills",

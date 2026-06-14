@@ -1,6 +1,6 @@
 """DecisionsAI bundled harness pack bootstrap.
 
-ECC is vendored once under ``vendor/ecc``. This module projects that single
+ECC is vendored once under ``plugins/ecc``. This module projects that single
 source into the local harnesses a developer already has installed.
 """
 
@@ -15,9 +15,11 @@ import subprocess
 import sys
 from typing import Any
 
+from distr.core.plugins import CODEX_PLUGIN_NAME, codex_ide_source, ecc_vendor_dir
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-ECC_VENDOR_DIR = PROJECT_ROOT / "vendor" / "ecc"
+ECC_VENDOR_DIR = ecc_vendor_dir()
 STATE_VERSION = 1
 
 
@@ -144,7 +146,7 @@ access point, not a second source copy.
 Use the cached registry at `{registry_path}` to discover ECC skills. Use the
 surface manifest at `{manifest_path}` to find ECC agents, commands, rules, hooks,
 MCP configs, schemas, scripts, and control-plane code. Both files point back to
-the vendored source under `vendor/ecc`.
+the vendored source under `plugins/ecc`.
 
 Rules:
 - Prefer native DecisionsAI skills when a native and ECC skill share the same id.
@@ -157,14 +159,14 @@ Rules:
 - If DecisionsAI is switched off or unreachable, ambient reporting must fail
   silently and never interrupt local `{harness}` work.
 - Keep generated harness projection files small; the source of truth remains
-  `vendor/ecc`.
+  `plugins/ecc`.
 """
 
 
 def _required_projection_paths(home: Path, detected: dict[str, bool]) -> list[Path]:
     paths: list[Path] = []
     if detected.get("codex"):
-        paths.append(home / "plugins" / "decisions-codex" / "skills" / "ecc-harness-pack" / "SKILL.md")
+        paths.append(home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "ecc-harness-pack" / "SKILL.md")
     if detected.get("claude"):
         paths.append(home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md")
     if detected.get("cursor"):
@@ -206,7 +208,7 @@ def _state_is_current(home: Path, fingerprint: str, detected: dict[str, bool]) -
 def _install_codex_plugin_if_requested(*, enabled: bool, detected: dict[str, bool]) -> None:
     if not enabled or not detected.get("codex"):
         return
-    script = PROJECT_ROOT / "codex_plugin" / "decisions-codex" / "scripts" / "install_local.py"
+    script = codex_ide_source() / "scripts" / "install_local.py"
     if not script.is_file():
         return
     try:
@@ -235,7 +237,7 @@ def _write_harness_projections(
 ) -> list[str]:
     written: list[str] = []
     targets = {
-        "codex": home / "plugins" / "decisions-codex" / "skills" / "ecc-harness-pack" / "SKILL.md",
+        "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "ecc-harness-pack" / "SKILL.md",
         "claude": home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         "cursor": home / ".cursor" / "decisions-ecc-harness.md",
         "pi": home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md",

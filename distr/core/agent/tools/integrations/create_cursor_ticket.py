@@ -22,9 +22,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _decisionsai_project_root() -> str:
-    """Return the DecisionsAI repo root for debug-only self tickets."""
-    return str(Path(__file__).resolve().parents[5])
+def _decisionsai_repo_cursor_handoffs_dir() -> str:
+    """Return the gitignored Cursor handoff folder for this DecisionsAI checkout."""
+    from distr.core.artifacts import ensure_repo_artifacts_dirs, repo_cursor_handoffs_dir
+
+    ensure_repo_artifacts_dirs()
+    return str(repo_cursor_handoffs_dir())
 
 
 def _extract_debug_decisions_ticket_content(text: str) -> str:
@@ -102,7 +105,7 @@ class CreateCursorTicketTool(BaseTool):
 
     name: str = "create_cursor_ticket"
     description: str = """Create a Cursor plugin handoff only when the user explicitly says 'tell cursor', 'Cursor ticket', or asks to send work to Cursor.
-    DEBUG=True exception: "make a ticket for Decisions/DecisionsAI" writes a Cursor plugin handoff into the DecisionsAI repo.
+    DEBUG=True exception: "make a ticket for Decisions/DecisionsAI" writes a Cursor plugin handoff into this checkout's .artifacts/decisions/cursor-handoffs/ folder.
     If a project is active (in use) with a folder path, the handoff is written to that project's .decisions/cursor-handoffs/ folder.
     Otherwise the handoff is written under ~/.cursor/decisionsai/handoffs/.
     The tool cleans up and summarizes the content into a well-formatted ticket.
@@ -566,8 +569,10 @@ Cleaned ticket:"""
             cursor_project_folder = None
             project_label = None
             if ticket_intent.kind == "debug_decisions_ticket":
-                cursor_project_folder = _decisionsai_project_root()
-                handoffs_dir = os.path.join(cursor_project_folder, ".decisions", "cursor-handoffs")
+                from distr.core.artifacts import project_root
+
+                cursor_project_folder = str(project_root())
+                handoffs_dir = _decisionsai_repo_cursor_handoffs_dir()
                 project_label = "DecisionsAI"
                 logger.info("CreateCursorTicket: using DEBUG DecisionsAI cursor handoffs at %s", handoffs_dir)
             else:
@@ -647,7 +652,9 @@ Cleaned ticket:"""
             # Return success message with option to open file or folder
             result = f"Successfully created Cursor plugin handoff: {filename}\n"
             result += f"Location: {filepath}\n"
-            if project_label:
+            if project_label == "DecisionsAI" and ticket_intent.kind == "debug_decisions_ticket":
+                result += "(In this checkout under .artifacts/decisions/cursor-handoffs)\n"
+            elif project_label:
                 result += f"(In active project \"{project_label}\" under .decisions/cursor-handoffs)\n"
             if opened_cursor:
                 result += "Opened the project in Cursor so the plugin can pick up the handoff.\n"

@@ -11,9 +11,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+from distr.core.plugins import ecc_vendor_dir
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
-_ECC_VENDOR_DIR = _PROJECT_ROOT / "vendor" / "ecc"
+_ECC_VENDOR_DIR = ecc_vendor_dir()
 _ECC_SKILLS_DIR = _ECC_VENDOR_DIR / "skills"
 _ECC_VENDOR_METADATA_FILE = _ECC_VENDOR_DIR / ".decisions-vendor.json"
 _REGISTRY_FILE = _SKILLS_DIR / "skills_registry.json"
@@ -167,7 +169,7 @@ def _vendor_registry_rows(scan: Any, existing_ids: set[str], metadata: dict[str,
                 "provenance": {
                     "repo": str(metadata.get("source") or "https://github.com/affaan-m/ecc"),
                     "license": str(metadata.get("license") or "MIT"),
-                    "vendored_path": "vendor/ecc",
+                    "vendored_path": "plugins/ecc",
                     "commit": str(metadata.get("commit") or ""),
                     "content_hash": entry.content_hash,
                 },
