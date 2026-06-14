@@ -341,12 +341,14 @@ class AboutWindow(QtWidgets.QMainWindow):
             _html_paragraph("<b>Hey.</b> You clicked the llama. Respect."),
             _html_paragraph(
                 "DecisionsAI is a local, voice-first workspace — chat, boards, automations, workflows, "
-                "and whatever you dragged in from the rest of your digital life. "
+                "loops, IRC, and whatever you dragged in from the rest of your digital life. "
                 "One machine, fewer tabs screaming at you."
             ),
             _html_paragraph(
                 "Winamp-era energy, modern problems: skimmable when you want speed, deep when you want proof. "
-                f"The {_html_link(orchestrator_url, 'orchestrator')} keeps the thread so handoffs do not evaporate."
+                f"The {_html_link(orchestrator_url, 'orchestrator')} keeps the thread so handoffs do not evaporate. "
+                "Version 2.8 tightens the web UI, adds Loops workflows, calendar automations, board-to-orchestrator handoff, "
+                "in-thread model and voice changes, chat compaction, WhatsApp-to-board linking, IRC, and a rebuilt remote control."
             ),
             _html_paragraph(
                 f"Build work routes through {_html_link(codex_url, 'Codex')}, "

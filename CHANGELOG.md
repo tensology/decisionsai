@@ -16,6 +16,40 @@ Codex and Cursor are also becoming first-class development surfaces inside the p
 
 ---
 
+## [2.8.0] - 2026-06-14
+
+### UI cohesion, Loops workflows, calendar automations, and a tighter orchestration harness
+
+**The local web UI got a full tightening pass.** Chat, Projects, Ticket Boards, Automations, and Workflows all received layout and interaction cleanup so the product feels like one workspace instead of a pile of separate admin screens. Less chrome, clearer primary actions, and fewer places where you have to guess what the next click should do.
+
+**Chat is more flexible without starting over.** You can switch LLM and voice settings inside an existing thread instead of spawning a new chat every time the model or speaker changes. Chat also gained explicit **Compact** controls — from the header, the chat context menu, or automatic compaction when context gets heavy — plus a clearer **system activity** trail so tool runs, workflow progress, and orchestration events show up as structured activity instead of mystery noise in the transcript.
+
+**Projects were simplified around the work that actually matters.** The Projects area was cleaned up so backend selection, folder context, CLI setup, and project details read as one surface. Less duplicate status, fewer nested panels, and a clearer path from “this is my repo” to “run work against it.”
+
+**Ticket Boards are cleaner and more connected to the orchestrator.** Board chrome, lane tools, and workflow hooks were tightened so the board reads as a work surface again. Tickets can now be **sent to the orchestrator** directly from the board, opening a real agent conversation with speech, linked project context, and a thread you can continue instead of a one-way context dump.
+
+**WhatsApp can be tied to a board by phone number.** A board can now link one or more WhatsApp numbers so inbound chats, snapshots, and ticket creation stay attached to the right lane instead of floating in a generic inbox.
+
+**Automations became simpler and more useful at the same time.** The Automations tool was redesigned around itemized instruction workflows with clearer create/edit/run/history behavior. It now shares a **calendar** where you can schedule automations, record **time-entry blocks**, link blocks to tickets and completed work, run a live timer, naturalize rough time notes, and export timesheet-style summaries back to boards.
+
+**Workflows were rebuilt again — this time around Loops.** Sorry for the churn; the goal was to find a practical way to work with the orchestrator instead of fighting a generic step editor. The Workflows UI was rebuilt around **Loops**: reusable preset patterns inspired by modern agentic loop practice, applied on top of the existing **Step Runner** spine. You can import loop presets, append or replace steps, export your own presets, steer a waiting harness mid-run, and see active runs with executor choice, validation, steering history, and what the system plans to do next. The harness layer gives the orchestrator and agent a fuller picture of project context, IDE activity, browser evidence, and run memory while a loop is in flight.
+
+**IRC chat landed as a first-class local surface.** DecisionsAI now includes a built-in IRC chat page and API proxy so shared rooms and relayed conversations can sit beside Telegram, WhatsApp, boards, and chat without bolting on a separate client.
+
+**Desktop control got sharper at the edges.** Shortcuts and **dictate mode** were tightened — hold-to-dictate is more reliable, modifier-only combos behave consistently, and dictation routes as text entry instead of accidentally firing commands. The **system tray context menu** was reorganized with nested submenus for chats, projects, boards, automations, workflows, snippets, skins, navigation, and controls so far more of the app is reachable without opening the browser first.
+
+**Initiative mode is simpler to reason about.** Initiative settings were reduced to a clearer posture model: what the agent may scan, what it may suggest, what requires asking first, and which channels it may use. Less jargon, more obvious boundaries.
+
+**The remote control surface was rebuilt around three obvious buttons.** **Snippets**, **Agent**, and **Dictate** are now the primary remote actions. Hold a button for push-to-talk dictation, or tap once to open a text box for typed input. Remote audio can stream back with an explicit stop control, and remote click routing was fixed so pointer actions land where they should.
+
+**IDE harness setup got easier to maintain.** ECC harness pack bootstrap, Codex/Cursor plugin repair, and a cleaner `plugins/` layout (`codex-ide`, `cursor-ide`, `ecc`) keep IDE reporting and skill projection in one place. Local checkout drift like committed `.tickets`, `.pi`, and scratch docs was moved into gitignored `.artifacts/`.
+
+**Telegram, Oracle, and Sidecar polish rounded out the release.** Telegram desktop intercom requests work more reliably, online notices are clearer, Oracle skin idle/animation behavior is smoother, file-drop glow no longer gets stuck, and Sidecar remote click handling routes through the correct mouse-position path.
+
+**Regression coverage expanded across the new surfaces.** Added and extended tests for chat compaction and activity contracts, loop preset application and run matrices, schedule blocks and calendar timers, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness pack bootstrap, and plugin path consolidation.
+
+---
+
 ## [2.7.17] - 2026-06-05
 
 ### Orchestration backbone, IDE handoff, human engagement, and Automation

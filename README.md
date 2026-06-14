@@ -47,13 +47,14 @@
 | 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
 | 🔄 | **Recorded macros** | Capture keyboard and mouse sequences, replay them by voice — perfect for repetitive tasks |
 | 👁️ | **Vision** | Share screenshots, photos, or diagrams — the assistant reasons about what it sees |
-| 🔀 | **Workflows + automations** | Multi-step workflows with validation, agent routing, recording, presets, scheduling, and itemized automations |
+| 🔀 | **Workflows + Loops** | Multi-step workflows with loop presets, Step Runner execution, validation, harness steering, recording, browser evidence, and scheduling |
+| 📅 | **Automations + calendar** | Itemized automations with scheduling, time-entry blocks, live timers, and timesheet export |
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
 | 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
 | 🧭 | **[Orchestrator](docs/orchestrator.md)** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
 | 🔧 | **[IDE + coding agents](#ide-integration)** | Work with [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), [Claude-compatible harnessing](plugins/ecc/docs/HERMES-SETUP.md), and coding backends through local plugins and harness reporting so project context does not disappear |
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
-| 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, drag, and transfer files from anywhere |
+| 🌐 | **Remote control** | HMAC-encrypted browser UI with Snippets, Agent, and Dictate — hold to talk or tap for a text box |
 
 ## How It Works
 
@@ -84,13 +85,14 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 |---|---|
 | **Preferences** | Choose models and voices, add API keys, connect Google and Telegram, tune behavior |
 | **Skins** | Browse and swap avatar skins in Preferences |
-| **Chat** | Browse and manage conversation threads |
+| **Chat** | Switch model and voice inside a thread, compact context, fork chats, and read system activity inline |
 | **Actions** | View, edit, rename, and trigger recorded macros |
 | **Snippets** | Manage text or code snippets with trigger words |
-| **Projects** | Create projects with context blocks, linked files, and IDE/coding backend setup |
-| **Ticket Boards** | Manage local, Jira, and Trello work, then send tickets into the orchestrator with linked project context |
-| **Automations** | Create scheduled instruction workflows with Run Now and per-automation history |
-| **Workflows** | Build multi-step workflows with validation, routing, recording, browser evidence, presets, and scheduling |
+| **Projects** | Simpler project workspace with context blocks, linked files, and IDE/coding backend setup |
+| **Ticket Boards** | Manage local, Jira, and Trello work; link WhatsApp numbers to a board; send tickets straight into the orchestrator |
+| **Automations** | Scheduled instruction workflows with Run Now, history, and a calendar for time-entry blocks linked to tickets |
+| **Workflows** | Multi-step workflows with **Loops** presets, Step Runner execution, validation, harness steering, browser evidence, and scheduling |
+| **IRC** | Built-in IRC chat page for shared rooms alongside Telegram and WhatsApp |
 | **Skills** | Browse local and vendored skills, including [ECC-backed capabilities](plugins/ecc/README.md), without duplicate setup |
 
 <p align="center">
@@ -312,7 +314,7 @@ The local [Codex](plugins/codex-ide/README.md) and [Cursor](plugins/cursor-ide/R
 
 ## Workflows
 
-Build multi-step workflows the agent executes in sequence. Each step has an action, optional validation, and routing logic. The workflow agent has full tool access — it can take screenshots, click elements, run Python scripts, search the web, use browser evidence, and hand project work to IDE/coding agents through the orchestrator.
+Build multi-step workflows the agent executes in sequence — now centered on **Loops** presets that sit on top of the Step Runner. Each step has an action, optional validation, and routing logic. Import a loop preset for common agentic patterns (check/fix until green, ship with CI, incremental ship, and more), steer a waiting harness mid-run, and watch active runs with validation, steering history, and executor context. The workflow agent has full tool access — screenshots, browser evidence, Python scripts, web search, and IDE/coding-agent handoff through the orchestrator.
 
 | Concept | How it works |
 |---|---|
