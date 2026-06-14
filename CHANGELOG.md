@@ -4,7 +4,7 @@
 
 ## [What's to Come]
 
-2.8 shipped the connected workspace. Next up: daily planning from one orchestrator view across chat, boards, projects, automations, Loops, IDE handoffs, and linked channels like Telegram, WhatsApp, Gmail, and IRC — plus smarter Initiative, deeper workflow memory, and more integrations without another inbox.
+2.8 shipped the connected workspace. Right now we are battle testing the end to end loop: work comes in from a board, WhatsApp, chat, or IDE, runs through automations and Loops workflows with harness reporting from Codex and Cursor, then comes back with evidence, validation, and tests. Next up is hardening Automations and Workflows, including WhatsApp draft saves so agent replies wait for your review before they go out.
 
 ---
 
