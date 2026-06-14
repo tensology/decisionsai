@@ -4,12 +4,11 @@
 
 ## [What's to Come]
 
-First came prompt engineering, then skills, then harnesses. Loops is the next layer: execution you can repeat, steer, and validate on top of a real Step Runner, not another chat wrapper.
+DecisionsAI followed a familiar stack: prompt engineering, then skills, then Codex/Cursor harnesses with project reporting, and now **Loops** on top of the Step Runner that was already there. Loops are importable preset step bundles (iterate until green, hand off to an IDE, validate, report back). Same runner, tighter contracts.
 
-2.8 shipped the connected workspace. We are in the middle of battle testing the pipe that ties it together. Work lands from WhatsApp, boards, tickets, email, or ideation in chat, routes through Automations and Workflows, hands off to Codex, Cursor, or your project CLI, and reports back with evidence, validation, and tests. The orchestrator is learning to hold that thread across surfaces instead of dropping state at every handoff.
+2.8 wired the surfaces together: boards, WhatsApp on boards, Automations, calendar blocks, orchestrator ticket handoffs, and IDE plugin repair. The shape we are battle testing in real use is intake from WhatsApp, boards, tickets, Gmail, or ideation in chat, into an Automation or Workflow run, out to project CLI, Codex, or Cursor, and back through validation, tests, steering memory, learned rules, and orchestrator events. The plumbing exists. Not every hop is dependable yet.
 
-Next up is hardening Automations and Workflows for daily use: steadier runs, tighter harness round-trips, and WhatsApp draft saves so agent replies sit in review before they go out. The direction is one execution graph from intake to IDE to proof, with the system getting better at routing work the more we run it.
-
+Current focus is hardening **Automations** and **Workflows** for that loop: clearer failures, steadier harness round-trips, and WhatsApp compose drafts that already let the agent stage a reply in the board UI for review before send. The bet is reliable orchestration from intake to proof, not more UI.
 ---
 
 ## [2.8.0] - 2026-06-14
