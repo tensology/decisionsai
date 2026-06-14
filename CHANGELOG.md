@@ -4,7 +4,11 @@
 
 ## [What's to Come]
 
-2.8 shipped the connected workspace. Right now we are battle testing the end to end loop: work comes in from WhatsApp, boards, tickets, emails, or ideation with the agent, runs through Automations and Loops workflows with harness reporting from Codex and Cursor, then comes back with evidence, validation, and tests. Next up is hardening Automations and Workflows, including WhatsApp draft saves so agent replies wait for your review before they go out.
+First came prompt engineering, then skills, then harnesses. Loops is the next layer: execution you can repeat, steer, and validate on top of a real Step Runner, not another chat wrapper.
+
+2.8 shipped the connected workspace. We are in the middle of battle testing the pipe that ties it together. Work lands from WhatsApp, boards, tickets, email, or ideation in chat, routes through Automations and Workflows, hands off to Codex, Cursor, or your project CLI, and reports back with evidence, validation, and tests. The orchestrator is learning to hold that thread across surfaces instead of dropping state at every handoff.
+
+Next up is hardening Automations and Workflows for daily use: steadier runs, tighter harness round-trips, and WhatsApp draft saves so agent replies sit in review before they go out. The direction is one execution graph from intake to IDE to proof, with the system getting better at routing work the more we run it.
 
 ---
 
