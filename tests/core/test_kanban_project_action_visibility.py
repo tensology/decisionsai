@@ -43,3 +43,19 @@ def test_kanban_api_payloads_expose_project_context_for_orchestrator():
     assert "default_project_name" in py
     assert "default_project_folder" in py
     assert '**_project_context_payload(linked_project, "linked")' in py
+
+
+def test_workflows_move_copy_and_orchestrator_actions_to_workflow_ticket_queue():
+    kanban_ticket_js = (ROOT / "distr/gui/web/static/kanban/js/kanban_ticket.js").read_text(encoding="utf-8")
+    workflows_js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
+
+    assert "hideCopy: !!listOpts.hideCopy" in kanban_ticket_js
+    assert "hideAgent: !!listOpts.hideAgent" in kanban_ticket_js
+    assert "copyTicketToClipboard: copyTicketToClipboard" in kanban_ticket_js
+
+    assert "hideCopy: true" in workflows_js
+    assert "hideAgent: true" in workflows_js
+    assert "wf-workflow-ticket-copy" in workflows_js
+    assert "wf-workflow-ticket-orchestrator" in workflows_js
+    assert "copyWorkflowQueueTicket" in workflows_js
+    assert "sendWorkflowQueueTicketToOrchestrator" in workflows_js

@@ -193,11 +193,13 @@
                 actionButtonHtml({
                     keyClass: "kb-act-copy",
                     tooltip: "Copy title and description",
+                    hidden: !!opts.hideCopy,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
                 }),
                 actionButtonHtml({
                     keyClass: "kb-act-agent",
                     tooltip: "Send to Orchestrator",
+                    hidden: !!opts.hideAgent,
                     disabled: false,
                     nativeTooltip: true,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>',
@@ -691,6 +693,8 @@
                 canTransfer: canTransfer,
                 canDelete: canDelete,
                 hideWorkflow: !!listOpts.hideWorkflow,
+                hideCopy: !!listOpts.hideCopy,
+                hideAgent: !!listOpts.hideAgent,
                 showAddToWorkflow: !!listOpts.showAddToWorkflow,
             });
             row.innerHTML =
@@ -732,6 +736,8 @@
             createTicketCard: createTicketCard,
             createTicketListRow: createTicketListRow,
             initListRowMarquee: initListRowMarquee,
+            copyTicketToClipboard: copyTicketToClipboard,
+            ticketClipboardText: ticketClipboardText,
         };
     }
 

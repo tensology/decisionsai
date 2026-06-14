@@ -39,11 +39,17 @@ from datetime import datetime
 _TAB_FONT_FAMILY = "Arial, sans-serif"
 _TAB_FONT_SIZE_PX = 14
 _TAB_LINE_HEIGHT = 1.5
+_TAB_LINE_HEIGHT_PX = round(_TAB_FONT_SIZE_PX * _TAB_LINE_HEIGHT)
 _TAB_PADDING_PX = 20
 _TAB_TEXT_COLOR = "#ffffff"
 _TAB_MUTED_COLOR = "#aab4c4"
 _TAB_LINK_COLOR = "#4a9eff"
 _TAB_PANEL_BG = "#1a2a3c"
+
+
+def _tab_line_height_css() -> str:
+    """Qt rich text applies line-height most reliably as pixels on block elements."""
+    return f"{_TAB_LINE_HEIGHT_PX}px"
 
 
 def _tab_body_stylesheet() -> str:
@@ -54,7 +60,7 @@ def _tab_body_stylesheet() -> str:
                 border: none;
                 padding: {_TAB_PADDING_PX}px;
                 font-size: {_TAB_FONT_SIZE_PX}px;
-                line-height: {_TAB_LINE_HEIGHT};
+                line-height: {_tab_line_height_css()};
                 font-family: {_TAB_FONT_FAMILY};
             }}
             QTextBrowser a {{
@@ -71,7 +77,7 @@ def _html_paragraph(inner_html: str, *, margin: str = "10px 0", muted: bool = Fa
     color = _TAB_MUTED_COLOR if muted else _TAB_TEXT_COLOR
     return (
         f'<p style="margin: {margin}; font-size: {_TAB_FONT_SIZE_PX}px; '
-        f'line-height: {_TAB_LINE_HEIGHT}; font-weight: 400; font-family: {_TAB_FONT_FAMILY}; '
+        f'line-height: {_tab_line_height_css()}; font-weight: 400; font-family: {_TAB_FONT_FAMILY}; '
         f'color: {color};">{inner_html}</p>'
     )
 
@@ -79,7 +85,7 @@ def _html_paragraph(inner_html: str, *, margin: str = "10px 0", muted: bool = Fa
 def _html_section_title(text: str) -> str:
     return (
         f'<p style="margin: 16px 0 8px 0; font-size: {_TAB_FONT_SIZE_PX}px; '
-        f'line-height: {_TAB_LINE_HEIGHT}; font-weight: 600; font-family: {_TAB_FONT_FAMILY}; '
+        f'line-height: {_tab_line_height_css()}; font-weight: 600; font-family: {_TAB_FONT_FAMILY}; '
         f'color: #cccccc;">{text}</p>'
     )
 
@@ -91,7 +97,17 @@ def _html_link(url: str, label: str) -> str:
 def _wrap_tab_html(inner_html: str) -> str:
     return (
         f'<div style="color: {_TAB_TEXT_COLOR}; font-family: {_TAB_FONT_FAMILY}; '
-        f'font-size: {_TAB_FONT_SIZE_PX}px; line-height: {_TAB_LINE_HEIGHT};">{inner_html}</div>'
+        f'font-size: {_TAB_FONT_SIZE_PX}px; line-height: {_tab_line_height_css()};">{inner_html}</div>'
+    )
+
+
+def _configure_tab_browser(browser: QtWidgets.QTextBrowser) -> None:
+    """Apply shared tab typography to a QTextBrowser instance."""
+    browser.setStyleSheet(_tab_body_stylesheet())
+    browser.document().setDefaultStyleSheet(
+        f"body, div, p, li {{ font-family: {_TAB_FONT_FAMILY}; font-size: {_TAB_FONT_SIZE_PX}px; "
+        f"line-height: {_tab_line_height_css()}; color: {_TAB_TEXT_COLOR}; }}"
+        f"a {{ color: {_TAB_LINK_COLOR}; text-decoration: underline; }}"
     )
 
 
@@ -315,8 +331,6 @@ class AboutWindow(QtWidgets.QMainWindow):
         # Set tab bar to left-align by using document mode and ensuring it doesn't stretch
         tab_widget.setDocumentMode(False)
         
-        tab_body_style = _tab_body_stylesheet()
-
         # Create About tab (FIRST) - simple QTextBrowser with its own scrolling
         about_tab = QtWidgets.QWidget()
         about_tab.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
@@ -327,45 +341,51 @@ class AboutWindow(QtWidgets.QMainWindow):
         about_content = QtWidgets.QTextBrowser()
         about_content.setOpenExternalLinks(True)
         about_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
-        about_content.setStyleSheet(tab_body_style)
+        _configure_tab_browser(about_content)
 
         orchestrator_url = local_doc_url("docs", "orchestrator.md")
         readme_url = local_doc_url("README.md")
-        codex_url = local_doc_url("plugins", "codex-ide", "README.md")
-        cursor_url = local_doc_url("plugins", "cursor-ide", "README.md")
-        claude_url = local_doc_url("plugins", "ecc", "docs", "HERMES-SETUP.md")
-        ecc_url = local_doc_url("plugins", "ecc", "README.md")
-        sidecar_url = local_doc_url("sidecar", "README.md")
 
         about_paragraphs = [
-            _html_paragraph("<b>Hey.</b> You clicked the llama. Respect."),
             _html_paragraph(
-                "DecisionsAI is a local, voice-first workspace — chat, boards, automations, workflows, "
-                "loops, IRC, and whatever you dragged in from the rest of your digital life. "
-                "One machine, fewer tabs screaming at you."
+                "The tech industry has two speeds: announce the revolution on Tuesday, "
+                "ship a settings panel on Thursday, and call it a platform by Friday. "
+                "We grew up in the Winamp era, when software had a personality, a skin folder, "
+                "a hidden installer sample about whipping a llama, and the nerve to be "
+                "a little ridiculous on purpose."
             ),
             _html_paragraph(
-                "Winamp-era energy, modern problems: skimmable when you want speed, deep when you want proof. "
-                f"The {_html_link(orchestrator_url, 'orchestrator')} keeps the thread so handoffs do not evaporate. "
-                "Version 2.8 delivers a unified web workspace, Loops workflows, calendar automations, board-to-orchestrator handoff, "
-                "in-thread model and voice changes, chat compaction, WhatsApp-to-board linking, IRC, and a rebuilt remote control."
+                "Work ethic, as we understand it: finish the thing, read the error, automate "
+                "the part that makes you hate your job, and go home before you start defending "
+                "a hallucination like it is company policy. Motion is not progress. A standup is "
+                "not a deliverable. Your stack should still make sense when the hype cycle moves on."
             ),
             _html_paragraph(
-                f"Build work routes through {_html_link(codex_url, 'Codex')}, "
-                f"{_html_link(cursor_url, 'Cursor')}, {_html_link(claude_url, 'Claude harnessing')}, "
-                f"and {_html_link(ecc_url, 'ECC')} — then back to the orchestrator like a responsible adult. "
-                f"Screen and machine control via {_html_link(sidecar_url, 'Sidecar')} when you need hands."
+                "Style is not decoration. Ugly tools train you to accept ugly thinking. "
+                "We like software that looks like someone cared, runs where you put it, "
+                "and does not need a webinar to explain its existence. "
+                "Local models through Ollama when you want them. Cloud GPUs when you do not. "
+                "Same standard either way: does it work, and can you live with it tomorrow."
+            ),
+            _html_paragraph(
+                "If you opened this window you already found the app. "
+                "We are not going to pitch you from an About box. "
+                "The docs are linked below. The changelog is the other tab. "
+                "The credits are the people and libraries we owe."
             ),
             _html_paragraph(
                 f"<b>Links:</b> {_html_link(readme_url, 'README')} · "
+                f"{_html_link(orchestrator_url, 'Orchestrator')} · "
                 f"{_html_link('https://www.decisionsai.net/', 'Website')} · "
                 f"{_html_link('https://github.com/tensology/decisionsai', 'GitHub')} · "
                 f"{_html_link('https://www.decisionsai.net/privacy', 'Privacy')} · "
                 f"{_html_link('https://www.decisionsai.net/terms', 'Terms')}"
             ),
             _html_paragraph(
-                "<em>It really whips Ollama's ass.</em> — vintage internet compliment. "
-                "We are legally required to inform you the llama consented.",
+                "<em>It really whips the llama's ass.</em> Winamp buried that line in its "
+                "installer twenty-six years ago as a goofy audio Easter egg. Then Ollama "
+                "named their local inference stack after LLaMA models and the universe "
+                "closed the loop. We did not plan the pun. We are just the ones still laughing.",
                 muted=True,
             ),
         ]
@@ -384,7 +404,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         changelog_content = QtWidgets.QTextBrowser()
         changelog_content.setOpenExternalLinks(True)
         changelog_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
-        changelog_content.setStyleSheet(tab_body_style)
+        _configure_tab_browser(changelog_content)
         
         # Load changelog file (CHANGELOG.md is in the project root)
         changelog_path = os.path.join(project_root, "CHANGELOG.md")
@@ -414,7 +434,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         credits_content = QtWidgets.QTextBrowser()
         credits_content.setOpenExternalLinks(True)
         credits_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
-        credits_content.setStyleSheet(tab_body_style)
+        _configure_tab_browser(credits_content)
         
         # Convert credits dictionary to HTML
         credits = {
@@ -494,27 +514,28 @@ class AboutWindow(QtWidgets.QMainWindow):
 
         body = (
             f"color: {_TAB_TEXT_COLOR}; font-family: {_TAB_FONT_FAMILY}; "
-            f"font-size: {_TAB_FONT_SIZE_PX}px; line-height: {_TAB_LINE_HEIGHT};"
+            f"font-size: {_TAB_FONT_SIZE_PX}px; line-height: {_tab_line_height_css()};"
         )
         link = f"color: {_TAB_LINK_COLOR}; text-decoration: underline;"
         h1 = (
-            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX + 4}px; "
-            f"margin: 16px 0 8px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX}px; "
+            f"margin: 16px 0 8px 0; font-weight: 600; line-height: {_tab_line_height_css()};"
         )
         h2 = (
-            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX + 2}px; "
-            f"margin: 14px 0 6px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+            f"color: {_TAB_LINK_COLOR}; font-size: {_TAB_FONT_SIZE_PX}px; "
+            f"margin: 14px 0 6px 0; font-weight: 600; line-height: {_tab_line_height_css()};"
         )
         h3 = (
-            f"color: #6ab4ff; font-size: {_TAB_FONT_SIZE_PX + 1}px; "
-            f"margin: 12px 0 4px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+            f"color: #6ab4ff; font-size: {_TAB_FONT_SIZE_PX}px; "
+            f"margin: 12px 0 4px 0; font-weight: 600; line-height: {_tab_line_height_css()};"
         )
         h4 = (
             f"color: #6ab4ff; font-size: {_TAB_FONT_SIZE_PX}px; "
-            f"margin: 10px 0 4px 0; font-weight: 600; line-height: {_TAB_LINE_HEIGHT};"
+            f"margin: 10px 0 4px 0; font-weight: 600; line-height: {_tab_line_height_css()};"
         )
-        li = f"margin: 4px 0; color: {_TAB_TEXT_COLOR}; line-height: {_TAB_LINE_HEIGHT};"
-        li_nested = f"margin: 2px 0; margin-left: 16px; color: #e0e0e0; line-height: {_TAB_LINE_HEIGHT};"
+        li = f"margin: 4px 0; color: {_TAB_TEXT_COLOR}; line-height: {_tab_line_height_css()};"
+        li_nested = f"margin: 2px 0; margin-left: 16px; color: #e0e0e0; line-height: {_tab_line_height_css()};"
+        block_tag = re.compile(r"^</?(?:h[1-4]|ul|li|hr)\b", re.IGNORECASE)
 
         # Replace emojis with text equivalents (do this FIRST, before any other processing)
         html = markdown_text
@@ -593,23 +614,20 @@ class AboutWindow(QtWidgets.QMainWindow):
         # Convert remaining markdown list items
         html = re.sub(rf'^- (.+)$', rf'<li style="{li}">\1</li>', html, flags=re.MULTILINE)
         html = re.sub(rf'^  - (.+)$', rf'<li style="{li_nested}">\1</li>', html, flags=re.MULTILINE)
-        
-        # Convert line breaks (but preserve HTML tags)
+
+        # Wrap prose lines in paragraphs so Qt applies line-height consistently.
         lines = html.split('\n')
         result = []
         for line in lines:
             stripped = line.strip()
-            if not stripped or stripped.startswith('<') and stripped.endswith('>'):
-                # HTML tag or empty line
-                result.append(line)
+            if not stripped:
+                continue
+            if block_tag.match(stripped):
+                result.append(stripped)
             else:
-                # Regular text line
-                result.append(line + '<br>')
+                result.append(_html_paragraph(stripped))
         html = '\n'.join(result)
-        
-        # Clean up double breaks
-        html = re.sub(r'<br>\s*<br>', '<br><br>', html)
-        
+
         html = f'<body style="{body}">{html}</body>'
 
         return html

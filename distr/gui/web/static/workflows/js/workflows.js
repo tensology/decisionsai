@@ -245,7 +245,8 @@
     }
 
     function initWorkflowTabMarquees(rootEl) {
-        (rootEl || document).querySelectorAll(".wf-workflow-tab").forEach(function (tab) {
+        var root = rootEl && typeof rootEl.querySelectorAll === "function" ? rootEl : document;
+        root.querySelectorAll(".wf-workflow-tab").forEach(function (tab) {
             if (tab.querySelector(".wf-workflow-tab-rename")) return;
             var wrap = tab.querySelector(".wf-workflow-tab-title-wrap");
             var title = tab.querySelector(".wf-workflow-tab-title");
@@ -3817,6 +3818,8 @@
                     var row = ticketUi.createTicketListRow(ticket, isLocal, boardData, {
                         hideWorkflow: true,
                         hideTransfer: true,
+                        hideCopy: true,
+                        hideAgent: true,
                         disableListDrag: true,
                         showAddToWorkflow: !!currentWorkflowId,
                     });
@@ -4829,6 +4832,48 @@
         return ticket ? (ticket.title || ("Ticket #" + ticket.id)) : ("Ticket #" + ticketId);
     }
 
+    function workflowQueueTicketById(ticketId) {
+        return (workflowQueueTickets || []).filter(function (item) {
+            return String(item.id) === String(ticketId);
+        })[0] || null;
+    }
+
+    function copyWorkflowQueueTicket(ticketId) {
+        var ticket = workflowQueueTicketById(ticketId);
+        if (!ticket) {
+            snack("Could not find ticket to copy", "error");
+            return;
+        }
+        var ticketUi = ensureWorkflowTicketUi();
+        if (ticketUi && typeof ticketUi.copyTicketToClipboard === "function") {
+            ticketUi.copyTicketToClipboard(ticket);
+            return;
+        }
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+            snack("Clipboard is unavailable in this browser", "error");
+            return;
+        }
+        var text = (ticket.title || "").trim();
+        var description = stripHtml(ticket.description || "").trim();
+        if (description) text += (text ? "\n\n" : "") + description;
+        navigator.clipboard.writeText(text || "(empty ticket)")
+            .then(function () { snack("Copied title and description", "success"); })
+            .catch(function (e) { snack("Copy failed: " + (e && e.message ? e.message : String(e)), "error"); });
+    }
+
+    function sendWorkflowQueueTicketToOrchestrator(ticketId, btnEl) {
+        var ticket = workflowQueueTicketById(ticketId);
+        if (!ticket) {
+            snack("Could not find ticket to send to orchestrator", "error");
+            return;
+        }
+        if (btnEl) btnEl.disabled = true;
+        startWorkflowTicketDiscussion(ticket, true);
+        setTimeout(function () {
+            if (btnEl) btnEl.disabled = false;
+        }, 1000);
+    }
+
     function syncWorkflowQueueRemoveButton() {
         var btn = document.getElementById("wf-delete-btn");
         if (!btn) return;
@@ -4967,6 +5012,12 @@
             "</div>" +
             '<div class="kb-ticket-list-actions wf-workflow-queue-actions">' +
                 '<span class="inline-flex whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded ' + statusClass + '">' + esc(status) + "</span>" +
+                '<button type="button" class="wf-workflow-ticket-copy kb-card-action-btn kb-act-copy" data-ticket-id="' + esc(ticket.id) + '" title="Copy title and description" aria-label="Copy title and description">' +
+                    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
+                "</button>" +
+                '<button type="button" class="wf-workflow-ticket-orchestrator kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Send to Orchestrator" aria-label="Send to Orchestrator">' +
+                    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>' +
+                "</button>" +
                 (!run ? '<button type="button" class="wf-workflow-ticket-run kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow" aria-label="Run ticket">' + SVG_PLAY + "</button>" : "") +
                 (locked ? "" : '<button type="button" class="wf-workflow-ticket-remove kb-card-action-btn kb-act-delete" data-ticket-id="' + esc(ticket.id) + '" title="Remove from workflow" aria-label="Remove from workflow">' + SVG_TRASH + "</button>") +
             "</div>";
@@ -5710,6 +5761,24 @@
                     evt.preventDefault();
                     evt.stopPropagation();
                     openWorkflowRunPreview(runBtn.dataset.ticketId || "");
+                });
+            }
+            var copyBtn = row.querySelector(".wf-workflow-ticket-copy");
+            if (copyBtn) {
+                copyBtn.addEventListener("click", function (evt) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    selectWorkflowQueueTicket(copyBtn.dataset.ticketId || "", row);
+                    copyWorkflowQueueTicket(copyBtn.dataset.ticketId || "");
+                });
+            }
+            var orchestratorBtn = row.querySelector(".wf-workflow-ticket-orchestrator");
+            if (orchestratorBtn) {
+                orchestratorBtn.addEventListener("click", function (evt) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    selectWorkflowQueueTicket(orchestratorBtn.dataset.ticketId || "", row);
+                    sendWorkflowQueueTicketToOrchestrator(orchestratorBtn.dataset.ticketId || "", orchestratorBtn);
                 });
             }
             var removeBtn = row.querySelector(".wf-workflow-ticket-remove");
