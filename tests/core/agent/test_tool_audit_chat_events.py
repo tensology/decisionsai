@@ -4,7 +4,7 @@ import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from distr.core.agent.tool_audit import record_tool_execution
+from distr.core.agent.tool_audit import record_chat_settings_change, record_tool_execution
 from distr.core.db import Base, Chat
 import distr.core.db.workflow  # noqa: F401
 
@@ -175,3 +175,64 @@ def test_record_tool_execution_hides_events_outside_active_turn(monkeypatch):
     events = params["tool_events"]
     assert len(events) == 1
     assert events[0]["chat_visible"] is False
+
+
+def test_record_chat_settings_change_persists_visible_activity(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def patched_get_session():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr("distr.core.db.get_session", patched_get_session)
+    monkeypatch.setattr(
+        "distr.core.workflow.service.append_audit_step",
+        lambda **kwargs: None,
+    )
+
+    with patched_get_session() as session:
+        chat = Chat(
+            title="Test chat",
+            provider="openai",
+            model_name="gpt-4o",
+            voice_provider="coqui",
+            voice_model="Alexa",
+        )
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    event = record_chat_settings_change(
+        chat_id,
+        previous={
+            "provider": "openai",
+            "model_name": "gpt-4o",
+            "voice_provider": "coqui",
+            "voice_model": "Alexa",
+        },
+        current={
+            "provider": "anthropic",
+            "model_name": "claude-sonnet-4",
+            "voice_provider": "coqui",
+            "voice_model": "Alexa",
+        },
+    )
+
+    assert event is not None
+    assert event["tool_name"] == "chat_settings"
+    assert event["chat_visible"] is True
+    assert "LLM:" in event["result_summary"]
+
+    with patched_get_session() as session:
+        chat = session.get(Chat, chat_id)
+        params = json.loads(chat.params)
+
+    events = params["tool_events"]
+    assert len(events) == 1
+    assert events[0]["title"] == "Changed chat settings"

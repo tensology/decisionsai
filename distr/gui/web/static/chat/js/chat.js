@@ -104,11 +104,12 @@ const headerLlmModel = document.getElementById('headerLlmModel');
 const headerVoiceProvider = document.getElementById('headerVoiceProvider');
 const headerVoiceModel = document.getElementById('headerVoiceModel');
 const headerSettingsStatus = document.getElementById('headerSettingsStatus');
+const headerSettingsSave = document.getElementById('headerSettingsSave');
 const contextRing = document.getElementById('contextRing');
 
 let _headerSettingsSyncing = false;
 let _headerOptionsReady = false;
-let _headerSettingsSaveTimer = null;
+let _headerSettingsBaseline = null;
 let _autoCompactInFlight = false;
 let _lastAutoCompactKey = null;
 let _headerStatsTimer = null;
@@ -411,6 +412,7 @@ function setupEventListeners() {
     if (compactChatButton) compactChatButton.addEventListener('click', () => compactCurrentChat());
     if (forkChatButton) forkChatButton.addEventListener('click', () => forkCurrentChat());
     bindHeaderSettingsControls();
+    if (headerSettingsSave) headerSettingsSave.addEventListener('click', () => persistHeaderChatSettings());
     if (chatMessages) {
         chatMessages.addEventListener('contextmenu', (e) => {
             if (!currentChatId) return;
@@ -679,6 +681,20 @@ function startChatWebSocket(force) {
                     if (Date.now() < _suppressChatUpdatedFetchUntil) {
                         return;
                     }
+                    if (isStreaming && streamingChatId !== currentChatId) {
+                        fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
+                            mergeChatUpdatedDuringStream(data.messages || []);
+                            updateChatSettingsDisplay({
+                                title: data.title || 'New Chat',
+                                provider: data.provider || '-',
+                                model_name: data.model_name || '-',
+                                voice_provider: data.voice_provider,
+                                voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
+                            });
+                            scrollToBottom();
+                        }).catch(() => {});
+                        return;
+                    }
                     fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
                         renderMessages(data.messages || [], true);
                         updateChatSettingsDisplay({
@@ -902,7 +918,10 @@ function sortMessagesForDisplay(messages) {
 function isLiveChatMessageNode(node) {
     if (!node) return false;
     const id = node.id || '';
-    return id !== 'transcriptionStatus' && id !== 'streamingAssistantMessage' && id !== 'typingIndicator';
+    return id !== 'transcriptionStatus'
+        && id !== 'streamingAssistantMessage'
+        && id !== 'streamingAssistantActivity'
+        && id !== 'typingIndicator';
 }
 
 function insertMessageElementInOrder(div, message) {
@@ -921,13 +940,15 @@ function insertMessageElementInOrder(div, message) {
         }
     }
     const streamingMsg = document.getElementById('streamingAssistantMessage');
+    const streamingActivity = document.getElementById('streamingAssistantActivity');
     const typingInd = document.getElementById('typingIndicator');
-    const insertBefore = streamingMsg || typingInd;
+    const insertBefore = streamingActivity || streamingMsg || typingInd;
     if (insertBefore) {
         chatMessages.insertBefore(div, insertBefore);
     } else {
         chatMessages.appendChild(div);
     }
+    finalizeMessageElementMount(div, message);
     syncRenderedMessageCountFromDom();
 }
 
@@ -997,6 +1018,7 @@ function handleChatEventMessageAdded(msg) {
     }
     const div = createMessageElement({ role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
     insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
+    if (role === 'assistant') flushPendingAssistantTools(div, msg.chat_row_id);
     scrollToBottom();
     scheduleRefreshChatHeaderStats({ checkTitle: role === 'assistant' });
 }
@@ -1020,7 +1042,9 @@ function findLiveTurnAnchor(chatRowId) {
         if (activity) return activity;
         if (matches.length) return matches[0];
     }
-    return document.getElementById('streamingAssistantMessage') || document.getElementById('typingIndicator');
+    return document.getElementById('streamingAssistantActivity')
+        || document.getElementById('streamingAssistantMessage')
+        || document.getElementById('typingIndicator');
 }
 
 function mergeChatUpdatedDuringStream(messages) {
@@ -1047,6 +1071,8 @@ function handleChatEventStreamStarted(msg) {
     _streamTextBuffer = '';
     _streamRafPending = false;
     removeTypingIndicator();
+    const existingActivity = document.getElementById('streamingAssistantActivity');
+    if (existingActivity) existingActivity.remove();
     const existing = document.getElementById('streamingAssistantMessage');
     if (existing) existing.remove();
     const div = document.createElement('div');
@@ -1065,6 +1091,7 @@ function handleChatEventStreamStarted(msg) {
         </div>
     `;
     chatMessages.appendChild(div);
+    flushPendingAssistantTools(div, null);
     _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
 }
@@ -1102,6 +1129,7 @@ function handleChatEventStreamFinished(msg) {
     removeTypingIndicator();
     const wrap = document.getElementById('streamingAssistantMessage');
     if (wrap) {
+        const existingActivityHtml = extractAssistantActivityForPreserve(wrap);
         const textEl = document.getElementById('streamingAssistantText');
         // Prefer response_text from event (clean, tool_call tags stripped) over raw streamed DOM text
         const raw = (msg.response_text != null && msg.response_text !== '') ? msg.response_text : (textEl ? textEl.textContent : '');
@@ -1125,6 +1153,7 @@ function handleChatEventStreamFinished(msg) {
                 </div>
             </div>
         `;
+        restoreAssistantEmbeddedActivity(wrap, existingActivityHtml);
         syncRenderedMessageCountFromDom();
         _lastStreamFinalizedPlain = _normalizeMsgPlain(raw);
         _suppressChatUpdatedFetchUntil = Date.now() + 2500;
@@ -1176,6 +1205,8 @@ function handleChatEventStreamError(msg) {
     _streamRafPending = false;
     _lastStreamFinalizedPlain = null;
     removeTypingIndicator();
+    const existingActivity = document.getElementById('streamingAssistantActivity');
+    if (existingActivity) existingActivity.remove();
     // Remove any in-progress streaming bubble
     const wrap = document.getElementById('streamingAssistantMessage');
     if (wrap) wrap.remove();
@@ -1252,39 +1283,67 @@ function handleChatEventToolExecuted(msg) {
             compact: Boolean(msg.chat_compact)
         }
     };
-    const block = appendToolToActivityGroup(toolMessage);
-
-    const streamingMsg = document.getElementById('streamingAssistantMessage');
-    const typingInd = document.getElementById('typingIndicator');
-    const turnRowId = msg.turn_chat_id != null ? String(msg.turn_chat_id) : null;
-
-    function tryInsertBefore(el) {
-        if (el && el.parentNode === chatMessages) {
-            if (block.parentNode !== chatMessages || block.nextSibling !== el) {
-                chatMessages.insertBefore(block, el);
-            }
-            return true;
-        }
-        return false;
-    }
-
-    let placed = false;
-    if (streamingMsg) {
-        placed = tryInsertBefore(streamingMsg);
-    } else if (turnRowId) {
-        const matches = [...chatMessages.querySelectorAll(`[data-turn-chat-id="${turnRowId}"]`)];
-        const finalAssistant = matches.reverse().find(el => el.classList.contains('assistant'));
-        placed = tryInsertBefore(finalAssistant);
-    }
-    if (!placed && block.parentNode !== chatMessages) {
-        if (typingInd && typingInd.parentNode === chatMessages) {
-            chatMessages.insertBefore(block, typingInd);
-        } else {
-            chatMessages.appendChild(block);
-        }
-    }
+    appendToolToAssistantTurn(toolMessage);
     syncRenderedMessageCountFromDom();
     scrollToBottom();
+}
+
+function pendingAssistantToolKey(turnChatId) {
+    if (turnChatId != null && turnChatId !== '') return String(turnChatId);
+    return '__active_assistant_turn__';
+}
+
+function findAssistantMessageForTurn(turnChatId) {
+    if (!chatMessages || turnChatId == null || turnChatId === '') return null;
+    const matches = [...chatMessages.querySelectorAll(`[data-turn-chat-id="${String(turnChatId)}"]`)];
+    return matches.reverse().find(el => el.classList.contains('assistant')) || null;
+}
+
+function queuePendingAssistantTool(message) {
+    const key = pendingAssistantToolKey(message && message.turn_chat_id);
+    const existing = _pendingAssistantToolMessages.get(key) || [];
+    existing.push(message);
+    _pendingAssistantToolMessages.set(key, existing);
+}
+
+function flushPendingAssistantTools(target, turnChatId) {
+    if (!target) return;
+    const keys = [pendingAssistantToolKey(turnChatId)];
+    if (turnChatId != null && turnChatId !== '') keys.push(pendingAssistantToolKey(null));
+    keys.forEach(key => {
+        const tools = _pendingAssistantToolMessages.get(key);
+        if (tools && tools.length) {
+            appendAssistantActivity(target, tools);
+            _pendingAssistantToolMessages.delete(key);
+        }
+    });
+}
+
+function appendStandaloneToolActivity(message) {
+    if (!chatMessages) return null;
+    const group = appendToolToActivityGroup(message);
+    if (group && !group.isConnected) {
+        chatMessages.appendChild(group);
+        syncRenderedMessageCountFromDom();
+        scrollToBottom();
+    }
+    return group;
+}
+
+function appendToolToAssistantTurn(message) {
+    const turnChatId = message && message.turn_chat_id != null ? String(message.turn_chat_id) : null;
+    const streamingMsg = document.getElementById('streamingAssistantMessage');
+    const target = findAssistantMessageForTurn(turnChatId) || streamingMsg;
+    if (!target) {
+        const toolName = (message && message.tool_event && message.tool_event.tool_name) || '';
+        if (toolName === 'chat_settings') {
+            return appendStandaloneToolActivity(message);
+        }
+        queuePendingAssistantTool(message);
+        return null;
+    }
+    appendAssistantActivity(target, [message]);
+    return target;
 }
 
 function activityGroupMatchesTurn(group, turnChatId) {
@@ -1347,8 +1406,9 @@ function handleChatEventWorkflow(msg) {
         workflow_event: workflowEvent
     });
     const streamingMsg = document.getElementById('streamingAssistantMessage');
+    const streamingActivity = document.getElementById('streamingAssistantActivity');
     const typingInd = document.getElementById('typingIndicator');
-    const insertBefore = streamingMsg || typingInd;
+    const insertBefore = streamingActivity || streamingMsg || typingInd;
     if (insertBefore) {
         chatMessages.insertBefore(block, insertBefore);
     } else {
@@ -1903,6 +1963,7 @@ function setViewOnlyChrome(isViewOnly) {
         headerLlmModel,
         headerVoiceProvider,
         headerVoiceModel,
+        headerSettingsSave,
         configureChatButton,
         compactChatButton,
         forkChatButton,
@@ -2233,6 +2294,8 @@ function applyModalSelectedSkin() {
 let _renderedMessageCount = 0;
 /** After stream_finished updates the DOM, ignore chat_updated refetches briefly (same write often triggers both). */
 let _suppressChatUpdatedFetchUntil = 0;
+/** Tool activity can arrive before the assistant DOM exists; hold it briefly by turn id. */
+const _pendingAssistantToolMessages = new Map();
 
 /** Keep _renderedMessageCount aligned when WebSocket finalizes #streamingAssistantMessage (no renderMessages() call). */
 function syncRenderedMessageCountFromDom() {
@@ -2280,59 +2343,87 @@ function traceBelongsToAssistantTurn(traceMessage, assistantMessage) {
     return assistantTurn === traceTurn;
 }
 
-function normalizeTraceMessages(messages) {
-    const reordered = [];
-    for (let i = 0; i < messages.length; i++) {
-        const current = messages[i];
-        if (current && current.role === 'assistant') {
-            const trace = [];
-            let j = i + 1;
-            while (j < messages.length && isTraceMessage(messages[j])) {
-                if (!traceBelongsToAssistantTurn(messages[j], current)) break;
-                trace.push(messages[j]);
-                j++;
-            }
-            if (trace.length) {
-                reordered.push(...trace, current);
-                i = j - 1;
-                continue;
-            }
-        }
-        reordered.push(current);
+function toolMessagesFromTrace(message) {
+    if (!message) return [];
+    if (message.role === 'tool_group' && Array.isArray(message.tools)) {
+        return message.tools.filter(tool => tool && tool.role === 'tool');
     }
+    if (message.role === 'tool') return [message];
+    return [];
+}
+
+function addToolsToTurnMap(map, turnId, tools) {
+    if (!tools.length) return;
+    const key = Number(turnId);
+    const existing = map.get(key) || [];
+    existing.push(...tools);
+    map.set(key, existing);
+}
+
+function toolGroupFromTools(tools, turnChatId) {
+    return {
+        role: 'tool_group',
+        timestamp: tools[0] && tools[0].timestamp,
+        turn_chat_id: turnChatId,
+        tools
+    };
+}
+
+function normalizeTraceMessages(messages) {
+    const toolsByAssistantTurn = new Map();
+    const standaloneTools = [];
+    messages.forEach(message => {
+        if (!message || (message.role !== 'tool' && message.role !== 'tool_group')) return;
+        const tools = toolMessagesFromTrace(message);
+        const turnId = traceTurnChatId(message);
+        if (turnId == null) {
+            standaloneTools.push(...tools);
+            return;
+        }
+        addToolsToTurnMap(toolsByAssistantTurn, turnId, tools);
+    });
 
     const grouped = [];
-    for (let i = 0; i < reordered.length; i++) {
-        const message = reordered[i];
-        if (message && message.role === 'tool') {
-            const tools = [];
-            const startTs = message.timestamp;
-            const groupTurn = traceTurnChatId(message);
-            while (i < reordered.length && reordered[i] && reordered[i].role === 'tool') {
-                const nextTurn = traceTurnChatId(reordered[i]);
-                if (tools.length && groupTurn != null && nextTurn != null && groupTurn !== nextTurn) break;
-                tools.push(reordered[i]);
-                i++;
+    const embeddedTurns = new Set();
+    messages.forEach(message => {
+        if (!message) return;
+        if (message.role === 'tool' || message.role === 'tool_group') {
+            return;
+        }
+        if (message.role === 'assistant') {
+            const turnId = assistantTurnChatId(message);
+            if (turnId != null && toolsByAssistantTurn.has(turnId)) {
+                grouped.push({
+                    ...message,
+                    embedded_tools: toolsByAssistantTurn.get(turnId)
+                });
+                embeddedTurns.add(turnId);
+                return;
             }
-            i -= 1;
-            grouped.push({
-                role: 'tool_group',
-                timestamp: startTs,
-                turn_chat_id: groupTurn,
-                tools
-            });
-            continue;
         }
         grouped.push(message);
+    });
+
+    toolsByAssistantTurn.forEach((tools, turnId) => {
+        if (!embeddedTurns.has(turnId) && tools.length) {
+            grouped.push(toolGroupFromTools(tools, turnId));
+        }
+    });
+    if (standaloneTools.length) {
+        grouped.push(toolGroupFromTools(standaloneTools, null));
     }
     return grouped;
 }
 
 function renderMessages(messages, preserveOnEmpty) {
-    // Always clean up streaming/typing state when rendering messages
-    removeTypingIndicator();
-    const streamingEl = document.getElementById('streamingAssistantMessage');
-    if (streamingEl) streamingEl.remove();
+    const preserveLiveUi = Boolean(isStreaming || document.getElementById('typingIndicator') || document.getElementById('streamingAssistantMessage'));
+    if (!preserveLiveUi) {
+        removeTypingIndicator();
+        const streamingEl = document.getElementById('streamingAssistantMessage');
+        if (streamingEl) streamingEl.remove();
+        const streamingActivityEl = document.getElementById('streamingAssistantActivity');
+        if (streamingActivityEl) streamingActivityEl.remove();
+    }
     // Incremental reload from API does not wipe innerHTML — remove live STT preview so
     // "Listening…" never sits next to persisted rows from the socket.
     _discardLiveTranscriptionUi();
@@ -2370,20 +2461,27 @@ function renderMessages(messages, preserveOnEmpty) {
                 }
             }
             const messageDiv = createMessageElement(msg);
-            if (messageDiv) chatMessages.appendChild(messageDiv);
+            if (messageDiv) {
+                chatMessages.appendChild(messageDiv);
+                finalizeMessageElementMount(messageDiv, msg);
+            }
         }
         _renderedMessageCount = messages.length;
         scrollToBottom();
         return;
     }
     // Full rebuild (chat switch, refresh, etc.)
+    if (preserveLiveUi) return;
     chatMessages.innerHTML = '';
     _optimisticUserMessages.clear();
     _lastStreamFinalizedPlain = null;
     const toRender = dedupeConsecutiveDuplicateAssistants(messages);
     toRender.forEach(message => {
         const messageDiv = createMessageElement(message);
-        if (messageDiv) chatMessages.appendChild(messageDiv);
+        if (messageDiv) {
+            chatMessages.appendChild(messageDiv);
+            finalizeMessageElementMount(messageDiv, message);
+        }
     });
     _renderedMessageCount = toRender.length;
     scrollToBottomImmediate();
@@ -2674,6 +2772,13 @@ function createMessageElement(message) {
     return div;
 }
 
+function finalizeMessageElementMount(div, message) {
+    if (!div || !message || message.role !== 'assistant') return;
+    if (Array.isArray(message.embedded_tools) && message.embedded_tools.length) {
+        appendAssistantActivity(div, message.embedded_tools);
+    }
+}
+
 function bindActivityToggleHandlers() {
     if (!chatMessages || chatMessages.dataset.activityToggleBound === '1') return;
     chatMessages.dataset.activityToggleBound = '1';
@@ -2711,6 +2816,81 @@ function createActivityMessageElement({ innerHtml, extraClass = '' }) {
         </div>
     `;
     return div;
+}
+
+function assistantActivityTurnKey(assistantEl) {
+    if (!assistantEl) return null;
+    const turnId = assistantEl.dataset && assistantEl.dataset.turnChatId;
+    return turnId != null && turnId !== '' ? String(turnId) : null;
+}
+
+function findAssistantActivitySibling(assistantEl) {
+    if (!assistantEl || !chatMessages) return null;
+    if (assistantEl.id === 'streamingAssistantMessage') {
+        const streaming = document.getElementById('streamingAssistantActivity');
+        if (streaming) return streaming;
+    }
+    const prev = assistantEl.previousElementSibling;
+    if (prev && prev.classList.contains('message') && prev.classList.contains('activity') && prev.classList.contains('assistant-turn-activity')) {
+        const key = assistantActivityTurnKey(assistantEl);
+        if (key == null || prev.dataset.turnChatId === key) return prev;
+    }
+    const key = assistantActivityTurnKey(assistantEl);
+    if (key != null) {
+        const match = [...chatMessages.querySelectorAll('.message.activity.assistant-turn-activity')]
+            .find(el => el.dataset.turnChatId === key);
+        if (match) return match;
+    }
+    return null;
+}
+
+function getOrCreateAssistantActivitySibling(assistantEl) {
+    let sibling = findAssistantActivitySibling(assistantEl);
+    if (sibling) return sibling;
+    sibling = createToolExecutionGroupElement({
+        role: 'tool_group',
+        timestamp: Date.now(),
+        turn_chat_id: assistantActivityTurnKey(assistantEl),
+        tools: []
+    });
+    sibling.classList.add('assistant-turn-activity');
+    if (assistantEl.id === 'streamingAssistantMessage') {
+        sibling.id = 'streamingAssistantActivity';
+    }
+    if (assistantEl.parentNode === chatMessages) {
+        chatMessages.insertBefore(sibling, assistantEl);
+    }
+    return sibling;
+}
+
+function appendAssistantActivity(assistantEl, tools) {
+    if (!assistantEl || !Array.isArray(tools) || !tools.length || !chatMessages) return;
+    const sibling = getOrCreateAssistantActivitySibling(assistantEl);
+    const list = sibling.querySelector('.activity-steps');
+    if (!list) return;
+    tools.forEach(tool => {
+        list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(tool));
+    });
+    sibling.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
+    assistantEl.classList.add('assistant--with-activity');
+    scrollToBottom();
+}
+
+function extractAssistantActivityForPreserve(assistantEl) {
+    const sibling = findAssistantActivitySibling(assistantEl);
+    return sibling ? sibling.outerHTML : '';
+}
+
+function restoreAssistantEmbeddedActivity(assistantEl, activityHtml) {
+    if (!assistantEl || !activityHtml || !chatMessages) return;
+    const existing = findAssistantActivitySibling(assistantEl);
+    if (existing) existing.remove();
+    assistantEl.insertAdjacentHTML('beforebegin', activityHtml);
+    const restored = findAssistantActivitySibling(assistantEl);
+    if (restored && restored.id === 'streamingAssistantActivity') {
+        restored.id = '';
+    }
+    assistantEl.classList.add('assistant--with-activity');
 }
 
 function activityCollapsedActionLabel(title, event) {
@@ -2873,7 +3053,7 @@ function createToolExecutionGroupElement(message) {
     const innerHtml = `<div class="activity-steps">${tools.map(toolExecutionItemHtml).join('')}</div>`;
     const el = createActivityMessageElement({
         innerHtml,
-        extraClass: 'tool-execution-group'
+        extraClass: 'tool-execution-group assistant-turn-activity'
     });
     const turnChatId = message.turn_chat_id || (tools[0] && tools[0].turn_chat_id);
     if (turnChatId != null && turnChatId !== '') {
@@ -3339,7 +3519,7 @@ function setSendButtonStreaming(streaming) {
 
 function createTypingIndicator() {
     const div = document.createElement('div');
-    div.className = 'message assistant';
+    div.className = 'message assistant message-waiting';
     div.id = 'typingIndicator';
     div.innerHTML = `
         <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
@@ -4046,13 +4226,19 @@ function setHeaderSaveStatus(text, kind) {
     if (kind) headerSettingsStatus.classList.add(kind);
 }
 
+function showChatSnackbar(message, type) {
+    if (window.DecisionsAPI && typeof window.DecisionsAPI.snackbar === 'function') {
+        window.DecisionsAPI.snackbar(message, type || 'success', { id: 'chat-snackbar' });
+    }
+}
+
 function bindHeaderSettingsControls() {
     if (!headerLlmProvider) return;
     headerLlmProvider.addEventListener('change', async () => {
         await loadLlmModelsInto(headerLlmModel, headerLlmProvider.value, currentChatSettings?.model_name || '');
-        scheduleHeaderSettingsSave();
+        markHeaderSettingsDirty();
     });
-    if (headerLlmModel) headerLlmModel.addEventListener('change', scheduleHeaderSettingsSave);
+    if (headerLlmModel) headerLlmModel.addEventListener('change', markHeaderSettingsDirty);
     if (headerVoiceProvider) {
         headerVoiceProvider.addEventListener('change', async () => {
             await loadVoiceModelsInto(
@@ -4060,19 +4246,65 @@ function bindHeaderSettingsControls() {
                 headerVoiceProvider.value,
                 currentChatSettings?.voice_model || ''
             );
-            scheduleHeaderSettingsSave();
+            markHeaderSettingsDirty();
         });
     }
-    if (headerVoiceModel) headerVoiceModel.addEventListener('change', scheduleHeaderSettingsSave);
+    if (headerVoiceModel) headerVoiceModel.addEventListener('change', markHeaderSettingsDirty);
 }
 
-function scheduleHeaderSettingsSave() {
+function snapshotHeaderSettingsFromControls() {
+    const settings = currentChatSettings || {};
+    return {
+        provider: (headerLlmProvider?.value || providerIdFromDisplay(settings.provider) || '').trim(),
+        model_name: (headerLlmModel?.value || settings.model_name || '').trim(),
+        voice_provider: (
+            headerVoiceProvider?.value
+            || canonicalVoiceProviderForSelect({ tts_provider: settings.voice_provider, voice_provider: settings.voice_provider })
+            || ''
+        ).trim(),
+        voice_model: (headerVoiceModel?.value || settings.voice_model || '').trim()
+    };
+}
+
+function headerSettingsMatchBaseline(current, baseline) {
+    if (!baseline) return true;
+    return current.provider === baseline.provider
+        && current.model_name === baseline.model_name
+        && current.voice_provider === baseline.voice_provider
+        && current.voice_model === baseline.voice_model;
+}
+
+function updateHeaderSettingsSaveButton() {
+    if (!headerSettingsSave) return;
+    const dirty = !headerSettingsMatchBaseline(snapshotHeaderSettingsFromControls(), _headerSettingsBaseline);
+    headerSettingsSave.hidden = !dirty;
+    headerSettingsSave.disabled = !dirty || !currentChatId;
+}
+
+function markHeaderSettingsDirty() {
     if (_headerSettingsSyncing) return;
-    if (_headerSettingsSaveTimer) clearTimeout(_headerSettingsSaveTimer);
-    _headerSettingsSaveTimer = setTimeout(() => {
-        _headerSettingsSaveTimer = null;
-        persistHeaderChatSettings();
-    }, 350);
+    updateHeaderSettingsSaveButton();
+    if (headerSettingsSave && !headerSettingsSave.hidden) {
+        setHeaderSaveStatus('', '');
+    }
+}
+
+function setHeaderSettingsBaseline(settings) {
+    if (!settings) {
+        _headerSettingsBaseline = null;
+        updateHeaderSettingsSaveButton();
+        return;
+    }
+    _headerSettingsBaseline = {
+        provider: providerIdFromDisplay(settings.provider || ''),
+        model_name: (settings.model_name || '').trim(),
+        voice_provider: canonicalVoiceProviderForSelect({
+            tts_provider: settings.voice_provider,
+            voice_provider: settings.voice_provider
+        }),
+        voice_model: (settings.voice_model || '').trim()
+    };
+    updateHeaderSettingsSaveButton();
 }
 
 async function ensureHeaderSettingOptions() {
@@ -4119,6 +4351,7 @@ async function syncHeaderSelectorsFromSettings(settings) {
         }
     } finally {
         _headerSettingsSyncing = false;
+        setHeaderSettingsBaseline(settings);
         setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
     }
 }
@@ -4147,18 +4380,18 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
     if (!body.provider || !body.model_name) {
         const msg = 'Choose an LLM provider and model.';
         if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
-        else setHeaderSaveStatus('Pick model', 'is-error');
+        else showChatSnackbar(msg, 'error');
         return null;
     }
     if (voiceRequired && (!body.voice_provider || !body.voice_model)) {
         const msg = 'Choose a voice provider and voice.';
         if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
-        else setHeaderSaveStatus('Pick voice', 'is-error');
+        else showChatSnackbar(msg, 'error');
         return null;
     }
     if (fromModal && chatConfigSave) chatConfigSave.disabled = true;
     if (fromModal && chatConfigStatus) chatConfigStatus.textContent = 'Saving...';
-    else setHeaderSaveStatus('Saving…', 'is-saving');
+    else setHeaderSaveStatus('', '');
     const selects = [headerLlmProvider, headerLlmModel, headerVoiceProvider, headerVoiceModel];
     selects.forEach(el => { if (el) el.disabled = true; });
     try {
@@ -4188,14 +4421,14 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
             compact_checkpoint: refreshed.compact_checkpoint
         });
         if (fromModal) hideChatConfigModal();
-        else setHeaderSaveStatus('Saved', '');
+        else showChatSnackbar('Chat settings saved', 'success');
         await loadChats();
         return refreshed;
     } catch (e) {
         console.error('Save chat settings failed:', e);
         const msg = e.message || 'Could not save chat settings.';
         if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
-        else setHeaderSaveStatus(msg.length > 28 ? 'Save failed' : msg, 'is-error');
+        else showChatSnackbar(msg, 'error');
         return null;
     } finally {
         selects.forEach(el => { if (el) el.disabled = false; });
@@ -4206,7 +4439,18 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
 
 async function persistHeaderChatSettings() {
     if (!currentChatId || _headerSettingsSyncing) return;
-    await persistChatSettingsPatch(buildHeaderSettingsPatchBody(), { fromModal: false });
+    if (headerSettingsSave) headerSettingsSave.disabled = true;
+    const refreshed = await persistChatSettingsPatch(buildHeaderSettingsPatchBody(), { fromModal: false });
+    if (refreshed) {
+        setHeaderSettingsBaseline({
+            provider: refreshed.provider,
+            model_name: refreshed.model_name,
+            voice_provider: refreshed.voice_provider,
+            voice_model: refreshed.voice_model
+        });
+    } else {
+        updateHeaderSettingsSaveButton();
+    }
 }
 
 async function saveChatConfig() {

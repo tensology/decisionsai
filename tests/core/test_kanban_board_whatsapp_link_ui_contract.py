@@ -27,7 +27,10 @@ def test_board_advanced_whatsapp_link_is_saved_from_single_chat_selector():
     assert "kb-bm-wa-person-select" not in template
     assert "Person in Group" not in template
     assert "kb-bm-wa-add-btn" not in template
-    assert "Link to Board" not in template
+    assert "kb-wa-msgctx-link" in template
+    assert "Link to Board" in template
+    assert "kb-wa-msgctx-delete" in template
+    assert "Delete Message" in template
 
     assert "document.getElementById(\"kb-bm-wa-add-btn\")" not in kanban_js
     assert "saveSelectedBoardWaLink" in kanban_js
@@ -38,5 +41,8 @@ def test_board_advanced_whatsapp_link_is_saved_from_single_chat_selector():
     assert "Linked - " not in whatsapp_js
     assert "setLinkedValues" in whatsapp_js
     assert "kb-bm-wa-link-dot" not in whatsapp_js
-    assert "/api/tickets/boards/\" + boardId + \"/whatsapp-links" in whatsapp_js
+    assert "setWaChatLinkContext" in whatsapp_js
+    assert "waMsgCtxLinkToBoard" in whatsapp_js
+    assert "openWaChatContextMenuFromRow" in whatsapp_js
+    assert "kb-wa-msgctx-link" in kanban_js
     assert "KanbanCustomSelect" in board_js

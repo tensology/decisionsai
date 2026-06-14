@@ -9,10 +9,12 @@ Extracted from complete_step() in service.py and _advance_workflow_orchestration
 import json
 import logging
 import re
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from distr.core.db import get_session
+from distr.core.db.orchestrator import OrchestratorEvent
 from distr.core.db.workflow import (
     AutoWorkflow,
     AutoWorkflowRun,
@@ -310,6 +312,16 @@ class StepRouter:
                     summary=f"{step.name or f'Step {step_id}'}: {status}",
                     details=(result or "")[:3000],
                 )
+            step_visibility = self._step_visibility_payload(
+                step,
+                extra_context=[
+                    "ticket_workflow_brief",
+                    "prior_step_result",
+                    "result_packet_summary",
+                    "route_decision",
+                    "validation_output",
+                ],
+            )
             try:
                 from distr.core.orchestrator import emit_event
 
@@ -330,6 +342,7 @@ class StepRouter:
                         "decision": decision,
                         "validation_record_id": validation_record_id,
                         "correction_attempt_id": correction_attempt_id,
+                        **step_visibility,
                     },
                     evidence={
                         "result_preview": (result or "")[:3000],
@@ -566,22 +579,98 @@ class StepRouter:
             if report_step and report_step.id != step.id:
                 return report_step.id
             return -1
+        target_visibility = self._step_visibility_payload(
+            target,
+            extra_context=[
+                "ticket_workflow_brief",
+                "prior_step_result",
+                "result_packet_summary",
+                "route_decision",
+                "validation_output",
+            ],
+        )
+        payload = {
+            "iteration": iteration,
+            "max_iterations": max_iterations,
+            "from_step_id": step.id,
+            "from_step_name": step.name or f"Step {step.id}",
+            "to_step_id": target.id,
+            "to_step_name": target.name or f"Step {target.id}",
+            **target_visibility,
+        }
+        loop_event = OrchestratorEvent(
+            event_uid=uuid.uuid4().hex,
+            source="workflow",
+            event_type="loop_iteration",
+            status="running",
+            workflow_id=step.workflow_id,
+            run_id=run.id,
+            step_id=step.id,
+            ticket_id=getattr(run, "ticket_id", None),
+            board_id=getattr(run, "board_id", None),
+            project_id=run_data.get("project_id"),
+            summary=f"Loop iteration {iteration} of {max_iterations}",
+            payload=json.dumps(payload, default=str),
+            evidence=json.dumps({
+                "prior_step_result": (getattr(step, "result", None) or "")[:3000],
+                "next_step_context": target_visibility.get("context", []),
+            }, default=str),
+        )
+        db.add(loop_event)
+        db.flush()
         try:
-            from distr.core.orchestrator import emit_event
+            from distr.core.events import ORCHESTRATION_EVENT, get_event_bus
+            from distr.core.orchestrator import serialize_event
 
-            emit_event(
-                source="workflow",
-                event_type="loop_iteration",
-                status="running",
-                workflow_id=step.workflow_id,
-                run_id=run.id,
-                step_id=step.id,
-                summary=f"Loop iteration {iteration} of {max_iterations}",
-                payload={"iteration": iteration, "max_iterations": max_iterations},
-            )
+            get_event_bus().publish(ORCHESTRATION_EVENT, serialize_event(loop_event))
         except Exception:
-            logger.debug("loop_iteration event failed", exc_info=True)
+            logger.debug("Could not publish loop_iteration event to EventBus", exc_info=True)
         return next_step_id
+
+    @staticmethod
+    def _step_config_dict(step: AutoWorkflowStep) -> Dict[str, Any]:
+        try:
+            config = json.loads(step.config or "{}")
+        except Exception:
+            config = {}
+        return config if isinstance(config, dict) else {}
+
+    @staticmethod
+    def _step_tools_for_action(action_type: str) -> List[str]:
+        action = (action_type or "").strip()
+        if action == "computer_use":
+            return ["computer_use"]
+        if action == "playwright":
+            return ["playwright", "browser_use"]
+        if action == "send_to_project_cli":
+            return ["cli"]
+        if action in {"run_command", "execute_code", "agent_instruction"}:
+            return ["other"]
+        return []
+
+    @classmethod
+    def _step_visibility_payload(
+        cls,
+        step: AutoWorkflowStep,
+        *,
+        extra_context: Optional[List[str]] = None,
+    ) -> Dict[str, List[str]]:
+        config = cls._step_config_dict(step)
+        tools = config.get("tools") if isinstance(config.get("tools"), list) else []
+        skills = config.get("skills") if isinstance(config.get("skills"), list) else []
+        context = config.get("context") if isinstance(config.get("context"), list) else []
+        clean_tools = [str(item).strip() for item in tools if str(item or "").strip()]
+        clean_skills = [str(item).strip() for item in skills if str(item or "").strip()]
+        clean_context = [str(item).strip() for item in context if str(item or "").strip()]
+        for label in extra_context or []:
+            label = str(label or "").strip()
+            if label and label not in clean_context:
+                clean_context.append(label)
+        return {
+            "skills": clean_skills,
+            "tools": clean_tools or cls._step_tools_for_action(step.action_type or step.step_type or ""),
+            "context": clean_context,
+        }
 
     @staticmethod
     def _static_route(db, step: AutoWorkflowStep, passed: bool) -> Optional[int]:

@@ -35,6 +35,43 @@ def test_enforce_validation_requirements_keeps_status_when_checks_present():
     assert updated["audit"]["final_verdict"] == "pass"
 
 
+def test_enforce_validation_requirements_uses_ui_gate_for_high_risk_product_work():
+    packet = _base_packet()
+    packet["tests_and_checks"]["tests_run"] = []
+    packet["artifacts"] = {
+        "screenshots": [],
+        "ui_quality": {
+            "before_screenshot": "/tmp/before.png",
+            "after_screenshot": "/tmp/after.png",
+            "flow_summary": "Queue ticket, run workflow, see loop go red to green.",
+            "happy_path_steps": ["queue ticket", "start run", "watch green exit"],
+            "click_count": 3,
+            "layout_hierarchy_notes": "Queue, loop, runs, and activity states remain distinct.",
+        },
+    }
+    packet["execution"] = {
+        "action_trace": [],
+        "validation_snapshots": [
+            {
+                "validation_type": "ui_quality",
+                "verdict": "pass",
+                "observed": "UI evidence present.",
+                "standards_context": "[VISUAL TASTE MEMORY]\n- approved: Dense operational workflow panels.",
+            }
+        ],
+    }
+
+    status, updated, missing = enforce_validation_requirements(
+        packet=packet,
+        run_status="completed",
+        risk_profile={"level": "high", "signals": ["ui", "flow"], "risk_type": "product_conversion"},
+    )
+
+    assert status == "completed"
+    assert missing == []
+    assert updated["audit"]["final_verdict"] == "pass"
+
+
 def test_enforce_validation_requirements_blocks_ui_completion_without_screenshot_flow():
     packet = _base_packet()
     packet["artifacts"] = {"screenshots": []}

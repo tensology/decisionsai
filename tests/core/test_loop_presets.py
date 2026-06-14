@@ -45,7 +45,8 @@ def test_loop_presets_api_route_not_shadowed_by_workflow_id():
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body.get("presets"), list)
-    assert len(body["presets"]) >= 12
+    assert len(body["presets"]) == 1
+    assert body["presets"][0]["slug"] == "senior-software-engineer-ticket-to-green"
 
 
 @pytest.fixture()
@@ -82,37 +83,46 @@ def db_factory(tmp_path, monkeypatch):
 
 def test_loop_preset_bundles_exist():
     summaries = list_preset_summaries()
-    assert len(summaries) >= 12
+    assert len(summaries) == 1
     assert summaries[0].get("source") == "bundle"
     bundle = load_bundle_by_name(summaries[0]["name"])
     assert bundle is not None
+    assert bundle.get("slug") == "senior-software-engineer-ticket-to-green"
     assert bundle.get("format") == "decisionsai_loop_preset_v1"
     assert isinstance(bundle.get("steps"), list)
-    assert len(bundle["steps"]) >= 3
+    assert len(bundle["steps"]) >= 8
 
 
 def test_list_loop_presets_matches_catalog():
     presets = list_loop_presets()
     assert len(presets) == len(ELORM_LOOP_KICKOFFS)
     assert presets[0]["name"] == ELORM_LOOP_KICKOFFS[0]["name"]
-    assert presets[0].get("step_count", 0) >= 5
+    assert presets[0]["slug"] == "senior-software-engineer-ticket-to-green"
+    assert presets[0].get("step_count", 0) >= 8
 
 
-def test_plan_steps_from_bundle_has_harness_fields():
-    bundle = load_bundle_by_name("De-Sloppify Pass")
+def test_plan_steps_from_bundle_has_senior_engineer_ticket_loop_contract():
+    bundle = load_bundle_by_name("Senior Software Engineer: Ticket to Green")
     assert bundle is not None
     planned = plan_steps_from_bundle(bundle)
     assert planned["success"] is True
     steps = planned["steps"]
-    assert len(steps) == 5
+    assert len(steps) == 12
+    assert steps[0]["title"] == "Ingest ticket and project context"
+    assert steps[1]["title"] == "Write plan.md and attach to ticket"
+    assert steps[-1]["title"] == "Attach evidence and close ticket loop"
+    assert any(step["action_type"] == "run_command" for step in steps)
+    assert any(step["action_type"] == "playwright" for step in steps)
+    assert any(step["action_type"] == "computer_use" for step in steps)
+    assert any(step.get("on_fail_goto_position") == 2 for step in steps)
+    assert "plan.md" in (planned["loop_contract"].get("exit_when") or "")
     cfg = steps[0]["config"]
     assert cfg.get("guardrail")
     assert cfg.get("skills")
     assert cfg.get("tools")
     assert cfg.get("failure_checklist")
     assert steps[0]["validation_prompt"]
-    assert "requesting-code-review" in cfg.get("skills", [])
-    assert steps[2].get("on_fail_goto_position") == 0
+    assert "writing-plans" in steps[1]["config"].get("skills", [])
 
 
 def test_apply_loop_preset_from_bundle(db_factory):
@@ -154,22 +164,10 @@ def test_apply_loop_preset_from_bundle(db_factory):
 
 def test_apply_loop_preset_append_mode(db_factory):
     session = db_factory()
-    wf = AutoWorkflow(name="Partial", description="", workflow_input="{}")
+    wf = AutoWorkflow(name="Append Target", description="", workflow_input="{}")
     session.add(wf)
     session.commit()
     session.refresh(wf)
-    for pos in range(3):
-        session.add(
-            AutoWorkflowStep(
-                workflow_id=wf.id,
-                position=pos,
-                name=f"Step {pos + 1}",
-                instruction="placeholder",
-                action_type="agent_instruction",
-                config="{}",
-            )
-        )
-    session.commit()
 
     preset_name = ELORM_LOOP_KICKOFFS[0]["name"]
     result = apply_loop_preset(wf.id, preset_name, mode="append")
@@ -177,7 +175,7 @@ def test_apply_loop_preset_append_mode(db_factory):
     assert result["success"] is True
     assert result["mode"] == "append"
     preset_steps = result["step_count"]
-    assert result["total_steps"] == 3 + preset_steps
+    assert result["total_steps"] == preset_steps
 
     session = db_factory()
     steps = (
@@ -186,9 +184,8 @@ def test_apply_loop_preset_append_mode(db_factory):
         .order_by(AutoWorkflowStep.position)
         .all()
     )
-    assert len(steps) == 3 + preset_steps
-    assert steps[0].name == "Step 1"
-    assert steps[3].name == "Ingest ticket"
+    assert len(steps) == preset_steps
+    assert steps[0].name == "Ingest ticket and project context"
 
 
 def test_apply_loop_preset_append_rejects_over_max_steps(db_factory):

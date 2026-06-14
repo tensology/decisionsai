@@ -83,6 +83,32 @@ def _resolve_turn_chat_row_id(session, chat_id: int) -> int | None:
     return None
 
 
+def _latest_thread_row_id(session, chat_id: int) -> int | None:
+    """Most recent row in the chat thread (root or child), for anchoring feed activity."""
+    from sqlalchemy import text
+
+    from distr.core.db import Chat
+
+    row = session.execute(
+        text(
+            """
+            WITH RECURSIVE chat_thread AS (
+                SELECT id, parent_id, created_date FROM chats WHERE id = :root_id
+                UNION ALL
+                SELECT c.id, c.parent_id, c.created_date FROM chats c
+                INNER JOIN chat_thread ct ON c.parent_id = ct.id
+            )
+            SELECT id FROM chat_thread ORDER BY created_date DESC LIMIT 1
+            """
+        ),
+        {"root_id": int(chat_id)},
+    ).fetchone()
+    if row and row[0] is not None:
+        return int(row[0])
+    chat = session.get(Chat, int(chat_id))
+    return int(chat.id) if chat and chat.id is not None else None
+
+
 def _parse_tool_timestamp_iso(raw: Optional[str]) -> Optional[datetime]:
     if not raw or not isinstance(raw, str):
         return None
@@ -161,6 +187,8 @@ def _chat_title(tool_name: str, result: Optional[str], instruction_hint: Optiona
         return "Ran helper code"
     if tool_name == "mode_control":
         return "Checked mode control"
+    if tool_name == "chat_settings":
+        return "Changed chat settings"
     return tool_name.replace("_", " ").title()
 
 
@@ -192,6 +220,82 @@ def _persist_chat_tool_event(event: Dict[str, Any], limit: int = 200) -> bool:
     except Exception as e:
         logger.debug("persist chat tool event failed: %s", e)
         return False
+
+
+def record_chat_settings_change(
+    chat_id: int,
+    *,
+    previous: Dict[str, Optional[str]],
+    current: Dict[str, Optional[str]],
+) -> Optional[Dict[str, Any]]:
+    """Record LLM/voice settings changes as visible system activity in the chat feed."""
+    def _norm_pair(provider: Optional[str], model: Optional[str]) -> tuple[str, str]:
+        return ((provider or "").strip(), (model or "").strip())
+
+    llm_prev = _norm_pair(previous.get("provider"), previous.get("model_name"))
+    llm_cur = _norm_pair(current.get("provider"), current.get("model_name"))
+    voice_prev = _norm_pair(previous.get("voice_provider"), previous.get("voice_model"))
+    voice_cur = _norm_pair(current.get("voice_provider"), current.get("voice_model"))
+
+    lines: list[str] = []
+    if llm_cur != llm_prev and any(llm_cur):
+        if any(llm_prev):
+            lines.append(
+                f"LLM: {llm_prev[0] or '—'} / {llm_prev[1] or '—'} "
+                f"→ {llm_cur[0] or '—'} / {llm_cur[1] or '—'}"
+            )
+        else:
+            lines.append(f"LLM: {llm_cur[0] or '—'} / {llm_cur[1] or '—'}")
+    if voice_cur != voice_prev and any(voice_cur):
+        if any(voice_prev):
+            lines.append(
+                f"Voice: {voice_prev[0] or '—'} / {voice_prev[1] or '—'} "
+                f"→ {voice_cur[0] or '—'} / {voice_cur[1] or '—'}"
+            )
+        else:
+            lines.append(f"Voice: {voice_cur[0] or '—'} / {voice_cur[1] or '—'}")
+    if not lines:
+        return None
+
+    summary = "\n".join(lines)
+    turn_chat_id = int(chat_id)
+    try:
+        from distr.core.db import get_session
+
+        with get_session() as session:
+            resolved = _latest_thread_row_id(session, int(chat_id))
+            if resolved is not None:
+                turn_chat_id = resolved
+    except Exception as e:
+        logger.debug("latest thread row resolution failed: %s", e)
+
+    event = _build_chat_tool_event(
+        int(chat_id),
+        "chat_settings",
+        summary,
+        "completed",
+        "Changed chat settings",
+        None,
+        None,
+        turn_chat_id=turn_chat_id,
+    )
+    event["chat_visible"] = True
+    event["chat_compact"] = False
+    if not _persist_chat_tool_event(event):
+        return None
+
+    _activity_logger.info(
+        "[agent_tool] chat_id=%s tool=chat_settings status=completed instruction=Changed chat settings result=%s",
+        chat_id,
+        _preview_result(summary, 120) or "(empty)",
+    )
+    try:
+        from distr.core.signals import signal_manager
+
+        signal_manager.tool_executed.emit(event)
+    except Exception as e:
+        logger.debug("tool_executed signal emit failed: %s", e)
+    return event
 
 
 def record_tool_execution(

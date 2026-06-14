@@ -21,6 +21,7 @@ MCP_SERVER_DISCONNECTED = "mcp.server.disconnected"
 MCP_TOOL_CALLED = "mcp.tool.called"
 
 # Workflows
+ORCHESTRATION_EVENT = "orchestration.event"
 WORKFLOW_STEP_STARTED = "workflow.step.started"
 WORKFLOW_STEP_COMPLETED = "workflow.step.completed"
 
@@ -48,6 +49,7 @@ ALL_EVENT_TYPES: frozenset[str] = frozenset(
         MCP_SERVER_CONNECTED,
         MCP_SERVER_DISCONNECTED,
         MCP_TOOL_CALLED,
+        ORCHESTRATION_EVENT,
         WORKFLOW_STEP_STARTED,
         WORKFLOW_STEP_COMPLETED,
         MEMORY_DISTILLED,

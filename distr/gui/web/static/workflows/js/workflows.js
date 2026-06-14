@@ -21,6 +21,8 @@
     var workflowMemoryRunId = null;
     var latestSteeringMemory = null;
     var latestActiveRuns = [];
+    var latestWorkflowRunHistory = [];
+    var workflowRunsSeenByWorkflowId = {};
     var latestWorkflowExecutionSessions = [];
     var latestOrchestratorEvents = [];
     var loopFeedRunId = null;
@@ -3753,7 +3755,7 @@
             loadActiveRuns();
             loadWorkflowExecutionSessions();
             checkActiveRun();
-            if (workflowHasActiveRuns() && workflowRunsSubtab === "timeline") {
+            if (workflowRunsSubtab === "timeline") {
                 loadOrchestratorTimeline({ quiet: true });
             }
             if (isLoopTabVisible()) {
@@ -4105,6 +4107,7 @@
             syncLoopFeedRunSelect();
             loadLoopActivityFeed({ quiet: true });
             if (workflowRunsSubtab === "memory") loadWorkflowSteeringMemory({ quiet: true });
+            if (workflowRunsSubtab === "timeline") loadOrchestratorTimeline({ quiet: true });
             renderWorkflowTickets(workflowQueueTickets);
             if (stopAllBtn) {
                 var hasActiveCurrentWorkflowRuns = latestActiveRuns.some(function (r) {
@@ -4132,8 +4135,13 @@
                 var stepText = r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
                 var workflowText = meta.workflowText || ("Workflow #" + r.workflow_id);
                 var routeCard = renderRouteCard(r.execution_route || {}, {
-                    pendingApproval: r.pending_route_approval && Object.keys(r.pending_route_approval || {}).length
+                    pendingApproval: r.pending_route_approval && Object.keys(r.pending_route_approval || {}).length,
+                    skills: workflowCleanStringList(r.current_step_skills).concat(workflowCleanStringList((r.execution_route || {}).skills)),
+                    tools: workflowCleanStringList(r.current_step_tools).concat(workflowCleanStringList((r.execution_route || {}).tools))
                 });
+                var loopBadge = r.loop_label
+                    ? '<span class="text-xs px-1.5 py-0.5 rounded bg-purple-600/20 text-purple-200">' + esc(r.loop_label) + '</span>'
+                    : '';
                 var rowCls = "rounded px-3 py-2 border border-white/10 " + (isCurrentWorkflow ? "wf-live-run" : "bg-[#152054]/50");
                 var waitingKind = r.waiting_kind || "";
                 var continueLabel = waitingKind === "ide_handoff"
@@ -4148,6 +4156,7 @@
                         '<span class="text-xs text-gray-400">Run #' + r.id + '</span>' +
                         '<span class="text-xs px-1.5 py-0.5 rounded ' + statusColor + '">' + esc(r.status) + '</span>' +
                         '<span class="text-xs px-1.5 py-0.5 rounded bg-green-600/20 text-green-300">' + esc(phase) + '</span>' +
+                        loopBadge +
                         '<span class="text-xs text-gray-500">Elapsed ' + esc(formatElapsed(r.elapsed_seconds)) + '</span>' +
                         actions +
                     '</div>' +
@@ -4404,6 +4413,35 @@
         return String(source).replace(/_/g, " ");
     }
 
+    function workflowCleanStringList(value) {
+        if (!value) return [];
+        if (typeof value === "string") {
+            value = value.split(",");
+        }
+        if (!Array.isArray(value)) return [];
+        var seen = {};
+        return value.map(function (item) {
+            return String(item || "").trim();
+        }).filter(function (item) {
+            if (!item || seen[item]) return false;
+            seen[item] = true;
+            return true;
+        });
+    }
+
+    function workflowPillListHtml(label, values, colorClass) {
+        values = workflowCleanStringList(values);
+        if (!values.length) return "";
+        colorClass = colorClass || "bg-white/10 text-gray-200";
+        return '<div class="mt-2 flex flex-wrap items-center gap-1.5">' +
+            '<span class="text-[10px] uppercase tracking-wide text-gray-500">' + esc(label) + '</span>' +
+            values.slice(0, 8).map(function (value) {
+                return '<span class="rounded px-1.5 py-0.5 text-[11px] ' + colorClass + '">' + esc(value) + '</span>';
+            }).join("") +
+            (values.length > 8 ? '<span class="text-[11px] text-gray-500">+' + (values.length - 8) + '</span>' : '') +
+        '</div>';
+    }
+
     function renderRouteCard(route, options) {
         options = options || {};
         route = route && typeof route === "object" ? route : {};
@@ -4412,6 +4450,8 @@
         var source = route.source || route.route_source || "policy";
         var rationale = route.rationale || route.route_rationale || "";
         var pending = options.pendingApproval || route.requires_approval;
+        var skills = workflowCleanStringList(options.skills || route.skills);
+        var tools = workflowCleanStringList(options.tools || route.tools);
         var html = '<div class="rounded border border-blue-500/25 bg-blue-500/5 px-3 py-2 text-xs">' +
             '<div class="flex flex-wrap items-center gap-2">' +
                 '<span class="text-[10px] uppercase tracking-wide text-blue-200">Route</span>' +
@@ -4421,6 +4461,8 @@
                 (pending ? '<span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-200">override pending approval</span>' : '') +
             '</div>';
         if (rationale) html += '<p class="mt-1 text-[11px] text-gray-400">' + esc(rationale) + '</p>';
+        html += workflowPillListHtml("Skills", skills, "bg-emerald-500/15 text-emerald-200");
+        html += workflowPillListHtml("Tools", tools, "bg-purple-500/15 text-purple-200");
         html += '</div>';
         return html;
     }
@@ -4535,7 +4577,11 @@
                     (run.ide_handoff_pending ? '<span class="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200">IDE handoff pending</span>' : '') +
                 '</div>' +
             '</div>' +
-            renderRouteCard(route, { pendingApproval: hasPendingRoute }) +
+            renderRouteCard(route, {
+                pendingApproval: hasPendingRoute,
+                skills: workflowCleanStringList(run.current_step_skills).concat(workflowCleanStringList(route.skills)),
+                tools: workflowCleanStringList(run.current_step_tools).concat(workflowCleanStringList(route.tools))
+            }) +
             approvalHtml +
             humanHtml +
             steerHtml +
@@ -4710,10 +4756,10 @@
         var locked = !!(run || executionSession);
         var loopLocked = workflowHasActiveRuns();
         var canReorder = !locked && !loopLocked;
-        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : "Queued");
+        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : (ticket.workflow_status || "Queued"));
         var statusClass = run || executionSession
             ? (status === "waiting" || status === "queued" ? "bg-amber-500/20 text-amber-200" : "bg-sky-500/20 text-sky-200")
-            : "bg-white/10 text-gray-300";
+            : (String(status || "").toLowerCase() === "completed" ? "bg-emerald-500/15 text-emerald-200" : "bg-white/10 text-gray-300");
         var nextUp = nextQueuedTicketAfterRunning();
         var isUpNext = nextUp && String(nextUp.id) === String(ticket.id);
         var title = ticket.title || ("Ticket #" + ticket.id);
@@ -5044,8 +5090,9 @@
         ctx = ctx || {};
         var projectName = ctx.project_name || ticket.linked_project_name || projectNameById(ticket.linked_project_id) || "";
         var projectFolder = ctx.project_folder || "";
-        var backend = ctx.backend_id || (ticket.cli_route && (ticket.cli_route.backend || ticket.cli_route.backend_id)) || "auto";
-        var model = ctx.model || (ticket.cli_route && ticket.cli_route.model) || "auto";
+        var route = ctx.route && typeof ctx.route === "object" ? ctx.route : (ticket.cli_route || {});
+        var backend = ctx.backend_id || route.backend || route.backend_id || "auto";
+        var model = ctx.model || route.model || "auto";
         var complexity = ctx.complexity || ticket.complexity || "medium";
         var rows = [
             ["Ticket", ticket.title || ctx.title || ("Ticket #" + (ticket.id || ctx.ticket_id || ""))],
@@ -5056,6 +5103,8 @@
             ["Model", model || "auto"]
         ];
         if (projectFolder) rows.push(["Folder", projectFolder]);
+        var skills = workflowCleanStringList(ctx.skills || route.skills);
+        if (skills.length) rows.push(["Skills", skills.join(", ")]);
         return '<div class="space-y-2">' + rows.map(function (row) {
             return '<div class="grid grid-cols-[7rem,1fr] gap-3 text-sm">' +
                 '<div class="text-gray-500">' + esc(row[0]) + '</div>' +
@@ -5135,11 +5184,21 @@
         }
         var buttons = document.querySelectorAll('.wf-workflow-ticket-run[data-ticket-id="' + esc(ticketId) + '"]');
         buttons.forEach(function (btn) { btn.disabled = true; btn.textContent = "Starting"; });
+        var runsTabBtn = document.getElementById("wf-runs-tab-btn");
+        workflowRunsSeenByWorkflowId[String(currentWorkflowId)] = true;
+        if (runsTabBtn) runsTabBtn.classList.remove("hidden");
+        startPolling();
+        [300, 1200, 2500].forEach(function (delay) {
+            setTimeout(function () {
+                loadActiveRuns();
+                loadLoopActivityFeed({ quiet: true });
+                loadOrchestratorTimeline({ quiet: true });
+            }, delay);
+        });
         api("POST", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/send-to-workflow", {
             workflow_id: parseInt(currentWorkflowId, 10)
         }).then(function (data) {
             snack(workflowFeedbackText(data, "Ticket run started"));
-            startPolling();
             switchTab("loop", { persist: false });
             loadDetail(currentWorkflowId);
             loadWorkflowTicketQueue();
@@ -7725,6 +7784,10 @@
             var status = String(run && run.status || "").toLowerCase();
             return status !== "running" && status !== "waiting";
         });
+        latestWorkflowRunHistory = runs;
+        if (currentWorkflowId && runs.length) {
+            workflowRunsSeenByWorkflowId[String(currentWorkflowId)] = true;
+        }
         if (clearBtn) clearBtn.disabled = !runs.length;
         if (!runs.length) { el.innerHTML = ""; empty.classList.remove("hidden"); return; }
         empty.classList.add("hidden");
@@ -7774,8 +7837,15 @@
         var runsTabBtn = document.getElementById("wf-runs-tab-btn");
         if (!runsTabBtn) return;
         var hasActiveCurrentWorkflowRuns = workflowHasActiveRuns();
-        runsTabBtn.classList.toggle("hidden", !hasActiveCurrentWorkflowRuns);
-        if (!hasActiveCurrentWorkflowRuns) {
+        var hasKnownRunHistory = !!(
+            currentWorkflowId &&
+            (
+                workflowRunsSeenByWorkflowId[String(currentWorkflowId)] ||
+                (latestWorkflowRunHistory || []).length
+            )
+        );
+        runsTabBtn.classList.toggle("hidden", !(hasActiveCurrentWorkflowRuns || hasKnownRunHistory));
+        if (!hasActiveCurrentWorkflowRuns && !hasKnownRunHistory) {
             var activeRunsTab = document.querySelector(".wf-tab.active[data-tab='runs']");
             if (activeRunsTab) switchTab("tickets", { persist: false });
         }
@@ -8178,12 +8248,20 @@
         if (payload.step_name) lines.push("Step: " + payload.step_name);
         if (payload.decision && payload.decision.backend) {
             lines.push("Route: " + payload.decision.backend + (payload.decision.model ? " / " + payload.decision.model : ""));
+            var decisionSkills = workflowCleanStringList(payload.decision.skills);
+            if (decisionSkills.length) lines.push("Skills: " + decisionSkills.join(", "));
         }
         if (payload.route_backend) lines.push("Backend: " + payload.route_backend);
+        var payloadSkills = workflowCleanStringList(payload.skills);
+        var payloadTools = workflowCleanStringList(payload.tools);
+        var payloadContext = workflowCleanStringList(payload.context);
+        if (payloadSkills.length) lines.push("Skills: " + payloadSkills.join(", "));
+        if (payloadTools.length) lines.push("Tools: " + payloadTools.join(", "));
+        if (payloadContext.length) lines.push("Context: " + payloadContext.join(", "));
         if (payload.correction_hint) lines.push(payload.correction_hint);
         if (evidence.result_preview) lines.push(evidence.result_preview);
         if (evidence.error) lines.push("Error: " + evidence.error);
-        return lines.slice(0, 3);
+        return lines.filter(Boolean).slice(0, 6);
     }
 
     function steeringEntryToFeedItem(entry) {
@@ -8366,10 +8444,21 @@
                 if (payload.decision.model) detailLines.push("Route model: " + payload.decision.model);
                 if (payload.decision.source) detailLines.push("Route source: " + payload.decision.source);
                 if (payload.decision.rationale) detailLines.push("Rationale: " + payload.decision.rationale);
+                var decisionSkills = workflowCleanStringList(payload.decision.skills);
+                if (decisionSkills.length) detailLines.push("Skills: " + decisionSkills.join(", "));
             }
             if (payload.override && typeof payload.override === "object" && payload.override.backend) {
                 detailLines.push("Override: " + payload.override.backend + (payload.override.model ? " / " + payload.override.model : ""));
             }
+            var payloadSkills = workflowCleanStringList(payload.skills);
+            var payloadTools = workflowCleanStringList(payload.tools);
+            var payloadContext = workflowCleanStringList(payload.context);
+            var orchestration = payload.orchestration && typeof payload.orchestration === "object" ? payload.orchestration : {};
+            if (orchestration.legacy_event_type) detailLines.push("Legacy event: " + orchestration.legacy_event_type);
+            if (orchestration.subtype && orchestration.subtype !== orchestration.legacy_event_type) detailLines.push("Subtype: " + orchestration.subtype);
+            if (payloadSkills.length) detailLines.push("Skills: " + payloadSkills.join(", "));
+            if (payloadTools.length) detailLines.push("Tools: " + payloadTools.join(", "));
+            if (payloadContext.length) detailLines.push("Context: " + payloadContext.join(", "));
             if (payload.route_backend) detailLines.push("Backend: " + payload.route_backend);
             if (payload.model) detailLines.push("Model: " + payload.model);
             if (payload.complexity) detailLines.push("Complexity: " + payload.complexity);
@@ -8399,7 +8488,7 @@
                                 '<span>' + esc(event.event_type || "event") + '</span>' +
                                 (meta ? '<span>' + esc(meta) + '</span>' : '') +
                             '</div>' +
-                            (detailLines.length ? '<div class="mt-2 space-y-1 text-xs text-gray-400">' + detailLines.slice(0, 4).map(function (line) { return '<p class="truncate">' + esc(line) + '</p>'; }).join('') + '</div>' : '') +
+                            (detailLines.length ? '<div class="mt-2 space-y-1 text-xs text-gray-400">' + detailLines.slice(0, 8).map(function (line) { return '<p class="truncate">' + esc(line) + '</p>'; }).join('') + '</div>' : '') +
                         '</div>' +
                         '<span class="text-[11px] text-gray-500 flex-shrink-0">' + esc(when) + '</span>' +
                     '</div>' +

@@ -280,7 +280,7 @@ class StepExecutorMixin:
         from distr.core.rtk_support import run_shell_command
 
         cmd = config.get("command", "")
-        cwd = config.get("working_directory") or None
+        cwd = config.get("working_directory") or self._project_cwd_for_run(run_id)
         timeout = config.get("timeout_seconds", 60)
         try:
             proc = run_shell_command(cmd, timeout=timeout, cwd=cwd)
@@ -290,6 +290,38 @@ class StepExecutorMixin:
             return {"output": f"Command timed out after {timeout}s", "passed": False}
         except Exception as e:
             return {"output": f"Command execution error: {e}", "passed": False}
+
+    def _project_cwd_for_run(self, run_id: Optional[int]) -> Optional[str]:
+        """Resolve the linked project folder for run-scoped command steps."""
+        if run_id is None:
+            return None
+        try:
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run:
+                    return None
+                run_data: dict[str, Any] = {}
+                if run.run_data:
+                    try:
+                        run_data = json.loads(run.run_data or "{}") or {}
+                    except Exception:
+                        run_data = {}
+                folder = str(run_data.get("project_folder") or "").strip()
+                if not folder and run_data.get("project_id"):
+                    try:
+                        from distr.core.db.projects import Project
+
+                        project = db.query(Project).filter(Project.id == int(run_data["project_id"])).first()
+                        folder = str(getattr(project, "folder_location", "") or "").strip()
+                    except Exception:
+                        folder = ""
+                if not folder:
+                    return None
+                path = Path(folder).expanduser()
+                return str(path) if path.is_dir() else None
+        except Exception:
+            logger.debug("_project_cwd_for_run: failed to resolve project folder", exc_info=True)
+            return None
 
     def _run_http(self, config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Make an HTTP request."""

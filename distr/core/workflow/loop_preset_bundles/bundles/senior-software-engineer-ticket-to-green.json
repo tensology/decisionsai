@@ -1,0 +1,331 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "senior-software-engineer-ticket-to-green",
+  "name": "Senior Software Engineer: Ticket to Green",
+  "role": "senior_software_engineer",
+  "category": "Engineering",
+  "archetype": "incremental_ship",
+  "description": "Ingest a ticket, attach plan.md, implement, run project safety nets, security checks, UI/product QA, code-health review, eval scoring, cleanup, and loop until green.",
+  "kickoff": "Start the \"Senior Software Engineer: Ticket to Green\" loop.\nGoal: linked ticket is implemented, validated, cleaned up, and evidence-backed\nMax iterations: 8\nBetween iterations run: project safety nets, secret/security audit, UI/product QA, code-health review, and eval scoring\nExit when: plan.md is attached to the ticket, implementation matches acceptance criteria, all checks are green, test data is cleaned up, and the result packet explains why the ticket is green\nStep 1: Ingest the ticket, board, lane, project, linked files, acceptance criteria, and prior workflow context before planning.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "loop_contract": {
+    "name": "Senior Software Engineer: Ticket to Green",
+    "goal": "linked ticket implemented, validated, cleaned up, and evidence-backed",
+    "exit_when": "plan.md is attached to the ticket, acceptance criteria are met, safety nets pass, security/UI/backend/eval/cleanup gates are green, and the result packet explains why",
+    "check_command": "project safety net discovery command + secret/security audit + browser/computer-use evidence + code-health/eval/cleanup gates",
+    "max_iterations": 8,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read the linked ticket title, description, comments, board, lane, project, todos, linked files, acceptance criteria, recommended skills, and any prior result-packet context. Restate the problem, constraints, risks, missing information, and the project route that should own the work.",
+    "archetype": "incremental_ship",
+    "role": "senior_software_engineer"
+  },
+  "expected_check_command": "project safety net discovery command + secret/security audit + browser/computer-use evidence + code-health/eval/cleanup gates",
+  "tags": [
+    "engineering",
+    "ticket",
+    "plan.md",
+    "security",
+    "playwright",
+    "computer-use"
+  ],
+  "steps": [
+    {
+      "name": "Ingest ticket and project context",
+      "instruction": "Read the linked ticket title, description, comments, board, lane, project, todos, linked files, acceptance criteria, recommended skills, and any prior result-packet context. Restate the problem, constraints, risks, missing information, and the project route that should own the work.",
+      "skills": [
+        "product-lens",
+        "brainstorming",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not write code before the plan artifact exists",
+      "failure_checklist": [
+        "Ticket acceptance criteria were not restated",
+        "Project route or linked project context was not identified",
+        "Prior result-packet context was ignored"
+      ],
+      "validation_prompt": "Ticket brief, acceptance criteria, risks, project route, and context handoff are explicit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket context + project repository",
+      "action_type": "send_to_project_cli"
+    },
+    {
+      "name": "Write plan.md and attach to ticket",
+      "instruction": "Create or update a ticket-specific plan.md artifact in the project. Include requirements, implementation slices, affected files, tests to write before shipping, security checks, UI checks, rollback plan, data cleanup plan, and eval scoring criteria. Attach or link plan.md back to the ticket before implementation.",
+      "skills": [
+        "writing-plans",
+        "executing-plans",
+        "doc-coauthoring",
+        "product-lens"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- The plan must be tied to this ticket, not a generic checklist",
+      "failure_checklist": [
+        "plan.md missing or not linked to ticket",
+        "Plan lacks tests, rollback, cleanup, security, UI, or eval criteria",
+        "Plan omits context transferred from the ticket"
+      ],
+      "validation_prompt": "plan.md exists, is linked or attached to the ticket, and includes tests, rollback, cleanup, security, UI, and eval criteria.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Ticket file attachment / ticket update",
+      "action_type": "send_to_project_cli"
+    },
+    {
+      "name": "Execute planned slice",
+      "instruction": "Implement the next planned slice using the project conventions. Write or update tests before shipping the behavior. Keep the diff tight, preserve existing patterns, and record what context is handed to validation.",
+      "skills": [
+        "executing-plans",
+        "tdd-workflow",
+        "verification-loop",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them\n- Do not assume npm, pytest, or make unless the repo proves it\n- Do not bypass tests or weaken acceptance criteria",
+      "failure_checklist": [
+        "No test or eval coverage for changed behavior",
+        "Implementation drifts outside the ticket plan",
+        "Context handoff to later steps is missing"
+      ],
+      "validation_prompt": "Planned slice is implemented with focused tests or evals and a clear context handoff.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Run project safety nets",
+      "instruction": "Run the discovered project lint, test, and build commands. Capture the exact command and output. If a command fails, route back to the implementation step with the first concrete failure.",
+      "skills": [
+        "verification-loop",
+        "ln-622-build-auditor",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them\n- Do not assume npm, pytest, or make unless the repo proves it\n- Do not edit commands, tests, or configs just to force green",
+      "failure_checklist": [
+        "Safety net command was skipped",
+        "A failing command was ignored",
+        "The command did not run in the linked project folder"
+      ],
+      "validation_prompt": "Discovered lint/test/build safety nets exit 0 in the linked project folder.",
+      "validation_type": "exit_code",
+      "wait_for_continue": false,
+      "action_type": "run_command",
+      "command": "set -eu\nif [ -f package.json ] && command -v node >/dev/null 2>&1; then\n  cmd=$(node -e \"const p=require('./package.json').scripts||{}; const cmds=[]; if(p.lint) cmds.push('npm run lint'); if(p.test) cmds.push('npm test'); if(p.build) cmds.push('npm run build'); console.log(cmds.join(' && '));\")\n  if [ -n \"$cmd\" ]; then\n    echo \"$cmd\"\n    sh -lc \"$cmd\"\n    exit $?\n  fi\nfi\nif [ -f pyproject.toml ] || [ -d tests ]; then\n  if command -v pytest >/dev/null 2>&1; then\n    pytest -q\n  else\n    python3 -m pytest -q\n  fi\n  exit $?\nfi\nif [ -f Makefile ]; then\n  make test\n  exit $?\nfi\necho \"No project safety net command discovered; add lint/test/build command to the ticket plan.\" >&2\nexit 2",
+      "timeout_seconds": 600,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Audit secrets and security",
+      "instruction": "Run tracked-secret and hard-coded-secret checks, then review the changed code for injection risks, unsafe deserialization, authz/authn drift, weak error handling, and rollback hazards.",
+      "skills": [
+        "ln-621-security-auditor",
+        "pre-flight-review",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Never print secret values into the ticket or activity log\n- Do not commit .env files, API keys, tokens, passwords, private keys, or generated credentials",
+      "failure_checklist": [
+        "Tracked .env or key material found",
+        "Hard-coded secret candidate found",
+        "SQL injection or unsafe input path not addressed"
+      ],
+      "validation_prompt": "Secret/env scan exits 0 and no unresolved security blocker remains.",
+      "validation_type": "exit_code",
+      "wait_for_continue": false,
+      "action_type": "run_command",
+      "command": "set -eu\nif ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then\n  echo \"Not a git worktree; cannot prove tracked secret safety.\" >&2\n  exit 2\nfi\ntracked_secret_files=$(git ls-files | grep -E '(^|/)(\\.env($|\\.)|.*\\.(pem|key|p12|pfx)$)' || true)\nif [ -n \"$tracked_secret_files\" ]; then\n  echo \"Secret-like files are tracked:\"\n  echo \"$tracked_secret_files\"\n  exit 1\nfi\nhardcoded=$(git grep -n -E '(api[_-]?key|secret|password|token)[[:space:]]*[:=][[:space:]]*\"[^\"]{12,}\"' -- . ':!vendor' ':!node_modules' ':!*.lock' || true)\nif [ -n \"$hardcoded\" ]; then\n  echo \"Hard-coded secret candidates:\"\n  echo \"$hardcoded\"\n  exit 1\nfi\necho 'Secret and environment audit passed.'",
+      "timeout_seconds": 180,
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Verify UI and product behavior",
+      "instruction": "Use Playwright/browser-use against the affected local or staging UI. Check changed flows, all visible buttons introduced or touched, loading states, snackbars/toasts, empty/error states, responsive layout, console errors, and whether the UI logically matches the ticket and project patterns.",
+      "skills": [
+        "webapp-testing",
+        "qa-tester",
+        "browser-qa"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not accept hidden required actions, clipped text, or rogue UI controls",
+      "failure_checklist": [
+        "Changed flow not exercised in browser",
+        "Button, snackbar, spinner, error, or loading state missing",
+        "Console errors, visual drift, or nonsensical UI ignored"
+      ],
+      "validation_prompt": "Browser evidence proves the changed UI flow makes sense, works, and has no console or visual blockers.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "playwright",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Capture desktop evidence when needed",
+      "instruction": "Use computer-use for desktop/sidecar evidence when the workflow involves native UI, browser chrome, file pickers, screen-level state, or anything Playwright cannot see. Capture screenshot evidence and summarize what was verified.",
+      "skills": [
+        "qa-tester",
+        "browser-qa"
+      ],
+      "tools": [
+        "computer_use"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Use this as evidence capture, not as a substitute for deterministic checks",
+      "failure_checklist": [
+        "Computer-use evidence needed but not captured",
+        "Screenshot does not show the relevant state",
+        "Observed UI state contradicts browser or test evidence"
+      ],
+      "validation_prompt": "Desktop/screenshot evidence is captured when needed, or the step states why Playwright evidence was sufficient.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "computer_use",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Review backend and code health",
+      "instruction": "Review the changed backend and shared code for dead code, duplicate logic, excessive complexity, files drifting toward 1600+ lines, leaky abstractions, inefficient queries, unclear errors, and missing rollback paths. Refactor only when it directly supports the ticket and reduces risk.",
+      "skills": [
+        "requesting-code-review",
+        "ln-511-code-quality-checker",
+        "ln-512-tech-debt-cleaner"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- No drive-by rewrites; refactor only the code touched or directly implicated",
+      "failure_checklist": [
+        "Dead code or duplicate logic left behind",
+        "Large-file or complexity drift ignored",
+        "Backend errors are vague or unsafe"
+      ],
+      "validation_prompt": "Code-health review is complete with dead code, duplication, complexity, and backend drift addressed or explicitly deferred.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Run eval and regression criteria",
+      "instruction": "Create or run evaluation-based tests where assertions alone are insufficient. Score criteria such as accuracy, tone, schema compliance, safety, and useful error messaging. Verify regressions called out in plan.md.",
+      "skills": [
+        "qa-tester",
+        "verification-loop",
+        "product-lens"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Eval scores must reflect the ticket acceptance criteria, not vanity metrics",
+      "failure_checklist": [
+        "Eval criteria missing for model/content/schema behavior",
+        "Accuracy, tone, schema, safety, or error messaging not scored where relevant",
+        "Potential regressions not tested"
+      ],
+      "validation_prompt": "Relevant evals and regressions are scored with pass/fail rationale tied to plan.md.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Evaluation harness / orchestrator scoring",
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Cleanup test data and rollback proof",
+      "instruction": "Remove temporary test data, generated fixtures, debug artifacts, and workflow noise created by this run. Prove rollback steps or migration safety where applicable. Confirm tests and evals leave no persistent data behind.",
+      "skills": [
+        "verification-loop",
+        "finishing-a-development-branch",
+        "ln-512-tech-debt-cleaner"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not leave seeded tickets, workflows, temp files, or credentials behind",
+      "failure_checklist": [
+        "Test data or generated artifacts left behind",
+        "Rollback plan untested or missing",
+        "Migration/fixture cleanup not verified"
+      ],
+      "validation_prompt": "Cleanup is verified, rollback notes exist where needed, and no persistent test data is left behind.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Evaluate green exit",
+      "instruction": "Decide whether the loop can exit. It can only pass when plan.md is attached, acceptance criteria are met, safety nets passed, security is clean, UI/product checks passed or were not applicable with rationale, backend/code health is acceptable, evals passed, cleanup is verified, and context handoffs are visible.",
+      "skills": [
+        "product-lens",
+        "finishing-a-development-branch",
+        "requesting-code-review"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not mark green with unresolved blockers or missing evidence",
+      "failure_checklist": [
+        "Exit declared with missing plan.md attachment",
+        "Exit declared with failing tests, security, UI, eval, or cleanup gate",
+        "Final result packet does not explain why the run is green"
+      ],
+      "validation_prompt": "All gates are green and the result packet explains the evidence for exit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Orchestrator exit judgment",
+      "action_type": "agent_instruction",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Attach evidence and close ticket loop",
+      "instruction": "Update the ticket with plan.md, changed files, commands run, browser/computer-use evidence, security notes, eval scores, cleanup proof, rollback notes, and the final result packet. Mark the workflow completed only after this ticket-facing summary is written.",
+      "skills": [
+        "internal-comms",
+        "learnings-keeper",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- The final summary must be useful to the next developer who opens the ticket",
+      "failure_checklist": [
+        "Ticket was not updated with evidence",
+        "Context handoff to future work is missing",
+        "Status changed without a final result packet"
+      ],
+      "validation_prompt": "Ticket contains the final evidence summary, result packet, and closure status.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Ticket update + result packet",
+      "action_type": "agent_instruction",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "parked_presets": "Older role presets remain as unlisted JSON bundles under loop_preset_bundles/bundles."
+  }
+}

@@ -193,6 +193,12 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
             cfg["other_tool"] = other_tool
         if raw.get("command"):
             cfg["command"] = raw["command"]
+        timeout_seconds = raw.get("timeout_seconds")
+        if timeout_seconds not in (None, ""):
+            try:
+                cfg["timeout_seconds"] = int(timeout_seconds)
+            except (TypeError, ValueError):
+                pass
 
         on_pass = _resolve_routing_action(
             raw, position=i, step_count=step_count, pass_key="validation_pass_action", goto_key="on_pass_goto_position"
@@ -212,6 +218,7 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 "wait_for_continue": bool(raw.get("wait_for_continue", False)),
                 "routing_mode": str(raw.get("routing_mode") or "static"),
                 "config": cfg,
+                "timeout_seconds": int(cfg.get("timeout_seconds") or raw.get("timeout_seconds") or 300),
                 "on_pass_goto_position": on_pass,
                 "on_fail_goto_position": on_fail,
             }
@@ -220,12 +227,18 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     return steps_out[:WORKFLOW_LOOP_MAX_STEPS]
 
 
-@lru_cache(maxsize=1)
-def _load_manifest() -> dict[str, Any]:
+@lru_cache(maxsize=8)
+def _load_manifest_cached(mtime_ns: int) -> dict[str, Any]:
     if not _MANIFEST_PATH.is_file():
         return {"format_version": BUNDLE_VERSION, "presets": []}
     with _MANIFEST_PATH.open(encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _load_manifest() -> dict[str, Any]:
+    if not _MANIFEST_PATH.is_file():
+        return {"format_version": BUNDLE_VERSION, "presets": []}
+    return _load_manifest_cached(_MANIFEST_PATH.stat().st_mtime_ns)
 
 
 def _bundle_path_for_slug(slug: str) -> Path | None:
@@ -576,6 +589,6 @@ def save_user_loop_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     manifest["format"] = "decisionsai_loop_preset_manifest_v1"
     manifest["presets"] = presets
     _save_user_manifest(manifest)
-    _load_manifest.cache_clear()
+    _load_manifest_cached.cache_clear()
 
     return {"success": True, "slug": slug, "name": bundle.get("name"), "path": str(out_path)}

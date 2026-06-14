@@ -611,6 +611,7 @@ def start_workflow_run(
     ticket_id: Optional[int] = None,
     run_metadata: Optional[Dict[str, Any]] = None,
     event_queue: Optional[Any] = None,
+    dispatch_async: bool = False,
 ) -> Dict[str, Any]:
     """Start a full workflow run.
 
@@ -875,35 +876,47 @@ def start_workflow_run(
         )
     except Exception:
         logger.debug("Could not emit Hermes workflow_run_started event", exc_info=True)
-    _tid = threading.get_ident()
-    _set_workflow_thread_env(_tid, run_id, first_step_id, workflow_id)
-    # Also keep os.environ for backward compat with tools that read it directly.
-    os.environ["DECISIONS_WORKFLOW_RUN_ID"] = str(run_id)
-    os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(first_step_id)
-    os.environ["DECISIONS_WORKFLOW_ID"] = str(workflow_id)
+    def _dispatch_first_step() -> Dict[str, Any]:
+        _tid = threading.get_ident()
+        _set_workflow_thread_env(_tid, run_id, first_step_id, workflow_id)
+        # Also keep os.environ for backward compat with tools that read it directly.
+        os.environ["DECISIONS_WORKFLOW_RUN_ID"] = str(run_id)
+        os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(first_step_id)
+        os.environ["DECISIONS_WORKFLOW_ID"] = str(workflow_id)
 
-    dispatcher = StepDispatcher()
-    if board_id is not None and ticket_id is not None:
-        try:
-            increment_kanban_updated(
-                board_id=board_id,
-                event_type="ticket_workflow_status",
-                payload={
-                    "ticket_id": int(ticket_id),
-                    "run_id": int(run_id),
-                    "status": "running",
-                    "step_id": int(first_step_id),
-                },
-            )
-        except Exception:
-            logger.debug("Could not emit ticket_workflow_status start event", exc_info=True)
-    result = dispatcher.run_in_workflow(first_step_id, run_id)
-    if "error" in result:
-        _clear_workflow_env()
-        complete_run(run_id, "failed")
+        dispatcher = StepDispatcher()
+        if board_id is not None and ticket_id is not None:
+            try:
+                increment_kanban_updated(
+                    board_id=board_id,
+                    event_type="ticket_workflow_status",
+                    payload={
+                        "ticket_id": int(ticket_id),
+                        "run_id": int(run_id),
+                        "status": "running",
+                        "step_id": int(first_step_id),
+                    },
+                )
+            except Exception:
+                logger.debug("Could not emit ticket_workflow_status start event", exc_info=True)
+        result = dispatcher.run_in_workflow(first_step_id, run_id)
+        if "error" in result:
+            _clear_workflow_env()
+            complete_run(run_id, "failed")
+            return result
+        result["run_id"] = run_id
         return result
-    result["run_id"] = run_id
-    return result
+
+    if dispatch_async:
+        dispatch_thread = threading.Thread(
+            target=_dispatch_first_step,
+            name=f"workflow-dispatch-{run_id}",
+            daemon=True,
+        )
+        dispatch_thread.start()
+        return {"run_id": run_id, "status": "started", "async": True}
+
+    return _dispatch_first_step()
 
 
 def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
@@ -1240,6 +1253,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             board_id=board_id,
             summary=f"Workflow run finished with status: {status}.",
         )
+        increment_workflow_updated()
     except Exception:
         logger.debug("Could not emit Hermes workflow_run_completed event", exc_info=True)
     try:

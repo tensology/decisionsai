@@ -242,6 +242,7 @@ class TelegramWebSocketManager(
 
         # Health Check
         self._last_message_time = time.time()
+        self._init_socket_heartbeat_state("Telegram", interval_ms=30_000, timeout_ms=8_000)
         self._health_check_timer = QTimer()
         self._health_check_timer.timeout.connect(self._check_health)
         self._health_check_timer.start(3 * 60 * 1000)  # Every 3 minutes
@@ -647,6 +648,7 @@ class TelegramWebSocketManager(
         # Stop reconnect timer first to prevent auto-reconnect
         if hasattr(self, "_reconnect_timer"):
             self._reconnect_timer.stop()
+        self._stop_socket_heartbeat()
 
         # Send shutdown message BEFORE closing the socket
         # CRITICAL: Only send shutdown message if NOT checking staleness (manual app exit)
@@ -831,6 +833,8 @@ class TelegramWebSocketManager(
 
         self._reset_reconnect_state("Telegram")
         self._is_auto_reconnecting = False  # Reset flag after connection
+        self._mark_socket_heartbeat_seen()
+        self._start_socket_heartbeat()
 
         # Send Subscribe Message
         msg = {"type": "subscribe"}
@@ -877,6 +881,7 @@ class TelegramWebSocketManager(
         """Called when socket disconnects."""
         # Release sleep prevention
         self._release_sleep()
+        self._stop_socket_heartbeat()
 
         if not self._active_disconnect:
             reason = "Telegram relay disconnected — reconnecting automatically"
@@ -1058,7 +1063,7 @@ class TelegramWebSocketManager(
 
     def _on_message(self, message: str):
         """Handle incoming text message."""
-        self._last_message_time = time.time()
+        self._mark_socket_heartbeat_seen()
 
         try:
             data = json.loads(message)
@@ -1081,6 +1086,9 @@ class TelegramWebSocketManager(
             if msg_type == "ping":
                 # Respond to ping silently - this is normal polling from remote app
                 self._send_websocket_message({"type": "pong"})
+                return
+
+            if msg_type == "pong":
                 return
 
             if msg_type == "telegram_message":

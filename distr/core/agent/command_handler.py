@@ -1003,16 +1003,20 @@ def _split_text_for_direct_tts(text: str, max_chunk: int = 300) -> list[str]:
 
 def _cmd_speak_text_directly(session, params):
     """Speak text directly via TTS without going through LLM."""
-    from .libs import StartFrame, TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
+    from .libs import TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
     import time
     from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
     raw_text = params.get('text', '')
     text = clean_text_for_tts(raw_text, spoken_prose=True)
     has_llm = hasattr(session, 'llm_service') and session.llm_service is not None
+    has_tts = hasattr(session, 'tts_service') and session.tts_service is not None
     has_loop = hasattr(session, 'runner') and session.runner is not None and hasattr(session.runner, '_loop') and session.runner._loop is not None
-    session.logger.info(f"_cmd_speak_text_directly called: text_len={len(text)}, has_llm_service={has_llm}, has_event_loop={has_loop}")
-    if text and has_llm:
+    session.logger.info(
+        "_cmd_speak_text_directly called: text_len=%d, has_llm_service=%s, has_tts_service=%s, has_event_loop=%s",
+        len(text), has_llm, has_tts, has_loop,
+    )
+    if text and has_tts:
         # De-duplicate repeated direct TTS within a short time window.
         # This prevents subagent->orchestrator double announcements.
         now = time.time()
@@ -1052,45 +1056,46 @@ def _cmd_speak_text_directly(session, params):
                     direct_tts_id, len(saved_flags),
                 )
 
-                pipeline_dir = session.llm_service._pipeline_direction
-
-                is_started = getattr(session.llm_service, '_FrameProcessor__started', False)
-                if not is_started:
-                    session.logger.warning("LLM service not started yet - sending StartFrame first")
-                    await session.llm_service.push_frame(StartFrame(), pipeline_dir)
-                    await asyncio.sleep(0.01)
-
-                await session.llm_service.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
-                chunks = _split_text_for_direct_tts(text)
-                for i, chunk in enumerate(chunks):
-                    if not chunk:
-                        continue
-                    await session.llm_service.push_frame(TextFrame(text=chunk), pipeline_dir)
-                    if i < len(chunks) - 1:
-                        await asyncio.sleep(0.04)
-                await session.llm_service.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
-                session.logger.info(
-                    "_cmd_speak_text_directly id=%s queued %d text chunk(s) to pipeline",
-                    direct_tts_id,
-                    len(chunks),
-                )
-
-                # Let the pipeline start synthesis before restoring telegram thread flags
-                await asyncio.sleep(0.5)
-                for t, val in saved_flags.items():
+                try:
                     try:
-                        t.telegram_request = val
+                        from pipecat.processors.frame_processor import FrameDirection
+                        direction = FrameDirection.DOWNSTREAM
                     except Exception:
-                        pass
-                current_thread.force_desktop_tts = prev_force_desktop
-                if hasattr(session, 'tts_service') and session.tts_service is not None:
-                    session.tts_service._force_desktop_tts = prev_tts_force
+                        direction = getattr(getattr(session, 'llm_service', None), '_pipeline_direction', None)
 
-                session.logger.info("_cmd_speak_text_directly done id=%s", direct_tts_id)
+                    tts = session.tts_service
+                    await tts.process_frame(LLMFullResponseStartFrame(), direction)
+                    chunks = _split_text_for_direct_tts(text)
+                    for i, chunk in enumerate(chunks):
+                        if not chunk:
+                            continue
+                        await tts.process_frame(TextFrame(text=chunk), direction)
+                        if i < len(chunks) - 1:
+                            await asyncio.sleep(0.04)
+                    await tts.process_frame(LLMFullResponseEndFrame(), direction)
+                    session.logger.info(
+                        "_cmd_speak_text_directly id=%s routed %d text chunk(s) to TTS",
+                        direct_tts_id,
+                        len(chunks),
+                    )
+                except Exception:
+                    session.logger.error("_cmd_speak_text_directly failed id=%s", direct_tts_id, exc_info=True)
+                finally:
+                    for t, val in saved_flags.items():
+                        try:
+                            t.telegram_request = val
+                        except Exception:
+                            pass
+                    current_thread.force_desktop_tts = prev_force_desktop
+                    if hasattr(session, 'tts_service') and session.tts_service is not None:
+                        session.tts_service._force_desktop_tts = prev_tts_force
+                    session.logger.info("_cmd_speak_text_directly done id=%s", direct_tts_id)
 
             asyncio.run_coroutine_threadsafe(speak_directly(), session.runner._loop)
         else:
             session.logger.warning("Cannot speak text directly: event loop not available")
+    elif text:
+        session.logger.warning("Cannot speak text directly: TTS service not available")
 
 
 # ---------------------------------------------------------------------------

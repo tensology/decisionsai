@@ -72,6 +72,12 @@ def test_preset_with_playwright_tools_exits(matrix_factory, tmp_path, preset_slu
     start_preset_run(matrix_factory, tmp_path, preset_slug, timeout=90.0)
 
 
-def test_de_sloppify_handoff_retains_loop_context(matrix_factory, tmp_path):
-    result = start_preset_run(matrix_factory, tmp_path, "de-sloppify-pass", timeout=120.0)
+def test_senior_engineer_handoff_retains_loop_context(matrix_factory, tmp_path):
+    result = start_preset_run(
+        matrix_factory,
+        tmp_path,
+        "senior-software-engineer-ticket-to-green",
+        timeout=120.0,
+    )
     assert result["terminal"]["run"].status == "completed"
+    assert result["loop_context_seen"] is True

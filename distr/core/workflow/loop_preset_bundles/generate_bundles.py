@@ -79,7 +79,7 @@ def main() -> None:
     manifest = {
         "format_version": BUNDLE_VERSION,
         "format": "decisionsai_loop_preset_manifest_v1",
-        "description": "Role-based loop presets (developer, content, sales) with full harness steps",
+        "description": "Active role-based loop presets. Older presets remain parked as unlisted bundle files.",
         "presets": manifest_presets,
     }
     with MANIFEST_PATH.open("w", encoding="utf-8") as handle:

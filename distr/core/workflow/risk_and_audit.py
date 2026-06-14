@@ -66,9 +66,19 @@ def validation_rules_for_risk(risk_level: str, signals: List[str]) -> List[str]:
     return rules
 
 
-def required_validation_checks(risk_level: str) -> List[str]:
+def required_validation_checks(
+    risk_level: str,
+    *,
+    risk_type: str = "",
+    signals: List[str] | None = None,
+) -> List[str]:
     """Deterministic checks required before pass verdict."""
     if risk_level != "high":
+        return []
+    normalized_type = str(risk_type or "").strip().lower()
+    normalized_signals = {str(item or "").strip().lower() for item in (signals or [])}
+    has_system_signal = any(signal in HIGH_RISK_TERMS for signal in normalized_signals)
+    if normalized_type == "product_conversion" and not has_system_signal:
         return []
     return ["lint", "typecheck", "build", "tests"]
 
@@ -128,7 +138,9 @@ def enforce_validation_requirements(
     """
     updated = dict(packet or {})
     risk_level = (risk_profile or {}).get("level", "low")
-    required = required_validation_checks(risk_level)
+    risk_type = str((risk_profile or {}).get("risk_type") or "").strip().lower()
+    signals = [str(item).strip().lower() for item in (risk_profile or {}).get("signals", [])]
+    required = required_validation_checks(risk_level, risk_type=risk_type, signals=signals)
     tests_and_checks = dict(updated.get("tests_and_checks") or {})
     observed = [str(item).strip().lower() for item in (tests_and_checks.get("tests_run") or []) if str(item).strip()]
     missing = [name for name in required if name not in observed]

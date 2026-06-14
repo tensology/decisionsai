@@ -137,6 +137,7 @@ class WorkflowUpdateRequest(BaseModel):
     start_step_position: Optional[int] = None
     workflow_type: Optional[str] = None
     context_rules: Optional[str] = None
+    workflow_input: Optional[str] = None
     run_settings: Optional[dict] = None
     pre_chain: Optional[List[str]] = None
     post_chain: Optional[List[str]] = None

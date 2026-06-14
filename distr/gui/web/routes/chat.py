@@ -1053,10 +1053,18 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         next new chat pre-selects these choices."""
         try:
             response_payload: Dict[str, Any]
+            previous_settings: Dict[str, Optional[str]] = {}
+            settings_fields_touched = False
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                previous_settings = {
+                    "provider": chat.provider,
+                    "model_name": chat.model_name,
+                    "voice_provider": chat.voice_provider,
+                    "voice_model": chat.voice_model,
+                }
                 updated = False
                 if request_data.title is not None:
                     chat.title = (request_data.title or "").strip() or None
@@ -1072,17 +1080,21 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 if request_data.provider is not None:
                     chat.provider = (request_data.provider or "").strip() or None
                     updated = True
+                    settings_fields_touched = True
                 if request_data.model_name is not None:
                     chat.model_name = (request_data.model_name or "").strip() or None
                     updated = True
+                    settings_fields_touched = True
                 if request_data.voice_provider is not None:
                     chat.voice_provider = (
                         request_data.voice_provider or ""
                     ).strip() or None
                     updated = True
+                    settings_fields_touched = True
                 if request_data.voice_model is not None:
                     chat.voice_model = (request_data.voice_model or "").strip() or None
                     updated = True
+                    settings_fields_touched = True
                 if updated:
                     chat.modified_date = datetime.utcnow()
                     session.commit()
@@ -1138,6 +1150,30 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
             except Exception as e:
                 logger.warning("Update chat: could not persist selections to settings: %s", e)
+
+            if settings_fields_touched and updated:
+                from distr.core.agent.tool_audit import record_chat_settings_change
+
+                current_settings = {
+                    "provider": response_payload.get("provider"),
+                    "model_name": response_payload.get("model_name"),
+                    "voice_provider": response_payload.get("voice_provider"),
+                    "voice_model": response_payload.get("voice_model"),
+                }
+                settings_event = record_chat_settings_change(
+                    chat_id,
+                    previous=previous_settings,
+                    current=current_settings,
+                )
+                if settings_event:
+                    payload = json.dumps({**settings_event, "event": "tool_executed"})
+                    with _chat_ws_lock:
+                        conns = list(_chat_ws_connections.get(chat_id, set()))
+                    for ws in conns:
+                        try:
+                            await ws.send_text(payload)
+                        except Exception as e:
+                            logger.debug("WebSocket send error: %s", e)
 
             return JSONResponse({**response_payload, "message": "Chat updated"})
         except HTTPException:

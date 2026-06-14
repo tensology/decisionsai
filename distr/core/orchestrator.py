@@ -393,7 +393,14 @@ def emit_event(
         )
         session.add(row)
         session.commit()
-        return int(row.id)
+        event_id = int(row.id)
+        try:
+            from distr.core.events import ORCHESTRATION_EVENT, get_event_bus
+
+            get_event_bus().publish(ORCHESTRATION_EVENT, serialize_event(row))
+        except Exception:
+            logger.debug("Could not publish orchestration event to EventBus", exc_info=True)
+        return event_id
 
 
 def list_events(
@@ -1315,6 +1322,8 @@ def record_ui_quality_validation(
         enriched_standards_context = (
             enriched_standards_context.rstrip() + "\n\n" + taste_context
         ).strip()
+    if enriched_standards_context:
+        snapshot["standards_context"] = enriched_standards_context
     return record_validation(
         workflow_id=workflow_id,
         run_id=run_id,

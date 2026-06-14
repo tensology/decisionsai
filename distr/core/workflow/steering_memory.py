@@ -169,6 +169,8 @@ def get_run_steering_snapshot(
 
         board_id = int(run.board_id) if run.board_id else None
         workflow_id = int(run.workflow_id) if run.workflow_id else None
+        ticket_id = int(run.ticket_id) if run.ticket_id else None
+        run_status = run.status
         live = run_data.get("live_agent_context") if isinstance(run_data.get("live_agent_context"), dict) else {}
 
         steering_log = [
@@ -227,9 +229,9 @@ def get_run_steering_snapshot(
         "run_id": int(run_id),
         "workflow_id": workflow_id,
         "board_id": board_id,
-        "ticket_id": int(run.ticket_id) if run.ticket_id else None,
+        "ticket_id": ticket_id,
         "project_id": int(run_data.get("project_id")) if run_data.get("project_id") not in (None, "") else None,
-        "status": run.status,
+        "status": run_status,
         "latest_steering": str(run_data.get("latest_steering") or "").strip(),
         "worker_question": str(run_data.get("worker_question") or "").strip(),
         "live_agent_summary": {

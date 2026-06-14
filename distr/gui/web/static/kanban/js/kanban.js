@@ -648,6 +648,7 @@
         showKanbanConfirm: showKanbanConfirm,
         hideKanbanConfirm: hideKanbanConfirm,
         getWaCtxMenuData: function() { return waCtxMenuData; },
+        setWaCtxMenuData: function(data) { waCtxMenuData = data; },
         getWaMsgCtxData: function() { return waMsgCtxData; },
         getWaSelectionMode: function() { return waSelectionMode; },
         getWaSelectedJid: function() { return waSelectedJid; },
@@ -720,6 +721,10 @@
         syncAndRefreshThreadAfterSend: syncAndRefreshThreadAfterSend,
         refreshWaThreadIfOpen: refreshWaThreadIfOpen,
         setWaMsgCtxData: function(data) { waMsgCtxData = data; },
+        setWaChatLinkContext: function(sender, name, chatType) {
+            return waManagement.setWaChatLinkContext(sender, name, chatType);
+        },
+        showWaChatContextMenu: showWaChatContextMenu,
         getState: function() {
             return {
                 waChats: waChats,
@@ -3170,20 +3175,33 @@
         var modal = document.getElementById("kb-wa-link-modal");
         var phoneEl = document.getElementById("kb-wa-link-phone");
         var boardSelect = document.getElementById("kb-wa-link-board");
+        var autoCheckbox = document.getElementById("kb-wa-link-auto");
 
+        if (!modal || !phoneEl || !boardSelect) return;
         phoneEl.textContent = (chatData.name || "") + " (" + chatData.phone + ")";
+        if (autoCheckbox) autoCheckbox.checked = false;
+        boardSelect.innerHTML = '<option value="">Select a board...</option>';
+        modal.classList.remove("hidden");
 
-        // Populate board dropdown
-        apiFetch("/api/tickets/boards").then(function(boards) {
+        Promise.all([
+            apiFetch("/api/tickets/boards"),
+            apiFetch("/api/tickets/whatsapp/linked-board?phone=" + encodeURIComponent(chatData.phone || "")).catch(function() {
+                return { board_id: null, board_name: null };
+            }),
+        ]).then(function(results) {
+            var boards = results[0] || [];
+            var linkData = results[1] || {};
             boardSelect.innerHTML = '<option value="">Select a board...</option>';
             boards.forEach(function(b) {
-                var selected = (currentBoard && currentBoard.id === b.id) ? " selected" : "";
+                var selected = "";
+                if (linkData.board_id && linkData.board_id === b.id) selected = " selected";
+                else if (!linkData.board_id && currentBoard && currentBoard.id === b.id) selected = " selected";
                 var sourceTag = b.source === "database" ? "Local" : (b.source || "").toUpperCase();
                 boardSelect.innerHTML += '<option value="' + b.id + '"' + selected + '>' + esc(b.name) + " [" + esc(sourceTag) + ']</option>';
             });
+        }).catch(function(err) {
+            showSnackbar("Failed to load boards: " + (err && err.message ? err.message : String(err)), "error");
         });
-
-        modal.classList.remove("hidden");
     }
 
     // ── Board modal WhatsApp tab ──
@@ -3355,6 +3373,9 @@
         document.getElementById("kb-wa-link-confirm").addEventListener("click", waManagement.confirmWaLink);
 
         // Message context menu
+        document.querySelector(".kb-wa-msgctx-link").addEventListener("click", function() {
+            return waManagement.waMsgCtxLinkToBoard();
+        });
         document.querySelector(".kb-wa-msgctx-ticket").addEventListener("click", waManagement.waMsgCtxCreateTicket);
         document.querySelector(".kb-wa-msgctx-mark-processed").addEventListener("click", waManagement.waMsgCtxMarkProcessed);
         document.querySelector(".kb-wa-msgctx-delete").addEventListener("click", waManagement.waMsgCtxDelete);

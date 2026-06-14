@@ -38,8 +38,8 @@ def test_parse_loop_contract_elorm_catalog(entry):
     assert loop_contract.get("archetype") == entry["archetype"]
 
 
-def test_parse_loop_contract_desloppify_guardrails():
-    bundle = load_bundle_by_name("De-Sloppify Pass") or {}
+def test_parse_loop_contract_senior_engineer_guardrails():
+    bundle = load_bundle_by_name("Senior Software Engineer: Ticket to Green") or {}
     loop_contract = bundle.get("loop_contract") or {}
     assert len(loop_contract.get("guardrails") or []) >= 2
     rules = loop_contract_to_context_rules(loop_contract)
@@ -48,12 +48,8 @@ def test_parse_loop_contract_desloppify_guardrails():
 
 
 def test_infer_loop_archetypes():
-    ship = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Ship PR Until Green")
-    assert infer_loop_archetype(ship["kickoff"]) == "ship_with_ci"
-    spec = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Spec-First Ship")
-    assert infer_loop_archetype(spec["kickoff"]) == "incremental_ship"
-    babysitter = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "PR Babysitter")
-    assert infer_loop_archetype(babysitter["kickoff"]) == "watch_maintain"
+    senior = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Senior Software Engineer: Ticket to Green")
+    assert infer_loop_archetype(senior["kickoff"]) == "incremental_ship"
 
 
 def test_normalize_plan_steps_caps_at_fourteen():
@@ -120,30 +116,30 @@ def test_call_planning_llm_fallback_chain_tries_next_tier():
 
 
 def test_plan_workflow_persists_loop_contract_and_goto(monkeypatch):
-    desloppify = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "De-Sloppify Pass")
+    senior = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Senior Software Engineer: Ticket to Green")
     mock_plan = {
-        "name": "De-Sloppify Pass",
+        "name": "Senior Software Engineer: Ticket to Green",
         "planning_model_tier": "test",
         "loop_contract": {
-            "goal": "clean changes",
-            "max_iterations": 4,
-            "check_command": "npm run lint && npm test",
-            "exit_when": "no slop",
+            "goal": "ticket green",
+            "max_iterations": 8,
+            "check_command": "project safety net discovery command",
+            "exit_when": "plan.md attached and all gates green",
             "guardrails": ["Do not bypass checks"],
         },
         "steps": [
             {
-                "title": "Review diff",
-                "instruction": "Review and fix slop",
+                "title": "Ingest ticket",
+                "instruction": "Read ticket and project context",
                 "action_type": "send_to_project_cli",
-                "verification": "Diff is cleaner",
+                "verification": "Ticket context is clear",
                 "on_fail_goto_position": None,
             },
             {
-                "title": "Run checks",
-                "instruction": "Run lint and test",
+                "title": "Run safety nets",
+                "instruction": "Run project checks",
                 "action_type": "run_command",
-                "config": {"command": "npm run lint && npm test"},
+                "config": {"command": "project safety net discovery command"},
             },
             {
                 "title": "Evaluate exit",
@@ -160,18 +156,18 @@ def test_plan_workflow_persists_loop_contract_and_goto(monkeypatch):
     }
 
     with patch("distr.core.workflow.planning._call_llm_for_loop_plan", return_value=mock_plan):
-        wf_id = plan_workflow(desloppify["kickoff"], name="My De-Sloppify")
+        wf_id = plan_workflow(senior["kickoff"], name="My Senior SWE Loop")
 
     assert wf_id is not None
     from distr.core.workflow.service import get_workflow
 
     wf = get_workflow(wf_id)
-    assert wf["name"] == "My De-Sloppify"
+    assert wf["name"] == "My Senior SWE Loop"
     assert wf["context_rules"]
     assert "Do not bypass checks" in wf["context_rules"]
     assert len(wf["steps"]) == 4
     assert wf["steps"][2]["on_fail_goto"] == wf["steps"][0]["id"]
 
     workflow_input = json.loads(wf.get("workflow_input") or "{}")
-    assert workflow_input.get("max_iterations") == 4
-    assert "npm run lint" in workflow_input.get("check_command", "")
+    assert workflow_input.get("max_iterations") == 8
+    assert "project safety net" in workflow_input.get("check_command", "")

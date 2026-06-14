@@ -1,8 +1,9 @@
 """
 Hand-authored loop preset definitions.
 
-Each preset is a full step-runner workflow: role-specific instructions, skills,
-tools, guardrails, validation, and routing — not a generic work/check/evaluate shell.
+Only one built-in preset is active for now: a Senior Software Engineer role loop
+that ingests a ticket, plans it, executes it, validates it, repairs it, and exits
+only when the evidence packet is green.
 """
 
 from __future__ import annotations
@@ -12,14 +13,57 @@ from typing import Any
 from distr.core.workflow.loop_text import GUARDRAILS_FOOTER, SELF_PACE_FOOTER
 
 _SCOPE = (
-    "- Stay on the ticket scope; avoid unrelated refactors or scope creep\n"
-    "- Prefer minimal diffs and concrete evidence over broad rewrites"
+    "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n"
+    "- Prefer minimal diffs, explicit evidence, and reversible changes"
 )
 
 _DEV_CHECKS = (
-    "- Detect lint and test commands from the repo (package.json, Makefile, pyproject.toml, etc.)\n"
-    "- Do not assume npm — use whatever this project actually uses"
+    "- Detect commands from the actual project config before running them\n"
+    "- Do not assume npm, pytest, or make unless the repo proves it"
 )
+
+_PROJECT_SAFETY_NET_COMMAND = r"""set -eu
+if [ -f package.json ] && command -v node >/dev/null 2>&1; then
+  cmd=$(node -e "const p=require('./package.json').scripts||{}; const cmds=[]; if(p.lint) cmds.push('npm run lint'); if(p.test) cmds.push('npm test'); if(p.build) cmds.push('npm run build'); console.log(cmds.join(' && '));")
+  if [ -n "$cmd" ]; then
+    echo "$cmd"
+    sh -lc "$cmd"
+    exit $?
+  fi
+fi
+if [ -f pyproject.toml ] || [ -d tests ]; then
+  if command -v pytest >/dev/null 2>&1; then
+    pytest -q
+  else
+    python3 -m pytest -q
+  fi
+  exit $?
+fi
+if [ -f Makefile ]; then
+  make test
+  exit $?
+fi
+echo "No project safety net command discovered; add lint/test/build command to the ticket plan." >&2
+exit 2"""
+
+_SECRET_AUDIT_COMMAND = r"""set -eu
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Not a git worktree; cannot prove tracked secret safety." >&2
+  exit 2
+fi
+tracked_secret_files=$(git ls-files | grep -E '(^|/)(\.env($|\.)|.*\.(pem|key|p12|pfx)$)' || true)
+if [ -n "$tracked_secret_files" ]; then
+  echo "Secret-like files are tracked:"
+  echo "$tracked_secret_files"
+  exit 1
+fi
+hardcoded=$(git grep -n -E '(api[_-]?key|secret|password|token)[[:space:]]*[:=][[:space:]]*"[^"]{12,}"' -- . ':!vendor' ':!node_modules' ':!*.lock' || true)
+if [ -n "$hardcoded" ]; then
+  echo "Hard-coded secret candidates:"
+  echo "$hardcoded"
+  exit 1
+fi
+echo 'Secret and environment audit passed.'"""
 
 
 def _kickoff(name: str, body: str) -> str:
@@ -48,6 +92,7 @@ def _step(
     action_type: str = "",
     wait_for_continue: bool = False,
     command: str = "",
+    timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "name": name,
@@ -67,6 +112,8 @@ def _step(
         out["action_type"] = action_type
     if command:
         out["command"] = command
+    if timeout_seconds is not None:
+        out["timeout_seconds"] = timeout_seconds
     if on_pass_goto_position is not None:
         out["on_pass_goto_position"] = on_pass_goto_position
     if on_fail_goto_position is not None:
@@ -78,666 +125,230 @@ def _step(
     return out
 
 
-# ── Developer: flagship ticket → PRD → build → verify ─────────────────────────
-
-_TICKET_TO_SHIP_KICKOFF = _kickoff(
-    "Ticket to PRD to Ship",
-    """Goal: ticket acceptance criteria met with a reviewed PRD, implementation, and browser verification
+_SENIOR_SWE_KICKOFF = _kickoff(
+    "Senior Software Engineer: Ticket to Green",
+    """Goal: linked ticket is implemented, validated, cleaned up, and evidence-backed
 Max iterations: 8
-Between iterations run: project test suite + targeted browser check on changed flows
-Exit when: PRD approved, tests green, browser verification passed, and self-review clean
-Step 1: Ingest the ticket, clarify acceptance criteria, and draft a PRD before writing code.
+Between iterations run: project safety nets, secret/security audit, UI/product QA, code-health review, and eval scoring
+Exit when: plan.md is attached to the ticket, implementation matches acceptance criteria, all checks are green, test data is cleaned up, and the result packet explains why the ticket is green
+Step 1: Ingest the ticket, board, lane, project, linked files, acceptance criteria, and prior workflow context before planning.
 """
     + SELF_PACE_FOOTER
     + "\n\n"
     + GUARDRAILS_FOOTER,
 )
 
-_TICKET_TO_SHIP_STEPS = [
+
+_SENIOR_SWE_STEPS = [
     _step(
-        "Ingest ticket",
-        "Read the linked ticket (title, description, comments, attachments). Extract acceptance criteria, "
-        "constraints, and unknowns. List assumptions that must be confirmed before a PRD is written.",
-        skills=["product-lens", "brainstorming"],
+        "Ingest ticket and project context",
+        "Read the linked ticket title, description, comments, board, lane, project, todos, linked files, "
+        "acceptance criteria, recommended skills, and any prior result-packet context. Restate the problem, "
+        "constraints, risks, missing information, and the project route that should own the work.",
+        skills=["product-lens", "brainstorming", "systematic-debugging"],
         tools=["cli", "other"],
-        other_tool="Kanban ticket context + project repo",
-        guardrail=_guardrail(_SCOPE, "- Do not start implementation in this step"),
+        other_tool="Kanban ticket context + project repository",
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(_SCOPE, "- Do not write code before the plan artifact exists"),
         failure_checklist=[
-            "Acceptance criteria not stated clearly",
-            "Ticket context missing or not read",
+            "Ticket acceptance criteria were not restated",
+            "Project route or linked project context was not identified",
+            "Prior result-packet context was ignored",
         ],
-        validation_prompt="Acceptance criteria and constraints are written down with any open questions listed.",
+        validation_prompt="Ticket brief, acceptance criteria, risks, project route, and context handoff are explicit.",
     ),
     _step(
-        "Draft PRD",
-        "Write a concise PRD for this ticket: problem, users, acceptance criteria, out-of-scope, "
-        "test plan, and rollout notes. Use writing-plans and doc-coauthoring patterns. Save where the project keeps specs.",
-        skills=["writing-plans", "doc-coauthoring", "product-lens"],
-        tools=["cli"],
-        failure_checklist=["PRD missing acceptance criteria or test plan", "PRD is implementation-only with no why"],
-        validation_prompt="PRD exists with acceptance criteria, scope boundaries, and verification approach.",
-    ),
-    _step(
-        "Scrutinize PRD",
-        "Run ceo-scope-review on the PRD: challenge scope size, risks, and missing edge cases. "
-        "Run pre-flight-review for security/architecture flags relevant to this change. Produce a revised PRD or explicit hold.",
-        skills=["ceo-scope-review", "pre-flight-review"],
-        tools=["other"],
-        other_tool="Orchestrator PRD review",
-        guardrail=_guardrail(_SCOPE, "- Do not weaken acceptance criteria to force approval"),
-        failure_checklist=["Scope concerns ignored", "P0 security/architecture flags not addressed"],
-        validation_prompt="PRD reviewed; scope mode chosen; blocking concerns resolved or explicitly accepted.",
-    ),
-    _step(
-        "Implement slice",
-        "Implement the next highest-priority unchecked item from the PRD using executing-plans and tdd-workflow. "
-        "One coherent slice per iteration — minimal diff, tests for behavior changed.",
-        skills=["executing-plans", "tdd-workflow", "verification-loop"],
-        tools=["cli"],
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
-        failure_checklist=["No tests for changed behavior", "Unrelated files changed"],
-        validation_prompt="A coherent slice landed with tests and a readable diff.",
-        on_fail_goto_position=3,
-    ),
-    _step(
-        "Run project checks",
-        "Run this repo's lint and unit/integration tests (discover commands from project config — do not assume npm). "
-        "Capture output. Fix the first failure before continuing.",
-        skills=["verification-loop", "ln-622-build-auditor", "systematic-debugging"],
+        "Write plan.md and attach to ticket",
+        "Create or update a ticket-specific plan.md artifact in the project. Include requirements, implementation "
+        "slices, affected files, tests to write before shipping, security checks, UI checks, rollback plan, data "
+        "cleanup plan, and eval scoring criteria. Attach or link plan.md back to the ticket before implementation.",
+        skills=["writing-plans", "executing-plans", "doc-coauthoring", "product-lens"],
         tools=["cli", "other"],
-        other_tool="Project test/lint commands from repo config",
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS, "- Do not disable failing tests to pass"),
-        failure_checklist=["Checks skipped", "Wrong command used for this stack", "Failures not fixed"],
-        validation_prompt="Project lint/tests pass with command output captured.",
-        validation_type="llm_judgment",
-        on_fail_goto_position=3,
+        other_tool="Ticket file attachment / ticket update",
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(_SCOPE, "- The plan must be tied to this ticket, not a generic checklist"),
+        failure_checklist=[
+            "plan.md missing or not linked to ticket",
+            "Plan lacks tests, rollback, cleanup, security, UI, or eval criteria",
+            "Plan omits context transferred from the ticket",
+        ],
+        validation_prompt="plan.md exists, is linked or attached to the ticket, and includes tests, rollback, cleanup, security, UI, and eval criteria.",
     ),
     _step(
-        "Browser verify changed flows",
-        "Using webapp-testing and qa-tester, exercise the user flows touched by this change in the browser. "
-        "Check happy path, one error state, and auth if applicable. Capture screenshots or notes for evidence.",
+        "Execute planned slice",
+        "Implement the next planned slice using the project conventions. Write or update tests before shipping the "
+        "behavior. Keep the diff tight, preserve existing patterns, and record what context is handed to validation.",
+        skills=["executing-plans", "tdd-workflow", "verification-loop", "systematic-debugging"],
+        tools=["cli"],
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(_SCOPE, _DEV_CHECKS, "- Do not bypass tests or weaken acceptance criteria"),
+        failure_checklist=[
+            "No test or eval coverage for changed behavior",
+            "Implementation drifts outside the ticket plan",
+            "Context handoff to later steps is missing",
+        ],
+        validation_prompt="Planned slice is implemented with focused tests or evals and a clear context handoff.",
+        on_fail_goto_position=2,
+    ),
+    _step(
+        "Run project safety nets",
+        "Run the discovered project lint, test, and build commands. Capture the exact command and output. "
+        "If a command fails, route back to the implementation step with the first concrete failure.",
+        skills=["verification-loop", "ln-622-build-auditor", "systematic-debugging"],
+        tools=["cli"],
+        action_type="run_command",
+        command=_PROJECT_SAFETY_NET_COMMAND,
+        timeout_seconds=600,
+        guardrail=_guardrail(_SCOPE, _DEV_CHECKS, "- Do not edit commands, tests, or configs just to force green"),
+        failure_checklist=[
+            "Safety net command was skipped",
+            "A failing command was ignored",
+            "The command did not run in the linked project folder",
+        ],
+        validation_type="exit_code",
+        validation_prompt="Discovered lint/test/build safety nets exit 0 in the linked project folder.",
+        on_fail_goto_position=2,
+    ),
+    _step(
+        "Audit secrets and security",
+        "Run tracked-secret and hard-coded-secret checks, then review the changed code for injection risks, unsafe "
+        "deserialization, authz/authn drift, weak error handling, and rollback hazards.",
+        skills=["ln-621-security-auditor", "pre-flight-review", "systematic-debugging"],
+        tools=["cli"],
+        action_type="run_command",
+        command=_SECRET_AUDIT_COMMAND,
+        timeout_seconds=180,
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Never print secret values into the ticket or activity log",
+            "- Do not commit .env files, API keys, tokens, passwords, private keys, or generated credentials",
+        ),
+        failure_checklist=[
+            "Tracked .env or key material found",
+            "Hard-coded secret candidate found",
+            "SQL injection or unsafe input path not addressed",
+        ],
+        validation_type="exit_code",
+        validation_prompt="Secret/env scan exits 0 and no unresolved security blocker remains.",
+        on_fail_goto_position=2,
+    ),
+    _step(
+        "Verify UI and product behavior",
+        "Use Playwright/browser-use against the affected local or staging UI. Check changed flows, all visible buttons "
+        "introduced or touched, loading states, snackbars/toasts, empty/error states, responsive layout, console errors, "
+        "and whether the UI logically matches the ticket and project patterns.",
         skills=["webapp-testing", "qa-tester", "browser-qa"],
         tools=["playwright", "browser_use"],
-        guardrail=_guardrail(_SCOPE, "- Use test credentials from project env — never invent secrets"),
+        action_type="playwright",
+        guardrail=_guardrail(_SCOPE, "- Do not accept hidden required actions, clipped text, or rogue UI controls"),
         failure_checklist=[
-            "Changed UI flow not exercised",
-            "Console errors ignored",
-            "Credentials hardcoded in test steps",
+            "Changed flow not exercised in browser",
+            "Button, snackbar, spinner, error, or loading state missing",
+            "Console errors, visual drift, or nonsensical UI ignored",
         ],
-        validation_prompt="Changed flows verified in browser with evidence (screenshot, trace, or repro notes).",
-        on_fail_goto_position=3,
-    ),
-    _step(
-        "Self-review diff",
-        "Review the full branch diff with requesting-code-review. Fix P0/P1 findings. Re-run checks if code changed.",
-        skills=["requesting-code-review", "ln-511-code-quality-checker", "receiving-code-review"],
-        tools=["cli"],
-        failure_checklist=["Critical review findings left open", "Debug code or TODOs left in diff"],
-        validation_prompt="Self-review complete; no open P0/P1 findings on the diff.",
-        on_fail_goto_position=3,
-    ),
-    _step(
-        "Evaluate ship readiness",
-        "Confirm: PRD items for this iteration done, tests green, browser verification passed, self-review clean. "
-        "If more PRD items remain, loop back. If ticket acceptance criteria met, exit.",
-        skills=["product-lens", "finishing-a-development-branch"],
-        tools=["other"],
-        other_tool="Orchestrator ship judgment",
-        guardrail=_guardrail(_SCOPE, "- Do not mark done with open acceptance criteria"),
-        failure_checklist=["Exit declared with failing tests or open AC", "PRD items still unchecked without reason"],
-        validation_prompt="Ticket acceptance criteria met OR clear list of remaining PRD items for next iteration.",
-        on_fail_goto_position=3,
-    ),
-    _step(
-        "Report iteration",
-        "Summarize for the ticket: what shipped, test/browser evidence, PRD status, and whether another iteration is needed.",
-        skills=["learnings-keeper", "internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator ticket update",
-        validation_prompt="Ticket-ready summary with evidence links and next-step recommendation.",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-        wait_for_continue=False,
-    ),
-]
-
-# ── Developer: scope gate then ship (condensed scope-then-execute) ───────────
-
-_SCOPE_THEN_SHIP_STEPS = [
-    _step(
-        "Scope review gate",
-        "Run ceo-scope-review on the ticket. Present HOLD / REDUCE / EXPAND / SELECTIVE EXPANSION. "
-        "Produce a revised scope doc before any implementation.",
-        skills=["ceo-scope-review", "brainstorming"],
-        tools=["other"],
-        other_tool="Orchestrator scope gate",
-        validation_prompt="Scope mode selected and revised scope document produced.",
-        wait_for_continue=True,
-    ),
-    _step(
-        "Pre-flight review",
-        "Run pre-flight-review on the approved scope. Surface P0 blockers. Auto-fix mechanical issues only.",
-        skills=["pre-flight-review", "ln-621-security-auditor"],
-        tools=["cli"],
-        failure_checklist=["P0 issues still open", "Pre-flight skipped"],
-        validation_prompt="Pre-flight verdict is READY or CONDITIONAL with no open P0.",
-    ),
-    _step(
-        "Implement",
-        "Execute the approved scope with executing-plans and tdd-workflow. One iteration slice if the scope is large.",
-        skills=["executing-plans", "tdd-workflow", "verification-loop"],
-        tools=["cli"],
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
-        validation_prompt="Approved scope slice implemented with passing local checks.",
+        validation_prompt="Browser evidence proves the changed UI flow makes sense, works, and has no console or visual blockers.",
         on_fail_goto_position=2,
     ),
     _step(
-        "QA pass",
-        "Run qa-tester STANDARD on critical paths. Use webapp-testing for UI flows. Health score and ship verdict required.",
-        skills=["qa-tester", "webapp-testing"],
-        tools=["playwright", "browser_use"],
-        validation_prompt="QA health score produced; ship verdict SHIP or CONDITIONAL; P0/P1 addressed.",
+        "Capture desktop evidence when needed",
+        "Use computer-use for desktop/sidecar evidence when the workflow involves native UI, browser chrome, file pickers, "
+        "screen-level state, or anything Playwright cannot see. Capture screenshot evidence and summarize what was verified.",
+        skills=["qa-tester", "browser-qa"],
+        tools=["computer_use"],
+        action_type="computer_use",
+        guardrail=_guardrail(_SCOPE, "- Use this as evidence capture, not as a substitute for deterministic checks"),
+        failure_checklist=[
+            "Computer-use evidence needed but not captured",
+            "Screenshot does not show the relevant state",
+            "Observed UI state contradicts browser or test evidence",
+        ],
+        validation_prompt="Desktop/screenshot evidence is captured when needed, or the step states why Playwright evidence was sufficient.",
         on_fail_goto_position=2,
     ),
     _step(
-        "Evaluate exit",
-        "All scope items for this iteration complete and QA passed. Otherwise loop to implement.",
-        skills=["product-lens", "finishing-a-development-branch"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Session retro",
-        "Run session-retro. Log top learnings to learnings-keeper.",
-        skills=["session-retro", "learnings-keeper"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── De-Sloppify (review cleanup, not npm theater) ─────────────────────────────
-
-_DESLOPPIFY_STEPS = [
-    _step(
-        "Review diff for slop",
-        "Review git diff against the base branch with requesting-code-review. Flag debug code, dead branches, "
-        "naming drift, and convention violations. Prioritize P0/P1 only.",
+        "Review backend and code health",
+        "Review the changed backend and shared code for dead code, duplicate logic, excessive complexity, files drifting "
+        "toward 1600+ lines, leaky abstractions, inefficient queries, unclear errors, and missing rollback paths. Refactor "
+        "only when it directly supports the ticket and reduces risk.",
         skills=["requesting-code-review", "ln-511-code-quality-checker", "ln-512-tech-debt-cleaner"],
         tools=["cli"],
-        validation_prompt="Review notes list concrete findings with file/line references.",
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(_SCOPE, "- No drive-by rewrites; refactor only the code touched or directly implicated"),
+        failure_checklist=[
+            "Dead code or duplicate logic left behind",
+            "Large-file or complexity drift ignored",
+            "Backend errors are vague or unsafe",
+        ],
+        validation_prompt="Code-health review is complete with dead code, duplication, complexity, and backend drift addressed or explicitly deferred.",
+        on_fail_goto_position=2,
     ),
     _step(
-        "Fix with minimal diffs",
-        "Fix findings with the smallest correct diff. No drive-by refactors.",
-        skills=["receiving-code-review", "ln-512-tech-debt-cleaner", "verification-loop"],
-        tools=["cli"],
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Run project quality checks",
-        "Run this repo's lint and tests (discover from project config). Do not assume npm.",
-        skills=["ln-622-build-auditor", "verification-loop"],
+        "Run eval and regression criteria",
+        "Create or run evaluation-based tests where assertions alone are insufficient. Score criteria such as accuracy, "
+        "tone, schema compliance, safety, and useful error messaging. Verify regressions called out in plan.md.",
+        skills=["qa-tester", "verification-loop", "product-lens"],
         tools=["cli", "other"],
-        other_tool="Project lint/test commands",
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Evaluate clean pass",
-        "No slop findings remain and quality checks pass.",
-        skills=["receiving-code-review", "ln-511-code-quality-checker"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Report",
-        "Summarize cleanup for the ticket.",
-        skills=["internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── E2E until green ───────────────────────────────────────────────────────────
-
-_E2E_STEPS = [
-    _step(
-        "Run E2E suite",
-        "Discover and run the project's E2E command (package.json scripts, playwright config, etc.). "
-        "Use webapp-testing skill. Capture first failure with trace.",
-        skills=["webapp-testing", "e2e-testing"],
-        tools=["playwright", "browser_use", "cli"],
-        guardrail=_guardrail(_SCOPE, "- Do not delete or skip specs to force green"),
-    ),
-    _step(
-        "Triage first failure",
-        "Use systematic-debugging on the first failing spec only. Document root cause hypothesis.",
-        skills=["systematic-debugging", "e2e-testing"],
-        tools=["cli", "playwright"],
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Fix failing spec",
-        "Fix the failing spec with tdd-workflow — minimal change, add regression coverage if needed.",
-        skills=["tdd-workflow", "verification-loop"],
-        tools=["cli"],
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Re-run E2E",
-        "Re-run the full E2E suite or the failing file until green.",
-        skills=["webapp-testing", "e2e-testing"],
-        tools=["playwright", "browser_use", "cli"],
-        on_fail_goto_position=1,
-    ),
-    _step(
-        "Evaluate all green",
-        "Entire E2E suite passes.",
-        skills=["qa-tester", "verification-loop"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=1,
-    ),
-    _step(
-        "Report",
-        "Summarize specs fixed and evidence.",
-        skills=["learnings-keeper"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── Ship PR until green ───────────────────────────────────────────────────────
-
-_SHIP_PR_STEPS = [
-    _step(
-        "Confirm branch state",
-        "Verify branch, commits, and diff against target branch. Ensure local checks pass before push.",
-        skills=["finishing-a-development-branch", "ln-622-build-auditor"],
-        tools=["cli"],
-    ),
-    _step(
-        "Push and open PR",
-        "Push branch. Open or update PR with summary, test plan, and linked ticket. Use gh CLI if available.",
-        skills=["finishing-a-development-branch", "internal-comms"],
-        tools=["cli", "other"],
-        other_tool="GitHub CLI (gh pr create / gh pr view)",
-    ),
-    _step(
-        "Read CI status",
-        "Run gh pr checks (or equivalent). List failing checks with logs.",
-        skills=["systematic-debugging", "ln-732-cicd-generator"],
-        tools=["cli", "other"],
-        other_tool="gh pr checks / CI logs",
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Fix CI blockers",
-        "Fix the first CI failure. Re-push. Do not disable checks.",
-        skills=["tdd-workflow", "systematic-debugging", "verification-loop"],
-        tools=["cli"],
+        other_tool="Evaluation harness / orchestrator scoring",
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(_SCOPE, "- Eval scores must reflect the ticket acceptance criteria, not vanity metrics"),
+        failure_checklist=[
+            "Eval criteria missing for model/content/schema behavior",
+            "Accuracy, tone, schema, safety, or error messaging not scored where relevant",
+            "Potential regressions not tested",
+        ],
+        validation_prompt="Relevant evals and regressions are scored with pass/fail rationale tied to plan.md.",
         on_fail_goto_position=2,
     ),
     _step(
-        "Evaluate PR green",
-        "All required PR checks success and PR is merge-ready.",
-        skills=["finishing-a-development-branch", "qa-tester"],
-        tools=["other"],
-        other_tool="gh pr checks",
+        "Cleanup test data and rollback proof",
+        "Remove temporary test data, generated fixtures, debug artifacts, and workflow noise created by this run. Prove "
+        "rollback steps or migration safety where applicable. Confirm tests and evals leave no persistent data behind.",
+        skills=["verification-loop", "finishing-a-development-branch", "ln-512-tech-debt-cleaner"],
+        tools=["cli"],
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(_SCOPE, "- Do not leave seeded tickets, workflows, temp files, or credentials behind"),
+        failure_checklist=[
+            "Test data or generated artifacts left behind",
+            "Rollback plan untested or missing",
+            "Migration/fixture cleanup not verified",
+        ],
+        validation_prompt="Cleanup is verified, rollback notes exist where needed, and no persistent test data is left behind.",
         on_fail_goto_position=2,
     ),
     _step(
-        "Report",
-        "PR link, check status, merge recommendation.",
-        skills=["internal-comms"],
+        "Evaluate green exit",
+        "Decide whether the loop can exit. It can only pass when plan.md is attached, acceptance criteria are met, safety "
+        "nets passed, security is clean, UI/product checks passed or were not applicable with rationale, backend/code "
+        "health is acceptable, evals passed, cleanup is verified, and context handoffs are visible.",
+        skills=["product-lens", "finishing-a-development-branch", "requesting-code-review"],
         tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── PR Babysitter ─────────────────────────────────────────────────────────────
-
-_PR_BABYSITTER_STEPS = [
-    _step(
-        "List watched PRs",
-        "Run gh pr list with the watch label (or project equivalent). Note stale, failing, or behind-main PRs.",
-        skills=["plan-orchestrate", "systematic-debugging"],
-        tools=["cli", "other"],
-        other_tool="gh pr list --label codex-watch",
-    ),
-    _step(
-        "Triage each PR",
-        "For each watched PR: CI status, review state, behind-main. One action per PR this iteration.",
-        skills=["product-lens", "qa-tester"],
-        tools=["cli", "other"],
-        other_tool="gh pr view / gh pr checks",
-    ),
-    _step(
-        "Remediate once",
-        "Fix CI once, rebase if behind, or comment if stale. Escalate repeated failures.",
-        skills=["systematic-debugging", "finishing-a-development-branch"],
-        tools=["cli"],
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Evaluate watch health",
-        "Each watched PR green and current, or escalated with owner tagged.",
-        skills=["plan-orchestrate"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Report",
-        "Status table per watched PR.",
-        skills=["internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── PR Self-Review ────────────────────────────────────────────────────────────
-
-_PR_SELF_REVIEW_STEPS = [
-    _step(
-        "Senior review pass",
-        "Review diff like a senior reviewer (requesting-code-review). Note P0–P2 with file refs.",
-        skills=["requesting-code-review", "ln-511-code-quality-checker"],
-        tools=["cli"],
-    ),
-    _step(
-        "Fix findings",
-        "Address P0/P1 from review. Minimal diffs.",
-        skills=["receiving-code-review", "verification-loop"],
-        tools=["cli"],
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Re-review pass",
-        "Second pass on updated diff. Track pass count toward three clean passes.",
-        skills=["receiving-code-review", "ln-511-code-quality-checker"],
-        tools=["cli"],
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Evaluate three clean passes",
-        "Three review passes complete with no critical findings.",
-        skills=["requesting-code-review"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Report",
-        "Review summary ready for PR opening.",
-        skills=["internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── Spec-first ship ───────────────────────────────────────────────────────────
-
-_SPEC_FIRST_STEPS = [
-    _step(
-        "Pick unchecked spec item",
-        "Read spec.md (or project spec). Select the first unchecked requirement. Restate acceptance criteria.",
-        skills=["writing-plans", "product-lens"],
-        tools=["cli"],
-    ),
-    _step(
-        "Plan the slice",
-        "Write a short implementation plan for this item only: files, tests, risks.",
-        skills=["writing-plans", "executing-plans"],
-        tools=["cli"],
-    ),
-    _step(
-        "Implement and test",
-        "Implement the item with tdd-workflow. Run relevant tests.",
-        skills=["tdd-workflow", "verification-loop"],
-        tools=["cli"],
+        other_tool="Orchestrator exit judgment",
+        action_type="agent_instruction",
+        guardrail=_guardrail(_SCOPE, "- Do not mark green with unresolved blockers or missing evidence"),
+        failure_checklist=[
+            "Exit declared with missing plan.md attachment",
+            "Exit declared with failing tests, security, UI, eval, or cleanup gate",
+            "Final result packet does not explain why the run is green",
+        ],
+        validation_prompt="All gates are green and the result packet explains the evidence for exit.",
         on_fail_goto_position=2,
     ),
     _step(
-        "Mark spec and verify",
-        "Mark requirement [x] in spec.md only after verification. Run project test suite.",
-        skills=["verification-loop", "doc-coauthoring"],
-        tools=["cli"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Evaluate spec complete",
-        "spec.md has no unchecked requirements OR this iteration's item is done and more remain.",
-        skills=["product-lens"],
+        "Attach evidence and close ticket loop",
+        "Update the ticket with plan.md, changed files, commands run, browser/computer-use evidence, security notes, eval "
+        "scores, cleanup proof, rollback notes, and the final result packet. Mark the workflow completed only after this "
+        "ticket-facing summary is written.",
+        skills=["internal-comms", "learnings-keeper", "finishing-a-development-branch"],
         tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Report",
-        "Spec progress and evidence.",
-        skills=["learnings-keeper"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── Content: article from ticket ──────────────────────────────────────────────
-
-_CONTENT_ARTICLE_STEPS = [
-    _step(
-        "Ingest content brief",
-        "Read ticket brief: audience, angle, keywords, CTA, brand voice, deadline. List gaps to confirm.",
-        skills=["product-lens", "brainstorming", "content-engine"],
-        tools=["other"],
-        other_tool="Kanban ticket + brand context",
-    ),
-    _step(
-        "Outline article",
-        "Produce H2/H3 outline with keyword map and internal link targets. Use article-writing and writing-plans.",
-        skills=["article-writing", "writing-plans", "seo"],
-        tools=["cli"],
-    ),
-    _step(
-        "Draft body",
-        "Write the draft following the outline. Use content-engine and doc-coauthoring patterns.",
-        skills=["content-engine", "doc-coauthoring", "article-writing"],
-        tools=["cli"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "SEO and metadata pass",
-        "Run seo skill: title, meta, headings, snippet. Fix readability issues.",
-        skills=["seo", "content-engine"],
-        tools=["cli"],
-    ),
-    _step(
-        "Preview in browser",
-        "Render preview (local CMS, staging, or markdown preview). Check formatting, links, CTA.",
-        skills=["browser-qa", "webapp-testing"],
-        tools=["playwright", "browser_use"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Evaluate publish-ready",
-        "Draft matches brief, SEO pass done, preview checked.",
-        skills=["content-engine", "product-lens"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Report",
-        "Publish checklist and draft location for human approval.",
-        skills=["social-publisher", "internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator ticket update",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── Content: SEO landing page ─────────────────────────────────────────────────
-
-_CONTENT_SEO_PAGE_STEPS = [
-    _step(
-        "Ingest page brief",
-        "Extract target keyword, intent, audience, and conversion goal from the ticket.",
-        skills=["seo", "product-lens", "brainstorming"],
-        tools=["other"],
-        other_tool="Kanban ticket",
-    ),
-    _step(
-        "Page structure",
-        "Outline hero, proof, FAQ, CTA. Map keywords to sections.",
-        skills=["seo", "writing-plans", "frontend-design"],
-        tools=["cli"],
-    ),
-    _step(
-        "Implement page slice",
-        "Build or update the page in the repo. Match project component patterns.",
-        skills=["executing-plans", "frontend-design"],
-        tools=["cli"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "SEO technical check",
-        "Verify title, meta, canonical, headings, schema if applicable.",
-        skills=["seo", "ln-643-api-contract-auditor"],
-        tools=["cli", "playwright"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Browser QA",
-        "Check responsive layout, CTA, forms, and console errors on staging/local.",
-        skills=["webapp-testing", "browser-qa", "qa-tester"],
-        tools=["playwright", "browser_use"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Evaluate ship",
-        "Page meets brief and SEO checklist.",
-        skills=["seo", "product-lens"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Report",
-        "URL, screenshots, remaining items.",
-        skills=["internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-    ),
-]
-
-# ── Sales: cold outreach batch ────────────────────────────────────────────────
-
-_SALES_COLD_STEPS = [
-    _step(
-        "Ingest lead context",
-        "From the ticket: company, persona, pain, prior touchpoints. List what is still unknown.",
-        skills=["product-lens", "brainstorming"],
-        tools=["other"],
-        other_tool="CRM / ticket fields",
-    ),
-    _step(
-        "Research prospect",
-        "Gather 2–3 specific hooks (recent news, tech stack, role). No generic fluff.",
-        skills=["research-ops", "product-lens"],
-        tools=["cli", "other"],
-        other_tool="Web research / LinkedIn / company site",
-    ),
-    _step(
-        "Draft outreach sequence",
-        "Write initial email + one follow-up using email-ops patterns. Personalize with research hooks.",
-        skills=["email-ops", "internal-comms", "writing-plans"],
-        tools=["cli"],
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Compliance and tone check",
-        "No false claims, no spam triggers, clear CTA, unsubscribe if required.",
-        skills=["internal-comms", "safety-guard"],
-        tools=["other"],
-        other_tool="Orchestrator review",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Evaluate ready to send",
-        "Sequence is personalized, compliant, and tied to ticket goal.",
-        skills=["product-lens"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Report",
-        "Paste-ready emails and send recommendation (human approves send).",
-        skills=["email-ops"],
-        tools=["other"],
-        other_tool="CRM note / ticket update",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
-        wait_for_continue=True,
-    ),
-]
-
-# ── Sales: follow-up cadence ──────────────────────────────────────────────────
-
-_SALES_FOLLOWUP_STEPS = [
-    _step(
-        "Review open threads",
-        "List open conversations from ticket/CRM: last touch, stage, next action date.",
-        skills=["plan-orchestrate", "product-lens"],
-        tools=["other"],
-        other_tool="CRM / ticket history",
-    ),
-    _step(
-        "Draft follow-ups",
-        "Write follow-up for the highest-priority thread. Reference prior context. One ask only.",
-        skills=["email-ops", "internal-comms"],
-        tools=["cli"],
-    ),
-    _step(
-        "Log next step",
-        "Record next follow-up date and outcome in ticket/CRM note.",
-        skills=["email-ops", "plan-orchestrate"],
-        tools=["other"],
-        other_tool="CRM / ticket update",
-    ),
-    _step(
-        "Evaluate cadence",
-        "No overdue threads without a drafted touch or explicit pause reason.",
-        skills=["product-lens"],
-        tools=["other"],
-        other_tool="Orchestrator judgment",
-        on_fail_goto_position=0,
-    ),
-    _step(
-        "Report",
-        "Threads touched and next dates.",
-        skills=["internal-comms"],
-        tools=["other"],
-        other_tool="Orchestrator summary",
+        other_tool="Ticket update + result packet",
+        action_type="agent_instruction",
+        guardrail=_guardrail(_SCOPE, "- The final summary must be useful to the next developer who opens the ticket"),
+        failure_checklist=[
+            "Ticket was not updated with evidence",
+            "Context handoff to future work is missing",
+            "Status changed without a final result packet",
+        ],
+        validation_prompt="Ticket contains the final evidence summary, result packet, and closure status.",
         validation_pass_action="end_loop",
         validation_fail_action="end_loop",
     ),
@@ -793,264 +404,36 @@ def _meta(
         "steps": steps,
         "references": {
             "source": "decisionsai_role_presets",
-            "elorm": "https://loops.elorm.xyz/loops",
+            "parked_presets": "Older role presets remain as unlisted JSON bundles under loop_preset_bundles/bundles.",
         },
     }
 
 
 LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
     _meta(
-        name="Ticket to PRD to Ship",
-        slug="ticket-to-prd-to-ship",
-        role="developer",
-        category="Developer",
+        name="Senior Software Engineer: Ticket to Green",
+        slug="senior-software-engineer-ticket-to-green",
+        role="senior_software_engineer",
+        category="Engineering",
         archetype="incremental_ship",
-        description="Ingest ticket, write and scrutinize a PRD, implement, run project checks, browser-verify, self-review, ship.",
-        kickoff=_TICKET_TO_SHIP_KICKOFF,
-        goal="ticket acceptance criteria met with reviewed PRD, tests, and browser proof",
-        exit_when="PRD approved, tests green, browser verification passed, self-review clean",
-        check_command="project lint + test suite + browser check on changed flows",
+        description=(
+            "Ingest a ticket, attach plan.md, implement, run project safety nets, security checks, "
+            "UI/product QA, code-health review, eval scoring, cleanup, and loop until green."
+        ),
+        kickoff=_SENIOR_SWE_KICKOFF,
+        goal="linked ticket implemented, validated, cleaned up, and evidence-backed",
+        exit_when=(
+            "plan.md is attached to the ticket, acceptance criteria are met, safety nets pass, "
+            "security/UI/backend/eval/cleanup gates are green, and the result packet explains why"
+        ),
+        check_command=(
+            "project safety net discovery command + secret/security audit + browser/computer-use evidence + "
+            "code-health/eval/cleanup gates"
+        ),
         max_iterations=8,
-        steps=_TICKET_TO_SHIP_STEPS,
-        tags=["developer", "prd", "playwright", "ticket"],
-    ),
-    _meta(
-        name="Scope Then Ship",
-        slug="scope-then-ship",
-        role="developer",
-        category="Developer",
-        archetype="review_cleanup",
-        description="Scope gate, pre-flight, implement, QA in browser, retro — no code before scope approval.",
-        kickoff=_kickoff(
-            "Scope Then Ship",
-            "Goal: approved scope shipped with QA evidence\nMax iterations: 6\n"
-            "Exit when: scope items done and QA ship verdict is SHIP or CONDITIONAL\n"
-            "Orientation: read the linked ticket to confirm scope boundaries before ceo-scope-review.\n"
-            "Step 1: Run ceo-scope-review before any implementation.",
-        ),
-        goal="approved scope shipped with QA evidence",
-        exit_when="scope complete and QA ship verdict SHIP or CONDITIONAL",
-        check_command="qa-tester health score + project tests",
-        max_iterations=6,
-        steps=_SCOPE_THEN_SHIP_STEPS,
-        tags=["developer", "scope", "qa"],
-    ),
-    _meta(
-        name="De-Sloppify Pass",
-        slug="de-sloppify-pass",
-        role="developer",
-        category="Developer",
-        archetype="review_cleanup",
-        description="Senior-style diff review, minimal fixes, project quality checks — not generic npm theater.",
-        kickoff=_kickoff(
-            "De-Sloppify Pass",
-            "Goal: diff is clean and convention-aligned\nMax iterations: 4\n"
-            "Between iterations run: project lint and tests (discover from repo)\n"
-            "Exit when: no slop findings and checks pass\n"
-            "Orientation: read the linked ticket for scope before reviewing the diff.\n"
-            "Step 1: Review diff for debug code, dead branches, naming issues.",
-        ),
-        goal="recent changes are clean, minimal, and convention-aligned",
-        exit_when="review finds no slop and project checks pass",
-        check_command="project lint + tests (from repo config)",
-        max_iterations=4,
-        steps=_DESLOPPIFY_STEPS,
-        tags=["review", "quality"],
-    ),
-    _meta(
-        name="E2E Until Green",
-        slug="e2e-until-green",
-        role="developer",
-        category="Developer",
-        archetype="check_fix_until_green",
-        description="Run E2E with playwright, triage first failure, fix, re-run until green.",
-        kickoff=_kickoff(
-            "E2E Until Green",
-            "Goal: E2E suite passes\nMax iterations: 10\n"
-            "Between iterations run: project E2E command\n"
-            "Exit when: E2E suite exits 0\n"
-            "Orientation: read the linked ticket to confirm which flows this run must cover.\n"
-            "Step 1: Run E2E tests and capture first failure.",
-        ),
-        goal="E2E suite passes",
-        exit_when="E2E command exits 0",
-        check_command="project E2E test command",
-        max_iterations=10,
-        steps=_E2E_STEPS,
-        tags=["e2e", "playwright"],
-    ),
-    _meta(
-        name="Ship PR Until Green",
-        slug="ship-pr-until-green",
-        role="developer",
-        category="Developer",
-        archetype="ship_with_ci",
-        description="Push, open PR, read CI with gh, fix blockers, until checks green.",
-        kickoff=_kickoff(
-            "Ship PR Until Green",
-            "Goal: PR open with all CI checks passing\nMax iterations: 10\n"
-            "Between iterations run: gh pr checks\n"
-            "Exit when: all PR checks success\n"
-            "Orientation: read the linked ticket to confirm branch scope and acceptance criteria.\n"
-            "Step 1: Confirm branch and open or update PR.",
-        ),
-        goal="PR open with all CI checks passing",
-        exit_when="all PR checks are success",
-        check_command="gh pr checks",
-        max_iterations=10,
-        steps=_SHIP_PR_STEPS,
-        tags=["pr", "ci"],
-    ),
-    _meta(
-        name="PR Babysitter",
-        slug="pr-babysitter",
-        role="developer",
-        category="Developer",
-        archetype="watch_maintain",
-        description="Watch labeled PRs: triage, fix CI once, rebase, escalate stale.",
-        kickoff=_kickoff(
-            "PR Babysitter",
-            "Goal: watched PRs healthy or escalated\nMax iterations: 20\n"
-            "Between iterations run: gh pr list --label codex-watch\n"
-            "Exit when: each watched PR green and current, or escalated.\n"
-            "Orientation: read the linked ticket for which PRs or labels to watch.\n"
-            "Step 1: List open PRs with the watch label and triage the first stale or failing one.",
-        ),
-        goal="open PRs labeled codex-watch are healthy (CI green, rebased, not stale)",
-        exit_when="each watched PR is green and current, or escalated",
-        check_command='gh pr list --label "codex-watch"',
-        max_iterations=20,
-        steps=_PR_BABYSITTER_STEPS,
-        tags=["pr", "ci"],
-    ),
-    _meta(
-        name="PR Self-Review",
-        slug="pr-self-review",
-        role="developer",
-        category="Developer",
-        archetype="review_cleanup",
-        description="Three senior self-review passes on the diff before opening PR.",
-        kickoff=_kickoff(
-            "PR Self-Review",
-            "Goal: three clean self-review passes\nMax iterations: 3\n"
-            "Between iterations run: git diff against base branch\n"
-            "Exit when: three passes with no critical findings.\n"
-            "Orientation: read the linked ticket to confirm what the diff must deliver.\n"
-            "Step 1: Review the current diff against ticket acceptance criteria.",
-        ),
-        goal="three clean self-review passes on the current diff",
-        exit_when="three passes complete with no critical findings",
-        check_command="git diff against base branch",
-        max_iterations=3,
-        steps=_PR_SELF_REVIEW_STEPS,
-        tags=["review", "pr"],
-    ),
-    _meta(
-        name="Spec-First Ship",
-        slug="spec-first-ship",
-        role="developer",
-        category="Developer",
-        archetype="incremental_ship",
-        description="One spec.md checkbox per iteration: plan, implement, verify, mark done.",
-        kickoff=_kickoff(
-            "Spec-First Ship",
-            "Goal: spec.md fully checked off\nMax iterations: 15\n"
-            "Between iterations run: project tests\n"
-            "Exit when: no unchecked requirements in spec.md.\n"
-            "Orientation: read the linked ticket and locate spec.md before picking the next checkbox.\n"
-            "Step 1: Read spec.md and select the next unchecked requirement.",
-        ),
-        goal="every requirement in spec.md is implemented and checked off",
-        exit_when="spec.md has no unchecked requirements",
-        check_command="project test suite",
-        max_iterations=15,
-        steps=_SPEC_FIRST_STEPS,
-        tags=["spec", "planning"],
-    ),
-    _meta(
-        name="Article from Ticket",
-        slug="article-from-ticket",
-        role="content",
-        category="Content",
-        archetype="incremental_ship",
-        description="Brief → outline → draft → SEO → browser preview → publish-ready report.",
-        kickoff=_kickoff(
-            "Article from Ticket",
-            "Goal: publish-ready article matching the ticket brief\nMax iterations: 5\n"
-            "Exit when: draft passes SEO and browser preview checks.\n"
-            "Orientation: read the linked ticket brief for audience, angle, keywords, and CTA.\n"
-            "Step 1: Ingest the content brief and list gaps to confirm.",
-        ),
-        goal="publish-ready article matching ticket brief",
-        exit_when="draft passes SEO and browser preview",
-        check_command="SEO checklist + preview URL",
-        max_iterations=5,
-        steps=_CONTENT_ARTICLE_STEPS,
-        tags=["content", "seo", "blog"],
-    ),
-    _meta(
-        name="SEO Landing Page",
-        slug="seo-landing-page",
-        role="content",
-        category="Content",
-        archetype="incremental_ship",
-        description="Keyword brief → structure → implement page → technical SEO → browser QA.",
-        kickoff=_kickoff(
-            "SEO Landing Page",
-            "Goal: landing page live-ready for target keyword\nMax iterations: 6\n"
-            "Exit when: technical SEO and browser QA pass.\n"
-            "Orientation: read the linked ticket for target keyword, audience, and page goal.\n"
-            "Step 1: Confirm keyword brief and page structure plan.",
-        ),
-        goal="landing page meets keyword brief and technical SEO bar",
-        exit_when="technical SEO and browser QA pass",
-        check_command="SEO metadata + staging URL QA",
-        max_iterations=6,
-        steps=_CONTENT_SEO_PAGE_STEPS,
-        tags=["seo", "landing-page"],
-    ),
-    _meta(
-        name="Cold Outreach Batch",
-        slug="cold-outreach-batch",
-        role="sales",
-        category="Sales",
-        archetype="incremental_ship",
-        description="Lead context → research → personalized email sequence → compliance check.",
-        kickoff=_kickoff(
-            "Cold Outreach Batch",
-            "Goal: personalized outreach ready for human send approval\nMax iterations: 5\n"
-            "Exit when: sequence is researched, personalized, and compliant.\n"
-            "Orientation: read the linked ticket for lead list, ICP, and messaging constraints.\n"
-            "Step 1: Ingest lead context and confirm personalization requirements.",
-        ),
-        goal="personalized outreach ready for approved send",
-        exit_when="sequence researched, personalized, and compliant",
-        check_command="compliance + personalization checklist",
-        max_iterations=5,
-        steps=_SALES_COLD_STEPS,
-        tags=["sales", "outreach", "email"],
-    ),
-    _meta(
-        name="Follow-up Cadence",
-        slug="follow-up-cadence",
-        role="sales",
-        category="Sales",
-        archetype="watch_maintain",
-        description="Review open sales threads, draft follow-ups, log next steps in CRM/ticket.",
-        kickoff=_kickoff(
-            "Follow-up Cadence",
-            "Goal: no overdue threads without a drafted touch\nMax iterations: 10\n"
-            "Exit when: each open thread has next action scheduled.\n"
-            "Orientation: read the linked ticket for which accounts or threads this cadence covers.\n"
-            "Step 1: Review open threads and identify overdue follow-ups.",
-        ),
-        goal="open threads have drafted follow-up and next date",
-        exit_when="no overdue threads without draft or pause reason",
-        check_command="CRM/ticket thread review",
-        max_iterations=10,
-        steps=_SALES_FOLLOWUP_STEPS,
-        tags=["sales", "follow-up"],
-    ),
+        steps=_SENIOR_SWE_STEPS,
+        tags=["engineering", "ticket", "plan.md", "security", "playwright", "computer-use"],
+    )
 ]
 
 

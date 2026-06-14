@@ -40,6 +40,64 @@ def _safe_json_loads(text: Optional[str]) -> Any:
         return {}
 
 
+def _run_loop_visibility(run_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Return compact loop position fields for active-run UI surfaces."""
+    data = run_data if isinstance(run_data, dict) else {}
+    contract = data.get("loop_contract") if isinstance(data.get("loop_contract"), dict) else {}
+    try:
+        iteration = int(data.get("loop_iteration") or 0)
+    except (TypeError, ValueError):
+        iteration = 0
+    max_iterations = contract.get("max_iterations")
+    try:
+        max_iterations = int(max_iterations) if max_iterations not in (None, "") else None
+    except (TypeError, ValueError):
+        max_iterations = None
+    label = f"Loop {iteration}"
+    if max_iterations is not None:
+        label = f"Loop {iteration} / {max_iterations}"
+    return {
+        "loop_iteration": iteration,
+        "loop_max_iterations": max_iterations,
+        "loop_label": label,
+    }
+
+
+def _step_tools_for_action(action_type: str) -> List[str]:
+    action = (action_type or "").strip()
+    if action == "computer_use":
+        return ["computer_use"]
+    if action == "playwright":
+        return ["playwright", "browser_use"]
+    if action == "send_to_project_cli":
+        return ["cli"]
+    if action in {"run_command", "execute_code", "agent_instruction"}:
+        return ["other"]
+    return []
+
+
+def _workflow_step_visibility_context(step: Optional[AutoWorkflowStep]) -> Dict[str, Any]:
+    """Return current-step action/skill/tool fields for run monitoring UIs."""
+    if not step:
+        return {
+            "current_step_action_type": "",
+            "current_step_tools": [],
+            "current_step_skills": [],
+        }
+    config = _safe_json_loads(step.config)
+    if not isinstance(config, dict):
+        config = {}
+    tools = config.get("tools") if isinstance(config.get("tools"), list) else []
+    skills = config.get("skills") if isinstance(config.get("skills"), list) else []
+    clean_tools = [str(item).strip() for item in tools if str(item or "").strip()]
+    clean_skills = [str(item).strip() for item in skills if str(item or "").strip()]
+    return {
+        "current_step_action_type": step.action_type or step.step_type or "",
+        "current_step_tools": clean_tools or _step_tools_for_action(step.action_type or step.step_type or ""),
+        "current_step_skills": clean_skills,
+    }
+
+
 def _run_source_label(source_type: Optional[str], ticket: Optional[KanbanTicket] = None) -> str:
     source = (source_type or "").strip().lower()
     ticket_source = (getattr(ticket, "source_provider", None) or "").strip().lower() if ticket else ""
@@ -408,7 +466,7 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
         "name", "description", "schedule_enabled",
         "schedule_preset", "schedule_cron", "schedule_time",
         "schedule_days", "schedule_timezone", "next_run_at",
-        "start_step_position", "workflow_type", "context_rules", "run_settings",
+        "start_step_position", "workflow_type", "context_rules", "workflow_input", "run_settings",
         "pre_chain", "post_chain",
     }
     if "workflow_type" in kwargs and not validate_workflow_type(kwargs["workflow_type"]):
@@ -894,10 +952,12 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
             return None
         run_data = _safe_json_loads(run.run_data) or {}
         step_name = None
+        step_context = _workflow_step_visibility_context(None)
         if run.current_step_id is not None:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == run.current_step_id).first()
             if step:
                 step_name = step.name
+                step_context = _workflow_step_visibility_context(step)
         enriched = _enrich_run_record(db, run, run_data)
         return {
             "id": run.id,
@@ -906,6 +966,8 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
             "current_step_name": step_name,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             **enriched,
+            **_run_loop_visibility(run_data),
+            **step_context,
             "phase": run_data.get("phase"),
             "waiting_kind": run_data.get("waiting_kind") or "",
         }
@@ -1229,10 +1291,10 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             workflow_rows = db.query(AutoWorkflow.id, AutoWorkflow.name).filter(AutoWorkflow.id.in_(workflow_ids)).all()
             workflow_name_by_id = {wid: name for wid, name in workflow_rows}
 
-        step_name_by_id = {}
+        step_by_id = {}
         if step_ids:
-            step_rows = db.query(AutoWorkflowStep.id, AutoWorkflowStep.name).filter(AutoWorkflowStep.id.in_(step_ids)).all()
-            step_name_by_id = {sid: name for sid, name in step_rows}
+            step_rows = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id.in_(step_ids)).all()
+            step_by_id = {step.id: step for step in step_rows}
 
         ticket_title_by_id = {}
         if ticket_ids:
@@ -1244,6 +1306,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
         for r in rows:
             run_data = _safe_json_loads(r.run_data) or {}
             enriched = _enrich_run_record(db, r, run_data)
+            step = step_by_id.get(r.current_step_id)
             started_at_iso = r.started_at.isoformat() if r.started_at else None
             elapsed_seconds = int((now - r.started_at).total_seconds()) if r.started_at else 0
             results.append({
@@ -1254,8 +1317,10 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "started_at": started_at_iso,
                 "elapsed_seconds": elapsed_seconds,
                 "current_step_id": r.current_step_id,
-                "current_step_name": step_name_by_id.get(r.current_step_id),
+                "current_step_name": step.name if step else None,
                 **enriched,
+                **_run_loop_visibility(run_data),
+                **_workflow_step_visibility_context(step),
                 "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
                 "phase": run_data.get("phase"),
                 "waiting_kind": run_data.get("waiting_kind") or "",
@@ -1724,6 +1789,7 @@ def start_workflow_run(
     ticket_id: Optional[int] = None,
     run_metadata: Optional[Dict[str, Any]] = None,
     event_queue: Optional[Any] = None,
+    dispatch_async: bool = False,
 ):
     """Service-level wrapper preserving legacy patch points for tests/callers."""
     if "unittest.mock" not in str(type(_dispatch_step)):
@@ -1736,6 +1802,7 @@ def start_workflow_run(
             ticket_id=ticket_id,
             run_metadata=run_metadata,
             event_queue=event_queue,
+            dispatch_async=dispatch_async,
         )
 
     with get_session() as db:

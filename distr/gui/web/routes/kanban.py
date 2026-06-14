@@ -4491,6 +4491,25 @@ source: kanban_ticket_{t.id}
                 s.flush()
 
             project_id_value = str(t.linked_project_id) if t.linked_project_id else None
+            project_name_value = None
+            execution_route = {}
+            if project_id_value:
+                try:
+                    project_for_route = orm_get_by_id(s, Project, int(project_id_value))
+                    if project_for_route:
+                        project_name_value = project_for_route.name
+                        from distr.core.orchestrator_routing import resolve_execution_route
+
+                        decision = resolve_execution_route(
+                            project=project_for_route,
+                            ticket=t,
+                            board=board,
+                            complexity=normalize_ticket_complexity(t.complexity),
+                            emit_event=False,
+                        )
+                        execution_route = decision.to_route_dict()
+                except Exception:
+                    logger.debug("send-to-workflow: route resolution failed", exc_info=True)
             context = f"Ticket: {t.title}"
             workflow_brief = None
             try:
@@ -4518,7 +4537,8 @@ source: kanban_ticket_{t.id}
                 "ticket_id": t.id,
                 "ticket_title": t.title or "",
                 "project_id": project_id_value,
-                "project_name": None,
+                "project_name": project_name_value,
+                "execution_route": execution_route,
                 "phase": "planning",
             }
             if workflow_brief:
@@ -4530,9 +4550,32 @@ source: kanban_ticket_{t.id}
                 board_id=board_id_value,
                 ticket_id=ticket_id,
                 run_metadata=run_metadata,
+                dispatch_async=True,
             )
             if "error" in run_result:
                 raise HTTPException(400, run_result["error"])
+            if execution_route:
+                try:
+                    from distr.core.orchestrator import emit_event
+
+                    emit_event(
+                        source="orchestrator",
+                        event_type="route_decided",
+                        status="selected",
+                        workflow_id=workflow_id,
+                        run_id=run_result.get("run_id"),
+                        ticket_id=ticket_id,
+                        board_id=board_id_value,
+                        project_id=int(project_id_value) if project_id_value else None,
+                        summary=(
+                            "Route selected: "
+                            f"{execution_route.get('backend') or execution_route.get('backend_id') or 'auto'}"
+                            f" / {execution_route.get('model') or 'auto'}"
+                        ),
+                        payload={"decision": execution_route},
+                    )
+                except Exception:
+                    logger.debug("send-to-workflow: route_decided event failed", exc_info=True)
         return JSONResponse({
             "success": True,
             "message": f"Ticket #{ticket_id} sent to workflow.",
@@ -4668,6 +4711,8 @@ source: kanban_ticket_{t.id}
                 "model": route.get("model") or "auto",
                 "route_source": route.get("source") or "policy",
                 "route_rationale": route.get("rationale") or "",
+                "skills": route.get("skills") or [],
+                "route": route,
                 "requires_approval": bool(route.get("requires_approval")),
                 "codex_reasoning_effort": route.get("codex_reasoning_effort") or "",
                 "codex_service_tier": route.get("codex_service_tier") or "",

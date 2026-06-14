@@ -200,28 +200,71 @@
             });
         }
 
+        function buildWaChatLinkData(sender, name, chatType) {
+            var raw = String(sender || "").trim();
+            var displayName = String(name || raw || "WhatsApp").trim();
+            var jid = raw.indexOf("@") >= 0 ? raw : waResolveTargetJid(raw, chatType);
+            var phone = raw.split("@")[0].split(":")[0];
+            return { jid: jid, phone: phone, name: displayName };
+        }
+
+        function setWaChatLinkContext(sender, name, chatType) {
+            if (deps.setWaCtxMenuData) deps.setWaCtxMenuData(buildWaChatLinkData(sender, name, chatType));
+        }
+
         function confirmWaLink() {
-            var boardId = parseInt(document.getElementById("kb-wa-link-board").value);
+            var boardId = parseInt(document.getElementById("kb-wa-link-board").value, 10);
             if (!boardId) { deps.showSnackbar("Select a board"); return; }
             var autoSnapshot = document.getElementById("kb-wa-link-auto").checked;
             var waCtxMenuData = deps.getWaCtxMenuData();
-            deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
-                method: "POST",
-                headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({
-                    phone_jid: waCtxMenuData.jid,
-                    phone_number: waCtxMenuData.phone,
-                    contact_name: waCtxMenuData.name,
-                    auto_snapshot: autoSnapshot,
-                })
+            if (!waCtxMenuData || !waCtxMenuData.jid) {
+                deps.showSnackbar("Missing WhatsApp chat data", "error");
+                return;
+            }
+            unlinkAllBoardWaLinks(boardId).then(function() {
+                return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        phone_jid: waCtxMenuData.jid,
+                        phone_number: waCtxMenuData.phone,
+                        contact_name: waCtxMenuData.name,
+                        auto_snapshot: autoSnapshot,
+                    })
+                });
             }).then(function(r) {
-                if (r.success) {
-                    deps.showSnackbar("Linked " + waCtxMenuData.name + " to project board");
+                if (r && r.success) {
+                    waBoardLinkedByJid[waCtxMenuData.jid] = {
+                        id: r.id,
+                        board_id: boardId,
+                        phone_jid: waCtxMenuData.jid,
+                        phone_number: waCtxMenuData.phone,
+                        contact_name: waCtxMenuData.name,
+                        auto_snapshot: autoSnapshot,
+                    };
+                    syncWaChatSelectLinkedState();
+                    deps.showSnackbar("Linked " + waCtxMenuData.name + " to board");
                     document.getElementById("kb-wa-link-modal").classList.add("hidden");
+                    var editingBoardId = deps.getEditingBoardId();
+                    if (editingBoardId === boardId) loadBoardWaLinks(boardId);
                 }
             }).catch(function(err) {
-                deps.showSnackbar("Failed to link: " + err.message);
+                deps.showSnackbar("Failed to link: " + (err && err.message ? err.message : String(err)), "error");
             });
+        }
+
+        function waMsgCtxLinkToBoard() {
+            deps.hideWaMsgContextMenu();
+            var phone = deps.getWaSelectedJid();
+            if (!phone) {
+                deps.showSnackbar("Open a thread first", "warning");
+                return;
+            }
+            var state = deps.getWaState();
+            var threadName = document.getElementById("kb-wa-thread-title").textContent || phone;
+            var chatType = state.waSelectedChatType || "private";
+            setWaChatLinkContext(phone, threadName, chatType);
+            deps.openWaLinkModal(deps.getWaCtxMenuData());
         }
 
         function waMsgCtxCreateTicket() {
@@ -679,6 +722,9 @@
 
         return {
             confirmWaLink: confirmWaLink,
+            buildWaChatLinkData: buildWaChatLinkData,
+            setWaChatLinkContext: setWaChatLinkContext,
+            waMsgCtxLinkToBoard: waMsgCtxLinkToBoard,
             waMsgCtxCreateTicket: waMsgCtxCreateTicket,
             waMsgCtxMarkProcessed: waMsgCtxMarkProcessed,
             waMsgCtxDelete: waMsgCtxDelete,
@@ -711,6 +757,18 @@
     function createRuntime(deps) {
         var waDraftSaveTimers = {};
         var waDraftLastSaved = {};
+
+        function openWaChatContextMenuFromRow(row, clientX, clientY) {
+            if (!row) return;
+            var state = deps.getState();
+            if (state && state.waSidebarChatListMode) return;
+            var sender = String(row.dataset.waSender || "").trim();
+            if (!sender) return;
+            var name = String(row.dataset.waName || sender).trim();
+            var chatType = String(row.dataset.waChatType || "private");
+            if (deps.setWaChatLinkContext) deps.setWaChatLinkContext(sender, name, chatType);
+            if (deps.showWaChatContextMenu) deps.showWaChatContextMenu(clientX, clientY);
+        }
 
         function loadWaDraftMap() {
             return deps.apiFetch("/api/tickets/whatsapp/drafts").then(function(data) {
@@ -1183,6 +1241,10 @@
                 });
                 row.addEventListener("focus", function() {
                     if (!deps.getState().waSidebarChatListMode) activateChatRow(row);
+                });
+                row.addEventListener("contextmenu", function(e) {
+                    e.preventDefault();
+                    openWaChatContextMenuFromRow(row, e.clientX, e.clientY);
                 });
             });
             chatListEl.querySelectorAll(".kb-wa-chat-select").forEach(function(el) {

@@ -163,6 +163,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
 
         # Message stats
         self._last_message_time = time.time()
+        self._init_socket_heartbeat_state("WhatsApp", interval_ms=30_000, timeout_ms=8_000)
         self._messages_received = 0
 
         # Connection info
@@ -346,6 +347,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         """Disconnect from the WhatsApp relay server."""
         self._active_disconnect = True
         self._reconnect_timer.stop()
+        self._stop_socket_heartbeat()
         if self.socket and self.socket.isValid():
             self.socket.close()
         logger.info("WhatsApp: Disconnected")
@@ -370,6 +372,8 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         logger.info("WhatsApp: Connected to relay server")
         self._connected = True
         self._reset_reconnect_state("WhatsApp")
+        self._mark_socket_heartbeat_seen()
+        self._start_socket_heartbeat()
         self.connection_status_changed.emit(True, "Connected")
 
         # Initialize authenticated desktop subscription session.
@@ -391,6 +395,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         self._connected = False
         self.phone_info = None
         self.current_qr = None
+        self._stop_socket_heartbeat()
 
         if not self._active_disconnect:
             logger.warning("WhatsApp: Disconnected unexpectedly, scheduling reconnect")
@@ -420,7 +425,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
 
     def _on_message(self, message: str):
         """Handle incoming WebSocket messages from the relay."""
-        self._last_message_time = time.time()
+        self._mark_socket_heartbeat_seen()
 
         try:
             data = json.loads(message)
@@ -445,8 +450,18 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
                 if self.socket and self.socket.isValid():
                     self.socket.sendTextMessage(json.dumps({"type": "pong"}))
 
+            elif msg_type == "pong":
+                pass
+
         except json.JSONDecodeError:
             logger.error("WhatsApp: Failed to decode JSON from WebSocket")
+
+    def _send_websocket_message(self, message: dict):
+        """Send a message via WebSocket for the shared heartbeat watchdog."""
+        if self.socket and self.is_connected():
+            self.socket.sendTextMessage(json.dumps(message))
+            return True
+        return False
 
     # ═════════════════════════════════════════════════════════════════════════
     # REST API Methods (for QR code, status, disconnect)

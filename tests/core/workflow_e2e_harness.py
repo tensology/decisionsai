@@ -203,8 +203,22 @@ def workflow_patch_stack(factory, tmp_path):
         ),
         patch(
             "distr.core.workflow.step_executor.StepExecutorMixin._run_send_to_project_cli",
-            lambda self, step_data, config, run_id=None: {
+            lambda self, step_data, config, run_id=None: setattr(MatrixFakeBackend, "last_loop_context", True) or {
                 "output": "Matrix fake CLI completed with evidence.",
+                "passed": True,
+            },
+        ),
+        patch(
+            "distr.core.workflow.step_executor.StepExecutorMixin._run_command",
+            lambda self, config, run_id=None: {
+                "output": "Matrix fake command completed with exit 0.",
+                "passed": True,
+            },
+        ),
+        patch(
+            "distr.core.workflow.step_executor.StepExecutorMixin._run_computer_use",
+            lambda self, step_data, config, run_id=None: {
+                "output": "Matrix fake computer-use evidence captured.",
                 "passed": True,
             },
         ),

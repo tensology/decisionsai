@@ -236,7 +236,7 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
 
     assert "canPromoteVoiceTranscriptInChat()" in promote_block
     assert "createMessageElement({ role: 'user', content: plain" in promote_block
-    assert "chatMessages.insertBefore(div, anchor);" in promote_block
+    assert "insertMessageElementInOrder(div, { role: 'user', content: plain" in promote_block
     assert "_optimisticUserMessages.add(plain.substring(0, 100));" in promote_block
     assert "if (clearLivePreview)" in status_block
     assert "promoteTranscriptionPreviewToUserMessage();" in status_block
@@ -257,6 +257,102 @@ def test_live_tool_activity_keeps_turn_anchor_for_voice_transcript_merge():
 
     assert "turn_chat_id: msg.turn_chat_id" in tool_block
     assert "el.dataset.turnChatId = String(turnChatId);" in group_block
+
+
+def test_reload_tool_activity_embeds_in_matching_assistant_turn():
+    src = _chat_js_source()
+    normalize_block = src.split("function normalizeTraceMessages(messages) {", 1)[1].split(
+        "function renderMessages(messages, preserveOnEmpty)",
+        1,
+    )[0]
+    create_block = src.split("function createMessageElement(message) {", 1)[1].split(
+        "function finalizeMessageElementMount(div, message) {",
+        1,
+    )[0]
+    finalize_block = src.split("function finalizeMessageElementMount(div, message) {", 1)[1].split(
+        "function bindActivityToggleHandlers()",
+        1,
+    )[0]
+
+    assert "embedded_tools" in normalize_block
+    assert "toolsByAssistantTurn" in normalize_block
+    assert "appendAssistantActivity(div, message.embedded_tools);" in finalize_block
+    assert "reordered.push(...trace, current)" not in normalize_block
+
+
+def test_live_tool_activity_embeds_into_streaming_or_matching_assistant():
+    src = _chat_js_source()
+    tool_block = src.split("function handleChatEventToolExecuted(msg) {", 1)[1].split(
+        "function appendToolToAssistantTurn(message) {",
+        1,
+    )[0]
+    append_block = src.split("function appendToolToAssistantTurn(message) {", 1)[1].split(
+        "function activityGroupMatchesTurn(group, turnChatId) {",
+        1,
+    )[0]
+
+    assert "appendToolToAssistantTurn(toolMessage);" in tool_block
+    assert "appendToolToActivityGroup(toolMessage)" not in tool_block
+    assert "toolName === 'chat_settings'" in append_block
+    assert "document.getElementById('streamingAssistantMessage')" in append_block
+    assert "findAssistantMessageForTurn(turnChatId)" in append_block
+    assert "appendAssistantActivity(target, [message]);" in append_block
+
+
+def test_stream_finish_preserves_embedded_assistant_activity():
+    src = _chat_js_source()
+    stream_finish_block = src.split("function handleChatEventStreamFinished(msg) {", 1)[1].split(
+        "function handleChatEventStreamError(msg)",
+        1,
+    )[0]
+
+    assert "const existingActivityHtml = extractAssistantActivityForPreserve(wrap);" in stream_finish_block
+    assert "restoreAssistantEmbeddedActivity(wrap, existingActivityHtml);" in stream_finish_block
+
+
+def test_assistant_activity_renders_as_system_activity_sibling():
+    src = _chat_js_source()
+    sibling_block = src.split("function getOrCreateAssistantActivitySibling(assistantEl) {", 1)[1].split(
+        "function appendAssistantActivity(assistantEl, tools) {",
+        1,
+    )[0]
+    append_block = src.split("function appendAssistantActivity(assistantEl, tools) {", 1)[1].split(
+        "function extractAssistantActivityForPreserve(assistantEl) {",
+        1,
+    )[0]
+    tool_item_block = src.split("function toolExecutionItemHtml(message) {", 1)[1].split(
+        "function createToolExecutionGroupElement(message) {",
+        1,
+    )[0]
+
+    assert "assistant-turn-activity" in sibling_block
+    assert "getOrCreateAssistantActivitySibling(assistantEl)" in append_block
+    assert "label: activitySystemLabel(title, event)" in tool_item_block
+    assert "label: activityCollapsedActionLabel(title, event)" not in tool_item_block
+
+
+def test_header_settings_require_explicit_save():
+    src = _chat_js_source()
+    assert "headerSettingsSave" in src
+    assert "markHeaderSettingsDirty" in src
+    assert "scheduleHeaderSettingsSave" not in src
+    assert 'headerSettingsSave.hidden = !dirty' in src
+
+
+def test_waiting_indicator_preserved_during_in_flight_send():
+    src = _chat_js_source()
+    render_block = src.split("function renderMessages(messages, preserveOnEmpty) {", 1)[1].split(
+        "function formatTime(seconds)",
+        1,
+    )[0]
+    typing_block = src.split("function createTypingIndicator() {", 1)[1].split(
+        "function removeTypingIndicator()",
+        1,
+    )[0]
+
+    assert "preserveLiveUi" in render_block
+    assert "message-waiting" in typing_block
+    assert "isStreaming && streamingChatId !== currentChatId" in src
 
 
 def test_live_tool_activity_uses_same_visibility_contract_as_reload():
