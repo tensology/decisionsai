@@ -14,7 +14,7 @@ import json
 import re
 import asyncio
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 
 # WebSocket connection manager: chat_id -> set of WebSocket instances subscribed to that chat
 _chat_ws_connections: Dict[int, Set[WebSocket]] = {}
@@ -163,6 +163,70 @@ def _message_sort_key(message: Dict[str, Any]) -> str:
     return ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
 
 
+def _timestamp_as_naive_utc(ts: Optional[datetime]) -> Optional[datetime]:
+    """Normalize DB and ISO timestamps to naive UTC for safe comparison."""
+    if ts is None:
+        return None
+    if ts.tzinfo is not None:
+        return ts.astimezone(UTC).replace(tzinfo=None)
+    return ts
+
+
+def _api_timestamp(ts: Any) -> Optional[str]:
+    """Serialize persisted timestamps for the web UI (always UTC with Z suffix)."""
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        text = ts.strip()
+        if not text:
+            return None
+        if text.endswith("Z") or re.search(r"[+-]\d{2}:?\d{2}$", text):
+            return text
+        normalized = text.replace(" ", "T", 1)
+        if "T" in normalized:
+            return normalized + "Z"
+        return text
+    if isinstance(ts, datetime):
+        naive = _timestamp_as_naive_utc(ts)
+        return f"{naive.isoformat()}Z" if naive is not None else None
+    return str(ts)
+
+
+def _parse_message_timestamp(message: Dict[str, Any]) -> Optional[datetime]:
+    """Parse a message timestamp for chronological insertion."""
+    ts = message.get("timestamp")
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return _timestamp_as_naive_utc(ts)
+    text = str(ts).strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return _timestamp_as_naive_utc(datetime.fromisoformat(normalized))
+    except ValueError:
+        return None
+
+
+def _insert_extra_messages(messages: List[Dict[str, Any]], extras: List[Dict[str, Any]]) -> None:
+    """Insert orphan tool/workflow rows into the thread by timestamp."""
+    for extra in extras:
+        extra_ts = _parse_message_timestamp(extra)
+        if extra_ts is None:
+            messages.append(extra)
+            continue
+        inserted = False
+        for index, msg in enumerate(messages):
+            msg_ts = _parse_message_timestamp(msg)
+            if msg_ts is not None and extra_ts < msg_ts:
+                messages.insert(index, extra)
+                inserted = True
+                break
+        if not inserted:
+            messages.append(extra)
+
+
 def _estimate_tokens(text: str) -> int:
     """Cheap context estimate for UI pressure. Avoids provider tokenizers on hot paths."""
     cleaned = " ".join(str(text or "").split())
@@ -245,7 +309,7 @@ def _divider_message_from_row(row: Any, marker: Dict[str, Any]) -> Dict[str, Any
     ts = getattr(row, "modified_date", None) or getattr(row, "created_date", None)
     return {
         "role": "divider",
-        "timestamp": ts,
+        "timestamp": _api_timestamp(ts),
         "chat_row_id": row.id,
         "divider": dict(marker),
     }
@@ -269,7 +333,7 @@ def _append_row_messages(messages: List[Dict[str, Any]], row: Any) -> None:
             {
                 "role": "user",
                 "content": row.input,
-                "timestamp": row.created_date if row.created_date else None,
+                "timestamp": _api_timestamp(row.created_date),
                 "chat_row_id": row.id,
             }
         )
@@ -278,7 +342,7 @@ def _append_row_messages(messages: List[Dict[str, Any]], row: Any) -> None:
             {
                 "role": "assistant",
                 "content": row.response,
-                "timestamp": row.modified_date if row.modified_date else None,
+                "timestamp": _api_timestamp(row.modified_date),
                 "chat_row_id": row.id,
             }
         )
@@ -428,7 +492,10 @@ def _merge_thread_rows_with_tool_and_workflow_events(
 
     workflow_msgs = _chat_workflow_event_messages(root_chat)
     workflow_msgs.sort(key=_message_sort_key)
-    messages.extend(workflow_msgs)
+
+    extras = orphan_tools + workflow_msgs
+    extras.sort(key=_message_sort_key)
+    _insert_extra_messages(messages, extras)
 
     return messages
 

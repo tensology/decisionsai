@@ -228,6 +228,7 @@ def test_record_chat_settings_change_persists_visible_activity(monkeypatch):
     assert event["tool_name"] == "chat_settings"
     assert event["chat_visible"] is True
     assert "LLM:" in event["result_summary"]
+    assert "turn_chat_id" not in event
 
     with patched_get_session() as session:
         chat = session.get(Chat, chat_id)
@@ -235,4 +236,4 @@ def test_record_chat_settings_change_persists_visible_activity(monkeypatch):
 
     events = params["tool_events"]
     assert len(events) == 1
-    assert events[0]["title"] == "Changed chat settings"
+    assert events[0]["title"].startswith("LLM:")

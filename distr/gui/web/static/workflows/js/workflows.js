@@ -91,6 +91,7 @@
        var SVG_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     var SVG_TRASH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
     var SVG_PLAY_REC = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
+    var SVG_ORCHESTRATOR_BOT = '<svg class="wf-loop-ring-center-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V5"/><path d="M8 5h8"/><rect x="5" y="8" width="14" height="11" rx="2"/><circle cx="9.5" cy="13" r="1"/><circle cx="14.5" cy="13" r="1"/><path d="M9 16.5h6"/></svg>';
 
     function esc(s) {
         if (!s) return "";
@@ -232,6 +233,78 @@
             ticketUi.initListRowMarquee(row);
         });
     }
+
+    function workflowTabTitleHtml(name) {
+        return '<span class="wf-workflow-tab-title-wrap"><span class="wf-workflow-tab-title">' + esc(name || "Untitled Workflow") + "</span></span>";
+    }
+
+    function scheduleWorkflowTabMarquees() {
+        requestAnimationFrame(function () {
+            requestAnimationFrame(initWorkflowTabMarquees);
+        });
+    }
+
+    function initWorkflowTabMarquees(rootEl) {
+        (rootEl || document).querySelectorAll(".wf-workflow-tab").forEach(function (tab) {
+            if (tab.querySelector(".wf-workflow-tab-rename")) return;
+            var wrap = tab.querySelector(".wf-workflow-tab-title-wrap");
+            var title = tab.querySelector(".wf-workflow-tab-title");
+            if (!wrap || !title) return;
+            title.classList.remove("wf-workflow-tab-title--marquee");
+            wrap.classList.remove("wf-workflow-tab-title-wrap--marquee");
+            title.style.removeProperty("--marquee-distance");
+            var textWidth = title.scrollWidth;
+            var available = wrap.clientWidth;
+            if (textWidth <= available + 1) return;
+            title.classList.add("wf-workflow-tab-title--marquee");
+            wrap.classList.add("wf-workflow-tab-title-wrap--marquee");
+            title.style.setProperty("--marquee-distance", (textWidth - available) + "px");
+        });
+    }
+
+    function initLoopTicketTitleMarquees(rootEl) {
+        (rootEl || document).querySelectorAll(".wf-loop-ticket-title-wrap").forEach(function (wrap) {
+            if (wrap.dataset.marqueeInit === "done") return;
+            var track = wrap.querySelector(".wf-loop-ticket-title-track");
+            if (!track) {
+                wrap.dataset.marqueeInit = "done";
+                return;
+            }
+            var first = track.querySelector("span");
+            if (!first) {
+                wrap.dataset.marqueeInit = "done";
+                return;
+            }
+            var text = (first.textContent || "").trim();
+            if (!text) {
+                wrap.dataset.marqueeInit = "done";
+                return;
+            }
+            requestAnimationFrame(function () {
+                if (wrap.dataset.marqueeInit === "done") return;
+                if (track.scrollWidth <= wrap.clientWidth + 1) {
+                    wrap.dataset.marqueeInit = "done";
+                    return;
+                }
+                wrap.dataset.marqueeInit = "done";
+                wrap.classList.add("wf-loop-ticket-title-wrap--marquee");
+                var clone = first.cloneNode(true);
+                clone.setAttribute("aria-hidden", "true");
+                track.appendChild(clone);
+                var duration = Math.max(10, Math.round(track.scrollWidth / 40));
+                track.style.setProperty("--kb-marquee-duration", duration + "s");
+            });
+        });
+    }
+
+    var _workflowTabMarqueeResizeTimer = null;
+    window.addEventListener("resize", function () {
+        clearTimeout(_workflowTabMarqueeResizeTimer);
+        _workflowTabMarqueeResizeTimer = setTimeout(function () {
+            scheduleWorkflowTabMarquees();
+            initLoopTicketTitleMarquees();
+        }, 150);
+    });
 
     function findWorkflowTicketKeyById(ticketId) {
         var keys = Object.keys(workflowBoardTicketByKey || {});
@@ -2929,7 +3002,7 @@
                 el.innerHTML = data.map(function (w) {
                     var isActive = currentWorkflowId === w.id;
                     var title = w.name + (isActive ? " (double-click to rename)" : "");
-                    return '<button type="button" class="wf-workflow-tab px-4 py-2 text-sm text-gray-400 truncate' + (isActive ? " active" : "") + '" data-id="' + w.id + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '" tabindex="' + (isActive ? "0" : "-1") + '" title="' + esc(title) + '">' + esc(w.name) + "</button>";
+                    return '<button type="button" class="wf-workflow-tab px-4 py-2 text-sm text-gray-400' + (isActive ? " active" : "") + '" data-id="' + w.id + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '" tabindex="' + (isActive ? "0" : "-1") + '" title="' + esc(title) + '">' + workflowTabTitleHtml(w.name) + "</button>";
                 }).join("");
                 el.querySelectorAll("[data-id]").forEach(function (row) {
                     row.addEventListener("click", function () { selectWorkflow(parseInt(row.dataset.id, 10)); });
@@ -2946,6 +3019,7 @@
                 if (activeTab && typeof activeTab.scrollIntoView === "function") {
                     activeTab.scrollIntoView({ block: "nearest", inline: "nearest" });
                 }
+                scheduleWorkflowTabMarquees();
 
                 if (data.length && !currentWorkflow) {
                     var pickId = currentWorkflowId;
@@ -3016,8 +3090,10 @@
     function finishWorkflowTabRename(nextName) {
         var tab = getActiveWorkflowTab();
         if (!tab) return;
-        tab.textContent = nextName || "Untitled Workflow";
-        tab.title = (nextName || "Untitled Workflow") + " (double-click to rename)";
+        var name = nextName || "Untitled Workflow";
+        tab.innerHTML = workflowTabTitleHtml(name);
+        tab.title = name + " (double-click to rename)";
+        scheduleWorkflowTabMarquees();
     }
 
     function cancelWorkflowTabRename() {
@@ -3026,7 +3102,9 @@
 
     function beginWorkflowTabRename(tab) {
         if (!tab || tab.querySelector(".wf-workflow-tab-rename")) return;
-        var currentName = currentWorkflow && currentWorkflow.name ? currentWorkflow.name : (tab.textContent || "").trim();
+        var titleEl = tab.querySelector(".wf-workflow-tab-title");
+        var currentName = currentWorkflow && currentWorkflow.name ? currentWorkflow.name : "";
+        if (!currentName) currentName = titleEl ? titleEl.textContent.trim() : (tab.textContent || "").trim();
         var input = document.createElement("input");
         input.type = "text";
         input.className = "wf-workflow-tab-rename";
@@ -3097,6 +3175,7 @@
             loadOrchestratorTimeline({ quiet: true });
             checkActiveRun();
             syncWorkflowRunsTabVisibility();
+            scheduleWorkflowTabMarquees();
             if (restoreTabAfterLoad) {
                 if (activeRunsPromise && typeof activeRunsPromise.then === "function") {
                     activeRunsPromise.finally(finishDetailTabRestore);
@@ -3948,14 +4027,10 @@
         return ticketId ? ("Ticket #" + ticketId) : "";
     }
 
-    function loopRunTicketContextRun() {
-        var active = currentWorkflowActiveRun();
-        if (active && (active.ticket_id || active.ticket_title)) return active;
-        var feedRun = loopFeedActiveRun();
-        if (feedRun && (feedRun.ticket_id || feedRun.ticket_title)) return feedRun;
-        return (latestWorkflowRunHistory || []).filter(function (run) {
-            return run && (run.ticket_id || run.ticket_title);
-        })[0] || null;
+    function isRunActiveForTicketContext(run) {
+        if (!run) return false;
+        var status = String(run.status || "").toLowerCase();
+        return status === "running" || status === "waiting";
     }
 
     function loopRunTicketContextHtml(run, mode) {
@@ -3973,25 +4048,27 @@
         if (mode !== "feed" && meta.boardText && meta.boardText !== "No board") bits.push(meta.boardText);
         return '' +
             '<div class="wf-loop-ticket-kicker"><span>Ticket in run</span></div>' +
-            '<span class="wf-loop-ticket-title" title="' + esc(title) + '">' + esc(title) + '</span>' +
+            '<div class="wf-loop-ticket-title-wrap" title="' + esc(title) + '">' +
+                '<span class="wf-loop-ticket-title-track"><span class="wf-loop-ticket-title">' + esc(title) + "</span></span>" +
+            "</div>" +
             '<div class="wf-loop-ticket-meta">' + bits.slice(0, mode === "feed" ? 4 : 6).map(function (bit) {
                 return '<span>' + esc(bit) + '</span>';
             }).join("") + '</div>';
     }
 
     function renderLoopRunTicketContext() {
-        var run = loopRunTicketContextRun();
         var mainEl = document.getElementById("wf-loop-run-ticket-context");
         var feedEl = document.getElementById("wf-loop-feed-ticket-context");
-        var mainHtml = loopRunTicketContextHtml(run, "main");
-        var feedHtml = loopRunTicketContextHtml(loopFeedActiveRun() || run, "feed");
+        var feedRun = loopFeedActiveRun() || currentWorkflowActiveRun();
+        var feedHtml = isRunActiveForTicketContext(feedRun) ? loopRunTicketContextHtml(feedRun, "feed") : "";
         if (mainEl) {
-            mainEl.classList.toggle("hidden", !mainHtml);
-            mainEl.innerHTML = mainHtml;
+            mainEl.classList.add("hidden");
+            mainEl.innerHTML = "";
         }
         if (feedEl) {
             feedEl.classList.toggle("hidden", !feedHtml);
             feedEl.innerHTML = feedHtml;
+            if (feedHtml) initLoopTicketTitleMarquees(feedEl);
         }
     }
 
@@ -6694,6 +6771,19 @@
         });
     }
 
+    function stepsForLoopView(steps) {
+        steps = Array.isArray(steps) ? steps.slice() : [];
+        var run = currentWorkflowActiveRun() || loopFeedActiveRun();
+        if (!run || !run.current_step_id) return steps;
+        if (!isRunActiveForTicketContext(run)) return steps;
+        return steps.map(function (step) {
+            if (String(step.id) !== String(run.current_step_id)) return step;
+            var status = run.status === "waiting" ? "waiting" : "running";
+            if (step.status === status) return step;
+            return Object.assign({}, step, { status: status });
+        });
+    }
+
     function loopStepStatusClass(status) {
         if (status === "running") return "wf-loop-step-status--running";
         if (status === "waiting") return "wf-loop-step-status--waiting";
@@ -6704,7 +6794,7 @@
 
     function loopRingNodePosition(index, total) {
         var angle = (-Math.PI / 2) + ((2 * Math.PI * index) / total);
-        var radius = 38;
+        var radius = 40;
         return {
             left: (50 + radius * Math.cos(angle)).toFixed(2) + "%",
             top: (50 + radius * Math.sin(angle)).toFixed(2) + "%"
@@ -6749,7 +6839,7 @@
                 '<svg class="wf-loop-ring-track" viewBox="0 0 200 200" aria-hidden="true">' +
                     '<circle cx="100" cy="100" r="76" fill="none" stroke="rgba(249,115,22,0.28)" stroke-width="2"></circle>' +
                 "</svg>" +
-                '<div class="wf-loop-ring-center-label">Loop</div>' +
+                '<div class="wf-loop-ring-center-label" aria-label="Orchestrator">' + SVG_ORCHESTRATOR_BOT + '<span>Orchestrator</span></div>' +
                 '<div class="wf-loop-ring-nodes">' + nodesHtml + "</div>" +
             "</div>";
 
@@ -7052,7 +7142,7 @@
 
     // ── Loop steps (ring + list) ──
     function renderSteps(steps) {
-        steps = Array.isArray(steps) ? steps : [];
+        steps = stepsForLoopView(Array.isArray(steps) ? steps : []);
         syncWorkflowLoopAddStepButton(steps);
         if (workflowLoopViewMode === "list") {
             renderLoopListView(steps);

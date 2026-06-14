@@ -116,10 +116,7 @@ def test_view_only_disables_header_and_composer_except_load_button():
         "function showEmptyState()", 1
     )[0]
 
-    assert "headerLlmProvider" in helper_block
-    assert "headerLlmModel" in helper_block
-    assert "headerVoiceProvider" in helper_block
-    assert "headerVoiceModel" in helper_block
+    assert "configureChatButton" in helper_block
     assert "speakerToggle.disabled = Boolean(isViewOnly);" in helper_block
     assert "inputLoadButton.disabled = !isViewOnly || currentChatId == null;" in helper_block
 
@@ -179,6 +176,8 @@ def test_header_icon_buttons_have_visible_tooltip_contract():
     assert "content: attr(data-tooltip);" in css
     assert ".chat-header-tooltip:hover::after" in css
     assert ".chat-header-tooltip:focus-visible::after" in css
+    assert "top: calc(100% + 8px);" in css
+    assert ".chat-header-actions .chat-header-tooltip::after" in css
     assert ".chat-header-tooltip::before" not in css
 
 
@@ -276,6 +275,9 @@ def test_reload_tool_activity_embeds_in_matching_assistant_turn():
 
     assert "embedded_tools" in normalize_block
     assert "toolsByAssistantTurn" in normalize_block
+    assert "shouldEmbedToolInAssistantTurn" in normalize_block
+    assert "buildStandaloneToolGroups" in normalize_block
+    assert "sortMessagesForDisplay" in normalize_block
     assert "appendAssistantActivity(div, message.embedded_tools);" in finalize_block
     assert "reordered.push(...trace, current)" not in normalize_block
 
@@ -293,7 +295,8 @@ def test_live_tool_activity_embeds_into_streaming_or_matching_assistant():
 
     assert "appendToolToAssistantTurn(toolMessage);" in tool_block
     assert "appendToolToActivityGroup(toolMessage)" not in tool_block
-    assert "toolName === 'chat_settings'" in append_block
+    assert "isStandaloneSystemActivity(message)" in append_block
+    assert "appendStandaloneToolActivity(message)" in append_block
     assert "document.getElementById('streamingAssistantMessage')" in append_block
     assert "findAssistantMessageForTurn(turnChatId)" in append_block
     assert "appendAssistantActivity(target, [message]);" in append_block
@@ -325,18 +328,25 @@ def test_assistant_activity_renders_as_system_activity_sibling():
         1,
     )[0]
 
-    assert "assistant-turn-activity" in sibling_block
+    assert "assistant_turn_activity: true" in sibling_block
+    assert "findAssistantTurnActivityBlocks(assistantEl)" in sibling_block
     assert "getOrCreateAssistantActivitySibling(assistantEl)" in append_block
-    assert "label: activitySystemLabel(title, event)" in tool_item_block
-    assert "label: activityCollapsedActionLabel(title, event)" not in tool_item_block
+    assert "label: activityStepLabel(title, event)" in tool_item_block
+    assert "label: activitySystemLabel(title, event)" not in tool_item_block
 
 
-def test_header_settings_require_explicit_save():
+def test_header_settings_edited_via_configure_modal_only():
     src = _chat_js_source()
-    assert "headerSettingsSave" in src
-    assert "markHeaderSettingsDirty" in src
-    assert "scheduleHeaderSettingsSave" not in src
-    assert 'headerSettingsSave.hidden = !dirty' in src
+    html = _chat_html_source()
+
+    assert 'id="headerLlmSummary"' in html
+    assert 'id="headerVoiceSummary"' in html
+    assert 'id="headerLlmProvider"' not in html
+    assert 'id="headerSettingsSave"' not in html
+    assert "renderHeaderSettingsSummary" in src
+    assert "openChatConfigModal" in src
+    assert "persistHeaderChatSettings" not in src
+    assert "markHeaderSettingsDirty" not in src
 
 
 def test_waiting_indicator_preserved_during_in_flight_send():

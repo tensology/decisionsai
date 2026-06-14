@@ -35,6 +35,33 @@ def _preview_result(text: Optional[str], limit: int = 220) -> str:
     return one_line[: limit - 3] + "..."
 
 
+def _format_llm_settings_pair(provider: Optional[str], model: Optional[str]) -> str:
+    """Human-readable LLM provider/model for chat settings activity."""
+    from distr.core.chat import _normalize_provider
+
+    pname = _normalize_provider(provider) if provider else "—"
+    mname = (model or "").strip() or "—"
+    return f"{pname} / {mname}"
+
+
+def _format_voice_settings_pair(voice_provider: Optional[str], voice_model: Optional[str]) -> str:
+    """Human-readable voice provider/voice for chat settings activity."""
+    from distr.core.agent.constants import normalize_voice_provider
+    from distr.core.agent.service_factory import resolve_voice_to_display_name
+    from distr.core.agent.services.tts.registry import tts_registry
+    from distr.core.settings import load_settings_from_db
+
+    settings = load_settings_from_db()
+    vp = normalize_voice_provider(voice_provider or "")
+    try:
+        descriptor = tts_registry.get(vp)
+        prov_name = descriptor.name or (voice_provider or "—")
+    except KeyError:
+        prov_name = (voice_provider or "").strip() or "—"
+    voice_name = resolve_voice_to_display_name(vp, voice_model or "", settings) if voice_model else "—"
+    return f"{prov_name} / {voice_name}"
+
+
 def _full_result_for_chat(text: Optional[str], limit: int = 24000) -> str:
     """Preserve multiline tool output for the chat activity expand view."""
     if not text:
@@ -143,7 +170,7 @@ def _build_chat_tool_event(
     instruction_hint: Optional[str],
     user_text: Optional[str],
     routing_path: Optional[str],
-    turn_chat_id: int,
+    turn_chat_id: Optional[int],
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     normalized_tool = (tool_name or "tool").strip()
@@ -155,7 +182,6 @@ def _build_chat_tool_event(
         "id": f"tool-{chat_id}-{now}",
         "event": "tool_executed",
         "chat_id": int(chat_id),
-        "turn_chat_id": int(turn_chat_id),
         "tool_name": normalized_tool,
         "title": _preview_result(title, 140) or "Tool executed",
         "result_summary": _preview_result(result, 420),
@@ -165,6 +191,8 @@ def _build_chat_tool_event(
         "chat_visible": True,
         "chat_compact": _is_compact_tool(normalized_tool),
     }
+    if turn_chat_id is not None:
+        event["turn_chat_id"] = int(turn_chat_id)
     if user_text:
         event["user_text"] = _preview_result(user_text, 180)
     if routing_path:
@@ -190,7 +218,13 @@ def _chat_title(tool_name: str, result: Optional[str], instruction_hint: Optiona
     if tool_name == "mode_control":
         return "Checked mode control"
     if tool_name == "chat_settings":
-        return "Changed chat settings"
+        hint = (instruction_hint or "").strip()
+        if hint:
+            return hint
+        first_line = (result or "").strip().splitlines()[0].strip() if result else ""
+        if first_line:
+            return first_line
+        return "Updated chat settings"
     return tool_name.replace("_", " ").title()
 
 
@@ -243,43 +277,34 @@ def record_chat_settings_change(
     if llm_cur != llm_prev and any(llm_cur):
         if any(llm_prev):
             lines.append(
-                f"LLM: {llm_prev[0] or '—'} / {llm_prev[1] or '—'} "
-                f"→ {llm_cur[0] or '—'} / {llm_cur[1] or '—'}"
+                f"LLM: {_format_llm_settings_pair(llm_prev[0], llm_prev[1])} "
+                f"→ {_format_llm_settings_pair(llm_cur[0], llm_cur[1])}"
             )
         else:
-            lines.append(f"LLM: {llm_cur[0] or '—'} / {llm_cur[1] or '—'}")
+            lines.append(f"LLM: {_format_llm_settings_pair(llm_cur[0], llm_cur[1])}")
     if voice_cur != voice_prev and any(voice_cur):
         if any(voice_prev):
             lines.append(
-                f"Voice: {voice_prev[0] or '—'} / {voice_prev[1] or '—'} "
-                f"→ {voice_cur[0] or '—'} / {voice_cur[1] or '—'}"
+                f"Voice: {_format_voice_settings_pair(voice_prev[0], voice_prev[1])} "
+                f"→ {_format_voice_settings_pair(voice_cur[0], voice_cur[1])}"
             )
         else:
-            lines.append(f"Voice: {voice_cur[0] or '—'} / {voice_cur[1] or '—'}")
+            lines.append(f"Voice: {_format_voice_settings_pair(voice_cur[0], voice_cur[1])}")
     if not lines:
         return None
 
     summary = "\n".join(lines)
-    turn_chat_id = int(chat_id)
-    try:
-        from distr.core.db import get_session
-
-        with get_session() as session:
-            resolved = _latest_thread_row_id(session, int(chat_id))
-            if resolved is not None:
-                turn_chat_id = resolved
-    except Exception as e:
-        logger.debug("latest thread row resolution failed: %s", e)
+    summary_title = lines[0] if lines else "Updated chat settings"
 
     event = _build_chat_tool_event(
         int(chat_id),
         "chat_settings",
         summary,
         "completed",
-        "Changed chat settings",
+        summary_title,
         None,
         None,
-        turn_chat_id=turn_chat_id,
+        turn_chat_id=None,
     )
     event["chat_visible"] = True
     event["chat_compact"] = False

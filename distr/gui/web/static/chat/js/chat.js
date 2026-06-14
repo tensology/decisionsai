@@ -99,17 +99,10 @@ const chatConfigLlmModel = document.getElementById('chatConfigLlmModel');
 const chatConfigVoiceProvider = document.getElementById('chatConfigVoiceProvider');
 const chatConfigVoiceModel = document.getElementById('chatConfigVoiceModel');
 const chatConfigStatus = document.getElementById('chatConfigStatus');
-const headerLlmProvider = document.getElementById('headerLlmProvider');
-const headerLlmModel = document.getElementById('headerLlmModel');
-const headerVoiceProvider = document.getElementById('headerVoiceProvider');
-const headerVoiceModel = document.getElementById('headerVoiceModel');
-const headerSettingsStatus = document.getElementById('headerSettingsStatus');
-const headerSettingsSave = document.getElementById('headerSettingsSave');
+const headerLlmSummary = document.getElementById('headerLlmSummary');
+const headerVoiceSummary = document.getElementById('headerVoiceSummary');
 const contextRing = document.getElementById('contextRing');
 
-let _headerSettingsSyncing = false;
-let _headerOptionsReady = false;
-let _headerSettingsBaseline = null;
 let _autoCompactInFlight = false;
 let _lastAutoCompactKey = null;
 let _headerStatsTimer = null;
@@ -285,7 +278,8 @@ async function fetchDefaultsForNewChat() {
     }
     if (!model_name && provider) {
         try {
-            const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider)}`);
+            const providerId = providerIdFromDisplay(provider);
+            const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(providerId)}`);
             const data = await response.json();
             const models = data.models || [];
             if (models.length) {
@@ -411,8 +405,6 @@ function setupEventListeners() {
     if (configureChatButton) configureChatButton.addEventListener('click', () => openChatConfigModal());
     if (compactChatButton) compactChatButton.addEventListener('click', () => compactCurrentChat());
     if (forkChatButton) forkChatButton.addEventListener('click', () => forkCurrentChat());
-    bindHeaderSettingsControls();
-    if (headerSettingsSave) headerSettingsSave.addEventListener('click', () => persistHeaderChatSettings());
     if (chatMessages) {
         chatMessages.addEventListener('contextmenu', (e) => {
             if (!currentChatId) return;
@@ -872,12 +864,25 @@ function promoteTranscriptionPreviewToUserMessage(committedText) {
     return true;
 }
 
+/** DB/API timestamps are naive UTC; normalize before parse so local display/order stay correct. */
+function normalizeUtcTimestampInput(ts) {
+    if (ts === undefined || ts === null || ts === '') return null;
+    if (typeof ts === 'number') return ts;
+    let value = String(ts).trim();
+    if (!value) return null;
+    if (/[zZ]$/.test(value) || /[+-]\d{2}:?\d{2}$/.test(value)) return value;
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) {
+        return value.replace(' ', 'T') + 'Z';
+    }
+    return value;
+}
+
 function messageTimestampMs(message) {
     if (!message) return 0;
-    let ts = message.timestamp;
-    if (ts === undefined || ts === null || ts === '') return 0;
-    if (typeof ts === 'number') return ts;
-    const parsed = Date.parse(String(ts));
+    const normalized = normalizeUtcTimestampInput(message.timestamp);
+    if (normalized === null) return 0;
+    if (typeof normalized === 'number') return normalized;
+    const parsed = Date.parse(normalized);
     return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -897,6 +902,54 @@ function messageDomRowId(node) {
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+function messageDomRole(node) {
+    if (!node || !node.classList) return '';
+    if (node.classList.contains('user')) return 'user';
+    if (node.classList.contains('assistant')) return 'assistant';
+    if (node.classList.contains('activity')) return 'tool';
+    if (node.classList.contains('chat-divider')) return 'divider';
+    return '';
+}
+
+function messageRoleRank(role) {
+    const roleRank = { user: 0, tool: 1, tool_group: 1, workflow: 1, assistant: 2, divider: 3 };
+    return roleRank[role] != null ? roleRank[role] : 9;
+}
+
+function previousMessageSibling(node) {
+    let prev = node ? node.previousElementSibling : null;
+    while (prev && !prev.classList.contains('message') && !prev.classList.contains('chat-divider')) {
+        prev = prev.previousElementSibling;
+    }
+    return prev;
+}
+
+/** Live path: assistant can finalize before the user bubble — pull the user row above it. */
+function repairOrphanAssistantBeforeUser() {
+    if (!chatMessages) return;
+    const assistants = [...chatMessages.querySelectorAll('.message.assistant')]
+        .filter((el) => el.id !== 'streamingAssistantMessage');
+    for (const asst of assistants) {
+        const prev = previousMessageSibling(asst);
+        if (prev && prev.classList.contains('user')) continue;
+        let next = asst.nextElementSibling;
+        while (next && !next.classList.contains('message')) next = next.nextElementSibling;
+        if (next && next.classList.contains('user')) {
+            chatMessages.insertBefore(next, asst);
+        }
+    }
+}
+
+function compareMessageInsertOrder(message, node) {
+    const msgTs = messageTimestampMs(message);
+    const nodeTs = messageDomTimestampMs(node);
+    if (msgTs !== nodeTs) return msgTs - nodeTs;
+    const msgRow = message.chat_row_id != null ? Number(message.chat_row_id) : null;
+    const nodeRow = messageDomRowId(node);
+    if (msgRow != null && nodeRow != null && msgRow !== nodeRow) return msgRow - nodeRow;
+    return messageRoleRank(message.role) - messageRoleRank(messageDomRole(node));
+}
+
 function compareMessageOrder(a, b) {
     const tsA = messageTimestampMs(a);
     const tsB = messageTimestampMs(b);
@@ -904,10 +957,7 @@ function compareMessageOrder(a, b) {
     const rowA = a && a.chat_row_id != null ? Number(a.chat_row_id) : null;
     const rowB = b && b.chat_row_id != null ? Number(b.chat_row_id) : null;
     if (rowA != null && rowB != null && rowA !== rowB) return rowA - rowB;
-    const roleRank = { user: 0, tool: 1, tool_group: 1, workflow: 1, assistant: 2, divider: 3 };
-    const rankA = roleRank[a && a.role] != null ? roleRank[a.role] : 9;
-    const rankB = roleRank[b && b.role] != null ? roleRank[b.role] : 9;
-    return rankA - rankB;
+    return messageRoleRank(a && a.role) - messageRoleRank(b && b.role);
 }
 
 function sortMessagesForDisplay(messages) {
@@ -929,27 +979,34 @@ function insertMessageElementInOrder(div, message) {
     const ts = messageTimestampMs(message);
     const rowId = message.chat_row_id != null ? Number(message.chat_row_id) : null;
     div.dataset.messageTs = String(ts || Date.now());
-    const nodes = [...chatMessages.querySelectorAll('.message, .chat-divider')].filter(isLiveChatMessageNode);
+    if (rowId != null && !Number.isNaN(rowId)) {
+        div.dataset.turnChatId = String(rowId);
+    }
+    const nodes = [...chatMessages.querySelectorAll('.message, .chat-divider')]
+        .filter(isLiveChatMessageNode)
+        .filter((node) => node !== div);
     for (const node of nodes) {
-        const nodeTs = messageDomTimestampMs(node);
-        const nodeRow = messageDomRowId(node);
-        if (ts < nodeTs || (ts === nodeTs && rowId != null && nodeRow != null && rowId < nodeRow)) {
+        if (compareMessageInsertOrder(message, node) < 0) {
             chatMessages.insertBefore(div, node);
+            finalizeMessageElementMount(div, message);
             syncRenderedMessageCountFromDom();
+            if (message.role === 'user') repairOrphanAssistantBeforeUser();
             return;
         }
     }
     const streamingMsg = document.getElementById('streamingAssistantMessage');
     const streamingActivity = document.getElementById('streamingAssistantActivity');
     const typingInd = document.getElementById('typingIndicator');
-    const insertBefore = streamingActivity || streamingMsg || typingInd;
+    const insertBefore = [streamingActivity, streamingMsg, typingInd]
+        .find((node) => node && node !== div);
     if (insertBefore) {
         chatMessages.insertBefore(div, insertBefore);
-    } else {
+    } else if (div.parentNode !== chatMessages) {
         chatMessages.appendChild(div);
     }
     finalizeMessageElementMount(div, message);
     syncRenderedMessageCountFromDom();
+    if (message.role === 'user') repairOrphanAssistantBeforeUser();
 }
 
 function handleChatEventMessageAdded(msg) {
@@ -965,7 +1022,7 @@ function handleChatEventMessageAdded(msg) {
             return;
         }
         const np = _normalizeMsgPlain(content);
-        if (np && np === _lastRenderedUserBubblePlain()) {
+        if (np && np === _lastRenderedUserBubblePlain() && hasRenderedMessagePlain('user', np)) {
             _discardLiveTranscriptionUi();
             return;
         }
@@ -973,6 +1030,7 @@ function handleChatEventMessageAdded(msg) {
         _discardLiveTranscriptionUi();
         const div = createMessageElement({ role, content, timestamp: msg.timestamp });
         insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
+        repairOrphanAssistantBeforeUser();
         scrollToBottom();
         scheduleRefreshChatHeaderStats();
         return;
@@ -1060,6 +1118,7 @@ function mergeChatUpdatedDuringStream(messages) {
         inserted = true;
     });
     if (inserted) {
+        repairOrphanAssistantBeforeUser();
         syncRenderedMessageCountFromDom();
         scheduleRefreshChatHeaderStats();
     }
@@ -1067,6 +1126,7 @@ function mergeChatUpdatedDuringStream(messages) {
 
 function handleChatEventStreamStarted(msg) {
     if (msg.chat_id !== currentChatId) return;
+    promoteTranscriptionPreviewToUserMessage();
     streamingChatId = msg.chat_id;
     _streamTextBuffer = '';
     _streamRafPending = false;
@@ -1090,7 +1150,8 @@ function handleChatEventStreamStarted(msg) {
             <div class="message-actions" style="display: none;"></div>
         </div>
     `;
-    chatMessages.appendChild(div);
+    const streamMessage = { role: 'assistant', timestamp: Date.now() };
+    insertMessageElementInOrder(div, streamMessage);
     flushPendingAssistantTools(div, null);
     _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
@@ -1140,6 +1201,7 @@ function handleChatEventStreamFinished(msg) {
         } else {
         wrap.id = '';
         const finishedAt = Date.now();
+        wrap.dataset.messageTs = String(finishedAt);
         const clock = _formatTimestamp(finishedAt);
         const headerTs = clock ? `<span class="message-header-timestamp">${clock}</span>` : '';
         wrap.innerHTML = `
@@ -1154,6 +1216,8 @@ function handleChatEventStreamFinished(msg) {
             </div>
         `;
         restoreAssistantEmbeddedActivity(wrap, existingActivityHtml);
+        insertMessageElementInOrder(wrap, { role: 'assistant', timestamp: finishedAt, chat_row_id: msg.chat_row_id });
+        repairOrphanAssistantBeforeUser();
         syncRenderedMessageCountFromDom();
         _lastStreamFinalizedPlain = _normalizeMsgPlain(raw);
         _suppressChatUpdatedFetchUntil = Date.now() + 2500;
@@ -1187,7 +1251,6 @@ function handleChatEventStreamFinished(msg) {
         window._agentStreamResolve = null;
     }
     streamingChatId = null;
-    _optimisticUserMessages.clear();
     scheduleRefreshChatHeaderStats({ checkTitle: true });
     // Reset input state in case the message came from voice/PTT (not web sendMessage)
     isStreaming = false;
@@ -1319,26 +1382,66 @@ function flushPendingAssistantTools(target, turnChatId) {
     });
 }
 
+function toolEventName(message) {
+    return String((message && message.tool_event && message.tool_event.tool_name) || '').trim();
+}
+
+function isStandaloneSystemActivity(message) {
+    return toolEventName(message) === 'chat_settings';
+}
+
+function shouldEmbedToolInAssistantTurn(toolMessage) {
+    return !isStandaloneSystemActivity(toolMessage);
+}
+
 function appendStandaloneToolActivity(message) {
     if (!chatMessages) return null;
-    const group = appendToolToActivityGroup(message);
+    const group = appendStandaloneToolToActivityGroup(message);
     if (group && !group.isConnected) {
-        chatMessages.appendChild(group);
-        syncRenderedMessageCountFromDom();
+        insertMessageElementInOrder(group, {
+            role: 'tool_group',
+            timestamp: message.timestamp,
+            chat_row_id: message.chat_row_id
+        });
         scrollToBottom();
     }
     return group;
 }
 
+function findAppendableStandaloneActivityGroup() {
+    if (!chatMessages) return null;
+    const last = chatMessages.lastElementChild;
+    if (!last || !last.classList.contains('message') || !last.classList.contains('activity')) return null;
+    if (last.classList.contains('assistant-turn-activity')) return null;
+    if (!last.classList.contains('tool-execution-group')) return null;
+    if (last.querySelectorAll('.activity-step').length >= MAX_ACTIVITY_STEPS_PER_GROUP) return null;
+    return last;
+}
+
+function appendStandaloneToolToActivityGroup(message) {
+    let group = isStandaloneSystemActivity(message) ? null : findAppendableStandaloneActivityGroup();
+    if (!group) {
+        group = createToolExecutionGroupElement({
+            role: 'tool_group',
+            timestamp: message.timestamp,
+            turn_chat_id: null,
+            tools: []
+        });
+    }
+    const list = group.querySelector('.activity-steps');
+    if (list) list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(message));
+    group.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
+    return group;
+}
+
 function appendToolToAssistantTurn(message) {
+    if (isStandaloneSystemActivity(message)) {
+        return appendStandaloneToolActivity(message);
+    }
     const turnChatId = message && message.turn_chat_id != null ? String(message.turn_chat_id) : null;
     const streamingMsg = document.getElementById('streamingAssistantMessage');
     const target = findAssistantMessageForTurn(turnChatId) || streamingMsg;
     if (!target) {
-        const toolName = (message && message.tool_event && message.tool_event.tool_name) || '';
-        if (toolName === 'chat_settings') {
-            return appendStandaloneToolActivity(message);
-        }
         queuePendingAssistantTool(message);
         return null;
     }
@@ -1891,9 +1994,7 @@ async function loadChat(chatId, options = {}) {
                 updateActiveChat();
             } catch (e) {
                 console.warn('Load-in-agent failed:', e);
-                if (headerSettingsStatus) {
-                    setHeaderSaveStatus('Agent not loaded', 'is-error');
-                }
+                showChatSnackbar('Agent not loaded', 'error');
             }
         }
         scheduleRefreshChatHeaderStats();
@@ -1932,7 +2033,56 @@ function updateActiveChat() {
     });
 }
 
+let _emptyStateAgentWatchTimer = null;
+
+function isEmptyStateVisible() {
+    return !!(emptyState && emptyState.style.display !== 'none');
+}
+
+function stopEmptyStateAgentWatch() {
+    if (_emptyStateAgentWatchTimer) {
+        clearInterval(_emptyStateAgentWatchTimer);
+        _emptyStateAgentWatchTimer = null;
+    }
+}
+
+/** Voice/PTT can create the first chat while the welcome screen is still showing — adopt it into the feed. */
+async function tryAdoptAgentFirstChat(data) {
+    if (!isEmptyStateVisible() || currentChatId != null) return false;
+    const chats = Array.isArray(data?.chats) ? data.chats : [];
+    const agentId = data?.agent_current_chat_id != null ? Number(data.agent_current_chat_id) : null;
+    let chatId = null;
+    if (agentId != null && !Number.isNaN(agentId) && chats.some((c) => c.id === agentId)) {
+        chatId = agentId;
+    } else if (chats.length > 0) {
+        chatId = chats[0].id;
+    }
+    if (chatId == null) return false;
+    stopEmptyStateAgentWatch();
+    hideEmptyStateAgentLoading();
+    await loadChat(chatId, { skipLoadInAgent: true });
+    return true;
+}
+
+function startEmptyStateAgentWatch() {
+    stopEmptyStateAgentWatch();
+    if (!isEmptyStateVisible()) return;
+    _emptyStateAgentWatchTimer = setInterval(async () => {
+        if (!isEmptyStateVisible() || currentChatId != null) {
+            stopEmptyStateAgentWatch();
+            return;
+        }
+        try {
+            const data = await loadChats();
+            await tryAdoptAgentFirstChat(data);
+        } catch (e) {
+            console.debug('Empty-state agent watch:', e);
+        }
+    }, 1500);
+}
+
 function showChatView(isLoaded) {
+    stopEmptyStateAgentWatch();
     emptyState.style.display = 'none';
     chatMessages.style.display = 'flex';
     if (chatSettingsHeader) chatSettingsHeader.style.display = 'flex';
@@ -1959,11 +2109,6 @@ function setViewOnlyChrome(isViewOnly) {
     if (chatSettingsHeader) chatSettingsHeader.classList.toggle('view-only', Boolean(isViewOnly));
     if (inputContainer) inputContainer.classList.toggle('view-only', Boolean(isViewOnly));
     const headerControls = [
-        headerLlmProvider,
-        headerLlmModel,
-        headerVoiceProvider,
-        headerVoiceModel,
-        headerSettingsSave,
         configureChatButton,
         compactChatButton,
         forkChatButton,
@@ -1993,6 +2138,7 @@ function showEmptyState() {
     hideEmptyStateAgentLoading();
     loadEmptyStateDropdowns();
     syncKanbanSourceChatContext();
+    startEmptyStateAgentWatch();
 }
 
 function showEmptyStateAgentLoading() {
@@ -2168,9 +2314,10 @@ async function pullOllamaModelFromEmptyState() {
 async function loadEmptyStateLlmModels(provider) {
     const el = document.getElementById('emptyStateLlmModel');
     if (!el) return;
+    const providerId = providerIdFromDisplay(provider || '');
     el.innerHTML = '<option value="">Loading…</option>';
     try {
-        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider)}`);
+        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(providerId)}`);
         const data = await response.json();
         const models = data.models || [];
         el.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
@@ -2296,6 +2443,7 @@ let _renderedMessageCount = 0;
 let _suppressChatUpdatedFetchUntil = 0;
 /** Tool activity can arrive before the assistant DOM exists; hold it briefly by turn id. */
 const _pendingAssistantToolMessages = new Map();
+const MAX_ACTIVITY_STEPS_PER_GROUP = 3;
 
 /** Keep _renderedMessageCount aligned when WebSocket finalizes #streamingAssistantMessage (no renderMessages() call). */
 function syncRenderedMessageCountFromDom() {
@@ -2360,13 +2508,40 @@ function addToolsToTurnMap(map, turnId, tools) {
     map.set(key, existing);
 }
 
-function toolGroupFromTools(tools, turnChatId) {
+function toolGroupFromTools(tools, turnChatId, options = {}) {
     return {
         role: 'tool_group',
         timestamp: tools[0] && tools[0].timestamp,
         turn_chat_id: turnChatId,
+        assistant_turn_activity: Boolean(options.assistant_turn_activity),
         tools
     };
+}
+
+function buildStandaloneToolGroups(standaloneTools) {
+    const groups = [];
+    let batch = [];
+    standaloneTools.forEach(tool => {
+        if (isStandaloneSystemActivity(tool)) {
+            if (batch.length) {
+                groups.push(toolGroupFromTools(batch, null));
+                batch = [];
+            }
+            groups.push(toolGroupFromTools([tool], null));
+            return;
+        }
+        batch.push(tool);
+        if (batch.length >= MAX_ACTIVITY_STEPS_PER_GROUP) {
+            groups.push(toolGroupFromTools(batch, null));
+            batch = [];
+        }
+    });
+    if (batch.length) groups.push(toolGroupFromTools(batch, null));
+    return groups;
+}
+
+function pushStandaloneToolGroups(grouped, standaloneTools) {
+    grouped.push(...buildStandaloneToolGroups(standaloneTools));
 }
 
 function normalizeTraceMessages(messages) {
@@ -2375,12 +2550,18 @@ function normalizeTraceMessages(messages) {
     messages.forEach(message => {
         if (!message || (message.role !== 'tool' && message.role !== 'tool_group')) return;
         const tools = toolMessagesFromTrace(message);
-        const turnId = traceTurnChatId(message);
-        if (turnId == null) {
-            standaloneTools.push(...tools);
-            return;
-        }
-        addToolsToTurnMap(toolsByAssistantTurn, turnId, tools);
+        tools.forEach(tool => {
+            if (!shouldEmbedToolInAssistantTurn(tool)) {
+                standaloneTools.push(tool);
+                return;
+            }
+            const turnId = traceTurnChatId(tool) ?? traceTurnChatId(message);
+            if (turnId == null) {
+                standaloneTools.push(tool);
+                return;
+            }
+            addToolsToTurnMap(toolsByAssistantTurn, turnId, [tool]);
+        });
     });
 
     const grouped = [];
@@ -2404,15 +2585,18 @@ function normalizeTraceMessages(messages) {
         grouped.push(message);
     });
 
+    const looseGroups = [];
     toolsByAssistantTurn.forEach((tools, turnId) => {
         if (!embeddedTurns.has(turnId) && tools.length) {
-            grouped.push(toolGroupFromTools(tools, turnId));
+            for (let i = 0; i < tools.length; i += MAX_ACTIVITY_STEPS_PER_GROUP) {
+                looseGroups.push(toolGroupFromTools(tools.slice(i, i + MAX_ACTIVITY_STEPS_PER_GROUP), turnId, {
+                    assistant_turn_activity: true
+                }));
+            }
         }
     });
-    if (standaloneTools.length) {
-        grouped.push(toolGroupFromTools(standaloneTools, null));
-    }
-    return grouped;
+    looseGroups.push(...buildStandaloneToolGroups(standaloneTools));
+    return sortMessagesForDisplay([...grouped, ...looseGroups]);
 }
 
 function renderMessages(messages, preserveOnEmpty) {
@@ -2448,9 +2632,15 @@ function renderMessages(messages, preserveOnEmpty) {
         // Fast path: append only new messages, skipping ones already rendered optimistically
         for (let i = _renderedMessageCount; i < messages.length; i++) {
             const msg = messages[i];
-            // Skip user messages we already rendered via sendMessage()
-            if (msg.role === 'user' && msg.content && _optimisticUserMessages.has(msg.content.substring(0, 100))) {
-                continue;
+            // Skip user messages already on screen (typed, dictated, or optimistic).
+            if (msg.role === 'user' && msg.content) {
+                const userPlain = _normalizeMsgPlain(msg.content);
+                if (
+                    _optimisticUserMessages.has(msg.content.substring(0, 100))
+                    || (userPlain && hasRenderedMessagePlain('user', userPlain))
+                ) {
+                    continue;
+                }
             }
             // Duplicate assistant rows (same body back-to-back) — DB/pipeline race with PTT/voice
             if (msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'assistant') {
@@ -2668,11 +2858,9 @@ async function playTTS(button) {
 function _formatTimestamp(ts) {
     if (!ts) return '';
     try {
-        let value = ts;
-        if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(value)) {
-            value = value + 'Z';
-        }
-        const d = new Date(value);
+        const normalized = normalizeUtcTimestampInput(ts);
+        if (normalized === null) return '';
+        const d = new Date(typeof normalized === 'number' ? normalized : normalized);
         if (isNaN(d.getTime())) return '';
         const h = d.getHours();
         const m = d.getMinutes().toString().padStart(2, '0');
@@ -2844,34 +3032,57 @@ function findAssistantActivitySibling(assistantEl) {
     return null;
 }
 
+function insertDomNodeAfter(newNode, referenceNode) {
+    if (!referenceNode || !referenceNode.parentNode) return;
+    referenceNode.parentNode.insertBefore(newNode, referenceNode.nextSibling);
+}
+
+function findAssistantTurnActivityBlocks(assistantEl) {
+    if (!assistantEl || !chatMessages) return [];
+    const key = assistantActivityTurnKey(assistantEl);
+    if (key == null) return [];
+    return [...chatMessages.querySelectorAll('.message.activity.assistant-turn-activity')]
+        .filter(el => el.dataset.turnChatId === key);
+}
+
 function getOrCreateAssistantActivitySibling(assistantEl) {
-    let sibling = findAssistantActivitySibling(assistantEl);
-    if (sibling) return sibling;
-    sibling = createToolExecutionGroupElement({
+    const blocks = findAssistantTurnActivityBlocks(assistantEl);
+    const last = blocks.length ? blocks[blocks.length - 1] : null;
+    if (last && last.querySelectorAll('.activity-step').length < MAX_ACTIVITY_STEPS_PER_GROUP) {
+        return last;
+    }
+    const sibling = createToolExecutionGroupElement({
         role: 'tool_group',
         timestamp: Date.now(),
         turn_chat_id: assistantActivityTurnKey(assistantEl),
-        tools: []
+        tools: [],
+        assistant_turn_activity: true
     });
-    sibling.classList.add('assistant-turn-activity');
-    if (assistantEl.id === 'streamingAssistantMessage') {
+    if (assistantEl.id === 'streamingAssistantMessage' && !blocks.length) {
         sibling.id = 'streamingAssistantActivity';
     }
     if (assistantEl.parentNode === chatMessages) {
-        chatMessages.insertBefore(sibling, assistantEl);
+        if (!blocks.length) {
+            chatMessages.insertBefore(sibling, assistantEl);
+        } else {
+            insertDomNodeAfter(sibling, blocks[blocks.length - 1]);
+        }
     }
     return sibling;
 }
 
 function appendAssistantActivity(assistantEl, tools) {
     if (!assistantEl || !Array.isArray(tools) || !tools.length || !chatMessages) return;
-    const sibling = getOrCreateAssistantActivitySibling(assistantEl);
-    const list = sibling.querySelector('.activity-steps');
-    if (!list) return;
     tools.forEach(tool => {
-        list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(tool));
+        if (isStandaloneSystemActivity(tool)) {
+            appendStandaloneToolActivity(tool);
+            return;
+        }
+        const sibling = getOrCreateAssistantActivitySibling(assistantEl);
+        const list = sibling.querySelector('.activity-steps');
+        if (list) list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(tool));
+        sibling.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
     });
-    sibling.querySelectorAll('.activity-step').forEach(syncActivityMessageAlignment);
     assistantEl.classList.add('assistant--with-activity');
     scrollToBottom();
 }
@@ -2919,10 +3130,15 @@ function activityCollapsedActionLabel(title, event) {
     return t.split(/\s+/).slice(0, 4).join(' ');
 }
 
-function activitySystemLabel(title, event) {
+function activityStepLabel(title, event) {
+    const toolName = (event && event.tool_name) || '';
+    if (toolName === 'chat_settings') {
+        const detail = String((event.result_detail || event.result_summary || '')).trim();
+        const firstLine = detail.split('\n').map(line => line.trim()).find(Boolean);
+        if (firstLine) return firstLine;
+    }
     const short = activityCollapsedActionLabel(title, event);
-    if (/^system activity:/i.test(short)) return short;
-    return `System Activity: ${short}`;
+    return String(short || '').replace(/^system activity:\s*/i, '').trim() || 'Activity';
 }
 
 function buildActivityCollapsibleStep({ timestamp, label, bodyHtml, safeStatus = 'completed', extraClass = '' }) {
@@ -2965,7 +3181,7 @@ function createWorkflowEventElement(message) {
     `;
     const innerHtml = `<div class="activity-steps">${buildActivityCollapsibleStep({
         timestamp: message.timestamp,
-        label: activitySystemLabel(workflowName, { tool_name: 'workflow' }),
+        label: activityStepLabel(workflowName, { tool_name: 'workflow' }),
         bodyHtml,
         safeStatus,
         extraClass: 'workflow-event'
@@ -3041,7 +3257,7 @@ function toolExecutionItemHtml(message) {
     `;
     return buildActivityCollapsibleStep({
         timestamp: message.timestamp,
-        label: activitySystemLabel(title, event),
+        label: activityStepLabel(title, event),
         bodyHtml,
         safeStatus,
         extraClass: compact ? 'activity-step--compact' : ''
@@ -3050,10 +3266,12 @@ function toolExecutionItemHtml(message) {
 
 function createToolExecutionGroupElement(message) {
     const tools = Array.isArray(message.tools) ? message.tools : [];
+    const extraClasses = ['tool-execution-group'];
+    if (message.assistant_turn_activity) extraClasses.push('assistant-turn-activity');
     const innerHtml = `<div class="activity-steps">${tools.map(toolExecutionItemHtml).join('')}</div>`;
     const el = createActivityMessageElement({
         innerHtml,
-        extraClass: 'tool-execution-group assistant-turn-activity'
+        extraClass: extraClasses.join(' ')
     });
     const turnChatId = message.turn_chat_id || (tools[0] && tools[0].turn_chat_id);
     if (turnChatId != null && turnChatId !== '') {
@@ -3678,13 +3896,25 @@ function escapeHtml(text) {
 // Load LLM models for provider (settings API)
 async function loadLlmModelsInto(modelSelectEl, provider, preferredModel) {
     if (!modelSelectEl) return;
+    const providerId = providerIdFromDisplay(provider || '');
     modelSelectEl.innerHTML = '<option value="">Loading...</option>';
     try {
-        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider || '')}`);
+        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(providerId)}`);
         const data = await response.json();
         const models = data.models || [];
-        modelSelectEl.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
         const preferred = (preferredModel || '').trim();
+        let options = models.map(m => ({
+            id: String(m.id || m || '').trim(),
+            name: String(m.name || m.id || m || '').trim()
+        })).filter(m => m.id);
+        if (preferred && !options.some(m => m.id === preferred)) {
+            options.unshift({ id: preferred, name: preferred });
+        }
+        modelSelectEl.innerHTML = options.length
+            ? options.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name || m.id)}</option>`).join('')
+            : (preferred
+                ? `<option value="${escapeHtml(preferred)}">${escapeHtml(preferred)}</option>`
+                : '<option value="">No models</option>');
         if (preferred) {
             const opt = Array.from(modelSelectEl.options).find(o => o.value === preferred);
             if (opt) modelSelectEl.value = preferred;
@@ -4219,181 +4449,106 @@ function hideChatConfigModal() {
     if (chatConfigModal) chatConfigModal.style.display = 'none';
 }
 
-function setHeaderSaveStatus(text, kind) {
-    if (!headerSettingsStatus) return;
-    headerSettingsStatus.textContent = text || '';
-    headerSettingsStatus.classList.remove('is-saving', 'is-error');
-    if (kind) headerSettingsStatus.classList.add(kind);
-}
-
 function showChatSnackbar(message, type) {
     if (window.DecisionsAPI && typeof window.DecisionsAPI.snackbar === 'function') {
         window.DecisionsAPI.snackbar(message, type || 'success', { id: 'chat-snackbar' });
     }
 }
 
-function bindHeaderSettingsControls() {
-    if (!headerLlmProvider) return;
-    headerLlmProvider.addEventListener('change', async () => {
-        await loadLlmModelsInto(headerLlmModel, headerLlmProvider.value, currentChatSettings?.model_name || '');
-        markHeaderSettingsDirty();
-    });
-    if (headerLlmModel) headerLlmModel.addEventListener('change', markHeaderSettingsDirty);
-    if (headerVoiceProvider) {
-        headerVoiceProvider.addEventListener('change', async () => {
-            await loadVoiceModelsInto(
-                headerVoiceModel,
-                headerVoiceProvider.value,
-                currentChatSettings?.voice_model || ''
-            );
-            markHeaderSettingsDirty();
-        });
-    }
-    if (headerVoiceModel) headerVoiceModel.addEventListener('change', markHeaderSettingsDirty);
-}
-
-function snapshotHeaderSettingsFromControls() {
-    const settings = currentChatSettings || {};
-    return {
-        provider: (headerLlmProvider?.value || providerIdFromDisplay(settings.provider) || '').trim(),
-        model_name: (headerLlmModel?.value || settings.model_name || '').trim(),
-        voice_provider: (
-            headerVoiceProvider?.value
-            || canonicalVoiceProviderForSelect({ tts_provider: settings.voice_provider, voice_provider: settings.voice_provider })
-            || ''
-        ).trim(),
-        voice_model: (headerVoiceModel?.value || settings.voice_model || '').trim()
+function llmProviderDisplayName(value) {
+    const id = providerIdFromDisplay(value);
+    const labels = {
+        ollama: 'Ollama',
+        openai: 'OpenAI',
+        anthropic: 'Anthropic',
+        groq: 'Groq',
+        openrouter: 'OpenRouter',
+        kilocode: 'KiloCode',
+        gemini: 'Google Gemini'
     };
+    return labels[id] || (value || '').trim() || '—';
 }
 
-function headerSettingsMatchBaseline(current, baseline) {
-    if (!baseline) return true;
-    return current.provider === baseline.provider
-        && current.model_name === baseline.model_name
-        && current.voice_provider === baseline.voice_provider
-        && current.voice_model === baseline.voice_model;
+function voiceProviderDisplayName(voiceProvider) {
+    const providerId = canonicalVoiceProviderForSelect({
+        tts_provider: voiceProvider,
+        voice_provider: voiceProvider
+    });
+    const provider = _ttsProviders && _ttsProviders.find(p => p.id === providerId);
+    return provider?.name || (voiceProvider || '').trim() || '—';
 }
 
-function updateHeaderSettingsSaveButton() {
-    if (!headerSettingsSave) return;
-    const dirty = !headerSettingsMatchBaseline(snapshotHeaderSettingsFromControls(), _headerSettingsBaseline);
-    headerSettingsSave.hidden = !dirty;
-    headerSettingsSave.disabled = !dirty || !currentChatId;
-}
-
-function markHeaderSettingsDirty() {
-    if (_headerSettingsSyncing) return;
-    updateHeaderSettingsSaveButton();
-    if (headerSettingsSave && !headerSettingsSave.hidden) {
-        setHeaderSaveStatus('', '');
+function voiceModelDisplayName(voiceProvider, voiceModel, voiceModelDisplay) {
+    const display = (voiceModelDisplay || '').trim();
+    if (display) return display;
+    const providerId = canonicalVoiceProviderForSelect({
+        tts_provider: voiceProvider,
+        voice_provider: voiceProvider
+    });
+    const provider = _ttsProviders && _ttsProviders.find(p => p.id === providerId);
+    const voiceId = (voiceModel || '').trim();
+    if (provider && Array.isArray(provider.voices) && voiceId) {
+        const match = provider.voices.find(v => (v.id || v.name) === voiceId);
+        if (match && match.name) return match.name;
     }
+    return voiceId || '—';
 }
 
-function setHeaderSettingsBaseline(settings) {
-    if (!settings) {
-        _headerSettingsBaseline = null;
-        updateHeaderSettingsSaveButton();
+function formatHeaderSettingsPair(providerLabel, modelLabel) {
+    const provider = (providerLabel || '').trim() || '—';
+    const model = (modelLabel || '').trim() || '—';
+    return `${provider} / ${model}`;
+}
+
+async function renderHeaderSettingsSummary(settings) {
+    if (!settings) return;
+    await _ensureTTSProviders();
+    const llmText = formatHeaderSettingsPair(
+        llmProviderDisplayName(settings.provider),
+        settings.model_name
+    );
+    if (headerLlmSummary) {
+        headerLlmSummary.textContent = llmText;
+        headerLlmSummary.title = llmText;
+    }
+    const voiceGroup = document.getElementById('headerVoiceGroup');
+    const hasVoice = Boolean((settings.voice_provider || '').trim() || (settings.voice_model || '').trim());
+    if (voiceGroup) voiceGroup.style.display = hasVoice ? '' : 'none';
+    if (!headerVoiceSummary) return;
+    if (!hasVoice) {
+        headerVoiceSummary.textContent = '—';
+        headerVoiceSummary.title = '';
         return;
     }
-    _headerSettingsBaseline = {
-        provider: providerIdFromDisplay(settings.provider || ''),
-        model_name: (settings.model_name || '').trim(),
-        voice_provider: canonicalVoiceProviderForSelect({
-            tts_provider: settings.voice_provider,
-            voice_provider: settings.voice_provider
-        }),
-        voice_model: (settings.voice_model || '').trim()
-    };
-    updateHeaderSettingsSaveButton();
+    const voiceText = formatHeaderSettingsPair(
+        voiceProviderDisplayName(settings.voice_provider),
+        voiceModelDisplayName(
+            settings.voice_provider,
+            settings.voice_model,
+            settings.voice_model_display
+        )
+    );
+    headerVoiceSummary.textContent = voiceText;
+    headerVoiceSummary.title = voiceText;
+    setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
 }
 
-async function ensureHeaderSettingOptions() {
-    if (_headerOptionsReady || !headerLlmProvider) return;
-    await _ensureTTSProviders();
-    const providersRes = await fetch('/api/llms/available-providers').catch(() => null);
-    const providersData = providersRes && providersRes.ok ? await providersRes.json() : { providers: [] };
-    const providers = providersData.providers || [];
-    headerLlmProvider.innerHTML = providers.length
-        ? providers.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')
-        : '<option value="">No providers</option>';
-    populateChatVoiceProviderSelect(headerVoiceProvider);
-    _headerOptionsReady = true;
-}
-
-async function syncHeaderSelectorsFromSettings(settings) {
-    if (!headerLlmProvider || !settings) return;
-    await ensureHeaderSettingOptions();
-    _headerSettingsSyncing = true;
-    try {
-        const providerId = providerIdFromDisplay(settings.provider || '');
-        if (Array.from(headerLlmProvider.options).some(o => o.value === providerId)) {
-            headerLlmProvider.value = providerId;
-        }
-        await loadLlmModelsInto(headerLlmModel, headerLlmProvider.value, settings.model_name || '');
-        if (headerVoiceProvider) {
-            populateChatVoiceProviderSelect(headerVoiceProvider);
-            const voiceProviderId = canonicalVoiceProviderForSelect({
-                tts_provider: settings.voice_provider,
-                voice_provider: settings.voice_provider
-            });
-            if (Array.from(headerVoiceProvider.options).some(o => o.value === voiceProviderId)) {
-                headerVoiceProvider.value = voiceProviderId;
-            }
-        }
-        await loadVoiceModelsInto(
-            headerVoiceModel,
-            headerVoiceProvider ? headerVoiceProvider.value : '',
-            settings.voice_model || ''
-        );
-        const voiceGroup = document.getElementById('headerVoiceGroup');
-        if (voiceGroup) {
-            voiceGroup.style.display = (settings.voice_provider || settings.voice_model) ? '' : 'none';
-        }
-    } finally {
-        _headerSettingsSyncing = false;
-        setHeaderSettingsBaseline(settings);
-        setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
-    }
-}
-
-function headerVoiceControlsVisible() {
-    const voiceGroup = document.getElementById('headerVoiceGroup');
-    return Boolean(voiceGroup && voiceGroup.style.display !== 'none');
-}
-
-function buildHeaderSettingsPatchBody() {
-    const settings = currentChatSettings || {};
-    const provider = (headerLlmProvider?.value || providerIdFromDisplay(settings.provider) || '').trim();
-    const model_name = (headerLlmModel?.value || settings.model_name || '').trim();
-    const voice_provider = (
-        headerVoiceProvider?.value
-        || canonicalVoiceProviderForSelect({ tts_provider: settings.voice_provider, voice_provider: settings.voice_provider })
-        || ''
-    ).trim();
-    const voice_model = (headerVoiceModel?.value || settings.voice_model || '').trim();
-    return { provider, model_name, voice_provider, voice_model };
-}
-
-async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
+async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
     if (!currentChatId) return null;
-    const voiceRequired = fromModal || headerVoiceControlsVisible();
     if (!body.provider || !body.model_name) {
         const msg = 'Choose an LLM provider and model.';
         if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
         else showChatSnackbar(msg, 'error');
         return null;
     }
-    if (voiceRequired && (!body.voice_provider || !body.voice_model)) {
+    if (fromModal && (!body.voice_provider || !body.voice_model)) {
         const msg = 'Choose a voice provider and voice.';
-        if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
+        if (chatConfigStatus) chatConfigStatus.textContent = msg;
         else showChatSnackbar(msg, 'error');
         return null;
     }
     if (fromModal && chatConfigSave) chatConfigSave.disabled = true;
     if (fromModal && chatConfigStatus) chatConfigStatus.textContent = 'Saving...';
-    else setHeaderSaveStatus('', '');
-    const selects = [headerLlmProvider, headerLlmModel, headerVoiceProvider, headerVoiceModel];
-    selects.forEach(el => { if (el) el.disabled = true; });
     try {
         const response = await fetch(`${API_BASE}/chats/${currentChatId}`, {
             method: 'PATCH',
@@ -4421,7 +4576,7 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
             compact_checkpoint: refreshed.compact_checkpoint
         });
         if (fromModal) hideChatConfigModal();
-        else showChatSnackbar('Chat settings saved', 'success');
+        showChatSnackbar('Chat settings saved', 'success');
         await loadChats();
         return refreshed;
     } catch (e) {
@@ -4431,25 +4586,8 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
         else showChatSnackbar(msg, 'error');
         return null;
     } finally {
-        selects.forEach(el => { if (el) el.disabled = false; });
         setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
         if (fromModal && chatConfigSave) chatConfigSave.disabled = false;
-    }
-}
-
-async function persistHeaderChatSettings() {
-    if (!currentChatId || _headerSettingsSyncing) return;
-    if (headerSettingsSave) headerSettingsSave.disabled = true;
-    const refreshed = await persistChatSettingsPatch(buildHeaderSettingsPatchBody(), { fromModal: false });
-    if (refreshed) {
-        setHeaderSettingsBaseline({
-            provider: refreshed.provider,
-            model_name: refreshed.model_name,
-            voice_provider: refreshed.voice_provider,
-            voice_model: refreshed.voice_model
-        });
-    } else {
-        updateHeaderSettingsSaveButton();
     }
 }
 
@@ -4650,8 +4788,8 @@ function updateChatSettingsDisplay(settings) {
         title_auto: settings.title_auto
     });
 
-    syncHeaderSelectorsFromSettings(currentChatSettings).catch((e) => {
-        console.warn('Header settings sync failed:', e);
+    renderHeaderSettingsSummary(currentChatSettings).catch((e) => {
+        console.warn('Header settings summary failed:', e);
     });
 
     chatSettingsHeader.style.display = 'flex';

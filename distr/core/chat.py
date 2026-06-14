@@ -36,6 +36,19 @@ def _normalize_provider(provider: Optional[str]) -> str:
     return _PROVIDER_NORMALIZE.get(key, provider.strip())
 
 
+def provider_slug(provider: Optional[str]) -> str:
+    """Map display name or slug to canonical lowercase provider id."""
+    if not provider or not str(provider).strip():
+        return "ollama"
+    key = str(provider).strip().lower()
+    if key in _PROVIDER_NORMALIZE:
+        return key
+    for slug, display in _PROVIDER_NORMALIZE.items():
+        if key == display.lower():
+            return slug
+    return key
+
+
 def _json_loads_obj(raw: Optional[str]) -> dict:
     if not raw:
         return {}

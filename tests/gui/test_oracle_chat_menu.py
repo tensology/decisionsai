@@ -43,6 +43,19 @@ def test_chat_submenu_orders_manage_before_new_chat() -> None:
     assert manage_idx < new_chat_idx < chat_id_idx
 
 
+def test_about_menu_item_above_quit_with_separator() -> None:
+    import inspect
+
+    from distr.gui.oracle.menu import MenuTrayMixin
+
+    source = inspect.getsource(MenuTrayMixin.create_menu)
+    about_idx = source.index('QAction("About DecisionsAI"')
+    about_sep_idx = source.index("self.menu.addAction(self.about_action)")
+    quit_sep_idx = source.index("self.menu.addAction(self.exit_action)")
+    assert about_idx < about_sep_idx < quit_sep_idx
+    assert source.index("self.menu.addSeparator()", about_sep_idx) < quit_sep_idx
+
+
 def test_truncate_menu_title_short() -> None:
     assert truncate_menu_title("Hello") == "Hello"
 

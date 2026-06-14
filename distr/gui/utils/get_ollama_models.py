@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta
 from distr.core.paths import MODELS_DIR
-from bs4 import BeautifulSoup
 import subprocess
 import requests
 import logging
@@ -744,6 +743,8 @@ def scrape_ollama_library():
         content = response.text
         
         # Parse the content
+        from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(content, 'html.parser')
         models = parse_ollama_library(soup)
         
@@ -838,6 +839,8 @@ def fetch_and_cache_ollama_models():
         content = response.text
         
         # Parse the content
+        from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(content, 'html.parser')
         models = parse_ollama_library(soup)
         

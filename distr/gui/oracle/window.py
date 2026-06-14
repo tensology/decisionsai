@@ -498,6 +498,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         logger.info("Switched to skin: %s (type=%s)", self._skin_config.name, self._skin_config.type)
 
+        try:
+            from distr.core.integrations.telegram.remote_skin import notify_remote_skin_changed
+
+            idle_resp = self._skin_config.events.get("idle")
+            notify_remote_skin_changed(
+                folder_name=self._skin_folder,
+                skin_name=self._skin_config.name,
+                skin_type=self._skin_config.type,
+                idle_animation=idle_resp.animation if idle_resp else None,
+            )
+        except Exception:
+            logger.debug("Remote skin notify skipped after direct oracle change", exc_info=True)
+
     def _on_event_hook_fired(self, new_hook: str, previous_hook: str):
         """Execute the Event_Response for the newly fired hook.
 
@@ -1170,6 +1183,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._play_animation(response)
         self.update()
 
+        try:
+            from distr.core.integrations.telegram.remote_skin import notify_remote_skin_changed
+
+            notify_remote_skin_changed(
+                folder_name=self._skin_folder,
+                skin_name=self._skin_config.name,
+                skin_type=self._skin_config.type,
+                idle_animation=next_file,
+            )
+        except Exception:
+            logger.debug("Remote skin notify skipped after cycle_oracle", exc_info=True)
+
     def cycle_oracle_previous(self):
         """Cycle to the previous oracle animation file."""
         if not self._check_eula_accepted():
@@ -1208,6 +1233,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._play_animation(response)
         self.update()
         logging.debug(f"Cycled oracle previous to: {prev_file}")
+
+        try:
+            from distr.core.integrations.telegram.remote_skin import notify_remote_skin_changed
+
+            notify_remote_skin_changed(
+                folder_name=self._skin_folder,
+                skin_name=self._skin_config.name,
+                skin_type=self._skin_config.type,
+                idle_animation=prev_file,
+            )
+        except Exception:
+            logger.debug("Remote skin notify skipped after cycle_oracle_previous", exc_info=True)
 
 
     def mouseMoveEvent(self, event):

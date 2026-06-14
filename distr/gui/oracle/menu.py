@@ -564,6 +564,12 @@ class MenuTrayMixin:
 
         self.menu.addSeparator()
 
+        self.about_action = QAction("About DecisionsAI", self.menu)
+        self.about_action.triggered.connect(self._show_about_from_menu)
+        self.menu.addAction(self.about_action)
+
+        self.menu.addSeparator()
+
         self.exit_action = QAction("Quit", self.menu)
         # QAction.triggered emits (checked: bool); do not pass it to exit_app(confirm=...)
         self.exit_action.triggered.connect(lambda: self.exit_app())
@@ -578,6 +584,13 @@ class MenuTrayMixin:
         self._snippet_focus_timer.start()
 
         return self.menu
+
+    def _show_about_from_menu(self) -> None:
+        """Show About window and play splash sound (same as chat llama click)."""
+        try:
+            signal_manager.show_about_window.emit()
+        except Exception as exc:
+            logger.error("Failed to show about window from menu: %s", exc, exc_info=True)
 
     def toggle_listening(self):
         if self.listen_action.isChecked():

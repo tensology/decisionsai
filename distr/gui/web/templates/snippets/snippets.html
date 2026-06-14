@@ -20,7 +20,7 @@
   .snippet-row {
     min-width: 0;
     display: grid;
-    grid-template-columns: 42px minmax(120px, 1fr) 154px 66px 38px;
+    grid-template-columns: 28px minmax(0, 1fr) minmax(88px, 108px) 66px 38px;
     align-items: center;
     gap: 8px;
     background: rgba(15, 23, 42, 0.52);
@@ -37,16 +37,17 @@
   }
   @media (max-width: 860px) {
     .snippet-row {
-      grid-template-columns: 46px minmax(0, 1fr) 150px 66px 38px;
+      grid-template-columns: 28px minmax(0, 1fr) minmax(84px, 104px) 66px 38px;
       gap: 8px;
       padding: 10px;
     }
   }
   .snippet-num {
     color: #d1d5db;
-    font-size: 0.84rem;
+    font-size: 0.78rem;
     font-weight: 700;
     white-space: nowrap;
+    text-align: center;
   }
   .snippet-text,
   .snippet-hotkey {
@@ -104,13 +105,13 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 24px;
-    padding: 2px 7px;
+    min-width: 20px;
+    padding: 1px 5px;
     background: #1e2430;
     border: 1px solid #565869;
     border-radius: 4px;
     color: #ececf1;
-    font-size: 12px;
+    font-size: 11px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     line-height: 1.45;
     white-space: nowrap;

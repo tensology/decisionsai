@@ -77,19 +77,15 @@
                     </div>
                 </div>
                 <div class="chat-settings-controls" id="chatSettingsControls">
-                    <div class="chat-header-control-group" title="LLM for this chat">
+                    <div class="chat-header-summary-group" title="LLM for this chat">
                         <span class="chat-header-control-label">LLM</span>
-                        <select id="headerLlmProvider" class="chat-header-select" aria-label="LLM provider"><option value="">…</option></select>
-                        <select id="headerLlmModel" class="chat-header-select" aria-label="LLM model"><option value="">…</option></select>
+                        <span class="chat-header-summary" id="headerLlmSummary" aria-label="LLM provider and model">—</span>
                     </div>
-                    <div class="chat-header-control-group" id="headerVoiceGroup" title="Voice for this chat">
+                    <div class="chat-header-summary-group" id="headerVoiceGroup" title="Voice for this chat">
                         <span class="chat-header-control-label">Voice</span>
-                        <select id="headerVoiceProvider" class="chat-header-select" aria-label="Voice provider"><option value="">…</option></select>
-                        <select id="headerVoiceModel" class="chat-header-select" aria-label="Voice"><option value="">…</option></select>
+                        <span class="chat-header-summary" id="headerVoiceSummary" aria-label="Voice provider and voice">—</span>
                     </div>
-                    <span class="chat-header-save-status" id="headerSettingsStatus" aria-live="polite"></span>
                     <div class="chat-header-actions">
-                        <button type="button" class="header-save-btn" id="headerSettingsSave" hidden aria-label="Save model and voice settings">Save</button>
                         <button type="button" class="header-icon-btn chat-header-tooltip" id="configureChatButton" aria-label="Configure chat" data-tooltip="Configure chat">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                         </button>

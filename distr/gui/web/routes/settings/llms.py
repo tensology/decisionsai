@@ -2,9 +2,12 @@
 LLMs routes — /llms, /llms/*, /ollama/*
 """
 import asyncio
+import logging
 from fastapi.responses import JSONResponse
 
 from ._shared import OllamaPullRequest, LLMSettings, route_handler
+
+logger = logging.getLogger(__name__)
 
 
 def _is_available_model_entry(model) -> bool:
@@ -282,6 +285,7 @@ def register_routes(router, templates):
     @route_handler("get models", fallback={"models": []})
     async def get_llm_models(type: str, provider: str):
         """Get available models for a specific LLM type and provider."""
+        from distr.core.chat import provider_slug
         from distr.core.settings import load_settings_from_db
         from distr.gui.utils.get_ollama_models import (
             get_installed_ollama_models,
@@ -295,6 +299,7 @@ def register_routes(router, templates):
 
         settings = load_settings_from_db()
         models = []
+        provider_key = provider_slug(provider)
 
         _fetchers = {
             "ollama": lambda: get_installed_ollama_models(),
@@ -311,9 +316,11 @@ def register_routes(router, templates):
             "gemini": lambda: get_gemini_models((settings.get("gemini_key") or "").strip())
                 if settings.get("gemini_enabled") and (settings.get("gemini_key") or "").strip() else [],
         }
-        fetcher = _fetchers.get(provider)
+        fetcher = _fetchers.get(provider_key)
         if fetcher:
             models = fetcher()
+        elif provider_key:
+            logger.warning("No model fetcher for provider=%r (slug=%r)", provider, provider_key)
 
         # Providers may return endpoint/model rows that exist but are not currently
         # available. Hide those entries from all UI dropdowns.
@@ -325,14 +332,14 @@ def register_routes(router, templates):
 
             # Filter by type capability
             _type_filters = {
-                "conversational": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
-                "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
+                "conversational": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
+                "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
                 "vision": lambda m: not _is_dict(m) or "image" in (m.get("input_modalities") or []),
                 "image": lambda m: not _is_dict(m) or "image" in (m.get("output_modalities") or []),
-                "workflow": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
-                "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),  # legacy alias
+                "workflow": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
+                "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),  # legacy alias
                 "computer_use": lambda m: True,
-                "kanban": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
+                "kanban": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
             }
             filt = _type_filters.get(type)
             if filt:
@@ -351,7 +358,15 @@ def register_routes(router, templates):
                 if _is_dict(m):
                     model_id = (m.get("id") or m.get("name") or "").strip()
                     if model_id and not m.get("context_window"):
-                        m["context_window"] = context_window_for_model(provider, model_id)
+                        m["context_window"] = context_window_for_model(provider_key, model_id)
+
+        if not models and provider_key:
+            logger.warning(
+                "No %s models returned for provider=%r (slug=%r)",
+                type,
+                provider,
+                provider_key,
+            )
 
         return JSONResponse({"models": models})
 
