@@ -4,7 +4,7 @@
 
 ## [What's to Come]
 
-DecisionsAI followed a familiar stack: prompt engineering, then skills, then Codex/Cursor harnesses with project reporting, and now **Loops** on top of the Step Runner that was already there. Loops are importable preset step bundles (iterate until green, hand off to an IDE, validate, report back). Same runner, tighter contracts.
+In the beginning it was prompt engineering, then skills, then Codex/Cursor harnesses with project reporting, and now **Loops** on top of the Step Runner that was already there. Loops are importable preset step bundles (iterate until green, hand off to an IDE, validate, report back). Same runner, tighter contracts.
 
 2.8 wired the surfaces together: boards, WhatsApp on boards, Automations, calendar blocks, orchestrator ticket handoffs, and IDE plugin repair. The shape we are battle testing in real use is intake from WhatsApp, boards, tickets, Gmail, or ideation in chat, into an Automation or Workflow run, out to project CLI, Codex, or Cursor, and back through validation, tests, steering memory, learned rules, and orchestrator events. The plumbing exists. Not every hop is dependable yet.
 
