@@ -9,6 +9,7 @@ DecisionsAI followed a familiar stack: prompt engineering, then skills, then Cod
 2.8 wired the surfaces together: boards, WhatsApp on boards, Automations, calendar blocks, orchestrator ticket handoffs, and IDE plugin repair. The shape we are battle testing in real use is intake from WhatsApp, boards, tickets, Gmail, or ideation in chat, into an Automation or Workflow run, out to project CLI, Codex, or Cursor, and back through validation, tests, steering memory, learned rules, and orchestrator events. The plumbing exists. Not every hop is dependable yet.
 
 Current focus is hardening **Automations** and **Workflows** for that loop: clearer failures, steadier harness round-trips, and WhatsApp compose drafts that already let the agent stage a reply in the board UI for review before send. The bet is reliable orchestration from intake to proof, not more UI.
+
 ---
 
 ## [2.8.0] - 2026-06-14
