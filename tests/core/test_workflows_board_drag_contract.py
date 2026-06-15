@@ -201,9 +201,17 @@ def test_workflows_board_drag_row_state_uses_dataset_draggable():
     render_block = js.split("function renderWorkflowBoardTickets(board, selected, message)", 1)[1].split(
         "function getSelectedBoardLocalId", 1
     )[0]
+    remove_block = js.split("function removeWorkflowQueueTicket(ticketId, options)", 1)[1].split(
+        "function createWorkflowQueueListRow", 1
+    )[0]
 
     assert "rowEl || workflowBoardTicketRowForKey(ticketKey)" in sync_block
     assert 'row.dataset.draggable = state.canDragToWorkflow ? "true" : "false"' in sync_block
     assert "upgradeWorkflowBoardTicketGrip(row, state.canDragToWorkflow)" in sync_block
+    assert "addWrap.hidden = !showAdd" in sync_block
+    assert "linkedToCurrentWorkflow" in js
+    assert "workflowExternalLinkKeyFromTicketRecord" in js
+    assert "restoreWorkflowBoardTicketAfterQueueRemove(ticketId, externalKey)" in remove_block
+    assert "rebuildWorkflowQueueExternalLinkIndex()" in remove_block
     assert "syncWorkflowBoardTicketRowUi(ticketKey, row)" in js
     assert "refreshWorkflowBoardTicketDragBindings(list)" in render_block

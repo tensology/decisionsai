@@ -1226,20 +1226,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_provider": response_payload.get("voice_provider"),
                     "voice_model": response_payload.get("voice_model"),
                 }
-                settings_event = record_chat_settings_change(
+                record_chat_settings_change(
                     chat_id,
                     previous=previous_settings,
                     current=current_settings,
                 )
-                if settings_event:
-                    payload = json.dumps({**settings_event, "event": "tool_executed"})
-                    with _chat_ws_lock:
-                        conns = list(_chat_ws_connections.get(chat_id, set()))
-                    for ws in conns:
-                        try:
-                            await ws.send_text(payload)
-                        except Exception as e:
-                            logger.debug("WebSocket send error: %s", e)
 
             return JSONResponse({**response_payload, "message": "Chat updated"})
         except HTTPException:

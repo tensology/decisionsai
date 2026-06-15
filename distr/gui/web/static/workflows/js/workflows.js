@@ -889,6 +889,14 @@
         }
     }
 
+    function workflowExternalLinkKeyFromTicketRecord(ticket) {
+        if (!ticket) return "";
+        var source = ticket.external_source || ticket.source_provider || "";
+        var externalId = ticket.external_id || ticket.source_external_id || "";
+        if (!source || !externalId) return "";
+        return String(source).toLowerCase() + ":" + String(externalId);
+    }
+
     function isBoardTicketQueuedInCurrentWorkflow(item) {
         var ticket = item && item.ticket;
         if (!ticket) return false;
@@ -908,7 +916,13 @@
         var isExternallyLinked = !!(externalLinkKey && workflowLinkedExternalTicketKeys[externalLinkKey]);
         var isPendingLink = !!((externalLinkKey && workflowPendingTicketLinks[externalLinkKey]) || (localLinkKey && workflowPendingTicketLinks[localLinkKey]));
         var isQueuedInCurrentWorkflow = isBoardTicketQueuedInCurrentWorkflow(item);
-        var isLinkedToWorkflow = !!ticket.linked_workflow_id || isExternallyLinked || isQueuedInCurrentWorkflow;
+        var linkedWorkflowId = ticket.linked_workflow_id;
+        var linkedToCurrentWorkflow = !!(
+            currentWorkflowId
+            && linkedWorkflowId != null
+            && String(linkedWorkflowId) === String(currentWorkflowId)
+        );
+        var isLinkedToWorkflow = linkedToCurrentWorkflow || isExternallyLinked || isQueuedInCurrentWorkflow;
         var boardHasProject = !!(selected && selected.default_project_id);
         var hasTicketIdentity = !!(ticket.id || ticket.key || ticket.external_id);
         return {
@@ -1023,10 +1037,21 @@
         var addBtn = row.querySelector(".kb-act-add-workflow");
         if (addBtn) {
             var canAdd = !!(currentWorkflowId && state.canDragToWorkflow);
+            var addWrap = addBtn.closest(".kb-card-action-tip");
+            var showAdd = !!(currentWorkflowId && !state.isLinkedToWorkflow && !state.isPendingLink);
+            if (addWrap) {
+                addWrap.hidden = !showAdd;
+                addWrap.style.display = showAdd ? "" : "none";
+            } else {
+                addBtn.hidden = !showAdd;
+                addBtn.style.display = showAdd ? "" : "none";
+            }
             addBtn.disabled = !canAdd;
             addBtn.title = canAdd
                 ? "Add to workflow queue"
-                : (state.isLinkedToWorkflow ? "Already in workflow queue" : "Cannot add to workflow");
+                : (state.isPendingLink
+                    ? "Adding to workflow queue…"
+                    : (state.isLinkedToWorkflow ? "Already in workflow queue" : "Cannot add to workflow"));
             addBtn.setAttribute("aria-label", addBtn.title);
         }
     }
@@ -4942,17 +4967,20 @@
         }
         var title = workflowQueueTicketTitle(ticketId);
         function performRemove() {
+            var removedTicket = workflowQueueTicketById(ticketId);
+            var externalKey = workflowExternalLinkKeyFromTicketRecord(removedTicket);
             api("DELETE", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/" + encodeURIComponent(ticketId))
                 .then(function () {
                     snack("Ticket removed from workflow queue");
                     workflowQueueTickets = workflowQueueTickets.filter(function (item) {
                         return String(item.id) !== String(ticketId);
                     });
+                    rebuildWorkflowQueueExternalLinkIndex();
                     if (selectedWorkflowQueueTicketId && String(selectedWorkflowQueueTicketId) === String(ticketId)) {
                         selectedWorkflowQueueTicketId = null;
                     }
                     renderWorkflowTickets(workflowQueueTickets);
-                    restoreWorkflowBoardTicketAfterQueueRemove(ticketId, "");
+                    restoreWorkflowBoardTicketAfterQueueRemove(ticketId, externalKey);
                 })
                 .catch(function (e) { snack(e.message || "Failed to remove ticket", "error"); });
         }
@@ -5604,7 +5632,6 @@
         }
         if (promise && typeof promise.finally === "function") {
             promise.finally(function () {
-                if (btnEl) btnEl.disabled = false;
                 syncWorkflowBoardTicketRowUi(ticketKey);
             });
         }
@@ -5687,6 +5714,7 @@
     function markWorkflowBoardTicketPending(payload) {
         if (!payload || !payload.ticket_key) return;
         var key = String(payload.ticket_key);
+        syncWorkflowBoardTicketRowUi(key);
         var escapedKey = window.CSS && CSS.escape ? CSS.escape(key) : key.replace(/"/g, '\\"');
         var row = document.querySelector('.wf-board-ticket-row[data-ticket-key="' + escapedKey + '"]');
         if (!row) return;

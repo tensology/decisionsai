@@ -425,7 +425,8 @@ function setupEventListeners() {
     }
     if (chatConfigVoiceProvider) {
         chatConfigVoiceProvider.addEventListener('change', async () => {
-            await loadVoiceModelsInto(chatConfigVoiceModel, chatConfigVoiceProvider.value);
+            await reloadChatVoiceModels('chatConfig', chatConfigVoiceProvider.value);
+            updateChatVoiceButtons('chatConfig');
         });
     }
 
@@ -451,9 +452,11 @@ function setupEventListeners() {
     }
 
     const modalPlayVoiceBtn = document.getElementById('modalPlayVoiceBtn');
-    if (modalPlayVoiceBtn) modalPlayVoiceBtn.addEventListener('click', playVoiceModal);
+    if (modalPlayVoiceBtn) modalPlayVoiceBtn.addEventListener('click', () => playVoiceForContext('modal'));
     const emptyStatePlayVoiceBtn = document.getElementById('emptyStatePlayVoiceBtn');
-    if (emptyStatePlayVoiceBtn) emptyStatePlayVoiceBtn.addEventListener('click', playEmptyStateVoice);
+    if (emptyStatePlayVoiceBtn) emptyStatePlayVoiceBtn.addEventListener('click', () => playVoiceForContext('emptyState'));
+    const chatConfigPlayVoiceBtn = document.getElementById('chatConfigPlayVoiceBtn');
+    if (chatConfigPlayVoiceBtn) chatConfigPlayVoiceBtn.addEventListener('click', () => playVoiceForContext('chatConfig'));
 
     // Modal should only close via Cancel, Close button, or Escape — NOT on overlay click
     // (removed: newChatModal background click handler)
@@ -822,6 +825,23 @@ function workflowEventDomKey(event) {
     }
     if (ev.id) return `workflow-id:${ev.id}`;
     return null;
+}
+
+function hasRenderedToolEvent(msg) {
+    if (!chatMessages || !msg) return false;
+    const eventId = msg.id != null ? String(msg.id) : '';
+    if (eventId) {
+        const existing = chatMessages.querySelector(`[data-tool-event-id="${CSS.escape(eventId)}"]`);
+        if (existing) return true;
+    }
+    if ((msg.tool_name || '') !== 'chat_settings') return false;
+    const summary = String(msg.result_summary || msg.title || '').trim();
+    if (!summary) return false;
+    const labels = chatMessages.querySelectorAll('.activity-step-label');
+    for (const label of labels) {
+        if ((label.textContent || '').trim() === summary) return true;
+    }
+    return false;
 }
 
 function hasRenderedWorkflowEvent(event) {
@@ -1330,11 +1350,13 @@ function handleChatEventToolExecuted(msg) {
     if (msg.chat_id !== currentChatId) return;
     if (!chatMessages) return;
     if (isHiddenLiveToolEvent(msg)) return;
+    if (hasRenderedToolEvent(msg)) return;
     const toolMessage = {
         role: 'tool',
         timestamp: msg.timestamp || Date.now(),
         content: msg.result_summary || '',
         turn_chat_id: msg.turn_chat_id,
+        tool_event_id: msg.id != null ? String(msg.id) : null,
         tool_event: {
             tool_name: msg.tool_name || 'tool',
             title: msg.title || `Executed ${msg.tool_name || 'tool'}`,
@@ -3141,10 +3163,11 @@ function activityStepLabel(title, event) {
     return String(short || '').replace(/^system activity:\s*/i, '').trim() || 'Activity';
 }
 
-function buildActivityCollapsibleStep({ timestamp, label, bodyHtml, safeStatus = 'completed', extraClass = '' }) {
+function buildActivityCollapsibleStep({ timestamp, label, bodyHtml, safeStatus = 'completed', extraClass = '', toolEventId = '' }) {
     const ts = _formatTimestamp(timestamp || Date.now());
+    const eventIdAttr = toolEventId ? ` data-tool-event-id="${escapeHtml(toolEventId)}"` : '';
     return `
-        <div class="activity-step activity-step--collapsed activity-step--${safeStatus}${extraClass ? ` ${extraClass}` : ''}">
+        <div class="activity-step activity-step--collapsed activity-step--${safeStatus}${extraClass ? ` ${extraClass}` : ''}"${eventIdAttr}>
             <button type="button" class="activity-step-toggle" aria-expanded="false">
                 <span class="activity-step-time">${ts}</span>
                 <span class="activity-step-label">${escapeHtml(label)}</span>
@@ -3260,7 +3283,8 @@ function toolExecutionItemHtml(message) {
         label: activityStepLabel(title, event),
         bodyHtml,
         safeStatus,
-        extraClass: compact ? 'activity-step--compact' : ''
+        extraClass: compact ? 'activity-step--compact' : '',
+        toolEventId: message.tool_event_id || event.event_id || ''
     });
 }
 
@@ -3932,139 +3956,96 @@ async function loadLlmModels(provider) {
     await loadLlmModelsInto(llmModelSelect, provider);
 }
 
-// Modal voice sample: same setup as Settings > General (general.js) — fetch WAV, play in browser, loading/playing state
-let _modalVoiceAudio = null;
-let _modalVoiceLoading = false;
+// Voice sample playback — shared by new-chat modal, empty state, and Configure Chat modal.
+const _CHAT_VOICE_CONTEXTS = {
+    emptyState: { prefix: 'emptyState', providerId: 'emptyStateVoiceProvider', modelId: 'emptyStateVoiceModel' },
+    modal: { prefix: 'modal', providerId: 'voiceProvider', modelId: 'voiceModel' },
+    chatConfig: { prefix: 'chatConfig', providerId: 'chatConfigVoiceProvider', modelId: 'chatConfigVoiceModel' },
+};
+const _chatVoicePlaybackByContext = {};
 
-function setModalVoiceUI(state) {
-    const playIcon = document.getElementById('modal_play_icon');
-    const stopIcon = document.getElementById('modal_stop_icon');
-    const spinner = document.getElementById('modal_play_spinner');
-    const btn = document.getElementById('modalPlayVoiceBtn');
+function getChatVoiceContextMeta(context) {
+    return _CHAT_VOICE_CONTEXTS[context] || null;
+}
+
+function getChatVoiceProviderEl(context) {
+    const meta = getChatVoiceContextMeta(context);
+    return meta ? document.getElementById(meta.providerId) : null;
+}
+
+function getChatVoiceModelEl(context) {
+    const meta = getChatVoiceContextMeta(context);
+    return meta ? document.getElementById(meta.modelId) : null;
+}
+
+async function reloadChatVoiceModels(context, provider, preferredVoice) {
+    const modelEl = getChatVoiceModelEl(context);
+    if (!modelEl) return;
+    if (context === 'emptyState') {
+        await loadEmptyStateVoiceModels(provider);
+        if (preferredVoice) selectVoiceModelOption(modelEl, preferredVoice);
+        return;
+    }
+    if (context === 'modal') {
+        await loadVoiceModels(provider);
+        if (preferredVoice) selectVoiceModelOption(modelEl, preferredVoice);
+        return;
+    }
+    await loadVoiceModelsInto(modelEl, provider, preferredVoice);
+}
+
+function setChatVoicePlayUI(context, state) {
+    const meta = getChatVoiceContextMeta(context);
+    if (!meta) return;
+    const prefix = meta.prefix;
+    const playIcon = document.getElementById(prefix + '_play_icon');
+    const stopIcon = document.getElementById(prefix + '_stop_icon');
+    const spinner = document.getElementById(prefix + '_play_spinner');
+    const btn = document.getElementById(prefix + 'PlayVoiceBtn');
     if (playIcon) playIcon.style.display = state === 'idle' ? '' : 'none';
     if (stopIcon) stopIcon.style.display = state === 'playing' ? '' : 'none';
     if (spinner) spinner.style.display = state === 'loading' ? '' : 'none';
     if (btn) btn.disabled = (state === 'loading');
 }
 
-function stopModalVoice() {
-    _modalVoiceLoading = false;
-    if (_modalVoiceAudio) {
-        _modalVoiceAudio.pause();
-        _modalVoiceAudio.currentTime = 0;
-        _modalVoiceAudio = null;
+function stopVoiceForContext(context) {
+    const slot = _chatVoicePlaybackByContext[context] || {};
+    slot.loading = false;
+    if (slot.audio) {
+        slot.audio.pause();
+        slot.audio.currentTime = 0;
+        slot.audio = null;
     }
-    setModalVoiceUI('idle');
+    _chatVoicePlaybackByContext[context] = slot;
+    setChatVoicePlayUI(context, 'idle');
 }
 
-async function playVoiceModal() {
-    if (_modalVoiceLoading) return;
-    if (_modalVoiceAudio && !_modalVoiceAudio.paused) {
-        stopModalVoice();
+function stopAllChatVoicePreviews(exceptContext) {
+    Object.keys(_CHAT_VOICE_CONTEXTS).forEach((ctx) => {
+        if (ctx !== exceptContext) stopVoiceForContext(ctx);
+    });
+}
+
+async function playVoiceForContext(context) {
+    const slot = _chatVoicePlaybackByContext[context] || {};
+    if (slot.loading) return;
+    if (slot.audio && !slot.audio.paused) {
+        stopVoiceForContext(context);
         return;
     }
-    const provider = (voiceProviderSelect.value || '').trim();
-    const voice = (voiceModelSelect.value || '').trim();
+    const providerEl = getChatVoiceProviderEl(context);
+    const modelEl = getChatVoiceModelEl(context);
+    const provider = (providerEl?.value || '').trim();
+    const voice = (modelEl?.value || '').trim();
     if (!provider || !voice) return;
-    const voiceName = voiceModelSelect.options[voiceModelSelect.selectedIndex] ? voiceModelSelect.options[voiceModelSelect.selectedIndex].text : voice;
+    const voiceName = modelEl?.options[modelEl.selectedIndex] ? modelEl.options[modelEl.selectedIndex].text : voice;
 
-    stopModalVoice();
-    _modalVoiceLoading = true;
-    setModalVoiceUI('loading');
+    stopAllChatVoicePreviews(context);
+    stopVoiceForContext(context);
+    slot.loading = true;
+    _chatVoicePlaybackByContext[context] = slot;
+    setChatVoicePlayUI(context, 'loading');
 
-    try {
-        const headers = { 'Content-Type': 'application/json' };
-        const token = typeof window !== 'undefined' && window.DECISIONSAI_INTERNAL_API_TOKEN;
-        if (token) headers['X-DecisionsAI-Internal-Token'] = token;
-        const response = await fetch('/api/play-voice?_=' + Date.now(), {
-            method: 'POST',
-            cache: 'no-store',
-            headers,
-            body: JSON.stringify({ provider, voice, speed: 1.0, voice_name: voiceName })
-        });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.error || err.detail || 'Failed to generate voice sample');
-        }
-        const contentType = (response.headers.get('content-type') || '').toLowerCase();
-        if (contentType.indexOf('audio') === -1 && contentType.indexOf('mpeg') === -1) {
-            const text = await response.text();
-            console.error('Play-voice returned non-audio:', contentType, text.slice(0, 200));
-            throw new Error('Server returned non-audio. Check console.');
-        }
-        const blob = await response.blob();
-        if (blob.size === 0) {
-            throw new Error('Server returned empty audio.');
-        }
-        const url = URL.createObjectURL(blob);
-        _modalVoiceAudio = new Audio(url);
-        _modalVoiceAudio.onended = function() {
-            setModalVoiceUI('idle');
-            URL.revokeObjectURL(url);
-            _modalVoiceAudio = null;
-        };
-        _modalVoiceAudio.onerror = function() {
-            setModalVoiceUI('idle');
-            URL.revokeObjectURL(url);
-            _modalVoiceAudio = null;
-            alert('Audio playback failed');
-        };
-        _modalVoiceLoading = false;
-        setModalVoiceUI('playing');
-        _modalVoiceAudio.play().catch((err) => {
-            console.error('Modal voice play() failed:', err);
-            setModalVoiceUI('idle');
-            URL.revokeObjectURL(url);
-            _modalVoiceAudio = null;
-            alert('Audio playback failed: ' + ((err && err.message) || 'Unknown browser error'));
-        });
-    } catch (e) {
-        console.error('Error playing voice:', e);
-        alert('Failed to play voice: ' + (e.message || 'Please try again.'));
-        _modalVoiceLoading = false;
-        setModalVoiceUI('idle');
-    }
-}
-
-let _emptyStateVoiceAudio = null;
-let _emptyStateVoiceLoading = false;
-
-function setEmptyStateVoiceUI(state) {
-    const playIcon = document.getElementById('emptyState_play_icon');
-    const stopIcon = document.getElementById('emptyState_stop_icon');
-    const spinner = document.getElementById('emptyState_play_spinner');
-    const btn = document.getElementById('emptyStatePlayVoiceBtn');
-    if (playIcon) playIcon.style.display = state === 'idle' ? '' : 'none';
-    if (stopIcon) stopIcon.style.display = state === 'playing' ? '' : 'none';
-    if (spinner) spinner.style.display = state === 'loading' ? '' : 'none';
-    if (btn) btn.disabled = (state === 'loading');
-}
-
-function stopEmptyStateVoice() {
-    _emptyStateVoiceLoading = false;
-    if (_emptyStateVoiceAudio) {
-        _emptyStateVoiceAudio.pause();
-        _emptyStateVoiceAudio.currentTime = 0;
-        _emptyStateVoiceAudio = null;
-    }
-    setEmptyStateVoiceUI('idle');
-}
-
-async function playEmptyStateVoice() {
-    if (_emptyStateVoiceLoading) return;
-    if (_emptyStateVoiceAudio && !_emptyStateVoiceAudio.paused) {
-        stopEmptyStateVoice();
-        return;
-    }
-    const voiceProviderEl = document.getElementById('emptyStateVoiceProvider');
-    const voiceModelEl = document.getElementById('emptyStateVoiceModel');
-    const provider = (voiceProviderEl?.value || '').trim();
-    const voice = (voiceModelEl?.value || '').trim();
-    if (!provider || !voice) return;
-    const voiceName = voiceModelEl?.options[voiceModelEl.selectedIndex] ? voiceModelEl.options[voiceModelEl.selectedIndex].text : voice;
-    stopEmptyStateVoice();
-    _emptyStateVoiceLoading = true;
-    setEmptyStateVoiceUI('loading');
     try {
         const headers = { 'Content-Type': 'application/json' };
         const token = typeof window !== 'undefined' && window.DECISIONSAI_INTERNAL_API_TOKEN;
@@ -4088,32 +4069,30 @@ async function playEmptyStateVoice() {
         const blob = await response.blob();
         if (blob.size === 0) throw new Error('Server returned empty audio.');
         const url = URL.createObjectURL(blob);
-        _emptyStateVoiceAudio = new Audio(url);
-        _emptyStateVoiceAudio.onended = function() {
-            setEmptyStateVoiceUI('idle');
+        const audio = new Audio(url);
+        slot.audio = audio;
+        slot.loading = false;
+        _chatVoicePlaybackByContext[context] = slot;
+        audio.onended = function() {
             URL.revokeObjectURL(url);
-            _emptyStateVoiceAudio = null;
+            stopVoiceForContext(context);
         };
-        _emptyStateVoiceAudio.onerror = function() {
-            setEmptyStateVoiceUI('idle');
+        audio.onerror = function() {
             URL.revokeObjectURL(url);
-            _emptyStateVoiceAudio = null;
+            stopVoiceForContext(context);
             alert('Audio playback failed');
         };
-        _emptyStateVoiceLoading = false;
-        setEmptyStateVoiceUI('playing');
-        _emptyStateVoiceAudio.play().catch((err) => {
-            console.error('Empty-state voice play() failed:', err);
-            setEmptyStateVoiceUI('idle');
+        setChatVoicePlayUI(context, 'playing');
+        audio.play().catch((err) => {
+            console.error('Voice preview play() failed:', err);
             URL.revokeObjectURL(url);
-            _emptyStateVoiceAudio = null;
+            stopVoiceForContext(context);
             alert('Audio playback failed: ' + ((err && err.message) || 'Unknown browser error'));
         });
     } catch (e) {
-        console.error('Error playing empty-state voice:', e);
+        console.error('Error playing voice:', e);
         alert('Failed to play voice: ' + (e.message || 'Please try again.'));
-        _emptyStateVoiceLoading = false;
-        setEmptyStateVoiceUI('idle');
+        stopVoiceForContext(context);
     }
 }
 
@@ -4245,7 +4224,7 @@ async function showNewChatModal() {
 }
 
 function hideNewChatModal() {
-    stopModalVoice();
+    stopVoiceForContext('modal');
     newChatModal.style.display = 'none';
     if (startingQuestionInput) startingQuestionInput.value = 'Are you ready to help me?';
 }
@@ -4399,6 +4378,7 @@ function providerIdFromDisplay(value) {
 async function openChatConfigModal(chatId) {
     const targetId = chatId || currentChatId;
     if (!targetId || !chatConfigModal) return;
+    stopAllChatVoicePreviews();
     if (chatConfigStatus) chatConfigStatus.textContent = '';
     chatConfigModal.style.display = 'flex';
     if (chatConfigSave) chatConfigSave.disabled = true;
@@ -4437,6 +4417,7 @@ async function openChatConfigModal(chatId) {
         if (rawVoice && chatConfigVoiceModel && Array.from(chatConfigVoiceModel.options).some(o => o.value === rawVoice)) {
             chatConfigVoiceModel.value = rawVoice;
         }
+        updateChatVoiceButtons('chatConfig');
     } catch (e) {
         console.error('Open chat config failed:', e);
         if (chatConfigStatus) chatConfigStatus.textContent = 'Could not load chat configuration.';
@@ -4446,6 +4427,7 @@ async function openChatConfigModal(chatId) {
 }
 
 function hideChatConfigModal() {
+    stopVoiceForContext('chatConfig');
     if (chatConfigModal) chatConfigModal.style.display = 'none';
 }
 
@@ -4811,10 +4793,12 @@ let _chatCvRecordLevelRAF = null;
 let _chatCvPlaybackAudio = null;
 const _CHAT_CV_MAX_SECS = 12;
 
-// Show/hide custom voice buttons (modal + empty-state configure form)
-function updateChatVoiceButtons(prefix) {
-    const providerEl = document.getElementById(prefix === 'emptyState' ? 'emptyStateVoiceProvider' : 'voiceProvider');
-    const voiceEl = document.getElementById(prefix === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
+// Show/hide custom voice buttons (modal, empty-state, and Configure Chat forms)
+function updateChatVoiceButtons(context) {
+    const providerEl = getChatVoiceProviderEl(context);
+    const voiceEl = getChatVoiceModelEl(context);
+    const meta = getChatVoiceContextMeta(context);
+    const prefix = meta ? meta.prefix : context;
     const customBtn = document.getElementById(prefix + 'CustomVoiceBtn');
     const deleteBtn = document.getElementById(prefix + 'DeleteVoiceBtn');
     const editBtn = document.getElementById(prefix + 'EditVoiceBtn');
@@ -4822,7 +4806,6 @@ function updateChatVoiceButtons(prefix) {
 
     const provider = providerEl.value;
     const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
-    const voiceId = voiceEl.value;
     const supportsCustom = _CHAT_CV_PROVIDERS.has(provider);
     const isCustomVoice = selected && selected.dataset.custom === '1';
 
@@ -4832,19 +4815,14 @@ function updateChatVoiceButtons(prefix) {
 }
 
 (function() {
-    const esVP = document.getElementById('emptyStateVoiceProvider');
-    const esVM = document.getElementById('emptyStateVoiceModel');
-    const mVP = document.getElementById('voiceProvider');
-    const mVM = document.getElementById('voiceModel');
-
-    function hookChange(el, pfx) {
-        if (!el) return;
-        el.addEventListener('change', () => updateChatVoiceButtons(pfx));
-    }
-    hookChange(esVP, 'emptyState');
-    hookChange(esVM, 'emptyState');
-    hookChange(mVP, 'modal');
-    hookChange(mVM, 'modal');
+    ['emptyState', 'modal', 'chatConfig'].forEach((context) => {
+        const meta = getChatVoiceContextMeta(context);
+        if (!meta) return;
+        const providerEl = document.getElementById(meta.providerId);
+        const modelEl = document.getElementById(meta.modelId);
+        if (providerEl) providerEl.addEventListener('change', () => updateChatVoiceButtons(context));
+        if (modelEl) modelEl.addEventListener('change', () => updateChatVoiceButtons(context));
+    });
 
     const origLoadES = window.loadEmptyStateVoiceModels;
     if (origLoadES) {
@@ -4864,13 +4842,14 @@ function updateChatVoiceButtons(prefix) {
     setTimeout(() => {
         updateChatVoiceButtons('emptyState');
         updateChatVoiceButtons('modal');
+        updateChatVoiceButtons('chatConfig');
     }, 500);
 })();
 
 // ── Open / Close / Submit Custom Voice Modal ──
 
 function openChatCustomVoiceModal(context) {
-    const providerEl = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceProvider' : 'voiceProvider');
+    const providerEl = getChatVoiceProviderEl(context);
     const provider = providerEl ? providerEl.value : 'kokoro';
     if (!_CHAT_CV_PROVIDERS.has(provider)) return;
 
@@ -5030,15 +5009,14 @@ function _pollChatCv(voiceId, context, provider) {
                 clearInterval(interval);
                 closeChatCustomVoiceModal();
                 invalidateTTSProvidersCache();
-                const voiceSelect = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
-                if (context === 'emptyState') await loadEmptyStateVoiceModels(provider);
-                else await loadVoiceModels(provider);
+                const voiceSelect = getChatVoiceModelEl(context);
+                await reloadChatVoiceModels(context, provider);
                 if (voiceSelect) {
                     const newId = 'custom_' + voiceId;
                     const opt = Array.from(voiceSelect.options).find(o => o.value === newId);
                     if (opt) voiceSelect.value = newId;
                 }
-                updateChatVoiceButtons(context === 'emptyState' ? 'emptyState' : 'modal');
+                updateChatVoiceButtons(context);
             } else if (data.status === 'failed') {
                 clearInterval(interval);
                 document.getElementById('chatCv_processing').classList.add('hidden');
@@ -5054,8 +5032,8 @@ function _pollChatCv(voiceId, context, provider) {
 // ── Delete / Edit Custom Voice ──
 
 async function deleteChatCustomVoice(context) {
-    const voiceEl = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
-    const providerEl = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceProvider' : 'voiceProvider');
+    const voiceEl = getChatVoiceModelEl(context);
+    const providerEl = getChatVoiceProviderEl(context);
     if (!voiceEl || !providerEl) return;
     const voiceId = voiceEl.value;
     const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
@@ -5079,15 +5057,14 @@ async function deleteChatCustomVoice(context) {
         if (r.ok) {
             const provider = providerEl.value;
             invalidateTTSProvidersCache();
-            if (context === 'emptyState') await loadEmptyStateVoiceModels(provider);
-            else await loadVoiceModels(provider);
-            updateChatVoiceButtons(context === 'emptyState' ? 'emptyState' : 'modal');
+            await reloadChatVoiceModels(context, provider);
+            updateChatVoiceButtons(context);
         }
     } catch (e) { console.error('Delete failed:', e); }
 }
 
 async function editChatCustomVoice(context) {
-    const voiceEl = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
+    const voiceEl = getChatVoiceModelEl(context);
     if (!voiceEl) return;
     const voiceId = voiceEl.value;
     if (!voiceId || !voiceId.startsWith('custom_')) return;
@@ -5096,7 +5073,7 @@ async function editChatCustomVoice(context) {
 
     // Fetch current personality
     try {
-        const r = await fetch('/api/custom-voices?provider=' + (document.getElementById(context === 'emptyState' ? 'emptyStateVoiceProvider' : 'voiceProvider')?.value || ''));
+        const r = await fetch('/api/custom-voices?provider=' + (getChatVoiceProviderEl(context)?.value || ''));
         const voices = await r.json();
         const cv = (Array.isArray(voices) ? voices : []).find(v => String(v.id) === dbId);
         document.getElementById('chatEditVoicePersonality').value = cv?.personality || '';

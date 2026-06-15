@@ -1,6 +1,45 @@
 {# Shared LLM + Voice + Skin blocks for chat welcome screen and New chat modal (single source of truth).
    variant: 'modal' — ids match chat.js modal wiring (llmProvider, modalSkinGrid, …)
-            'empty' — ids prefixed emptyState* for the welcome / no-chats screen #}
+            'empty' — ids prefixed emptyState* for the welcome / no-chats screen
+            'chatConfig' — ids for Configure Chat modal on an existing chat #}
+{% macro voice_select_fields(variant) -%}
+{% set modal = (variant == 'modal') %}
+{% set empty = (variant == 'empty') %}
+{% set chat_config = (variant == 'chatConfig') %}
+            <p class="{% if modal or chat_config %}modal-section-label{% else %}empty-state-section-label{% endif %}">Voice</p>
+            <div class="{% if modal or chat_config %}modal-row{% else %}empty-state-row{% endif %}">
+                <div class="form-group">
+                    <label for="{% if chat_config %}chatConfigVoiceProvider{% elif modal %}voiceProvider{% else %}emptyStateVoiceProvider{% endif %}">Provider</label>
+                    <select id="{% if chat_config %}chatConfigVoiceProvider{% elif modal %}voiceProvider{% else %}emptyStateVoiceProvider{% endif %}" class="form-control form-control-select{% if chat_config %} chat-config-select{% endif %}">
+                        {# Same source as Settings > General: populated by chat.js from GET /api/tts/providers #}
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <div class="form-group form-group-with-play">
+                    <label for="{% if chat_config %}chatConfigVoiceModel{% elif modal %}voiceModel{% else %}emptyStateVoiceModel{% endif %}">Voice</label>
+                    <div class="voice-select-row">
+                        <select id="{% if chat_config %}chatConfigVoiceModel{% elif modal %}voiceModel{% else %}emptyStateVoiceModel{% endif %}" class="form-control form-control-select{% if chat_config %} chat-config-select{% endif %}">
+                            <option value="">Loading…</option>
+                        </select>
+                        <button type="button" id="{% if chat_config %}chatConfig{% elif modal %}modal{% else %}emptyState{% endif %}CustomVoiceBtn" class="modal-play-voice-btn" title="Add custom voice" style="display: none;" onclick="openChatCustomVoiceModal('{% if chat_config %}chatConfig{% elif modal %}modal{% else %}emptyState{% endif %}')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m-7-7h14"/></svg>
+                        </button>
+                        <button type="button" id="{% if chat_config %}chatConfig{% elif modal %}modal{% else %}emptyState{% endif %}DeleteVoiceBtn" class="modal-play-voice-btn" title="Delete custom voice" style="display: none;" onclick="deleteChatCustomVoice('{% if chat_config %}chatConfig{% elif modal %}modal{% else %}emptyState{% endif %}')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        </button>
+                        <button type="button" id="{% if chat_config %}chatConfig{% elif modal %}modal{% else %}emptyState{% endif %}EditVoiceBtn" class="modal-play-voice-btn" title="Edit personality" style="display: none;" onclick="editChatCustomVoice('{% if chat_config %}chatConfig{% elif modal %}modal{% else %}emptyState{% endif %}')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        <button type="button" id="{% if chat_config %}chatConfigPlayVoiceBtn{% elif modal %}modalPlayVoiceBtn{% else %}emptyStatePlayVoiceBtn{% endif %}" class="modal-play-voice-btn" title="Play voice sample">
+                            <svg id="{% if chat_config %}chatConfig_play_icon{% elif modal %}modal_play_icon{% else %}emptyState_play_icon{% endif %}" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            <svg id="{% if chat_config %}chatConfig_stop_icon{% elif modal %}modal_stop_icon{% else %}emptyState_stop_icon{% endif %}" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display: none;"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                            <svg id="{% if chat_config %}chatConfig_play_spinner{% elif modal %}modal_play_spinner{% else %}emptyState_play_spinner{% endif %}" class="modal-play-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+{%- endmacro %}
+
 {% macro configure_chat_fields(variant) -%}
 {% set modal = (variant == 'modal') %}
 
@@ -51,38 +90,7 @@
                     </div>
                 </div>
             </div>
-            <p class="{% if modal %}modal-section-label{% else %}empty-state-section-label{% endif %}">Voice</p>
-            <div class="{% if modal %}modal-row{% else %}empty-state-row{% endif %}">
-                <div class="form-group">
-                    <label for="{% if modal %}voiceProvider{% else %}emptyStateVoiceProvider{% endif %}">Provider</label>
-                    <select id="{% if modal %}voiceProvider{% else %}emptyStateVoiceProvider{% endif %}" class="form-control form-control-select">
-                        {# Same source as Settings > General: populated by chat.js from GET /api/tts/providers #}
-                        <option value="">Loading…</option>
-                    </select>
-                </div>
-                <div class="form-group form-group-with-play">
-                    <label for="{% if modal %}voiceModel{% else %}emptyStateVoiceModel{% endif %}">Voice</label>
-                    <div class="voice-select-row">
-                        <select id="{% if modal %}voiceModel{% else %}emptyStateVoiceModel{% endif %}" class="form-control form-control-select">
-                            <option value="">Loading…</option>
-                        </select>
-                        <button type="button" id="{% if modal %}modal{% else %}emptyState{% endif %}CustomVoiceBtn" class="modal-play-voice-btn" title="Add custom voice" style="display: none;" onclick="openChatCustomVoiceModal('{% if modal %}modal{% else %}emptyState{% endif %}')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m-7-7h14"/></svg>
-                        </button>
-                        <button type="button" id="{% if modal %}modal{% else %}emptyState{% endif %}DeleteVoiceBtn" class="modal-play-voice-btn" title="Delete custom voice" style="display: none;" onclick="deleteChatCustomVoice('{% if modal %}modal{% else %}emptyState{% endif %}')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                        </button>
-                        <button type="button" id="{% if modal %}modal{% else %}emptyState{% endif %}EditVoiceBtn" class="modal-play-voice-btn" title="Edit personality" style="display: none;" onclick="editChatCustomVoice('{% if modal %}modal{% else %}emptyState{% endif %}')">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        </button>
-                        <button type="button" id="{% if modal %}modalPlayVoiceBtn{% else %}emptyStatePlayVoiceBtn{% endif %}" class="modal-play-voice-btn" title="Play voice sample">
-                            <svg id="{% if modal %}modal_play_icon{% else %}emptyState_play_icon{% endif %}" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                            <svg id="{% if modal %}modal_stop_icon{% else %}emptyState_stop_icon{% endif %}" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display: none;"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-                            <svg id="{% if modal %}modal_play_spinner{% else %}emptyState_play_spinner{% endif %}" class="modal-play-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
-                        </button>
-                    </div>
-                </div>
-            </div>
+            {{ voice_select_fields(variant) }}
             <p class="{% if modal %}modal-section-label{% else %}empty-state-section-label{% endif %}">Skin</p>
             <div id="{% if modal %}modalSkinGrid{% else %}emptyStateSkinGrid{% endif %}" class="empty-state-skin-grid">
                 <!-- Dynamically populated -->

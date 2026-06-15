@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from 'chat/partials/configure_chat_fields.html' import configure_chat_fields %}
+{% from 'chat/partials/configure_chat_fields.html' import configure_chat_fields, voice_select_fields %}
 
 {% block title %}Chat{% endblock %}
 
@@ -184,17 +184,7 @@
                     <select id="chatConfigLlmModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
                 </div>
             </div>
-            <p class="modal-section-label">Voice</p>
-            <div class="modal-row">
-                <div class="form-group">
-                    <label for="chatConfigVoiceProvider">Provider</label>
-                    <select id="chatConfigVoiceProvider" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
-                </div>
-                <div class="form-group">
-                    <label for="chatConfigVoiceModel">Voice</label>
-                    <select id="chatConfigVoiceModel" class="form-control form-control-select chat-config-select"><option value="">Loading...</option></select>
-                </div>
-            </div>
+            {{ voice_select_fields('chatConfig') }}
             <p class="chat-config-status" id="chatConfigStatus"></p>
         </div>
         <div class="modal-footer">
