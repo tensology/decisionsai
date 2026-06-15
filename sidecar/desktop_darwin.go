@@ -46,36 +46,7 @@ func loadAllScreens(force bool) []screenDef {
 		return screensCache.screens
 	}
 
-	// ── Method 1: Python/Cocoa (most accurate, all screens) ──────────────────
-	py := `import Cocoa,json
-r=[]
-for s in Cocoa.NSScreen.screens():
-    f=s.frame()
-    r.append([int(f.size.width),int(f.size.height),int(f.origin.x),int(f.origin.y),s.backingScaleFactor()])
-print(json.dumps(r))`
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	out, err := exec.CommandContext(ctx, "python3", "-c", py).Output()
-	cancel()
-	if err == nil {
-		var raw [][]float64
-		if json.Unmarshal([]byte(strings.TrimSpace(string(out))), &raw) == nil && len(raw) > 0 {
-			defs := make([]screenDef, len(raw))
-			for i, s := range raw {
-				if len(s) >= 5 {
-					defs[i] = screenDef{
-						logicalW: int(s[0]), logicalH: int(s[1]),
-						xOffset: int(s[2]), yOffset: int(s[3]),
-						scaleFactor: s[4],
-					}
-				}
-			}
-			screensCache.screens = defs
-			screensCache.loaded = true
-			return defs
-		}
-	}
-
-	// ── Method 2: osascript desktop bounds (primary screen, logical size) ────
+	// ── Method 1: osascript desktop bounds (primary screen, logical size) ────
 	osaOut, osaErr := runOsascript(`tell application "Finder" to get bounds of window of desktop`, 5*time.Second)
 	if osaErr == nil {
 		parts := strings.Split(strings.TrimSpace(osaOut), ",")
@@ -228,7 +199,7 @@ ev = CGEventCreateMouseEvent(None,kCGEventMouseMoved,pt,kCGMouseButtonLeft)
 CGEventPost(kCGHIDEventTap,ev)`, x, y)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err := exec.CommandContext(ctx, "python3", "-c", py).Run()
+	err := runSidecarPython(ctx, py)
 	return map[string]any{"success": err == nil, "x": x, "y": y}, err
 }
 
@@ -466,7 +437,7 @@ ev = CGEventCreateMouseEvent(None,kCGEventLeftMouseUp,pt,kCGMouseButtonLeft)
 CGEventPost(kCGHIDEventTap,ev)`, x, y)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "python3", "-c", py).Run()
+	return runSidecarPython(ctx, py)
 }
 
 func doubleClickAt(x, y int) error {
@@ -489,7 +460,7 @@ for _ in range(2):
     time.sleep(0.05)`, x, y)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "python3", "-c", py).Run()
+	return runSidecarPython(ctx, py)
 }
 
 func rightClickAt(x, y int) error {
@@ -509,7 +480,7 @@ ev = CGEventCreateMouseEvent(None,kCGEventRightMouseUp,pt,kCGMouseButtonRight)
 CGEventPost(kCGHIDEventTap,ev)`, x, y)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return exec.CommandContext(ctx, "python3", "-c", py).Run()
+	return runSidecarPython(ctx, py)
 }
 
 // ── click_at (NEW) ────────────────────────────────────────────────────────────
@@ -581,7 +552,7 @@ print(json.dumps(screens))`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "python3", "-c", py).Output()
+	out, err := runSidecarPythonOutput(ctx, py)
 	if err != nil {
 		return nil, fmt.Errorf("get_screen_info: %w", err)
 	}
@@ -601,15 +572,29 @@ print(json.dumps(screens))`
 // ── get_cursor_pos (NEW) ──────────────────────────────────────────────────────
 
 func handleGetCursorPos(params map[string]any) (any, error) {
-	py := `from Quartz.CoreGraphics import CGEventCreate,kCGEventNull,CGEventGetLocation
+	if _, err := exec.LookPath("cliclick"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(ctx, "cliclick", "p").Output()
+		if err == nil {
+			parts := strings.Split(strings.TrimSpace(string(out)), ",")
+			if len(parts) == 2 {
+				x, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+				y, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+				return map[string]any{"x": x, "y": y}, nil
+			}
+		}
+	}
+
+	pyCode := `from Quartz.CoreGraphics import CGEventCreate, kCGEventNull, CGEventGetLocation
 import json
-ev=CGEventCreate(None)
-pt=CGEventGetLocation(ev)
-print(json.dumps({"x":int(pt.x),"y":int(pt.y)}))`
+ev = CGEventCreate(kCGEventNull)
+pt = CGEventGetLocation(ev)
+print(json.dumps({"x": int(pt.x), "y": int(pt.y)}))`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "python3", "-c", py).Output()
+	out, err := runSidecarPythonOutput(ctx, pyCode)
 	if err != nil {
 		return nil, fmt.Errorf("get_cursor_pos: %w", err)
 	}
@@ -894,7 +879,7 @@ for i in range(steps + 1):
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(durationMs+5000)*time.Millisecond)
 	defer cancel()
-	err = exec.CommandContext(ctx, "python3", "-c", py).Run()
+	err = runSidecarPython(ctx, py)
 	if err != nil {
 		return nil, fmt.Errorf("drag_to failed: %w", err)
 	}
@@ -977,7 +962,7 @@ for i in range(steps):
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := exec.CommandContext(ctx, "python3", "-c", py).Run()
+	err := runSidecarPython(ctx, py)
 	if err != nil {
 		return nil, fmt.Errorf("scroll failed: %w", err)
 	}
@@ -1091,12 +1076,7 @@ func handleCaptureAnnotated(params map[string]any) (any, error) {
 
 	pyCode := fmt.Sprintf(`
 import json,base64,io,sys
-try:
-    from PIL import Image,ImageDraw
-except ImportError:
-    import subprocess
-    subprocess.check_call([sys.executable,'-m','pip','install','--quiet','Pillow'])
-    from PIL import Image,ImageDraw
+from PIL import Image,ImageDraw
 
 with open(%q) as f:
     data=json.load(f)
@@ -1143,7 +1123,7 @@ print(base64.b64encode(buf.getvalue()).decode())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	annotOut, err := exec.CommandContext(ctx, "python3", pyScript).Output()
+	annotOut, err := runSidecarPythonScript(ctx, pyScript)
 	if err != nil {
 		// Return unannotated image if Pillow not available
 		return map[string]any{

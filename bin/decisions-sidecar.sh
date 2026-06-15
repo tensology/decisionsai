@@ -14,12 +14,26 @@ decisions_start_sidecar() {
     local sidecar_bin="$script_dir/sidecar/dist/decisionsai-sidecar"
     local sidecar_pid=""
 
+    if [[ "$OSTYPE" == darwin* ]] && ! command -v cliclick &>/dev/null && command -v brew &>/dev/null; then
+        echo "Installing cliclick (mouse control)..."
+        brew install cliclick 2>/dev/null || echo "cliclick install failed — mouse clicks may use python3 fallback"
+    fi
+
     if [ ! -f "$sidecar_bin" ]; then
         if command -v go &>/dev/null && [ -d "$script_dir/sidecar" ]; then
             echo "Building sidecar..."
             mkdir -p "$script_dir/sidecar/dist"
             (cd "$script_dir/sidecar" && go mod tidy && go build -ldflags="-s -w" -o dist/decisionsai-sidecar . 2>/dev/null) || \
                 echo "Sidecar build failed — accessibility tree tools unavailable"
+            if [ -f "$sidecar_bin" ] && command -v codesign &>/dev/null; then
+                codesign --force --sign - "$sidecar_bin" &>/dev/null || true
+            fi
+        fi
+    fi
+
+    if [ -f "$sidecar_bin" ] && command -v codesign &>/dev/null; then
+        if ! codesign -dv "$sidecar_bin" &>/dev/null; then
+            codesign --force --sign - "$sidecar_bin" &>/dev/null || true
         fi
     fi
 
@@ -49,3 +63,9 @@ decisions_stop_sidecar() {
         fi
     fi
 }
+
+# When executed directly (not sourced), start the sidecar for the given project root.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+    decisions_start_sidecar "$ROOT"
+fi

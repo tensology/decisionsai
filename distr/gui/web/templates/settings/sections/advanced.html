@@ -63,6 +63,24 @@
             <p class="text-xs text-gray-500 mt-3">Skills are reusable execution guidance. Workflows pick them up automatically when relevant.</p>
         </div>
 
+        <!-- macOS desktop permissions -->
+        <div id="macos-permissions-panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden">
+            <h3 class="text-lg font-semibold text-white mb-2">Desktop permissions</h3>
+            <p class="text-sm text-gray-400 mb-4">
+                Screenshots, clicks, and voice need macOS approval. Check status here and open the right System Settings pane.
+            </p>
+            <div id="macos-permissions-status" class="space-y-2 mb-4 text-sm"></div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" id="macos-permissions-check"
+                        class="px-4 py-2 rounded-md text-sm font-medium bg-[#007bff] hover:bg-[#0069d9] text-white">
+                    Check again
+                </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-3">
+                Terminal setup: <code class="text-gray-400">./decisions --permissions --interactive</code>
+            </p>
+        </div>
+
         <!-- Directory Management (tree like native: QTreeView from ~/, expand to see subfolders, checkboxes = indexed_folders) -->
         <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
             <h3 class="text-lg font-semibold text-white mb-4">Directory Management</h3>

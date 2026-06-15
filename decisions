@@ -10,17 +10,28 @@ fi
 cd "$SCRIPT_DIR" || exit 1
 
 FOLLOW_LOGS=0
+STOP_APP=0
 PASSTHROUGH_ARGS=()
 for arg in "$@"; do
     case "$arg" in
         --logs|--follow|-f)
             FOLLOW_LOGS=1
             ;;
+        --stop|--quit|-q)
+            STOP_APP=1
+            ;;
+        --permissions|--setup-permissions)
+            exec "$SCRIPT_DIR/bin/decisions-permissions.sh" "$@"
+            ;;
         *)
             PASSTHROUGH_ARGS+=("$arg")
             ;;
     esac
 done
+
+if [ "$STOP_APP" = "1" ]; then
+    exec "$SCRIPT_DIR/bin/decisions-cleanup.sh"
+fi
 
 "$SCRIPT_DIR/bin/decisions.sh" "${PASSTHROUGH_ARGS[@]}"
 EXIT_CODE=$?

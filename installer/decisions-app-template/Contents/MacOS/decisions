@@ -13,6 +13,10 @@ VENV_PYTHON="${VENV_PYTHON:-$HOME/.virtualenvs/decisions/bin/python}"
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
 export DECISIONS_DOCK_APP=1
+export DECISIONS_APP_BUNDLE="$APP_ROOT"
+
+# shellcheck source=decisions-env.sh
+source "$PROJECT_ROOT/bin/decisions-env.sh"
 
 {
     echo "===== DecisionsAI dock launch $(date) ====="
@@ -34,11 +38,11 @@ export DECISIONS_DOCK_APP=1
         exec /bin/bash "$PROJECT_ROOT/bin/decisions.sh" --foreground
     fi
 
-    # shellcheck source=decisions-sidecar.sh
-    source "$PROJECT_ROOT/bin/decisions-sidecar.sh"
-    decisions_start_sidecar "$PROJECT_ROOT"
+    if [ ! -x "$PROJECT_ROOT/bin/decisions-run.sh" ]; then
+        echo "Missing bin/decisions-run.sh"
+        exit 1
+    fi
 
-    cd "$PROJECT_ROOT" || exit 1
     echo "Starting DecisionsAI (dock mode)."
-    exec "$VENV_PYTHON" bin/start.py
+    exec /bin/bash "$PROJECT_ROOT/bin/decisions-run.sh"
 } >>"$LOG_FILE" 2>&1

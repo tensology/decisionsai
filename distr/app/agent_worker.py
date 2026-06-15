@@ -11,6 +11,12 @@ import os
 # Agent subprocess: set before importing distr (which pulls sentence_transformers / HF stacks).
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+if os.name == "posix" and __import__("sys").platform == "darwin":
+    os.environ.setdefault("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1")
+    from distr.core.macos_background import hide_process_from_dock
+
+    hide_process_from_dock()
+
 from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix
 
 apply_rubicon_arm64_fix()

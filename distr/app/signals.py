@@ -285,6 +285,22 @@ class SignalBridgeMixin:
             # LLM swap, TTS swap, agent identity, and history load in deterministic order.
             self._send_command_to_agent('current_chat_changed', {'chat_id': chat_id})
         signal_manager.current_chat_changed.connect(on_current_chat_changed)
+
+        # Oracle right-click "New Chat" (and other desktop chat switches) update ChatManagerCore
+        # but previously did not notify the agent subprocess — voice/PTT kept writing to the old chat.
+        if getattr(self, "chat_manager", None):
+            try:
+                self.chat_manager.current_chat_changed.disconnect(
+                    signal_manager.current_chat_changed.emit
+                )
+            except (TypeError, RuntimeError):
+                pass
+            self.chat_manager.current_chat_changed.connect(
+                signal_manager.current_chat_changed.emit
+            )
+            logger.info(
+                "Connected chat_manager.current_chat_changed to agent hot-swap relay"
+            )
         
         # Model hot-reload signal - send hot_swap_llm command to running agent (no process restart)
         def on_model_hot_reload(provider, model_name, chat_id=None):

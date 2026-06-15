@@ -138,6 +138,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+try:
+    from distr.core.launch_env import bootstrap_gui_launch_environment
+
+    bootstrap_gui_launch_environment()
+except Exception:
+    pass
+
 # Load .env file if it exists
 try:
     from dotenv import load_dotenv

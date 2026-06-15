@@ -214,6 +214,7 @@ func handleCaptureScreen(params map[string]any) (any, error) {
 	if err := platformCaptureScreen(tmp); err != nil {
 		return nil, fmt.Errorf("screenshot failed: %w", err)
 	}
+	markSidecarScreenRecordingOK()
 
 	data, err := os.ReadFile(tmp)
 	if err != nil {

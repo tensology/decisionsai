@@ -18,6 +18,9 @@ for _arg in "$@"; do
         --run-app-only)
             exec "$SCRIPT_DIR/bin/decisions-run.sh"
             ;;
+        --permissions|--setup-permissions)
+            exec "$SCRIPT_DIR/bin/decisions-permissions.sh" "$@"
+            ;;
     esac
 done
 
@@ -274,6 +277,9 @@ install_system_deps() {
         if ! check_command SwitchAudioSource; then
             NEED_INSTALL=true
         fi
+        if ! check_command cliclick; then
+            NEED_INSTALL=true
+        fi
     elif [[ "$OS_TYPE" == "linux"* ]] || [[ "$OS_TYPE" == "debian" ]] || [[ "$OS_TYPE" == "redhat" ]]; then
         # Linux/Unix: PulseAudio (pactl)
         if ! check_command pactl; then
@@ -292,6 +298,9 @@ install_system_deps() {
                     INSTALL_LIST="portaudio ffmpeg zlib"
                     if ! check_command SwitchAudioSource; then
                         INSTALL_LIST="$INSTALL_LIST switchaudio-osx"
+                    fi
+                    if ! check_command cliclick; then
+                        INSTALL_LIST="$INSTALL_LIST cliclick"
                     fi
                     if ! brew install $INSTALL_LIST; then
                         echo -e "${YELLOW}Warning: Failed to install some dependencies. Continuing anyway...${NC}"

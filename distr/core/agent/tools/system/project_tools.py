@@ -27,7 +27,10 @@ def _get_internal_api_token_for_web() -> str:
     if token:
         return token
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8765/settings", timeout=2.0) as resp:
+        from distr.core.web_runtime import get_local_web_base_url
+
+        base = get_local_web_base_url()
+        with urllib.request.urlopen(f"{base}/settings", timeout=2.0) as resp:
             html = resp.read().decode("utf-8", errors="replace")
         m = re.search(r'<meta name="decisionsai-internal-api-token" content="([^"]+)"', html)
         return (m.group(1).strip() if m else "")
@@ -41,10 +44,12 @@ def _start_via_web_runtime(project_id: int, folder: str, commands: list[str]) ->
         diagnostics = [{"command": c, "status": "failed", "reason": "Missing internal API token"} for c in commands]
         return 0, len(commands), diagnostics
 
+    from distr.core.web_runtime import get_local_web_base_url
+
     started = 0
     failed = 0
     diagnostics: list[dict[str, str]] = []
-    url = "http://127.0.0.1:8765/api/projects/startup-terminal"
+    url = f"{get_local_web_base_url()}/api/projects/startup-terminal"
     for cmd in commands:
         body = json.dumps({
             "project_id": int(project_id),

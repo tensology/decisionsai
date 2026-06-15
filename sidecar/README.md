@@ -31,9 +31,11 @@ Connects to the relay server via WebSocket and executes tool calls:
 ## macOS requirements
 
 - macOS 12+ (Monterey or later)
-- Grant **Accessibility** permission in System Settings → Privacy & Security → Accessibility
-- Grant **Screen Recording** permission for screenshots
-- Optional: `brew install cliclick` for more reliable mouse clicks
+- Run **`./decisions --permissions --interactive`** from the project root for guided setup (or open **Settings → Advanced → Desktop permissions** in the web UI)
+- Grant **Accessibility** for `decisionsai-sidecar`, **Python**, and optionally **cliclick** (`brew install cliclick`)
+- Grant **Screen Recording** for `decisionsai-sidecar` and **Python**
+- Grant **Automation** so `decisionsai-sidecar` can control **System Events**
+- Grant **Microphone** for **Python** (voice input)
 
 ## Windows requirements
 

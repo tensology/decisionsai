@@ -247,7 +247,7 @@ func buildHealthPayload(handlers map[string]ToolHandler) map[string]any {
 		tools = append(tools, name)
 	}
 	sort.Strings(tools)
-	return map[string]any{
+	payload := map[string]any{
 		"ok":             true,
 		"wire_version":   sidecarWireVersion,
 		"os":             runtime.GOOS,
@@ -258,6 +258,10 @@ func buildHealthPayload(handlers map[string]ToolHandler) map[string]any {
 		"tools":          tools,
 		"tool_count":     len(tools),
 	}
+	if perms := probeMacOSPermissions(); perms != nil {
+		payload["permissions"] = perms
+	}
+	return payload
 }
 
 // startHTTPServer starts a simple HTTP server so Python tools can call

@@ -370,6 +370,12 @@ def run_agent_session(settings, input_device=None, output_device=None, command_q
     
     # Ensure QCoreApplication exists for signals to work in the agent process
     # This prevents "wrapped C/C++ object has been deleted" errors
+    if sys.platform == "darwin":
+        from distr.core.macos_background import hide_process_from_dock
+
+        hide_process_from_dock()
+        os.environ.setdefault("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1")
+
     from PyQt6.QtCore import QCoreApplication
     app = None
     if not QCoreApplication.instance():
@@ -485,6 +491,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception as exc:
             logging.getLogger(__name__).debug("agent event queue registration skipped: %s", exc)
         self._splash_sound_played = False  # Flag to prevent double-playing splash sound
+        self._startup_splash = None
 
         # Create shared manager for cross-process screen info cache
         self.screen_info_manager = self.mp_context.Manager()
@@ -912,14 +919,32 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     def _set_macos_dock_icon(self):
         """Set the application icon via AppKit so macOS shows it when pinned to dock."""
         try:
-            icon_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                'decisions.app', 'Contents', 'Resources', 'icon.icns'
-            )
-            if not os.path.exists(icon_path):
-                # Fallback: try tray icon
-                icon_path = os.path.join(ICONS_DIR, 'tray.png')
-            if os.path.exists(icon_path):
+            candidates = []
+            app_bundle = os.environ.get("DECISIONS_APP_BUNDLE", "").strip()
+            if app_bundle:
+                candidates.append(
+                    os.path.join(app_bundle, "Contents", "Resources", "icon.icns")
+                )
+            candidates.extend([
+                os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "decisions.app",
+                    "Contents",
+                    "Resources",
+                    "icon.icns",
+                ),
+                os.path.join(
+                    CORE_DIR,
+                    "installer",
+                    "decisions-app-template",
+                    "Contents",
+                    "Resources",
+                    "icon.icns",
+                ),
+                os.path.join(ICONS_DIR, "tray.png"),
+            ])
+            icon_path = next((p for p in candidates if os.path.exists(p)), None)
+            if icon_path:
                 icon_image = AppKit.NSImage.alloc().initWithContentsOfFile_(icon_path)
                 if icon_image:
                     AppKit.NSApp.setApplicationIconImage_(icon_image)
@@ -1082,6 +1107,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Update menu before showing to ensure all items are enabled
         self.oracle_window.update_menu()
         self.oracle_window.show()
+
+        if is_dock_app():
+            self._show_startup_splash_if_needed()
             
         # Only show about window if that setting is enabled
         if self.settings.get("show_about", False):  # Default to False
@@ -1100,6 +1128,41 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Enable device check timer after initialization is complete
         # Use a delay to ensure everything is fully initialized
         QTimer.singleShot(2000, self._enable_device_check_timer)
+
+    def _show_startup_splash_if_needed(self):
+        if self._startup_splash is not None:
+            return
+        try:
+            from distr.gui.dialogs.startup_splash import show_startup_splash
+
+            self._startup_splash = show_startup_splash()
+            QTimer.singleShot(20000, self._dismiss_startup_splash)
+        except Exception as exc:
+            logging.getLogger(__name__).debug("Startup splash unavailable: %s", exc)
+
+    def _dismiss_startup_splash(self):
+        splash = getattr(self, "_startup_splash", None)
+        if splash is not None:
+            try:
+                splash.close()
+            except Exception:
+                pass
+            self._startup_splash = None
+
+    def _offer_macos_permissions_setup(self):
+        """After boot settles, guide the user through macOS desktop permissions if needed."""
+        self._dismiss_startup_splash()
+        if self._quitting or not is_dock_app():
+            return
+        try:
+            from distr.gui.dialogs.macos_permissions import offer_macos_permissions_setup
+
+            parent = self.oracle_window if hasattr(self, "oracle_window") else None
+            offer_macos_permissions_setup(parent=parent)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "macOS permission setup skipped: %s", exc, exc_info=True
+            )
     
     def _on_show_about_from_web(self):
         """Show the about window and play splash sound (triggered from web UI)."""
@@ -1190,6 +1253,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Bridge signals to agent command queue
         self._bridge_signals_to_agent()
         QTimer.singleShot(500, self.start_agent_session)
+        if is_dock_app():
+            # Wait for sidecar/agent boot before permission probes (not an installer step).
+            QTimer.singleShot(4000, self._offer_macos_permissions_setup)
     
 
     
@@ -1528,7 +1594,12 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             return
             
         self._quitting = True
-        logger.info("Starting application shutdown and cleanup...")
+
+        if os.environ.get("DECISIONS_SLOW_QUIT", "").lower() not in ("1", "true", "yes"):
+            self._quit_fast()
+            return
+
+        logger.info("Starting application shutdown and cleanup (slow path)...")
         
         try:
             # Stop all timers first
@@ -1644,6 +1715,75 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             
             # Now quit
             super().quit()
+
+    def _quit_fast(self):
+        """Exit quickly; heavy process cleanup runs in bin/decisions-cleanup.sh."""
+        logger = logging.getLogger(__name__)
+        logger.info("Fast shutdown — handing process cleanup to external script")
+
+        agent_pid = None
+        try:
+            if (
+                hasattr(self, "agent_process")
+                and self.agent_process
+                and self.agent_process.is_alive()
+            ):
+                agent_pid = self.agent_process.pid
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "event_timer"):
+                self.event_timer.stop()
+            if hasattr(self, "health_check_timer"):
+                self.health_check_timer.stop()
+            if hasattr(self, "screen_info_timer"):
+                self.screen_info_timer.stop()
+            if hasattr(self, "device_check_timer"):
+                self.device_check_timer.stop()
+            if hasattr(self, "workflow_scheduler_timer"):
+                self.workflow_scheduler_timer.stop()
+            if hasattr(self, "initiative_service"):
+                self.initiative_service.stop()
+
+            if hasattr(self, "oracle_window") and self.oracle_window:
+                try:
+                    self.oracle_window.save_listening_state()
+                except Exception as e:
+                    logger.warning("Error saving listening state: %s", e)
+
+            try:
+                signal_manager.stop_sound_player.emit()
+            except Exception as e:
+                logger.debug("Error emitting stop_sound_player: %s", e)
+
+            if hasattr(self, "action_playback_service") and self.action_playback_service:
+                try:
+                    self.action_playback_service.stop()
+                except Exception as e:
+                    logger.warning("Error stopping action playback service: %s", e)
+
+            self._signal_agent_shutdown_no_wait()
+            self._stop_unified_gui_server()
+            self._cleanup_database_connections()
+        except Exception as e:
+            logger.error("Error during fast shutdown prep: %s", e, exc_info=True)
+
+        try:
+            from distr.core.external_cleanup import spawn_detached_cleanup
+
+            spawn_detached_cleanup(main_pid=os.getpid(), agent_pid=agent_pid)
+        except Exception as e:
+            logger.warning("Could not spawn external cleanup: %s", e)
+
+        try:
+            super().quit()
+            self.processEvents()
+        except Exception:
+            pass
+
+        # Avoid ggml Metal crash during normal Python/Qt teardown on macOS.
+        os._exit(0)
     
     def _cleanup_all_processes(self):
         """Cleanup all child processes"""

@@ -6,6 +6,9 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
+# shellcheck source=decisions-env.sh
+source "$SCRIPT_DIR/bin/decisions-env.sh"
+
 VENV_DIR="${VENV_DIR:-$HOME/.virtualenvs/decisions}"
 RUN_DIR="$HOME/.decisions/run"
 LOG_DIR="$HOME/.decisions/logs"
@@ -24,4 +27,10 @@ trap _on_exit EXIT
 decisions_start_sidecar "$SCRIPT_DIR"
 echo $$ > "$RUN_DIR/decisions-run.pid"
 
-exec "$VENV_DIR/bin/python" bin/start.py
+export DECISIONS_PYTHON="$VENV_DIR/bin/python"
+
+# Do not exec: keep this shell alive so the EXIT trap stops the sidecar when Python exits.
+"$VENV_DIR/bin/python" bin/start.py
+exit_code=$?
+_on_exit
+exit "$exit_code"

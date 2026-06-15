@@ -967,11 +967,90 @@ function initAdvancedTab() {
     }
 }
 
+async function loadMacosPermissionsPanel() {
+    var panel = document.getElementById('macos-permissions-panel');
+    var statusEl = document.getElementById('macos-permissions-status');
+    if (!panel || !statusEl) return;
+
+    try {
+        var res = await fetch('/api/advanced/macos-permissions');
+        var data = await res.json();
+        if (!data.supported) {
+            panel.classList.add('hidden');
+            return;
+        }
+        panel.classList.remove('hidden');
+        statusEl.innerHTML = '';
+        (data.items || []).forEach(function (item) {
+            var row = document.createElement('div');
+            row.className = 'border border-[#565869] rounded-md p-3 bg-[#40414f]';
+            var ok = !!item.ok;
+            var title = document.createElement('div');
+            title.className = 'flex items-center justify-between gap-2';
+            title.innerHTML = '<span class="text-[#ececf1] font-medium">' + escapeHtml(item.title || item.id) + '</span>'
+                + '<span class="' + (ok ? 'text-green-400' : 'text-amber-400') + '">' + (ok ? 'OK' : 'Needs setup') + '</span>';
+            row.appendChild(title);
+            if (item.detail) {
+                var detail = document.createElement('p');
+                detail.className = 'text-xs text-gray-400 mt-1';
+                detail.textContent = item.detail;
+                row.appendChild(detail);
+            }
+            if (!ok && item.enable_in_settings) {
+                var hint = document.createElement('pre');
+                hint.className = 'text-xs text-gray-500 mt-2 whitespace-pre-wrap font-sans';
+                hint.textContent = item.enable_in_settings;
+                row.appendChild(hint);
+            }
+            if (!ok) {
+                var actions = document.createElement('div');
+                actions.className = 'flex flex-wrap gap-2 mt-2';
+                if (item.settings_pane) {
+                    var openBtn = document.createElement('button');
+                    openBtn.type = 'button';
+                    openBtn.className = 'px-3 py-1 rounded text-xs border border-white/20 hover:bg-white/10 text-[#ececf1]';
+                    openBtn.textContent = 'Open System Settings';
+                    openBtn.addEventListener('click', function () {
+                        fetch('/api/advanced/macos-permissions/open-pane', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ pane: item.settings_pane })
+                        });
+                    });
+                    actions.appendChild(openBtn);
+                }
+                if (item.can_prompt && item.prompt_target) {
+                    var promptBtn = document.createElement('button');
+                    promptBtn.type = 'button';
+                    promptBtn.className = 'px-3 py-1 rounded text-xs border border-white/20 hover:bg-white/10 text-[#ececf1]';
+                    promptBtn.textContent = 'Show permission prompt';
+                    promptBtn.addEventListener('click', async function () {
+                        await fetch('/api/advanced/macos-permissions/prompt', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ kind: item.prompt_target })
+                        });
+                        loadMacosPermissionsPanel();
+                    });
+                    actions.appendChild(promptBtn);
+                }
+                row.appendChild(actions);
+            }
+            statusEl.appendChild(row);
+        });
+    } catch (e) {
+        statusEl.innerHTML = '<p class="text-red-400">Could not load permission status.</p>';
+    }
+}
+
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
         if (document.getElementById('tab-advanced')) {
             loadAdvancedSettings();
             initAdvancedTab();
+            loadMacosPermissionsPanel();
+            var macPermCheck = document.getElementById('macos-permissions-check');
+            if (macPermCheck) macPermCheck.addEventListener('click', loadMacosPermissionsPanel);
             var googleBtn = document.getElementById('google_connect_btn');
             if (googleBtn) googleBtn.addEventListener('click', connectGoogle);
             var telegramBtn = document.getElementById('telegram_connect_btn');

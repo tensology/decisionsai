@@ -333,6 +333,26 @@ class AgentLifecycleMixin:
             with self._reload_lock:
                 self._reloading_agent = False
 
+    def _signal_agent_shutdown_no_wait(self):
+        """Ask the agent to stop without blocking the UI thread."""
+        if not (
+            hasattr(self, "agent_process")
+            and self.agent_process
+            and self.agent_process.is_alive()
+        ):
+            return
+        try:
+            if hasattr(self, "agent_command_queue") and self.agent_command_queue is not None:
+                try:
+                    self.agent_command_queue.put(("shutdown", {}), block=False)
+                except Exception:
+                    pass
+            import signal as sig
+
+            os.kill(self.agent_process.pid, sig.SIGTERM)
+        except Exception as e:
+            logger.debug("Non-blocking agent shutdown signal failed: %s", e)
+
     def _cleanup_agent_process(self):
         """Clean up the agent process with proper signal handling."""
         if hasattr(self, 'agent_process') and self.agent_process and self.agent_process.is_alive():

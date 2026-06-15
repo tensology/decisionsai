@@ -12,11 +12,62 @@ import asyncio
 import termios
 import time
 import atexit
+import subprocess
 from typing import Optional, Dict, Any
 import uuid
 import json
 
 logger = logging.getLogger(__name__)
+
+
+def _pty_child_setup(slave_fd: int) -> None:
+    """Attach the child process to the PTY as its controlling terminal."""
+    os.setsid()
+    try:
+        fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+    except OSError:
+        pass
+    for fd in (0, 1, 2):
+        if slave_fd != fd:
+            os.dup2(slave_fd, fd)
+    if slave_fd > 2:
+        os.close(slave_fd)
+
+
+async def _spawn_pty_process(
+    cmd_args: list[str],
+    cwd: str,
+    env: dict[str, str],
+) -> tuple[int, int, subprocess.Popen]:
+    """Start cmd_args in a PTY without fork() from the asyncio process."""
+    master_fd, slave_fd = os.openpty()
+    winsize = struct.pack("HHHH", 24, 80, 0, 0)
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+    def _launch() -> subprocess.Popen:
+        return subprocess.Popen(
+            cmd_args,
+            cwd=cwd,
+            env=env,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=lambda: _pty_child_setup(slave_fd),
+            close_fds=True,
+        )
+
+    loop = asyncio.get_running_loop()
+    try:
+        proc = await loop.run_in_executor(None, _launch)
+    except Exception:
+        os.close(master_fd)
+        os.close(slave_fd)
+        raise
+
+    os.close(slave_fd)
+    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    return master_fd, proc.pid, proc
 
 # ── Global terminal registry ──────────────────────────────────────────────
 # Maps project_id -> TerminalSession
@@ -133,6 +184,7 @@ class TerminalSession:
         self.max_buffer_lines = 5000
         self._reader_task: Optional[asyncio.Task] = None
         self._running = False
+        self._subprocess: Optional[subprocess.Popen] = None
         self.created_at = time.time()
 
     # ── Shell command startup (for project terminals) ─────────────────────
@@ -177,41 +229,18 @@ class TerminalSession:
         env["COLORTERM"] = "truecolor"
         env.pop("DISPLAY", None)
 
-        # Create PTY pair
-        self.master_fd, slave_fd = os.openpty()
-
-        # Set terminal size
-        winsize = struct.pack("HHHH", 24, 80, 0, 0)
-        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-
-        # Fork and exec
-        pid = os.fork()
-        if pid == 0:
-            # Child process
-            os.close(self.master_fd)
-            os.setsid()
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-            os.dup2(slave_fd, 0)
-            os.dup2(slave_fd, 1)
-            os.dup2(slave_fd, 2)
-            if slave_fd > 2:
-                os.close(slave_fd)
-            os.chdir(self.cwd)
-            os.execve(cmd_args[0], cmd_args, env)
-            os._exit(1)  # shouldn't reach here
-
-        # Parent process
-        os.close(slave_fd)
-        self.pid = pid
+        self.master_fd, self.pid, self._subprocess = await _spawn_pty_process(
+            cmd_args, self.cwd, env
+        )
         self._running = True
-
-        # Set master_fd non-blocking
-        flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
-        fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-        # Start async reader
         self._reader_task = asyncio.create_task(self._read_loop())
-        logger.info(f"Startup terminal: project={self.project_id}, pid={pid}, cmd={self.shell_command!r}, cwd={self.cwd}")
+        logger.info(
+            "Startup terminal: project=%s, pid=%s, cmd=%r, cwd=%s",
+            self.project_id,
+            self.pid,
+            self.shell_command,
+            self.cwd,
+        )
 
     # ── Pi agent terminal startup ─────────────────────────────────────────
 
@@ -225,52 +254,23 @@ class TerminalSession:
         if not cmd_args:
             cmd_args = [os.environ.get("SHELL", "/bin/bash"), "-l"]
 
-        # Create PTY
-        master_fd, slave_fd = os.openpty()
-
-        # Set terminal size (24 rows x 80 cols is a default; will be resized)
-        winsize = struct.pack("HHHH", 24, 80, 0, 0)
-        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
-
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env.pop("DISPLAY", None)  # No X11 for headless
 
-        pid = os.fork()
-        if pid == 0:
-            # Child process
-            os.close(master_fd)
-            os.setsid()
-
-            # Make slave_fd the controlling terminal
-            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
-
-            os.dup2(slave_fd, 0)
-            os.dup2(slave_fd, 1)
-            os.dup2(slave_fd, 2)
-
-            if slave_fd > 2:
-                os.close(slave_fd)
-
-            os.chdir(self.cwd)
-            os.execvp(cmd_args[0], cmd_args)
-            # Should never reach here
-            os._exit(1)
-        else:
-            # Parent
-            os.close(slave_fd)
-            self.master_fd = master_fd
-            self.pid = pid
-            self._running = True
-
-            # Set master_fd non-blocking
-            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
-            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-            # Start reading loop
-            self._reader_task = asyncio.create_task(self._read_loop())
-            logger.info(f"Terminal session started: project={self.project_id}, pid={pid}, cmd={' '.join(cmd_args)}, cwd={self.cwd}")
+        self.master_fd, self.pid, self._subprocess = await _spawn_pty_process(
+            cmd_args, self.cwd, env
+        )
+        self._running = True
+        self._reader_task = asyncio.create_task(self._read_loop())
+        logger.info(
+            "Terminal session started: project=%s, pid=%s, cmd=%s, cwd=%s",
+            self.project_id,
+            self.pid,
+            " ".join(cmd_args),
+            self.cwd,
+        )
 
     def _find_pi(self) -> list:
         """Find the command to run — returns [command, *args]."""

@@ -16,7 +16,9 @@ DEFAULT_BACKEND_ID = "pi"
 
 
 def _decisions_api_base() -> str:
-    return (os.environ.get("DECISIONS_API_BASE") or "http://127.0.0.1:8765").rstrip("/")
+    from distr.core.web_runtime import get_local_web_base_url
+
+    return (os.environ.get("DECISIONS_API_BASE") or get_local_web_base_url()).rstrip("/")
 
 
 def _internal_api_token() -> str:

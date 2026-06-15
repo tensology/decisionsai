@@ -1044,3 +1044,44 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Telegram save: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)})
+
+    @router.get("/advanced/macos-permissions")
+    @route_handler("macOS permission status")
+    async def get_macos_permissions():
+        import platform
+
+        if platform.system() != "Darwin":
+            return JSONResponse({"supported": False, "platform": platform.system()})
+        from distr.core.macos_permissions import collect_permission_report
+
+        return JSONResponse(collect_permission_report(start_sidecar=True))
+
+    @router.post("/advanced/macos-permissions/open-pane")
+    @route_handler("open macOS privacy pane")
+    async def open_macos_privacy_pane(body: dict):
+        import platform
+
+        if platform.system() != "Darwin":
+            return JSONResponse({"success": False, "error": "macOS only"})
+        pane = str(body.get("pane") or "").strip()
+        if not pane:
+            raise HTTPException(status_code=400, detail="pane is required")
+        from distr.core.macos_permissions import open_privacy_pane
+
+        ok = open_privacy_pane(pane)
+        return JSONResponse({"success": ok, "pane": pane})
+
+    @router.post("/advanced/macos-permissions/prompt")
+    @route_handler("request macOS permission prompt")
+    async def prompt_macos_permission(body: dict):
+        import platform
+
+        if platform.system() != "Darwin":
+            return JSONResponse({"success": False, "error": "macOS only"})
+        kind = str(body.get("kind") or "").strip()
+        if not kind:
+            raise HTTPException(status_code=400, detail="kind is required")
+        from distr.core.macos_permissions import request_python_permission
+
+        ok, detail = request_python_permission(kind)
+        return JSONResponse({"success": ok, "kind": kind, "detail": detail})

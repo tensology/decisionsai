@@ -967,6 +967,8 @@ class UnifiedGuiServer:
             self.server_thread.start()
             self.is_running = True
             _unified_server = self
+            os.environ["DECISIONS_WEB_PORT"] = str(self.port)
+            os.environ["DECISIONS_API_BASE"] = f"http://{self.host}:{self.port}"
             
             # Wait a moment for the server to initialize
             time.sleep(0.5)
