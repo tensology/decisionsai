@@ -86,6 +86,7 @@ else:
 # 3. Local Imports
 # ===========================================
 from distr.core.utils import load_settings_from_db, save_settings_to_db
+from distr.core.dock_app import configure_qt_dock_identity, is_dock_app
 from distr.core.signals import signal_manager
 from distr.core.chat import ChatService
 from distr.core.chat_manager import ChatManagerCore
@@ -576,10 +577,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         signal_manager.stt_model_changed.connect(self.update_agent_stt_model)
         # macOS-specific: set activation policy and dock icon (only on macOS)
         if platform.system() == 'Darwin' and APPKIT_AVAILABLE:
-            AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+            if is_dock_app():
+                AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+            else:
+                AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
             # Set the application icon so macOS shows it properly when pinned to dock
             # (instead of the generic glass square)
             self._set_macos_dock_icon()
+        configure_qt_dock_identity(self)
         
         # Initialize windows
         self._initialize_windows()

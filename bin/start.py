@@ -168,7 +168,10 @@ if sys.platform == 'darwin':
     # Import AppKit only on macOS
     try:
         import AppKit
-        AppKit.NSBundle.mainBundle().infoDictionary()['LSUIElement'] = '1'
+        from distr.core.dock_app import is_dock_app
+
+        if not is_dock_app():
+            AppKit.NSBundle.mainBundle().infoDictionary()['LSUIElement'] = '1'
     except ImportError:
         print("Warning: AppKit (PyObjC) not found. Install with: pip install pyobjc")
         print("Continuing anyway...")

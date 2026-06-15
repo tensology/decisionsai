@@ -1,5 +1,5 @@
 #!/bin/bash
-# DecisionsAI.app launcher — starts the app without Terminal or .app sandbox issues.
+# DecisionsAI.app — run as the real app process so Dock menus work.
 
 set -u
 
@@ -7,29 +7,38 @@ APP_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_ROOT="$(cd "$APP_ROOT/.." && pwd)"
 LOG_DIR="$HOME/.decisions/logs"
 LOG_FILE="$LOG_DIR/launcher.log"
-APP_LOG="$LOG_DIR/decisions.log"
-RUN_SCRIPT="$PROJECT_ROOT/bin/decisions-run.sh"
+RUN_DIR="$HOME/.decisions/run"
+VENV_PYTHON="${VENV_PYTHON:-$HOME/.virtualenvs/decisions/bin/python}"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$RUN_DIR"
+
+export DECISIONS_DOCK_APP=1
 
 {
-    echo "===== DecisionsAI launcher $(date) ====="
+    echo "===== DecisionsAI dock launch $(date) ====="
     echo "Project root: $PROJECT_ROOT"
 
     if pgrep -f "[Pp]ython.*${PROJECT_ROOT}/bin/start.py" > /dev/null 2>&1; then
-        echo "DecisionsAI already running."
+        echo "DecisionsAI already running — requesting activation."
+        touch "$RUN_DIR/activate.request"
         exit 0
     fi
 
-    if [ ! -x "$RUN_SCRIPT" ]; then
-        echo "Missing $RUN_SCRIPT"
+    if [ ! -x "$PROJECT_ROOT/bin/decisions-run.sh" ]; then
+        echo "Missing bin/decisions-run.sh"
         exit 1
     fi
 
-    # Finder/.app launches break rubicon/pyautogui unless we spawn from osascript.
-    /usr/bin/osascript \
-        -e "do shell script \"cd '$PROJECT_ROOT' && /bin/bash '$RUN_SCRIPT' >> '$APP_LOG' 2>&1 &\" with dismiss"
-    echo "Spawned DecisionsAI via osascript."
-} >>"$LOG_FILE" 2>&1
+    if [ ! -x "$VENV_PYTHON" ]; then
+        echo "First launch — running setup in foreground."
+        exec /bin/bash "$PROJECT_ROOT/bin/decisions.sh" --foreground
+    fi
 
-exit 0
+    # shellcheck source=decisions-sidecar.sh
+    source "$PROJECT_ROOT/bin/decisions-sidecar.sh"
+    decisions_start_sidecar "$PROJECT_ROOT"
+
+    cd "$PROJECT_ROOT" || exit 1
+    echo "Starting DecisionsAI (dock mode)."
+    exec "$VENV_PYTHON" bin/start.py
+} >>"$LOG_FILE" 2>&1

@@ -17,6 +17,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6 import QtWidgets
 
 from distr.core.signals import signal_manager
+from distr.core.dock_app import check_dock_activation_request
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.integrations.telegram.response_format import (
     determine_response_format,
@@ -48,6 +49,7 @@ class EventHandlerMixin:
         ``get_nowait()`` call.  The loop is capped at 50 events per
         tick to prevent starvation of the Qt event loop.
         """
+        check_dock_activation_request(self)
         import queue as _queue
 
         # Lazy-init event dedup cache

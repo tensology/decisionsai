@@ -24,5 +24,4 @@ trap _on_exit EXIT
 decisions_start_sidecar "$SCRIPT_DIR"
 echo $$ > "$RUN_DIR/decisions-run.pid"
 
-"$VENV_DIR/bin/python" bin/start.py
-exit $?
+exec "$VENV_DIR/bin/python" bin/start.py
