@@ -378,6 +378,9 @@ if __name__ == "__main__":
         ensure_harness_pack_setup_quiet()
     except Exception:
         pass
+    from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix
+
+    apply_rubicon_arm64_fix()
     from distr.app.main import run
     skip_kill = (
         "--skip-kill-existing" in sys.argv

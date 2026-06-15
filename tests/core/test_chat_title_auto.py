@@ -23,6 +23,20 @@ def test_fallback_title_uses_latest_user_message():
     assert _fallback_chat_title(messages) == "SSH access for prod"
 
 
+def test_lightweight_title_models_prefers_openai_and_skips_missing_ollama(monkeypatch):
+    from distr.core.chat_title_auto import _lightweight_title_models
+
+    monkeypatch.setattr(
+        "distr.core.chat_title_auto._ollama_installed_models",
+        lambda settings: set(),
+    )
+    models = _lightweight_title_models(
+        {"openai_enabled": True, "openai_key": "sk-test", "ollama_url": "http://localhost:11434/"}
+    )
+    assert models[0] == ("openai", "gpt-4o-mini")
+    assert all(provider != "ollama" for provider, _ in models)
+
+
 def test_suggest_chat_title_uses_fallback_without_models(monkeypatch):
     monkeypatch.setattr(
         "distr.core.chat_title_auto._lightweight_title_models",

@@ -869,7 +869,12 @@ class InitiativeService:
     # ------------------------------------------------------------------
 
     def _call_llm(self, bundle, settings: dict, level: str) -> str:
-        import litellm
+        from distr.core.litellm_utils import litellm_completion
+
+        try:
+            import litellm
+        except ImportError:
+            raise RuntimeError("InitiativeService: litellm is not installed")
 
         # Collect candidate providers in priority order:
         #   1. conversational_llm_provider/model (preferred for lightweight calls)
@@ -916,7 +921,7 @@ class InitiativeService:
         for provider, model in candidates:
             litellm_model = _litellm_model(provider, model, settings)
             try:
-                response = litellm.completion(
+                response = litellm_completion(
                     model=litellm_model,
                     messages=messages,
                     max_tokens=512,

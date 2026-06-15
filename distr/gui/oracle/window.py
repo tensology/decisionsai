@@ -188,6 +188,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.ptt_pulse_timer = QTimer()  # kept for stop() calls in drag/release handlers
         self.ptt_requested = False
         self.stt_ready = False
+        self._startup_loading = True
         self._voice_capture_blocked_not_listening = False
         
         # Dictation state
@@ -220,6 +221,15 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Don't use setScaledContents — frame handlers do manual scaling/cropping
         # Make gif_label transparent to mouse events so they pass through to OracleWindow
         self.gif_label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        self._loading_label = QtWidgets.QLabel("Loading", self.round_container)
+        self._loading_label.setGeometry(0, 0, self.content_size, self.content_size)
+        self._loading_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._loading_label.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._loading_label.setStyleSheet(
+            "QLabel { color: rgba(255, 255, 255, 230); font-size: 14px; font-weight: 600; background: transparent; }"
+        )
+        self._loading_label.raise_()
 
         self.movie = None  # Will be set by load_oracle_animation if needed
 
@@ -332,6 +342,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Initialize the state properly
         self.initialize_listening_state()
+        self._set_startup_loading(True)
+
+    def _set_startup_loading(self, loading: bool) -> None:
+        """Dim oracle and show centered loading text until STT/agent is ready."""
+        self._startup_loading = loading
+        if hasattr(self, "_loading_label"):
+            self._loading_label.setVisible(loading)
+            if loading:
+                self._loading_label.raise_()
+        self._apply_unfocused_opacity()
 
     def initialize_listening_state(self):
         """Initialize the listening and hands-free states based on saved settings."""
@@ -737,6 +757,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         offset = self.shadow_size + self.stroke_width
         self.round_container.setGeometry(offset, offset, self.content_size, self.content_size)
         self.gif_label.setGeometry(0, 0, self.content_size, self.content_size)
+        if hasattr(self, "_loading_label"):
+            self._loading_label.setGeometry(0, 0, self.content_size, self.content_size)
+            if getattr(self, "_startup_loading", False):
+                self._loading_label.raise_()
 
         # Resize WebMView if it exists
         if self._webm_view is not None:
@@ -1029,11 +1053,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             logging.info("[ORACLE] ✅ STT service ready - PTT is now ENABLED (was disabled)")
         else:
             logging.info("[ORACLE] ✓ STT service ready - PTT already enabled")
+        self._set_startup_loading(False)
     
     def on_agent_reload(self):
         """React to agent session being reloaded - reset STT ready state."""
         logging.info("[ORACLE] Agent reloading - resetting STT ready state (will wait for new stt_ready event)")
         self.stt_ready = False
+        self._set_startup_loading(True)
         self.ptt_requested = False  # Reset stuck PTT state on reload
         # Safety timer: if stt_ready event doesn't arrive within 10s, force-enable PTT
         # This prevents PTT from being permanently blocked if the event is lost
@@ -1048,6 +1074,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if not self.stt_ready:
             logging.warning("[ORACLE] ⚠️ STT ready safety timeout - force-enabling PTT (stt_ready event was lost)")
             self.stt_ready = True
+        self._set_startup_loading(False)
     
     def on_stt_capture_started(self):
         """React to STT confirming it started capturing - confirm visual feedback"""
@@ -1163,6 +1190,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def _apply_unfocused_opacity(self):
         """Set window opacity based on focus state and skin config."""
+        if getattr(self, "_startup_loading", False):
+            self.setWindowOpacity(0.6)
+            return
         if (self._skin_config is None
                 or self._skin_config.type != "oracle"
                 or not self._skin_config.rendering.unfocused_opacity_enabled):

@@ -1,122 +1,40 @@
 #!/bin/bash
-# Wrapper script for DecisionsAI
-# Calls the main script from bin/ and runs it in the background
+# Wrapper script for DecisionsAI — runs setup, launches detached, then exits.
 
-# Get the script directory
 if [ -L "$0" ]; then
-    # If this is a symlink, resolve it
     SCRIPT_DIR="$(cd "$(dirname "$(readlink "$0")")" && pwd)"
 else
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 fi
 
-# Change to the project directory
 cd "$SCRIPT_DIR" || exit 1
 
-# Check if already running
-if pgrep -f "bin/start.py" > /dev/null 2>&1; then
-    echo "DecisionsAI is already running."
-    exit 0
+FOLLOW_LOGS=0
+PASSTHROUGH_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --logs|--follow|-f)
+            FOLLOW_LOGS=1
+            ;;
+        *)
+            PASSTHROUGH_ARGS+=("$arg")
+            ;;
+    esac
+done
+
+"$SCRIPT_DIR/bin/decisions.sh" "${PASSTHROUGH_ARGS[@]}"
+EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -ne 0 ]; then
+    exit "$EXIT_CODE"
 fi
 
-# Create log directory if it doesn't exist
-LOG_DIR="$HOME/.decisions/logs"
-mkdir -p "$LOG_DIR"
+LOG_FILE="$HOME/.decisions/logs/decisions.log"
 
-# Log file with timestamp
-LOG_FILE="$LOG_DIR/decisions_$(date +%Y%m%d_%H%M%S).log"
-
-echo "================================================================================"
-echo "                      STARTING DECISIONSAI"
-echo "================================================================================"
-echo ""
-echo "⚠️  DO NOT CLOSE THIS TERMINAL WINDOW YET!"
-echo ""
-echo "The app is starting in the background and will show logs below."
-echo "You can press Ctrl+C to stop viewing logs at any time."
-echo "The app will continue running even after you press Ctrl+C."
-echo ""
-echo "When you quit DecisionsAI (via the menu), you'll see:"
-echo "   ✅ 'IT IS NOW SAFE TO CLOSE THIS TERMINAL'"
-echo ""
-echo "Log file: $LOG_FILE"
-echo "PID will be shown below once started..."
-echo ""
-echo "================================================================================"
-echo "                      STARTING COMMAND"
-echo "================================================================================"
-echo "Command: nohup $SCRIPT_DIR/bin/decisions.sh"
-echo "================================================================================"
-echo ""
-
-# Run in background with nohup to detach from terminal
-# Redirect both stdout and stderr to log file
-nohup "$SCRIPT_DIR/bin/decisions.sh" > "$LOG_FILE" 2>&1 &
-
-# Get the PID
-PID=$!
-
-# Give it a moment to start
-sleep 2
-
-# Check if it's still running
-if ps -p $PID > /dev/null 2>&1; then
-    echo "✅ DecisionsAI started successfully!"
-    echo "   PID: $PID"
+if [ "$FOLLOW_LOGS" = "1" ]; then
     echo ""
-    echo "================================================================================"
-    echo "                      SHOWING LIVE LOGS"
-    echo "================================================================================"
-    echo "Press Ctrl+C to stop viewing logs (app continues running in background)"
-    echo "================================================================================"
+    echo "Following logs (Ctrl+C to stop viewing — app keeps running):"
+    echo "  $LOG_FILE"
     echo ""
-
-    # Set up a trap to catch Ctrl+C
-    trap 'echo ""; echo "==============================================================================="; echo "Log tailing stopped. DecisionsAI is still running in background."; echo "To view logs again: tail -f $LOG_FILE"; echo "To stop DecisionsAI: pkill -f \"bin/start.py\""; echo "==============================================================================="; exit 0' INT
-
-    # Tail the log file and watch for shutdown message
-    tail -f "$LOG_FILE" | while IFS= read -r line; do
-        echo "$line"
-        # Check if the app has quit
-        if ! ps -p $PID > /dev/null 2>&1; then
-            echo ""
-            echo "================================================================================"
-            echo "                      DECISIONSAI HAS QUIT"
-            echo "================================================================================"
-            echo ""
-            echo "DecisionsAI has shut down cleanly."
-            echo "Log file saved to: $LOG_FILE"
-            echo ""
-            echo "================================================================================"
-            echo "This terminal will close in 3 seconds..."
-            sleep 3
-            # Close the terminal window on macOS
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                osascript -e 'tell application "Terminal" to close front window' 2>/dev/null &
-            fi
-            break
-        fi
-    done
-else
-    echo ""
-    echo "================================================================================"
-    echo "                      ❌ STARTUP FAILED"
-    echo "================================================================================"
-    echo ""
-    echo "Failed to start DecisionsAI. Check log for errors:"
-    echo "  tail -20 $LOG_FILE"
-    echo ""
-    echo "================================================================================"
-    exit 1
+    tail -f "$LOG_FILE"
 fi
-
-
-
-
-
-
-
-
-
-
-

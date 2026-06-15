@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 TITLE_REFRESH_MESSAGE_INTERVAL = 5
 TITLE_CONTEXT_MESSAGE_COUNT = 5
+
+_ollama_tags_cache: Tuple[float, Optional[set[str]]] = (0.0, None)
+_OLLAMA_TAGS_TTL_SECONDS = 60.0
 
 
 def _chat_additional_context(raw: Optional[str]) -> Dict[str, Any]:
@@ -91,17 +95,54 @@ def _fallback_chat_title(messages: List[Dict[str, Any]]) -> str:
     return "New Chat"
 
 
+def _ollama_installed_models(settings: dict) -> set[str]:
+    """Return model names available on the configured Ollama host (cached)."""
+    global _ollama_tags_cache
+    now = time.time()
+    cached_at, cached = _ollama_tags_cache
+    if cached is not None and now - cached_at < _OLLAMA_TAGS_TTL_SECONDS:
+        return cached
+
+    models: set[str] = set()
+    base = (settings.get("ollama_url") or "http://localhost:11434/").strip().rstrip("/")
+    if not base:
+        _ollama_tags_cache = (now, models)
+        return models
+
+    try:
+        import requests
+
+        response = requests.get(f"{base}/api/tags", timeout=2)
+        if response.ok:
+            for item in response.json().get("models", []) or []:
+                name = str(item.get("name") or "").strip()
+                if name:
+                    models.add(name)
+                    models.add(name.split(":", 1)[0])
+    except Exception:
+        logger.debug("Ollama tag lookup failed for chat titles", exc_info=True)
+
+    _ollama_tags_cache = (now, models)
+    return models
+
+
 def _lightweight_title_models(settings: dict) -> List[tuple[str, str]]:
-    """Prefer tiny local models; only use cloud mini models when configured."""
+    """Prefer configured cloud mini models; only use Ollama when models exist locally."""
     models: List[tuple[str, str]] = []
-    ollama_url = (settings.get("ollama_url") or "http://localhost:11434/").strip()
-    if ollama_url:
-        models.append(("ollama", "qwen3:0.6b"))
-        models.append(("ollama", "llama3.2"))
-    if settings.get("groq_enabled") and (settings.get("groq_key") or "").strip():
-        models.append(("groq", "llama-3.1-8b-instant"))
+
     if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip():
         models.append(("openai", "gpt-4o-mini"))
+    if settings.get("groq_enabled") and (settings.get("groq_key") or "").strip():
+        models.append(("groq", "llama-3.1-8b-instant"))
+
+    ollama_url = (settings.get("ollama_url") or "http://localhost:11434/").strip()
+    if ollama_url:
+        installed = _ollama_installed_models(settings)
+        for candidate in ("llama3.2", "llama3.2:latest", "qwen3:0.6b"):
+            if candidate in installed or candidate.split(":", 1)[0] in installed:
+                models.append(("ollama", candidate.split(":", 1)[0]))
+                break
+
     return models
 
 
@@ -131,12 +172,12 @@ def suggest_chat_title(messages: List[Dict[str, Any]], *, settings: dict) -> str
         return "New Chat"
 
     try:
-        import litellm
+        from distr.core.litellm_utils import litellm_completion
         from distr.core.workflow.planning import _litellm_model
 
         for provider, model_name in _lightweight_title_models(settings):
             try:
-                response = litellm.completion(
+                response = litellm_completion(
                     model=_litellm_model(provider, model_name, settings),
                     messages=[
                         {

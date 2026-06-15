@@ -61,6 +61,10 @@ from PyQt6.QtWidgets import QDialog, QApplication
 import sounddevice as sd
 import platform
 
+from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix
+
+apply_rubicon_arm64_fix()
+
 # PyAutoGUI - import at module level and disable FAILSAFE
 try:
     import pyautogui
@@ -303,13 +307,23 @@ def setup_logging(clear_logs=True):
         'httpx',
         'urllib3',
         'matplotlib',
-        'PIL'
+        'PIL',
+        'LiteLLM',
+        'litellm',
+        'sentence_transformers',
     ]
     for logger_name in silent_loggers:
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
         for name in logging.root.manager.loggerDict:
             if name.startswith(logger_name):
                 logging.getLogger(name).setLevel(logging.CRITICAL)
+
+    try:
+        from distr.core.litellm_utils import configure_litellm
+
+        configure_litellm()
+    except Exception:
+        pass
 
     # Disable propagation for all loggers except our app
     for name in logging.root.manager.loggerDict:

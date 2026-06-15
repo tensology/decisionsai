@@ -229,7 +229,7 @@ class ToolRetriever:
         try:
             from sentence_transformers import SentenceTransformer
             model = SentenceTransformer("all-MiniLM-L6-v2")
-            embeddings = model.encode(descriptions, convert_to_numpy=True)
+            embeddings = model.encode(descriptions, convert_to_numpy=True, show_progress_bar=False)
             norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
             norms = np.where(norms == 0, 1.0, norms)
             self._matrix = (embeddings / norms).astype(np.float32)
@@ -291,7 +291,7 @@ class ToolRetriever:
 
     def _retrieve_sbert(self, user_message: str, k: int) -> set:
         """Retrieve top-K tool names using sentence-transformer cosine sim."""
-        query_vec = self._model.encode([user_message], convert_to_numpy=True)[0]
+        query_vec = self._model.encode([user_message], convert_to_numpy=True, show_progress_bar=False)[0]
         query_norm = np.linalg.norm(query_vec)
         if query_norm > 0:
             query_vec = query_vec / query_norm

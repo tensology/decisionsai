@@ -9,6 +9,18 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
+DECISIONS_FOREGROUND=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --foreground|--fg)
+            DECISIONS_FOREGROUND=1
+            ;;
+        --run-app-only)
+            exec "$SCRIPT_DIR/bin/decisions-run.sh"
+            ;;
+    esac
+done
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -1023,45 +1035,16 @@ if ! check_eula_acceptance; then
     exit 1
 fi
 
-# ── Start sidecar (machine control agent) ────────────────────────────────────
-SIDECAR_BIN="$SCRIPT_DIR/sidecar/dist/decisionsai-sidecar"
-SIDECAR_PID=""
+# ── Launch app (detached by default) ─────────────────────────────────────────
+if [ "$DECISIONS_FOREGROUND" = "1" ]; then
+    echo ""
+    echo -e "${GREEN}booting up now. Please wait for the agent to speak to you...${NC}"
+    echo -e "${YELLOW}Running in foreground — keep this terminal open.${NC}"
+    exec "$SCRIPT_DIR/bin/decisions-run.sh"
+fi
 
-start_sidecar() {
-    if [ ! -f "$SIDECAR_BIN" ]; then
-        if command -v go &>/dev/null && [ -d "$SCRIPT_DIR/sidecar" ]; then
-            echo -e "${YELLOW}Building sidecar...${NC}"
-            mkdir -p "$SCRIPT_DIR/sidecar/dist"
-            (cd "$SCRIPT_DIR/sidecar" && go mod tidy && go build -ldflags="-s -w" -o dist/decisionsai-sidecar . 2>/dev/null) && \
-                echo -e "${GREEN}✓${NC} Sidecar built" || \
-                echo -e "${YELLOW}⚠  Sidecar build failed — accessibility tree tools unavailable${NC}"
-        fi
-    fi
-
-    if [ -f "$SIDECAR_BIN" ]; then
-        mkdir -p "$HOME/.decisions/logs"
-        # Run in local-only mode — no relay server needed, just the HTTP tool API
-        "$SIDECAR_BIN" --local \
-            > "$HOME/.decisions/logs/sidecar.log" 2>&1 &
-        SIDECAR_PID=$!
-        echo -e "${GREEN}✓${NC} Sidecar started (PID: $SIDECAR_PID, HTTP port: 11435)"
-    fi
-}
-
-stop_sidecar() {
-    if [ -n "$SIDECAR_PID" ] && kill -0 "$SIDECAR_PID" 2>/dev/null; then
-        kill "$SIDECAR_PID" 2>/dev/null
-        wait "$SIDECAR_PID" 2>/dev/null
-    fi
-}
-
-trap stop_sidecar EXIT
-mkdir -p "$HOME/.decisions/logs"
-start_sidecar
-
-# Run the application
 echo ""
-echo -e "${GREEN}booting up now. Please wait for the agent to speak to you...${NC}"
-echo -e "${GREEN}YOU CAN NOW CLOSE THIS TERMINAL${NC}"
-# Filter macOS dylib duplicate class warnings from stderr (harmless noise from cv2/av FFmpeg conflict)
-"$VENV_DIR/bin/python" bin/start.py 2> >(grep -v "^objc\[" >&2)
+if bash "$SCRIPT_DIR/bin/decisions-detach.sh"; then
+    exit 0
+fi
+exit 1

@@ -11,6 +11,10 @@ import os
 # Agent subprocess: set before importing distr (which pulls sentence_transformers / HF stacks).
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix
+
+apply_rubicon_arm64_fix()
+
 import gc
 import sys
 import time

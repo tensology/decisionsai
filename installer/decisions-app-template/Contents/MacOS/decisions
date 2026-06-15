@@ -1,0 +1,35 @@
+#!/bin/bash
+# DecisionsAI.app launcher — starts the app without Terminal or .app sandbox issues.
+
+set -u
+
+APP_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_ROOT="$(cd "$APP_ROOT/.." && pwd)"
+LOG_DIR="$HOME/.decisions/logs"
+LOG_FILE="$LOG_DIR/launcher.log"
+APP_LOG="$LOG_DIR/decisions.log"
+RUN_SCRIPT="$PROJECT_ROOT/bin/decisions-run.sh"
+
+mkdir -p "$LOG_DIR"
+
+{
+    echo "===== DecisionsAI launcher $(date) ====="
+    echo "Project root: $PROJECT_ROOT"
+
+    if pgrep -f "[Pp]ython.*${PROJECT_ROOT}/bin/start.py" > /dev/null 2>&1; then
+        echo "DecisionsAI already running."
+        exit 0
+    fi
+
+    if [ ! -x "$RUN_SCRIPT" ]; then
+        echo "Missing $RUN_SCRIPT"
+        exit 1
+    fi
+
+    # Finder/.app launches break rubicon/pyautogui unless we spawn from osascript.
+    /usr/bin/osascript \
+        -e "do shell script \"cd '$PROJECT_ROOT' && /bin/bash '$RUN_SCRIPT' >> '$APP_LOG' 2>&1 &\" with dismiss"
+    echo "Spawned DecisionsAI via osascript."
+} >>"$LOG_FILE" 2>&1
+
+exit 0
