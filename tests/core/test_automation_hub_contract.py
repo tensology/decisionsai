@@ -107,14 +107,17 @@ def test_automation_hub_is_plain_crud_scheduler_surface():
     assert "setActiveTab" in js
     assert 'method: "DELETE"' in js
     assert "automationKeyboardTargetIsEditable" in js
-    assert 'document.getElementById("decisions-confirm-modal")' in js
-    assert 'e.key === "Enter"' in js
-    assert 'e.key === "Delete" || e.key === "Backspace"' in js
-    assert 'deleteSelected(active.getAttribute("data-id"))' in js
+    assert "DecisionsListKeyboard" in js
+    assert "deleteSelected" in js
     assert 'window.DecisionsAPI.confirm({' in js
     assert 'title: "Remove automation"' in js
     assert 'confirmLabel: "Remove"' in js
-    assert "automation-preset" in html
+    assert "automation-presets-btn" in html
+    assert "automation-preset-menu" in html
+    assert "createAutomationFromPreset" in js
+    assert "automation-preset-id" in html
+    assert 'id="automation-preset"' not in html
+    assert "Custom instruction" not in html
     assert "loadAutomationPresets" in js
     assert "/api/automations/presets" in js
 

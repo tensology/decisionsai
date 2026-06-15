@@ -2773,23 +2773,29 @@ def create_routes():
                     "workflow_queue_position": t.workflow_queue_position or 0,
                     "workflow_status": t.workflow_status,
                     "linked_workflow_id": t.linked_workflow_id,
-                    "linked_project_id": t.linked_project_id or board.default_project_id,
-                    "linked_project_name": (
-                        projects.get(t.linked_project_id or board.default_project_id).name
-                        if projects.get(t.linked_project_id or board.default_project_id)
-                        else None
+                    "linked_project_id": (
+                        effective_project_id := (t.linked_project_id or board.default_project_id)
+                    ),
+                    **_project_context_payload(
+                        projects.get(effective_project_id) if effective_project_id else None,
+                        "linked",
+                    ),
+                    **_project_context_payload(
+                        projects.get(board.default_project_id) if board.default_project_id else None,
+                        "board_default",
                     ),
                     "cli_route": (
                         _resolve_ticket_execution_route(
                             s,
                             {
-                                "project": projects.get(t.linked_project_id or board.default_project_id),
+                                "project": projects.get(effective_project_id),
                                 "ticket": t,
                                 "board": board,
                                 "complexity": normalize_ticket_complexity(t.complexity),
                             },
+                            allow_orchestrator_override=False,
                         )
-                        if projects.get(t.linked_project_id or board.default_project_id)
+                        if effective_project_id and projects.get(effective_project_id)
                         else {}
                     ),
                     "lane_id": lane.id,
@@ -4735,14 +4741,16 @@ source: kanban_ticket_{t.id}
                 t.linked_workflow_id = payload.workflow_id
                 s.flush()
 
-            project_id_value = str(t.linked_project_id) if t.linked_project_id else None
+            project_id_value = t.linked_project_id or (board.default_project_id if board else None)
             project_name_value = None
+            project_folder_value = None
             execution_route = {}
             if project_id_value:
                 try:
                     project_for_route = orm_get_by_id(s, Project, int(project_id_value))
                     if project_for_route:
                         project_name_value = project_for_route.name
+                        project_folder_value = project_for_route.folder_location
                         from distr.core.orchestrator_routing import resolve_execution_route
 
                         decision = resolve_execution_route(
@@ -4751,6 +4759,7 @@ source: kanban_ticket_{t.id}
                             board=board,
                             complexity=normalize_ticket_complexity(t.complexity),
                             emit_event=False,
+                            allow_orchestrator_override=False,
                         )
                         execution_route = decision.to_route_dict()
                 except Exception:
@@ -4781,8 +4790,9 @@ source: kanban_ticket_{t.id}
                 "board_name": board_name_value,
                 "ticket_id": t.id,
                 "ticket_title": t.title or "",
-                "project_id": project_id_value,
+                "project_id": str(project_id_value) if project_id_value else None,
                 "project_name": project_name_value,
+                "project_folder": project_folder_value,
                 "execution_route": execution_route,
                 "phase": "planning",
             }
@@ -4866,7 +4876,7 @@ source: kanban_ticket_{t.id}
                 "phase": run_data.get("phase"),
             })
 
-    def _resolve_ticket_cli_context(s, ticket_id: int):
+    def _resolve_ticket_cli_context(s, ticket_id: int, *, include_instruction: bool = True):
         t = orm_get_by_id(s, KanbanTicket,ticket_id)
         if not t:
             raise HTTPException(404, "Ticket not found")
@@ -4897,13 +4907,15 @@ source: kanban_ticket_{t.id}
 
         from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
 
-        instruction = build_kanban_ticket_cli_instruction(
-            s,
-            tid,
-            project_name=project_name,
-            project_folder=folder or "",
-            project_id=project_id,
-        )
+        instruction = ""
+        if include_instruction:
+            instruction = build_kanban_ticket_cli_instruction(
+                s,
+                tid,
+                project_name=project_name,
+                project_folder=folder or "",
+                project_id=project_id,
+            )
         return {
             "ticket": t,
             "title": title,
@@ -4922,7 +4934,12 @@ source: kanban_ticket_{t.id}
             ),
         }
 
-    def _resolve_ticket_execution_route(s, ctx: dict) -> dict:
+    def _resolve_ticket_execution_route(
+        s,
+        ctx: dict,
+        *,
+        allow_orchestrator_override: bool = True,
+    ) -> dict:
         from distr.core.orchestrator_routing import resolve_execution_route
 
         decision = resolve_execution_route(
@@ -4931,18 +4948,23 @@ source: kanban_ticket_{t.id}
             board=ctx.get("board"),
             complexity=ctx.get("complexity"),
             emit_event=False,
+            allow_orchestrator_override=allow_orchestrator_override,
         )
         return decision.to_route_dict()
 
     @router.get("/tickets/tickets/{ticket_id}/cli-context")
-    async def get_ticket_cli_context(ticket_id: int):
+    async def get_ticket_cli_context(ticket_id: int, preview: bool = False):
         """Return the resolved project/backend context and generated CLI instruction for a ticket."""
         with get_session() as s:
-            ctx = _resolve_ticket_cli_context(s, ticket_id)
+            ctx = _resolve_ticket_cli_context(s, ticket_id, include_instruction=not preview)
             project = ctx["project"]
             from distr.core.project_cli_backends import get_backend_statuses, get_project_backend_id
 
-            route = _resolve_ticket_execution_route(s, ctx)
+            route = _resolve_ticket_execution_route(
+                s,
+                ctx,
+                allow_orchestrator_override=not preview,
+            )
             active_backend = route.get("backend") or get_project_backend_id(project)
             return JSONResponse({
                 "ticket_id": ctx["ticket_id"],
@@ -4962,6 +4984,7 @@ source: kanban_ticket_{t.id}
                 "codex_reasoning_effort": route.get("codex_reasoning_effort") or "",
                 "codex_service_tier": route.get("codex_service_tier") or "",
                 "context_notes": (ctx.get("ticket").context_notes or "") if ctx.get("ticket") else "",
+                "preview": bool(preview),
                 **get_backend_statuses(active_backend),
             })
 

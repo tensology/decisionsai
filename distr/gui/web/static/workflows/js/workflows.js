@@ -741,6 +741,10 @@
             linked_workflow_id: ticket.linked_workflow_id,
             linked_project_id: ticket.linked_project_id || ticket.board_default_project_id || null,
             linked_project_name: ticket.linked_project_name || ticket.board_default_project_name || null,
+            linked_project_folder: ticket.linked_project_folder || ticket.board_default_project_folder || null,
+            board_default_project_id: ticket.board_default_project_id || null,
+            board_default_project_name: ticket.board_default_project_name || null,
+            board_default_project_folder: ticket.board_default_project_folder || null,
             board_id: ticket.board_id,
             board_name: ticket.board_name || "",
             external_source: ticket.external_source || "",
@@ -5696,6 +5700,44 @@
         return '<div class="wf-run-preview-label">' + esc(label) + '</div><div class="wf-run-preview-value">' + valueHtml + "</div>";
     }
 
+    function workflowRunPreviewCtxFromTicket(ticket) {
+        ticket = ticket || {};
+        var boardData = workflowBoardRenderState.data || {};
+        var projectId = ticket.linked_project_id || ticket.board_default_project_id || boardData.default_project_id || null;
+        var projectName = ticket.linked_project_name
+            || ticket.board_default_project_name
+            || boardData.default_project_name
+            || projectNameById(projectId)
+            || "";
+        var projectFolder = ticket.linked_project_folder
+            || ticket.board_default_project_folder
+            || boardData.default_project_folder
+            || "";
+        var route = ticket.cli_route && typeof ticket.cli_route === "object" ? ticket.cli_route : {};
+        return {
+            ticket_id: ticket.id,
+            title: ticket.title || "",
+            description: ticket.description || "",
+            project_id: projectId,
+            project_name: projectName,
+            project_folder: projectFolder,
+            complexity: ticket.complexity || "medium",
+            priority: ticket.priority || "medium",
+            context_notes: ticket.context_notes || "",
+            backend_id: route.backend || route.backend_id || "",
+            model: route.model || "auto",
+            route: route,
+            skills: route.skills || []
+        };
+    }
+
+    function workflowRunPreviewCanStart(ticket, ctx) {
+        ctx = ctx || workflowRunPreviewCtxFromTicket(ticket);
+        if ((ctx.project_folder || "").trim()) return true;
+        if (ctx.project_id) return true;
+        return false;
+    }
+
     function workflowRunPreviewRouteHtml(ticket, ctx) {
         ticket = ticket || {};
         ctx = ctx || {};
@@ -5799,25 +5841,31 @@
             return;
         }
         if (subtitle) subtitle.textContent = ticket ? (ticket.title || ("Ticket #" + ticketId)) : ("Ticket #" + ticketId);
-        body.innerHTML = workflowRunPreviewRouteHtml(ticket, {});
+        var localCtx = workflowRunPreviewCtxFromTicket(ticket);
+        body.innerHTML = workflowRunPreviewRouteHtml(ticket, localCtx);
         bindWorkflowRunPreviewTabs(body);
         if (warning) {
             warning.textContent = "";
             warning.classList.add("hidden");
         }
-        confirmBtn.disabled = true;
+        confirmBtn.disabled = !workflowRunPreviewCanStart(ticket, localCtx);
         modal.classList.remove("hidden");
-        api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/cli-context")
+        api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/cli-context?preview=1")
             .then(function (ctx) {
                 if (pendingWorkflowRunTicketId !== String(ticketId)) return;
                 body.innerHTML = workflowRunPreviewRouteHtml(ticket, ctx);
                 bindWorkflowRunPreviewTabs(body);
                 if (warning) warning.classList.add("hidden");
-                confirmBtn.disabled = false;
+                confirmBtn.disabled = !workflowRunPreviewCanStart(ticket, ctx);
             })
             .catch(function (e) {
                 if (pendingWorkflowRunTicketId !== String(ticketId)) return;
-                body.innerHTML = workflowRunPreviewRouteHtml(ticket, {});
+                if (workflowRunPreviewCanStart(ticket, localCtx)) {
+                    if (warning) warning.classList.add("hidden");
+                    confirmBtn.disabled = false;
+                    return;
+                }
+                body.innerHTML = workflowRunPreviewRouteHtml(ticket, localCtx);
                 bindWorkflowRunPreviewTabs(body);
                 if (warning) {
                     warning.textContent = e.message || "This ticket does not have a complete project/executor route yet. Link the board or ticket to a project before running.";

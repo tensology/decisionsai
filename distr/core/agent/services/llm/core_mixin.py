@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 # Fast-tool matcher runs tools immediately (before the LLM). These tools return
 # user-facing prose — show the real result instead of the generic "Done" stub.
 _FAST_MATCH_TOOLS_SHOW_FULL_RESULT = frozenset({
+    "board_notes",
     "developer_context",
     "get_project_status",
     "list_projects",

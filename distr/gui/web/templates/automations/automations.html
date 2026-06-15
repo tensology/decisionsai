@@ -709,6 +709,54 @@
 .sched-block.is-compact .sched-block-meta { display: none; }
 .sched-block.is-medium .sched-block-time,
 .sched-block.is-medium .sched-block-meta { display: none; }
+.automation-preset-menu {
+    position: fixed;
+    z-index: 70;
+    width: min(22rem, calc(100vw - 1.5rem));
+    max-height: min(24rem, calc(100vh - 2rem));
+    overflow-y: auto;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: #1a1f3a;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    padding: 0.25rem 0;
+}
+.automation-preset-menu-header {
+    padding: 0.5rem 0.75rem 0.375rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #9ca3af;
+}
+.automation-preset-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    background: transparent;
+    border: 0;
+    color: #e5e7eb;
+}
+.automation-preset-item:hover { background: rgba(255, 255, 255, 0.08); }
+.automation-preset-item.is-disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+.automation-preset-item.is-disabled:hover { background: transparent; }
+.automation-preset-item-name {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: #f9fafb;
+}
+.automation-preset-item-desc {
+    display: block;
+    margin-top: 0.125rem;
+    font-size: 0.6875rem;
+    line-height: 1.35;
+    color: #9ca3af;
+}
 .sched-block-context-menu {
     position: fixed;
     z-index: 70;
@@ -971,7 +1019,15 @@ body.sched-calendar-interacting .sched-block-resize-handle {
             <div id="automation-list" class="flex-1 overflow-y-auto space-y-2 min-h-0">
                 <p class="text-sm text-gray-400">Loading automations...</p>
             </div>
-            <button type="button" id="automation-new" class="mt-4 w-full px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium flex-shrink-0">+ Add Automation</button>
+            <div class="mt-4 flex gap-2 flex-shrink-0">
+                <button type="button" id="automation-new" class="flex-1 min-w-0 px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Automation</button>
+                <button type="button" id="automation-presets-btn" class="flex-shrink-0 px-3 py-2 rounded border border-white/20 text-gray-200 hover:bg-white/10 text-sm" title="Add from preset" aria-label="Add from preset" aria-haspopup="menu" aria-expanded="false">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                </button>
+            </div>
         </div>
     </div>
 
@@ -985,6 +1041,7 @@ body.sched-calendar-interacting .sched-block-resize-handle {
 
         <form id="automation-detail" class="hidden flex-1 flex flex-col min-h-0">
             <input type="hidden" id="automation-id">
+            <input type="hidden" id="automation-preset-id" value="">
             <div class="border-b border-white/20 px-6 py-4 flex items-center justify-between">
                 <div>
                     <h2 id="automation-detail-title" class="text-lg font-semibold text-white">Automation</h2>
@@ -1065,13 +1122,6 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                             </div>
                         </div>
                     </div>
-                    <div class="flex-shrink-0 pb-2">
-                        <label class="block text-sm text-gray-400 mb-1">Preset</label>
-                        <select id="automation-preset" class="w-full max-w-md px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                            <option value="">Custom instruction</option>
-                        </select>
-                        <p id="automation-preset-hint" class="text-xs text-gray-500 mt-1 hidden"></p>
-                    </div>
                     <div class="flex flex-col flex-1 min-h-0 pt-4 mt-4 border-t border-white/10">
                         <label class="block text-sm text-gray-400 mb-1 flex-shrink-0">Instruction</label>
                         <textarea id="automation-instruction" class="flex-1 min-h-[12rem] w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-none" placeholder="Enter the instruction this automation should run..."></textarea>
@@ -1138,6 +1188,8 @@ body.sched-calendar-interacting .sched-block-resize-handle {
         </div>
     </div>
 </div>
+
+<div id="automation-preset-menu" class="automation-preset-menu hidden" role="menu" aria-label="Automation presets"></div>
 
 <div id="sched-block-context-menu" class="sched-block-context-menu hidden" role="menu" aria-label="Time block actions">
     <button type="button" class="sched-block-context-item" data-action="edit" role="menuitem">Edit</button>

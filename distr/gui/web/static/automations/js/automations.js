@@ -435,38 +435,75 @@
         return null;
     }
 
-    function renderPresetOptions(selectedId) {
-        var select = document.getElementById("automation-preset");
-        if (!select) return;
-        var selected = String(selectedId || "");
-        var html = '<option value="">Custom instruction</option>';
-        automationPresets.forEach(function(preset) {
-            html += '<option value="' + escapeAttr(preset.preset_id) + '"' +
-                (selected === preset.preset_id ? " selected" : "") + ">" +
-                escapeAttr(preset.name || preset.preset_id) + "</option>";
-        });
-        select.innerHTML = html;
-        updatePresetHint(selected);
+    function automationWithPreset(presetId) {
+        var key = String(presetId || "").trim();
+        if (!key) return null;
+        for (var i = 0; i < automationsData.length; i += 1) {
+            if (automationsData[i].preset_id === key) return automationsData[i];
+        }
+        return null;
     }
 
-    function updatePresetHint(presetId) {
-        var hint = document.getElementById("automation-preset-hint");
-        if (!hint) return;
-        var preset = findPreset(presetId);
-        if (!preset || !preset.description) {
-            hint.textContent = "";
-            hint.classList.add("hidden");
+    function closeAutomationPresetMenu() {
+        var menu = document.getElementById("automation-preset-menu");
+        var btn = document.getElementById("automation-presets-btn");
+        if (menu) menu.classList.add("hidden");
+        if (btn) btn.setAttribute("aria-expanded", "false");
+    }
+
+    function renderAutomationPresetMenu() {
+        var menu = document.getElementById("automation-preset-menu");
+        if (!menu) return;
+        if (!automationPresets.length) {
+            menu.innerHTML = '<p class="automation-preset-menu-header">Presets</p>' +
+                '<p class="px-3 py-2 text-xs text-gray-500">No presets available.</p>';
             return;
         }
-        hint.textContent = preset.description;
-        hint.classList.remove("hidden");
+        var html = '<p class="automation-preset-menu-header">Add preset</p>';
+        automationPresets.forEach(function(preset) {
+            var existing = automationWithPreset(preset.preset_id);
+            var disabled = Boolean(existing);
+            html += '<button type="button" class="automation-preset-item' +
+                (disabled ? " is-disabled" : "") + '" role="menuitem"' +
+                ' data-preset-id="' + escapeAttr(preset.preset_id) + '"' +
+                (disabled ? ' aria-disabled="true"' : "") + ">" +
+                '<span class="automation-preset-item-name">' + escapeAttr(preset.name || preset.preset_id) +
+                (disabled ? " (added)" : "") + "</span>" +
+                '<span class="automation-preset-item-desc">' + escapeAttr(preset.description || "") + "</span>" +
+                "</button>";
+        });
+        menu.innerHTML = html;
+        menu.querySelectorAll(".automation-preset-item:not(.is-disabled)").forEach(function(item) {
+            item.addEventListener("click", function(e) {
+                e.stopPropagation();
+                var presetId = item.getAttribute("data-preset-id");
+                closeAutomationPresetMenu();
+                createAutomationFromPreset(presetId);
+            });
+        });
+    }
+
+    function openAutomationPresetMenu(anchorEl) {
+        var menu = document.getElementById("automation-preset-menu");
+        var btn = document.getElementById("automation-presets-btn");
+        if (!menu || !anchorEl) return;
+        renderAutomationPresetMenu();
+        menu.classList.remove("hidden");
+        if (btn) btn.setAttribute("aria-expanded", "true");
+        var rect = anchorEl.getBoundingClientRect();
+        var menuWidth = menu.offsetWidth || 320;
+        var left = Math.min(rect.left, window.innerWidth - menuWidth - 8);
+        var top = rect.top - menu.offsetHeight - 6;
+        if (top < 8) {
+            top = rect.bottom + 6;
+        }
+        menu.style.left = Math.max(8, left) + "px";
+        menu.style.top = top + "px";
     }
 
     function applyPresetToForm(presetId, force) {
         var preset = findPreset(presetId);
-        var select = document.getElementById("automation-preset");
-        if (select) select.value = presetId || "";
-        updatePresetHint(presetId || "");
+        setValue("automation-preset-id", presetId || "");
         if (!preset) return;
         if (force || !(document.getElementById("automation-name").value || "").trim()) {
             setValue("automation-name", preset.name || "");
@@ -478,6 +515,17 @@
             var schedule = preset.schedule || {};
             setValue("automation-kind", normalizeScheduleKind(schedule.kind || "daily"));
             setValue("automation-time", schedule.time || "09:00");
+            if (schedule.kind === "weekly" && schedule.days) {
+                setWeeklyDaySelection(schedule.days);
+            } else if (schedule.kind === "monthly" && schedule.days) {
+                renderMonthlyDayBadges(
+                    String(schedule.days).split(",").map(function(part) { return part.trim(); }).filter(Boolean)
+                );
+            }
+            if (schedule.kind === "interval") {
+                setValue("automation-interval-value", schedule.interval || 15);
+                setValue("automation-interval-unit", schedule.interval_unit || "minutes");
+            }
             updateScheduleControls();
         }
     }
@@ -486,12 +534,44 @@
         return apiFetch("/api/automations/presets")
             .then(function(data) {
                 automationPresets = data.presets || [];
-                renderPresetOptions(document.getElementById("automation-preset") ?
-                    document.getElementById("automation-preset").value : "");
             })
             .catch(function() {
                 automationPresets = [];
             });
+    }
+
+    function createAutomationFromPreset(presetId) {
+        var preset = findPreset(presetId);
+        if (!preset) {
+            showSnackbar("Preset not found.", "error");
+            return Promise.resolve();
+        }
+        if (automationWithPreset(presetId)) {
+            showSnackbar('"' + (preset.name || presetId) + '" is already in your list.', "info");
+            return Promise.resolve();
+        }
+        setMainView("automations");
+        return apiFetch("/api/automations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                name: preset.name || "",
+                preset_id: presetId,
+                schedule: preset.schedule || { kind: "daily", time: "09:00" }
+            })
+        }).then(function(data) {
+            var automation = data.automation || {};
+            currentAutomationId = automation.id || null;
+            isCreating = false;
+            showSnackbar('Added "' + (automation.name || preset.name) + '".', "success");
+            return loadAutomations(true).then(function() {
+                if (currentAutomationId) {
+                    selectAutomation(currentAutomationId);
+                }
+            });
+        }).catch(function(e) {
+            showSnackbar(e.message || "Could not add preset.", "error");
+        });
     }
 
     function startOfDay(value) {
@@ -1175,9 +1255,7 @@
         setValue("automation-id", row.id || "");
         setValue("automation-name", row.name || "");
         setValue("automation-instruction", row.instruction || "");
-        renderPresetOptions(row.preset_id || "");
-        setValue("automation-preset", row.preset_id || "");
-        updatePresetHint(row.preset_id || "");
+        setValue("automation-preset-id", row.preset_id || "");
         setValue("automation-kind", kind);
         setValue("automation-time", schedule.time || "09:00");
         setValue("automation-once-at", String(schedule.run_at || ""));
@@ -1280,7 +1358,7 @@
             automation_type: "scheduled_instruction",
             status: document.getElementById("automation-status").value || "active",
             instruction: (document.getElementById("automation-instruction").value || "").trim(),
-            preset_id: (document.getElementById("automation-preset") && document.getElementById("automation-preset").value) || "",
+            preset_id: (document.getElementById("automation-preset-id") && document.getElementById("automation-preset-id").value) || "",
             schedule: schedule
         };
     }
@@ -1549,17 +1627,32 @@
         }
         document.getElementById("automation-new").addEventListener("click", createNewAutomation);
         document.getElementById("automation-create-big").addEventListener("click", createNewAutomation);
+        var presetsBtn = document.getElementById("automation-presets-btn");
+        if (presetsBtn) {
+            presetsBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                var menu = document.getElementById("automation-preset-menu");
+                if (menu && !menu.classList.contains("hidden")) {
+                    closeAutomationPresetMenu();
+                    return;
+                }
+                openAutomationPresetMenu(presetsBtn);
+            });
+        }
+        document.addEventListener("click", function() {
+            closeAutomationPresetMenu();
+        });
+        var presetMenu = document.getElementById("automation-preset-menu");
+        if (presetMenu) {
+            presetMenu.addEventListener("click", function(e) {
+                e.stopPropagation();
+            });
+        }
         document.getElementById("automation-detail").addEventListener("submit", saveAutomation);
         document.getElementById("automation-delete").addEventListener("click", function() {
             deleteSelected();
         });
         document.getElementById("automation-run").addEventListener("click", runSelected);
-        var presetSelect = document.getElementById("automation-preset");
-        if (presetSelect) {
-            presetSelect.addEventListener("change", function() {
-                applyPresetToForm(presetSelect.value || "", true);
-            });
-        }
         document.getElementById("automation-kind").addEventListener("change", updateScheduleControls);
         document.querySelectorAll(".automation-weekday-btn").forEach(function(btn) {
             btn.addEventListener("click", function() {
@@ -1619,8 +1712,7 @@
             var prefillPreset = sessionStorage.getItem("automation_prefill_preset");
             if (prefillPreset) {
                 sessionStorage.removeItem("automation_prefill_preset");
-                createNewAutomation();
-                applyPresetToForm(prefillPreset, true);
+                createAutomationFromPreset(prefillPreset);
             } else if (prefill) {
                 sessionStorage.removeItem("automation_prefill_instruction");
                 createNewAutomation();

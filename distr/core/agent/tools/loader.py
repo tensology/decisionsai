@@ -161,6 +161,7 @@ def _get_tool_definitions(
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
         ("DeveloperContextTool", {}),
+        ("BoardNotesTool", {}),
         ("CodexThreadContextTool", {}),
         ("ProactiveOrchestratorTool", {}),
         ("MemorySearchTool", {}),
@@ -487,6 +488,7 @@ TOOL_REGISTRY = {
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
+    "BoardNotesTool":          ("system.board_notes", "BoardNotesTool"),
     "CodexThreadContextTool":  ("system.codex_thread_context", "CodexThreadContextTool"),
     "ProactiveOrchestratorTool": ("system.proactive_orchestrator", "ProactiveOrchestratorTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
@@ -621,6 +623,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
+    "BoardNotesTool": "Read, create, edit, append to, or delete ticket board scratchpad notes in the kanban board area (not MEMORY.md). Actions: list, create, update, append, delete.",
     "CodexThreadContextTool": "Load a matching local Codex conversation transcript for project context, ticket creation, plans, skill handoffs, or follow-up replies instead of asking the user to paste the thread.",
     "ProactiveOrchestratorTool": (
         "Scan Gmail, Slack, WhatsApp, Telegram, Trello, Jira, and board-derived work signals, "

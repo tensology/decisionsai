@@ -124,10 +124,18 @@ class ChatManagerCore:
         # Load agent prompt (persona + system template)
         self.agent_prompt = self._load_agent_prompt()
 
-        # Load last chat ID from settings
+        # Load conversational LLM + last chat from settings
         with get_session() as session:
             settings = session.query(Settings).first()
             if settings:
+                provider = (
+                    getattr(settings, "conversational_llm_provider", None)
+                    or getattr(settings, "llm_provider", None)
+                    or getattr(settings, "agent_provider", None)
+                )
+                if provider:
+                    self.current_provider = _normalize_provider(provider)
+
                 model = getattr(settings, "conversational_llm_model", None) or getattr(
                     settings, "agent_model", None
                 )
@@ -137,11 +145,17 @@ class ChatManagerCore:
                         "ChatManagerCore: Loaded model from settings: %s",
                         self.current_model,
                     )
+                if provider:
+                    logger.info(
+                        "ChatManagerCore: Loaded provider from settings: %s",
+                        self.current_provider,
+                    )
 
                 if settings.last_chat_id:
                     chat = session.get(Chat, settings.last_chat_id)
                     if chat:
                         self._current_chat_id = chat.id
+                        self._apply_chat_runtime_metadata(chat)
                         logger.info(
                             "ChatManagerCore: Loading last chat ID from settings: %s",
                             chat.id,
@@ -370,6 +384,23 @@ class ChatManagerCore:
 
     # ---- chat state ----
 
+    def _apply_chat_runtime_metadata(self, chat: Chat) -> None:
+        """Sync provider/model/voice fields from a chat row onto runtime state."""
+        if not chat:
+            return
+        if chat.model_name:
+            self.current_model = chat.model_name
+        if chat.provider:
+            self.current_provider = _normalize_provider(chat.provider)
+        vp = (getattr(chat, "voice_provider", None) or "").strip() or None
+        vm = (getattr(chat, "voice_model", None) or "").strip() or None
+        if vp:
+            from distr.core.agent.constants import normalize_voice_provider
+
+            self.current_voice_provider = normalize_voice_provider(vp)
+        if vm:
+            self.current_voice_model = vm
+
     def set_current_chat(self, chat_id: int, force_reload: bool = False) -> None:
         if self._updating_chat:
             return
@@ -377,6 +408,11 @@ class ChatManagerCore:
         old = self._current_chat_id
         changed = chat_id != old
         if not force_reload and not changed:
+            if chat_id:
+                with get_session() as session:
+                    chat = session.get(Chat, chat_id)
+                    if chat:
+                        self._apply_chat_runtime_metadata(chat)
             return
 
         try:
@@ -392,17 +428,7 @@ class ChatManagerCore:
             with get_session() as session:
                 chat = session.get(Chat, chat_id)
                 if chat:
-                    if chat.model_name:
-                        self.current_model = chat.model_name
-                    if chat.provider:
-                        self.current_provider = _normalize_provider(chat.provider)
-                    vp = (getattr(chat, "voice_provider", None) or "").strip() or None
-                    vm = (getattr(chat, "voice_model", None) or "").strip() or None
-                    if vp:
-                        from distr.core.agent.constants import normalize_voice_provider
-                        self.current_voice_provider = normalize_voice_provider(vp)
-                    if vm:
-                        self.current_voice_model = vm
+                    self._apply_chat_runtime_metadata(chat)
                 settings = session.query(Settings).first()
                 if settings:
                     settings.last_chat_id = chat_id

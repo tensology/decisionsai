@@ -111,6 +111,55 @@ def delete_board_note(note_id: str) -> bool:
     return True
 
 
+def find_board_note_by_title(title: str) -> dict[str, Any] | None:
+    """Return the first note whose title contains the needle (case-insensitive)."""
+    needle = (title or "").strip().lower()
+    if not needle:
+        return None
+    for note in load_board_notes():
+        hay = (note.get("title") or "").lower()
+        if needle in hay or hay in needle:
+            return note
+    return None
+
+
+def append_board_note(
+    content: str,
+    *,
+    note_id: str = "",
+    title: str = "",
+) -> dict[str, Any]:
+    """Append text to a note, or create one when no match exists."""
+    text = (content or "").strip()
+    if not text:
+        raise ValueError("content is required")
+
+    note: dict[str, Any] | None = None
+    if note_id:
+        note = next((n for n in load_board_notes() if n.get("id") == note_id), None)
+    elif title:
+        note = find_board_note_by_title(title)
+
+    if note:
+        existing = (note.get("content") or "").rstrip()
+        combined = f"{existing}\n\n{text}".strip() if existing else text
+        updated = update_board_note(note["id"], content=combined)
+        return updated or note
+
+    create_title = (title or "").strip() or _title_from_first_line(text)
+    return create_board_note(title=create_title, content=text)
+
+
+def _title_from_first_line(text: str) -> str:
+    first_line = (text or "").strip().splitlines()[0] if text else ""
+    compact = " ".join(first_line.split())
+    if not compact:
+        return "Untitled"
+    if len(compact) <= 72:
+        return compact
+    return compact[:71].rstrip() + "…"
+
+
 def _one_line(text: str, max_chars: int) -> str:
     compact = " ".join((text or "").split())
     if len(compact) <= max_chars:

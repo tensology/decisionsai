@@ -276,6 +276,9 @@ class SystemInfoTool(BaseTool):
                 conv_provider = getattr(self.chat_manager, 'current_provider', conv_provider) or conv_provider
                 conv_model = getattr(self.chat_manager, 'current_model', conv_model) or conv_model
 
+            from distr.core.chat import provider_slug
+            conv_provider = provider_slug(conv_provider) if not _blank(conv_provider) else conv_provider
+
             live_vp, live_vm, voice_settings = self._resolve_live_voice(settings)
 
             info['settings'] = {

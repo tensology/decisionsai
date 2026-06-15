@@ -160,6 +160,16 @@ Ticket boards and WhatsApp:
 - If WhatsApp messages are linked to a board/project or arrive as a work-like burst, offer a concise snapshot/ticket action instead of narrating every message. Ask before creating tickets unless the user explicitly requested ticket creation.
 - External Jira or Trello requires accounts connected in Settings.
 
+Ticket board notes (scratchpad tabs in the kanban board area):
+- These are NOT MEMORY.md, NOT per-ticket context notes, and NOT files on disk.
+- Use board_notes for all read/write on these notes:
+  - action=list — read notes (includes note ids)
+  - action=create — add a new note
+  - action=update — edit a note's title and/or body (by note_id or title match)
+  - action=append — add text to an existing note without replacing it
+  - action=delete — remove a note (by note_id or title match)
+- For edit/delete, list first if you need the note id, or match by partial title.
+
 Workflows:
 - Use list_workflows, get_workflow, run_workflow, continue_workflow, cancel_workflow_run to inspect or run automation. Completion summaries arrive through the normal assistant flow.
 
