@@ -28,6 +28,7 @@ from distr.core.agent.libs import (
 )
 from distr.core.agent.services.llm.utils import clean_text_for_tts
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
+from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def get_or_load_tts(model: str = "supertonic-3", model_dir: str | None = None):
         return _TTS_CACHE[key]
 
 
-class SupertonicTTSService(TTSService):
+class SupertonicTTSService(TTSPipelineMixin, TTSService):
     """Pipecat-compatible Supertonic TTS service."""
 
     def __init__(
@@ -104,6 +105,8 @@ class SupertonicTTSService(TTSService):
         self.event_queue = event_queue
         self._speech_volume = max(0.0, min(1.0, speech_volume / 100.0))
         self._cancelled = False
+        self._volume_in_run_tts = True
+        self._init_tts_pipeline_state()
         self._is_hands_free = False
         self._ptt_active = False
         self._text_buffer = ""
@@ -235,13 +238,11 @@ class SupertonicTTSService(TTSService):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._tts_session_active = True
             self._tts_started_emitted = False
-            self._processed_sentences = set()
-            self._text_buffer = ""
-            self._llm_response_started_at = time.monotonic()
+            self.reset_tts_response_start()
             return
 
         if isinstance(frame, TextFrame):
-            if self._cancelled:
+            if not self.maybe_clear_stale_cancelled_for_text():
                 return
             self._text_buffer += frame.text
             sentences, self._text_buffer = self._extract_complete_sentences(self._text_buffer)
@@ -250,8 +251,7 @@ class SupertonicTTSService(TTSService):
                 if norm in self._processed_sentences:
                     continue
                 self._processed_sentences.add(norm)
-                async for out_frame in self.run_tts(sentence):
-                    await self.push_frame(out_frame, direction)
+                await self._enqueue_sentence(sentence, direction)
             return
 
         if isinstance(frame, LLMFullResponseEndFrame):
@@ -259,20 +259,19 @@ class SupertonicTTSService(TTSService):
                 norm = self._text_buffer.strip().lower()
                 if norm not in self._processed_sentences:
                     self._processed_sentences.add(norm)
-                    async for out_frame in self.run_tts(self._text_buffer.strip()):
-                        await self.push_frame(out_frame, direction)
+                    await self._enqueue_sentence(self._text_buffer.strip(), direction)
             self._text_buffer = ""
+            if not self._cancelled:
+                await self._drain_speak_queue()
             self._tts_session_active = False
             self._llm_response_started_at = 0.0
             return
 
         if isinstance(frame, (CancelFrame, InterruptionFrame)):
-            now = time.monotonic()
-            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 2.0:
+            if self.is_stale_interrupt_frame():
                 logger.debug("Supertonic TTS: ignoring stale %s", type(frame).__name__)
                 return
-            self._cancelled = True
-            self._text_buffer = ""
+            self.abort_pending_synthesis()
             return
 
         if isinstance(frame, UserStartedSpeakingFrame):

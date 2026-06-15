@@ -578,6 +578,12 @@ class EventHandlerMixin:
             # Do not time-dedupe stream_finished: interrupt cleanup often fires within 2s of
             # normal completion; dropping it leaves the web UI stuck on the streaming bubble.
             signal_manager.chat_stream_finished.emit(chat_id)
+            try:
+                from distr.core.kanban.ticket_context_notes import maybe_capture_orchestrator_turn
+
+                maybe_capture_orchestrator_turn(chat_id, response_text)
+            except Exception:
+                pass
             self._force_oracle_idle_if_ptt_stale("chat_stream_finished")
         elif event == 'transcription_progress':
             _tcid = data.get('chat_id')

@@ -496,6 +496,25 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                     )
                     ticket.workflow_status = status
                     _append_workflow_summary_to_ticket(ticket, run_id, status, steps_summary)
+                    try:
+                        from distr.core.kanban.ticket_workflow_engagement import (
+                            record_ticket_workflow_elapsed,
+                        )
+
+                        warning = ""
+                        try:
+                            run_data = json.loads(run_rec.run_data or "{}") or {}
+                            warning = str(run_data.get("terminal_warning") or "")
+                        except Exception:
+                            run_data = {}
+                        record_ticket_workflow_elapsed(
+                            ticket_id=int(run_rec.ticket_id),
+                            run_id=run_id,
+                            status=status,
+                            warning=warning,
+                        )
+                    except Exception:
+                        logger.debug("Could not record ticket workflow elapsed time", exc_info=True)
                     db.commit()
     except Exception:
         logger.debug("Could not sync workflow_status to ticket for run %d", run_id)
@@ -1411,6 +1430,12 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                     db.commit()
         except Exception:
             logger.debug("Could not write step-start audit entry", exc_info=True)
+        try:
+            from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_step_started
+
+            notify_ticket_workflow_step_started(run_id, step_id)
+        except Exception:
+            logger.debug("Could not send ticket workflow step-start engagement", exc_info=True)
         result = self._execute(step_data, run_id=run_id)
         if result.get("async"):
             return {"success": True, "message": result.get("message", "Step dispatched.")}

@@ -91,13 +91,10 @@ class WorkflowAgentBridge:
     @staticmethod
     def _generate_report(run_result: dict) -> str:
         """Generate a human-readable summary from *run_result*."""
-        session_id = run_result.get("session_id", "?")
-        run_id = run_result.get("run_id", "?")
         success = run_result.get("success", False)
         cancelled = run_result.get("cancelled", False)
 
         steps_summary = run_result.get("steps_summary", [])
-        total = len(steps_summary)
 
         all_steps_ok = bool(steps_summary) and all(
             str(s.get("status") or "").strip().lower() in ("completed", "passed")
@@ -109,11 +106,11 @@ class WorkflowAgentBridge:
         )
 
         if cancelled:
-            status_line = f"Done - the workflow was cancelled. Session {session_id}, run {run_id}."
+            status_line = "I stopped that workflow run."
         elif success or (all_steps_ok and saw_green):
-            status_line = f"Done - the workflow finished successfully. Session {session_id}, run {run_id}."
+            status_line = "That workflow run finished."
         else:
-            status_line = f"The workflow failed. Session {session_id}, run {run_id}."
+            status_line = "That workflow run didn't get through."
 
         # Failed steps retain a useful error clue. Completed steps are summarized
         # so chat follow-ups do not receive CLI transcripts or callback payloads.
@@ -127,21 +124,26 @@ class WorkflowAgentBridge:
             status = s.get("status", "")
             st_lower = (status or "").strip().lower()
             ok = st_lower in ("completed", "passed")
-            status_tag = f" [{status}]" if status and not ok else ""
             if result:
                 lim = _PASS_SNIPPET if ok else _FAIL_SNIPPET
                 short = WorkflowAgentBridge._human_step_result(result)
                 short = short[:lim] + ("..." if len(short) > lim else "")
-                step_lines.append(f"  {i}. {title}{status_tag}: {short}")
+                if ok:
+                    step_lines.append(f"{title}: {short}")
+                else:
+                    step_lines.append(f"{title} didn't clear: {short}")
             else:
-                step_lines.append(f"  {i}. {title}{status_tag}")
+                if ok:
+                    step_lines.append(f"{title} finished.")
+                else:
+                    step_lines.append(f"{title} didn't clear.")
 
-        steps_block = "\n".join(step_lines) if step_lines else "  (no steps)"
+        steps_block = "\n".join(step_lines) if step_lines else "No steps were recorded."
 
-        return (
-            f"{status_line}\n"
-            f"Steps ({total}):\n{steps_block}"
-        )
+        if not step_lines:
+            return status_line
+
+        return f"{status_line}\n{steps_block}"
 
     @staticmethod
     def _human_step_result(result: str) -> str:

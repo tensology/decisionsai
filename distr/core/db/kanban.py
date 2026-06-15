@@ -126,6 +126,9 @@ class KanbanTicket(Base):
     # Chat that created or owns this ticket for UX (lane-move notices, etc.)
     source_chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
 
+    # Compact orchestrator / discussion notes (ticket-scoped, not workflow-scoped)
+    context_notes = Column(Text, nullable=True)
+
     # Subagent hierarchy — parent ticket that spawned this one (if any)
     parent_ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
 

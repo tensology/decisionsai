@@ -48,6 +48,16 @@
 
     // ── Helpers ──
 
+    function kbDocumentsWorkspaceOpen() {
+        return !!(window.KanbanDocuments && typeof window.KanbanDocuments.isExpanded === "function" && window.KanbanDocuments.isExpanded());
+    }
+
+    function kbRevealBoardView() {
+        if (kbDocumentsWorkspaceOpen()) return;
+        var boardView = document.getElementById("kb-board-view");
+        if (boardView) boardView.classList.remove("hidden");
+    }
+
     var commonUtils = window.KanbanCommonUtils;
     var waHelpers = window.KanbanWhatsAppHelpers;
     var esc = commonUtils.esc;
@@ -1223,6 +1233,10 @@
 
     function selectBoard(source, id, extUrl, opts) {
         opts = opts || {};
+        var boardChanged = !currentBoard || String(currentBoard.id) !== String(id) || currentBoard.source !== source;
+        if (boardChanged && kbDocumentsWorkspaceOpen() && window.KanbanDocuments && typeof window.KanbanDocuments.collapse === "function") {
+            window.KanbanDocuments.collapse();
+        }
         currentBoard = { id: id, source: source, extUrl: extUrl || "" };
         var keepMessagesVisible = isMessagesPanelVisible();
         // Auto-switch source tab when selecting a board
@@ -1248,7 +1262,7 @@
                 currentBoardData = data;
                 if (!keepMessagesVisible) {
                 document.getElementById("kb-loading").classList.add("hidden");
-                document.getElementById("kb-board-view").classList.remove("hidden");
+                kbRevealBoardView();
                 }
                 renderBoard(data, true);
             }).catch(function(e) {
@@ -1271,7 +1285,7 @@
                     if (data.cache_ready === false && attempt < 90) {
                         if (!keepMessagesVisible) {
                             document.getElementById("kb-loading").classList.add("hidden");
-                            document.getElementById("kb-board-view").classList.remove("hidden");
+                            kbRevealBoardView();
                         }
                         renderBoard(data, false);
                         return new Promise(function(resolve) {
@@ -2355,6 +2369,13 @@
 
     // ── Ticket modal ──
 
+    function renderModalContextNotes(notes) {
+        var el = document.getElementById("kb-modal-context-notes");
+        if (!el) return;
+        var text = (notes || "").trim();
+        el.textContent = text || "No notes yet. Send this ticket to the orchestrator to build context here.";
+    }
+
     function openTicketModal(ticketId) {
         modalTicketId = ticketId;
         modalTicketSourceChatId = null;
@@ -2374,6 +2395,7 @@
             renderModalLinks(t.links || []);
             renderModalFiles(t.files || []);
             renderModalTodos(t.todos || []);
+            renderModalContextNotes(t.context_notes || "");
             loadModalAuditReport(ticketId, t.audit_entries || []);
             loadLinkableEntities(t);
             modalTicketSourceChatId = t.source_chat_id != null ? t.source_chat_id : null;
@@ -3082,7 +3104,7 @@
         // Restore the previous board view or empty state
         document.getElementById("kb-loading").classList.add("hidden");
         if (currentBoard) {
-            document.getElementById("kb-board-view").classList.remove("hidden");
+            kbRevealBoardView();
         } else {
             document.getElementById("kb-empty").classList.remove("hidden");
         }
@@ -3717,6 +3739,36 @@
         document.querySelectorAll('.kb-modal-overlay').forEach(function(overlay) {
             overlay.classList.add('hidden');
         });
+
+        if (window.KanbanDocuments && typeof window.KanbanDocuments.init === "function") {
+            window.KanbanDocuments.init({
+                apiFetch: apiFetch,
+                showKanbanConfirm: showKanbanConfirm,
+                hideKanbanConfirm: hideKanbanConfirm,
+                showSnackbar: showSnackbar,
+                restoreMainPanel: function() {
+                    if (isMessagesPanelVisible()) return;
+                    var boardView = document.getElementById("kb-board-view");
+                    var emptyView = document.getElementById("kb-empty");
+                    var loadingView = document.getElementById("kb-loading");
+                    var waThread = document.getElementById("kb-wa-thread-view");
+                    if (waThread) waThread.classList.add("hidden");
+                    if (currentBoard && currentBoardData) {
+                        if (emptyView) emptyView.classList.add("hidden");
+                        if (loadingView) loadingView.classList.add("hidden");
+                        kbRevealBoardView();
+                    } else if (currentBoard) {
+                        if (emptyView) emptyView.classList.add("hidden");
+                        if (loadingView) loadingView.classList.remove("hidden");
+                        if (boardView) boardView.classList.add("hidden");
+                    } else {
+                        if (boardView) boardView.classList.add("hidden");
+                        if (loadingView) loadingView.classList.add("hidden");
+                        if (emptyView) emptyView.classList.remove("hidden");
+                    }
+                },
+            });
+        }
     }
 
     if (document.readyState === "loading") {

@@ -157,12 +157,7 @@ def apply_loop_preset(
     if not bundle:
         return {"success": False, "error": f"Unknown loop preset: {preset_name}"}
     result = apply_loop_bundle(workflow_id, bundle, mode=mode)
-    if result.get("success") and mode == "replace":
-        with get_session() as db:
-            wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
-            if wf:
-                wf.name = str(bundle.get("name") or wf.name)
-                db.commit()
+    # Preset bundle names label the preset catalog, not the user's workflow tab.
     return result
 
 

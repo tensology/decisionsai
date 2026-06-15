@@ -4,6 +4,7 @@ from distr.core.agent.services.llm.text_utils import (
     _PATH_REDACT_PLACEHOLDER,
     clean_model_text_for_chat,
     clean_text_for_tts,
+    ensure_line_sentence_boundaries_for_tts,
     redact_filesystem_paths_for_conversation,
 )
 
@@ -37,7 +38,7 @@ def test_clean_model_text_for_chat_strips_markdown_noise():
     assert "*" not in out
     assert "`" not in out
     assert "#" not in out
-    assert out == "Fix: use dictation mode. Next Do the thing"
+    assert out == "Fix: use dictation mode. Next. Do the thing."
 
 
 def test_clean_text_for_tts_turns_residual_slashes_into_spacing():
@@ -64,3 +65,28 @@ def test_path_redaction_does_not_claim_a_file_was_saved():
 
     assert "saved a file" not in out.lower()
     assert "a local path" in out
+
+
+def test_ensure_line_sentence_boundaries_adds_period_for_soft_breaks():
+    raw = "Dear team\nPlease review the budget\nThanks"
+    out = ensure_line_sentence_boundaries_for_tts(raw)
+    assert out == "Dear team.\nPlease review the budget.\nThanks."
+
+
+def test_ensure_line_sentence_boundaries_keeps_existing_stops():
+    raw = "First line.\nSecond line!\nThird line?\nAlready done..."
+    out = ensure_line_sentence_boundaries_for_tts(raw)
+    assert out == raw
+
+
+def test_clean_text_for_tts_email_lines_become_distinct_sentences():
+    raw = "Subject: Quarterly update\nWe met with the client\nNo issues found"
+    out = clean_text_for_tts(raw, spoken_prose=True)
+    assert out == "Subject: Quarterly update. We met with the client. No issues found."
+
+
+def test_clean_text_for_tts_does_not_double_periods():
+    raw = "All good.\nSee you soon."
+    out = clean_text_for_tts(raw, spoken_prose=True)
+    assert out == "All good. See you soon."
+    assert ".." not in out

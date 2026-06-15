@@ -467,7 +467,7 @@ def _audio_input_should_be_active(session) -> bool:
     )
 
 
-def _set_audio_input_active(session, active: bool, reason: str):
+def _set_audio_input_active(session, active: bool, reason: str, *, force: bool = False):
     transport = getattr(session, 'transport', None)
     if not transport or not hasattr(transport, 'input'):
         return
@@ -483,7 +483,7 @@ def _set_audio_input_active(session, active: bool, reason: str):
     if method is None:
         return
 
-    if active:
+    if active and not force:
         try:
             health = input_transport.get_input_health()
         except Exception:
@@ -492,6 +492,7 @@ def _set_audio_input_active(session, active: bool, reason: str):
             health.get("enabled")
             and health.get("stream_active")
             and health.get("audio_task_alive")
+            and not health.get("stream_callbacks_stale")
         ):
             session.logger.debug("Audio input power sync: already active reason=%s", reason)
             return
@@ -755,15 +756,38 @@ def _cmd_process_text_input(session, params):
 def _cmd_push_to_talk_start(session, params):
     session.logger.debug("PTT: Push-to-talk START received")
     session.ptt_active = True
-    _set_audio_input_active(session, True, "push_to_talk_start")
+    # Resume mic forwarding before STT arms capture or pipeline interruption runs.
+    _set_audio_input_active(session, True, "push_to_talk_start", force=True)
 
     if hasattr(session, 'tts_service') and session.tts_service and hasattr(session.tts_service, 'set_ptt_active'):
         session.tts_service.set_ptt_active(True)
 
     if hasattr(session, 'stt_service') and session.stt_service:
-        session.stt_service.set_ptt_active(True)
+        session.stt_service.set_ptt_active(True, queue_interruption=False)
     else:
         session.logger.debug("PTT: STT service not yet available - PTT state will be restored when STT starts")
+
+    # Retry resume shortly after start — mic task can lag the command thread.
+    target_loop = getattr(getattr(session, 'runner', None), '_loop', None) or getattr(session, '_main_loop', None)
+    if target_loop and getattr(target_loop, 'is_running', lambda: False)():
+        def _retry_resume():
+            _set_audio_input_active(session, True, "push_to_talk_start_retry", force=True)
+            try:
+                health = session.transport.input().get_input_health()
+                session.logger.info("PTT: Audio input health after start: %s", health)
+            except Exception as exc:
+                session.logger.debug("PTT: Could not read audio input health after start: %s", exc)
+
+        try:
+            target_loop.call_later(0.05, _retry_resume)
+        except Exception:
+            import asyncio
+
+            async def _delayed_resume():
+                await asyncio.sleep(0.05)
+                _retry_resume()
+
+            asyncio.run_coroutine_threadsafe(_delayed_resume(), target_loop)
 
     # Immediate cancel so TTS/LLM stop before frame propagates
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_cancelled'):
@@ -786,7 +810,12 @@ def _cmd_push_to_talk_start(session, params):
     # push_interruption_task_frame_and_wait() broadcasts InterruptionFrame to ALL
     # processors simultaneously via PipelineTask, avoiding the sequential propagation
     # that kills the output transport's processing loop.
-    if hasattr(session, 'stt_service') and session.stt_service and session.runner and session.runner._loop:
+    stt_started = bool(
+        hasattr(session, 'stt_service')
+        and session.stt_service
+        and getattr(session.stt_service, '_FrameProcessor__started', False)
+    )
+    if stt_started and session.runner and session.runner._loop:
         async def send_ptt_interruption():
             try:
                 await session.stt_service.push_interruption_task_frame_and_wait()
@@ -794,6 +823,8 @@ def _cmd_push_to_talk_start(session, params):
             except Exception as e:
                 session.logger.warning(f"PTT: Could not send pipeline interruption: {e}")
         asyncio.run_coroutine_threadsafe(send_ptt_interruption(), session.runner._loop)
+    elif hasattr(session, 'stt_service') and session.stt_service and not stt_started:
+        session.logger.debug("PTT: STT not started yet — skipping pipeline interruption")
     elif hasattr(session, 'stt_service') and session.stt_service:
         session.logger.warning("PTT: Runner/loop not available - STT will send InterruptionFrame on next frame")
     else:

@@ -954,9 +954,20 @@ function repairOrphanAssistantBeforeUser() {
         if (prev && prev.classList.contains('user')) continue;
         let next = asst.nextElementSibling;
         while (next && !next.classList.contains('message')) next = next.nextElementSibling;
-        if (next && next.classList.contains('user')) {
-            chatMessages.insertBefore(next, asst);
+        if (!next || !next.classList.contains('user')) continue;
+
+        const asstRow = messageDomRowId(asst);
+        const userRow = messageDomRowId(next);
+        if (asstRow != null && userRow != null) {
+            // Different turns — keep chronological order (e.g. clipboard reply, then a later user message).
+            if (asstRow !== userRow) continue;
+        } else {
+            const asstTs = messageDomTimestampMs(asst);
+            const userTs = messageDomTimestampMs(next);
+            if (asstTs && userTs && userTs > asstTs) continue;
         }
+
+        chatMessages.insertBefore(next, asst);
     }
 }
 
@@ -4780,7 +4791,7 @@ function updateChatSettingsDisplay(settings) {
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────
 
-const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'f5tts', 'voxcpm', 'supertonic']);
+const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'supertonic']);
 let _chatCvAudioMode = 'upload';
 let _chatCvRecordedBlob = null;
 let _chatCvMediaRecorder = null;
@@ -4876,11 +4887,6 @@ function openChatCustomVoiceModal(context) {
         audioInput.multiple = false;
         if (help) help.textContent = 'Upload a Supertonic Voice Builder .json voice style file.';
         if (recordBtn) recordBtn.classList.add('hidden');
-    } else if (provider === 'chatterbox') {
-        audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
-        audioInput.multiple = false;
-        if (help) help.textContent = 'Upload a clean 5-20 second reference clip for Chatterbox voice cloning';
-        if (recordBtn) recordBtn.classList.remove('hidden');
     } else {
         audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
         audioInput.multiple = true;

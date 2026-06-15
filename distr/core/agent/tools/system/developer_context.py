@@ -21,7 +21,7 @@ class DeveloperContextTool(BaseTool):
     name: str = "developer_context"
     description: str = (
         "Inspect the current developer workflow context: active project, active board, "
-        "current tickets, workflow runs, and recommended skills. Use before creating "
+        "current tickets, ticket board notes, workflow runs, and recommended skills. Use before creating "
         "tickets, starting workflows, delegating project work, or diagnosing why the "
         "agent chose the wrong board/project/workflow."
     )

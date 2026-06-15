@@ -39,24 +39,9 @@ except ImportError:
     CoquiTTSService = None
 
 try:
-    from .tts.f5tts import F5TTSTTSService
-except ImportError:
-    F5TTSTTSService = None
-
-try:
-    from .tts.voxcpm import VoxCPMTTSService
-except ImportError:
-    VoxCPMTTSService = None
-
-try:
     from .tts.supertonic import SupertonicTTSService
 except ImportError:
     SupertonicTTSService = None
-
-try:
-    from .tts.chatterbox import ChatterboxTTSService
-except ImportError:
-    ChatterboxTTSService = None
 
 # LLM services
 from .llm.providers.ollama import OllamaLLMService
@@ -102,14 +87,8 @@ if OpenAITTSService:
     __all__.append("OpenAITTSService")
 if CoquiTTSService:
     __all__.append("CoquiTTSService")
-if F5TTSTTSService:
-    __all__.append("F5TTSTTSService")
-if VoxCPMTTSService:
-    __all__.append("VoxCPMTTSService")
 if SupertonicTTSService:
     __all__.append("SupertonicTTSService")
-if ChatterboxTTSService:
-    __all__.append("ChatterboxTTSService")
 if OpenAILLMService:
     __all__.append("OpenAILLMService")
 if OpenRouterLLMService:

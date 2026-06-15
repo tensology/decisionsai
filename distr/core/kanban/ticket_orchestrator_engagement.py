@@ -134,6 +134,8 @@ def build_agent_context(
     board_label: str = "",
     source: str = "database",
     board_data: Optional[Mapping[str, Any]] = None,
+    attachment_markdown: str = "",
+    attachment_warning: Optional[str] = None,
 ) -> str:
     """Full orchestrator instructions + ticket context (never shown in chat UI)."""
     ticket = ticket or {}
@@ -218,6 +220,26 @@ def build_agent_context(
             "and acceptance details.)*"
         )
 
+    attachment_block = ""
+    attachment_md = (attachment_markdown or "").strip()
+    if attachment_md and "_No files on this issue._" not in attachment_md:
+        attachment_block = (
+            "\n\n**Attachments (imported to project folder)**\n"
+            f"{attachment_md}"
+            "\nThese files were downloaded from Jira/Trello for this handoff. "
+            "Use document_extractor or pdf_page_extractor on the paths above. "
+            "Do not tell the user you cannot access ticket attachments when paths are listed here."
+        )
+    elif attachment_warning:
+        attachment_block = f"\n\n**Attachments**\n_(Import note: {attachment_warning})_"
+
+    notes_block = ""
+    context_notes = (ticket.get("context_notes") or "").strip()
+    if context_notes:
+        from distr.core.kanban.ticket_context_notes import format_context_notes_block
+
+        notes_block = format_context_notes_block(context_notes)
+
     orchestrator_hint = ""
     if not is_local:
         orchestrator_hint = (
@@ -229,6 +251,11 @@ def build_agent_context(
             "**Copy to local board**. Answer from this message and the URL; suggest copying to "
             "the board only if they need send-to-project or a local ticket id."
         )
+        if attachment_block:
+            orchestrator_hint += (
+                " Imported attachments are already on disk in the linked project — read them "
+                "with document tools instead of asking the user to download links manually."
+            )
 
     return (
         "[Ticket Board — orchestrator engage this ticket]\n"
@@ -243,6 +270,9 @@ def build_agent_context(
         "Use project/local-context tools only as needed to confirm folder state or recent project "
         "activity — the board and project are already activated for this handoff.\n"
         "Do not start CLI runs, edit the board, or create workflows unless the user asks.\n"
+        "Ticket-scoped discussion is captured silently on the ticket as compact notes — never "
+        "announce that you are saving notes. Workflow-wide operational updates belong on the "
+        "workflow, not the ticket.\n"
         "End with one concrete suggested next step and one focused question or offer to proceed. "
         "Do not ask 3-5 generic questions.\n\n"
         f"**Context** — Source: {source} · Board: {board_label or '(unknown)'} · {id_part}"
@@ -252,6 +282,8 @@ def build_agent_context(
         f"**Description**\n{desc or '(none)'}"
         f"{project_block}"
         f"{activation_block}"
+        f"{attachment_block}"
+        f"{notes_block}"
         f"{desc_note}"
         f"{orchestrator_hint}"
     )
@@ -264,6 +296,8 @@ def build_orchestrator_messages(
     board_label: str = "",
     source: str = "database",
     board_data: Optional[Mapping[str, Any]] = None,
+    attachment_markdown: str = "",
+    attachment_warning: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Return (display_brief, agent_context)."""
     return (
@@ -274,6 +308,8 @@ def build_orchestrator_messages(
             board_label=board_label,
             source=source,
             board_data=board_data,
+            attachment_markdown=attachment_markdown,
+            attachment_warning=attachment_warning,
         ),
     )
 

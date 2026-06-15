@@ -28,6 +28,7 @@ from distr.core.agent.services.tts.sentence_split import (
     extract_complete_sentences,
     is_redundant_sentence,
 )
+from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
 from distr.core.agent.constants import SAMPLE_RATE_COQUI, DEFAULT_COQUI_VOICE
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ except ImportError:
     COQUI_AVAILABLE = False
 
 
-class CoquiTTSService(TTSService):
+class CoquiTTSService(TTSPipelineMixin, TTSService):
     """Coqui TTS running locally via the TTS package (VCTK multi-speaker model).
 
     Args:
@@ -78,6 +79,8 @@ class CoquiTTSService(TTSService):
         self.event_queue = event_queue
         self._speech_volume = max(0.0, min(1.0, speech_volume / 100.0))
         self._cancelled = False
+        self._volume_in_run_tts = True
+        self._init_tts_pipeline_state()
         self._in_response_after_start = False
         self._llm_response_started_at = 0  # Timestamp of last LLMFullResponseStartFrame; used to ignore stale InterruptionFrames
         self._is_hands_free = False
@@ -302,28 +305,22 @@ class CoquiTTSService(TTSService):
 
     async def process_frame(self, frame, direction):
         if isinstance(frame, CancelFrame):
-            if self._in_response_after_start:
+            if self.is_stale_interrupt_frame():
                 logger.debug("Coqui TTS: CancelFrame ignored (stale)")
                 return
-            self._cancelled = True
-            self._text_buffer = ""
+            self.abort_pending_synthesis()
             if self._is_hands_free:
                 await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, InterruptionFrame):
-            # Guard: ignore stale InterruptionFrames that arrive after the current response
-            # has already started (e.g. from a pre-send interrupt_tts command that raced).
-            now = time.monotonic()
-            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+            if self.is_stale_interrupt_frame():
                 logger.debug(
                     "Coqui TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame)",
-                    (now - self._llm_response_started_at) * 1000,
+                    (time.monotonic() - self._llm_response_started_at) * 1000,
                 )
                 return
-            self._cancelled = True
-            self._text_buffer = ""
-            self._processed_sentences.clear()
+            self.abort_pending_synthesis()
             if self._tts_session_active:
                 self._tts_session_active = False
                 self._total_audio_duration = 0.0
@@ -346,7 +343,7 @@ class CoquiTTSService(TTSService):
             return
 
         if isinstance(frame, TextFrame):
-            if self._cancelled:
+            if not self.maybe_clear_stale_cancelled_for_text():
                 return
 
             import threading
@@ -381,25 +378,12 @@ class CoquiTTSService(TTSService):
                 self._processed_sentences.add(norm)
                 if len(self._processed_sentences) > 100:
                     self._processed_sentences = set(list(self._processed_sentences)[-50:])
-                async for audio_frame in self.run_tts(sentence):
-                    if self._cancelled:
-                        break
-                    is_audio = isinstance(audio_frame, AudioRawFrame) or (
-                        OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)
-                    )
-                    if (
-                        is_audio
-                        or isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame, ErrorFrame))
-                    ):
-                        await self.push_frame(audio_frame, direction)
+                await self._enqueue_sentence(sentence, direction)
             return
 
         if isinstance(frame, LLMFullResponseStartFrame):
-            self._cancelled = False
+            self.reset_tts_response_start()
             self._in_response_after_start = True
-            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
-            self._text_buffer = ""
-            self._processed_sentences.clear()
             self._tts_session_active = True
             self._total_audio_duration = 0.0
             self._tts_started_emitted = False
@@ -415,14 +399,9 @@ class CoquiTTSService(TTSService):
             if self._text_buffer.strip() and not self._cancelled:
                 text = self._text_buffer.strip()
                 self._text_buffer = ""
-                async for audio_frame in self.run_tts(text):
-                    if self._cancelled:
-                        break
-                    is_audio = isinstance(audio_frame, AudioRawFrame) or (
-                        OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)
-                    )
-                    if is_audio or isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
-                        await self.push_frame(audio_frame, direction)
+                await self._enqueue_sentence(text, direction)
+            if not self._cancelled:
+                await self._drain_speak_queue()
             if self._tts_session_active:
                 self._tts_session_active = False
                 if not self._current_telegram_request and self.event_queue:

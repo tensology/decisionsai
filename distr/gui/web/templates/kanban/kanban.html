@@ -244,6 +244,110 @@
 .kb-board-item { cursor: pointer; padding: 8px 12px; border-radius: 6px; display: flex; align-items: center; font-size: 0.875rem; }
 .kb-board-item:hover { background: rgba(255,255,255,0.07); }
 .kb-board-item.active { background: rgba(249,115,22,0.2); color: #f97316; }
+/* Ticket board notes — tab bar in main area */
+.kb-doc-tabbar { min-height: 2.625rem; }
+.kb-doc-tab {
+    flex-shrink: 0;
+    max-width: 14rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+    overflow: hidden;
+    min-width: 0;
+}
+.kb-doc-tab-title-wrap { display: block; min-width: 0; max-width: 100%; overflow: hidden; }
+.kb-doc-tab-title { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kb-doc-tab:hover { color: #fff; background: rgba(255,255,255,0.04); }
+.kb-doc-tab.active { color: #fff; border-bottom-color: #f97316; background: rgba(255,255,255,0.06); }
+.kb-doc-tab:focus-visible { outline: 2px solid rgba(249,115,22,0.55); outline-offset: -2px; }
+.kb-doc-tab-delete {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: #f87171;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background-color 0.15s;
+}
+.kb-doc-tab:hover .kb-doc-tab-delete,
+.kb-doc-tab.active .kb-doc-tab-delete { opacity: 1; }
+.kb-doc-tab-delete:hover { background: rgba(239,68,68,0.18); color: #fecaca; }
+.kb-doc-tabbar-actions { border-left: 1px solid rgba(255,255,255,0.12); }
+.kb-doc-textarea {
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    resize: none;
+    border: 0;
+    background: #152054;
+    color: #f3f4f6;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    padding: 0.75rem;
+    outline: none;
+}
+.kb-doc-textarea::placeholder { color: #6b7280; }
+.kb-doc-textarea:focus { box-shadow: inset 0 0 0 1px rgba(249,115,22,0.35); }
+.kb-notes-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.625rem 0.875rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: #1a1f3a;
+    color: #e5e7eb;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+}
+.kb-notes-bar:hover { border-color: rgba(249,115,22,0.45); color: #fff; }
+.kb-notes-bar.active {
+    border-color: rgba(249,115,22,0.55);
+    background: rgba(249,115,22,0.12);
+    color: #fff;
+}
+.kb-notes-bar-label { text-transform: uppercase; font-size: 0.6875rem; letter-spacing: 0.08em; color: #9ca3af; }
+.kb-notes-bar.active .kb-notes-bar-label { color: #fdba74; }
+.kb-doc-ctx-menu {
+    position: fixed;
+    z-index: 10050;
+    min-width: 10rem;
+    padding: 0.25rem 0;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: #1a1f3a;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.kb-doc-ctx-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.8125rem;
+    color: #e5e7eb;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.kb-doc-ctx-menu button:hover { background: rgba(255,255,255,0.08); }
+.kb-doc-ctx-menu button.danger { color: #f87171; }
+.kb-doc-ctx-menu button.danger:hover { background: rgba(239,68,68,0.15); }
 /* Card hover uses board accent */
 .kb-card:hover { border-color: var(--kb-accent, #f97316) !important; opacity: 0.85; }
 /* Disabled copy button */
@@ -581,7 +685,7 @@
             <!-- Boards panel -->
             <div id="kb-panel-tickets" class="flex-1 min-h-0 flex flex-col">
                 <!-- Search -->
-                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3 pb-2 mb-1">
+                <div id="kb-board-search-wrap" class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3 pb-2 mb-1">
                     <div class="flex items-center gap-2">
                         <input type="text" id="kb-search" placeholder="Search boards..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
                     </div>
@@ -599,7 +703,7 @@
                     </button>
                 </div>
                 <!-- Board list -->
-                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto mt-2">
+                <div id="kb-boards-shell" class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto mt-2">
                     <!-- Local boards container -->
                     <div id="kb-local-boards-container" class="flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
@@ -629,6 +733,12 @@
                         </div>
                     </div>
                 </div>
+                <button type="button" id="kb-todo-bar" class="kb-notes-bar mt-2 shrink-0" aria-expanded="false" title="Open notes">
+                    <span class="kb-notes-bar-label">Notes</span>
+                    <svg id="kb-todo-bar-chevron" class="w-4 h-4 text-gray-400 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                </button>
             </div>
 
             <!-- Messages panel -->
@@ -694,6 +804,32 @@
             <!-- Loading spinner -->
             <div id="kb-loading" class="hidden flex-1 flex items-center justify-center">
                 <svg class="animate-spin h-8 w-8 text-[#f97316]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            </div>
+            <!-- Sidebar documents workspace (main board area) -->
+            <div id="kb-documents-main" class="hidden flex-1 flex flex-col min-h-0">
+                <div class="kb-doc-tabbar flex items-stretch flex-shrink-0 border-b border-white/20 px-2">
+                    <div id="kb-doc-main-tabs" class="flex-1 min-w-0 flex items-stretch overflow-x-auto" role="tablist" aria-label="Notes"></div>
+                    <div class="kb-doc-tabbar-actions flex items-center shrink-0 pl-2">
+                        <button type="button" id="kb-doc-new-btn" title="New note" aria-label="New note" class="flex-shrink-0 px-2 py-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-white">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div id="kb-doc-empty" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                    <p class="text-sm text-gray-400 mb-3">No notes yet.</p>
+                    <button type="button" id="kb-doc-empty-add" class="text-xs px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] hover:bg-[#f97316]/10">+ Add note</button>
+                </div>
+                <div id="kb-doc-editor" class="hidden flex-1 flex flex-col min-h-0">
+                    <textarea id="kb-doc-textarea" class="kb-doc-textarea" placeholder="Type your notes here..." spellcheck="true"></textarea>
+                    <div class="border-t border-white/10 px-3 py-2 flex items-center justify-between gap-3 shrink-0 bg-[#12183a]/60">
+                        <button type="button" id="kb-doc-delete-btn" class="inline-flex items-center justify-center w-8 h-8 rounded border border-red-500/40 text-red-300 hover:bg-red-500/15" title="Delete note" aria-label="Delete note">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        </button>
+                        <button type="button" id="kb-doc-save-btn" class="px-4 py-1.5 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
+                    </div>
+                </div>
             </div>
             <!-- Board view -->
             <div id="kb-board-view" class="hidden flex-1 flex flex-col min-h-0">
@@ -872,6 +1008,7 @@
         <!-- Ticket tabs -->
         <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-ttab="details">Details</button>
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="notes">Notes</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="links">Links</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="todo">To-do</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="report">Report</button>
@@ -906,6 +1043,11 @@
                 <div id="kb-modal-source-meta" class="hidden mb-3 p-3 bg-[#152054] border border-white/10 rounded">
                     <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid"></div>
                 </div>
+            </div>
+            <!-- Notes tab (orchestrator context — read-only) -->
+            <div id="kb-tm-tab-notes" class="kb-tm-pane hidden p-6 space-y-3">
+                <p class="text-xs text-gray-500">Compact notes from orchestrator discussions on this ticket. These travel with the ticket into workflow runs.</p>
+                <div id="kb-modal-context-notes" class="text-sm text-gray-200 whitespace-pre-wrap rounded border border-white/10 bg-[#152054] p-3 min-h-[8rem] max-h-[16rem] overflow-y-auto text-xs leading-relaxed"></div>
             </div>
             <!-- Links tab -->
             <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-6 space-y-4">
@@ -1062,6 +1204,25 @@
     <button type="button" class="kb-ctx-rename w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>Rename</button>
     <button type="button" class="kb-ctx-archive w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>Archive</button>
     <button type="button" class="kb-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete</button>
+</div>
+
+<!-- Document tab context menu -->
+<div id="kb-doc-ctx-menu" class="kb-doc-ctx-menu hidden" role="menu" aria-label="Note actions">
+    <button type="button" class="kb-doc-ctx-rename" role="menuitem">Rename</button>
+    <button type="button" class="kb-doc-ctx-delete danger" role="menuitem">Delete</button>
+</div>
+
+<!-- Rename note modal -->
+<div id="kb-doc-rename-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="kb-doc-rename-title">
+    <div class="kb-modal p-6" style="width: 420px;">
+        <h3 id="kb-doc-rename-title" class="text-lg font-semibold text-white mb-4">Rename note</h3>
+        <label for="kb-doc-rename-input" class="block text-sm text-gray-400 mb-1">Title</label>
+        <input type="text" id="kb-doc-rename-input" class="w-full px-3 py-2 mb-5 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Note title" spellcheck="false">
+        <div class="flex justify-end gap-2">
+            <button type="button" id="kb-doc-rename-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-doc-rename-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
+        </div>
+    </div>
 </div>
 
 <!-- External board context menu (right-click on Trello/Jira boards) -->
@@ -1235,6 +1396,7 @@
 <script src="/tickets/static/js/kanban_board.js"></script>
 <script src="/tickets/static/js/kanban_ticket.js"></script>
 <script src="/tickets/static/js/kanban_whatsapp.js"></script>
+<script src="/tickets/static/js/kanban_documents.js"></script>
 <script src="/tickets/static/js/kanban.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 {% endblock %}

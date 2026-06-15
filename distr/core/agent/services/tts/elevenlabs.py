@@ -15,6 +15,7 @@ from distr.core.agent.libs import (
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 from distr.core.agent.services.tts.elevenlabs_config import ELEVENLABS_TTS_MODEL_ID
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
+from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def _elevenlabs_clean_error(error):
     return ("unknown", "ElevenLabs TTS failed. Please try again or switch to another TTS provider.")
 
 
-class ElevenLabsTTSService(TTSService):
+class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
     """ElevenLabs-based TTS service using Pipecat"""
     
     def __init__(self, api_key: str, voice_id: str, voice_name: str = None, stt_service=None, playback_speed: float = 1.0, event_queue=None, speech_volume: int = 100, stability: float = 0.5, similarity_boost: float = 0.6, style: float = 0.25, use_speaker_boost: bool = True, on_quota_exceeded=None, **kwargs):
@@ -70,6 +71,8 @@ class ElevenLabsTTSService(TTSService):
         self._frame_id_counter = 10000
         self._stt_service = stt_service
         self._cancelled = False
+        self._volume_in_run_tts = True
+        self._init_tts_pipeline_state()
         self._is_hands_free = False  # Track hands-free mode state
         self._ptt_active = False  # Track PTT state
         self.event_queue = event_queue  # Queue to send events back to main process
@@ -462,14 +465,10 @@ class ElevenLabsTTSService(TTSService):
         # - Hands-free mode: Pass through (needed for proper interruption)
         # - Push-to-talk mode: STOP here (transport breaks if it receives these)
         if isinstance(frame, CancelFrame):
-            # Guard: ignore stale CancelFrames (same logic as InterruptionFrame)
-            now = time.monotonic()
-            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+            if self.is_stale_interrupt_frame():
                 logger.debug("TTS: Ignoring stale CancelFrame (from pre-send interrupt)")
                 return
-            # CancelFrame is handled for backwards compatibility; PTT uses InterruptionFrame
-            self._cancelled = True
-            self._text_buffer = ""
+            self.abort_pending_synthesis()
             logger.warning(f"TTS: CancelFrame received - cancelling TTS (hands_free={self._is_hands_free}, ptt_active={self._ptt_active})")
             
             # Only pass CancelFrame through in hands-free mode
@@ -481,18 +480,14 @@ class ElevenLabsTTSService(TTSService):
         # Handle InterruptionFrame - KILLS AUDIO IMMEDIATELY
         # InterruptionFrame always interrupts, regardless of mode.
         if isinstance(frame, InterruptionFrame):
-            # Guard: ignore stale InterruptionFrames that arrive after the current response
-            # has already started (e.g. from a pre-send interrupt_tts command that raced).
-            now = time.monotonic()
-            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+            if self.is_stale_interrupt_frame():
                 logger.debug(
                     "TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame - from pre-send interrupt)",
-                    (now - self._llm_response_started_at) * 1000,
+                    (time.monotonic() - self._llm_response_started_at) * 1000,
                 )
                 return
             logger.debug("TTS: InterruptionFrame received - stopping playback")
-            self._cancelled = True
-            self._text_buffer = ""
+            self.abort_pending_synthesis()
             
             # Emit tts_stopped on interrupt to close player
             if self._tts_session_active:
@@ -527,9 +522,8 @@ class ElevenLabsTTSService(TTSService):
             
             # CRITICAL: If cancelled (e.g., by CancelFrame from PTT), DROP all TextFrames
             # Do NOT reset cancelled state - only LLMFullResponseStartFrame should do that
-            if self._cancelled:
+            if not self.maybe_clear_stale_cancelled_for_text():
                 logger.debug("TTS: TextFrame dropped - TTS is cancelled, not processing")
-                # Don't process, don't accumulate, just drop it
                 return
             
             # Accumulate cleaned text and process incrementally. Live deltas can
@@ -590,49 +584,7 @@ class ElevenLabsTTSService(TTSService):
                         self._processed_sentences = set(list(self._processed_sentences)[-50:])
                     
                     logger.debug(f"TTS: Synthesizing: '{sentence[:60]}'")
-                    frame_count = 0
-                    audio_frame_count = 0
-                    async for audio_frame in self.run_tts(sentence):
-                        # CRITICAL: Check cancellation BEFORE processing each frame
-                        if self._cancelled:
-                            logger.warning("TTS: Generation cancelled - stopping immediately")
-                            break
-                        
-                        # CRITICAL: Check cancellation BEFORE pushing frame
-                        if self._cancelled:
-                            logger.debug("TTS: Cancelled before pushing frame - dropping")
-                            break
-                        
-                        frame_count += 1
-                        
-                        # Debug: Log frame details before pushing
-                        if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                            if audio_frame_count == 0:
-                                logger.debug(f"TTS: About to push first audio frame: {len(audio_frame.audio)} bytes, sample_rate={audio_frame.sample_rate}, direction={direction}")
-                        
-                        try:
-                            # Final check before pushing
-                            if self._cancelled:
-                                logger.debug("TTS: Cancelled right before push - dropping frame")
-                                break
-                            
-                            # Volume is already applied inside run_tts — do NOT scale again here.
-                            await self.push_frame(audio_frame, direction)
-                            # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
-                            if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                audio_frame_count += 1
-                                if audio_frame_count == 1:
-                                    logger.debug(f"TTS: First audio frame pushed successfully to direction={direction}")
-                                elif audio_frame_count % 50 == 0:
-                                    logger.debug(f"TTS: Pushed {audio_frame_count} audio frames so far...")
-                        except Exception as e:
-                            logger.error(f"TTS: Error pushing frame: {e}", exc_info=True)
-                            break
-                    
-                    if audio_frame_count > 0:
-                        logger.debug(f"TTS: {audio_frame_count} audio frames for sentence")
-                    else:
-                        logger.warning(f"TTS: No audio frames generated for sentence: '{sentence[:50]}...'")
+                    await self._enqueue_sentence(sentence, direction)
             else:
                 logger.debug(f"TTS: No complete sentences yet, buffering (buffer: '{self._text_buffer[:50]}...')")
             
@@ -643,10 +595,8 @@ class ElevenLabsTTSService(TTSService):
         
         if isinstance(frame, LLMFullResponseStartFrame):
             logger.debug("TTS: LLMFullResponseStartFrame - resetting TTS state for new response")
-            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
-            self._text_buffer = ""
-            self._cancelled = False  # Reset cancelled state to allow new audio generation
-            self._processed_sentences.clear()  # Clear processed sentences for new response
+            self._llm_response_started_at = time.monotonic()
+            self.reset_tts_response_start()
             
             # Start new TTS session - reset duration accumulator and mark session as active
             self._tts_session_active = True
@@ -666,40 +616,13 @@ class ElevenLabsTTSService(TTSService):
             if self._text_buffer.strip() and not self._cancelled:
                 text = self._text_buffer.strip()
                 self._text_buffer = ""
-                logger.debug(f"TTS: Processing remaining text: '{text[:50]}...'")
-                audio_frame_count = 0
-                frame_count = 0
-                async for audio_frame in self.run_tts(text):
-                    if self._cancelled:
-                        logger.debug("TTS: Generation cancelled during remaining text processing")
-                        break
-                    frame_count += 1
-                    
-                    # Debug: Log frame details before pushing (same as regular TextFrame processing)
-                    if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                        if audio_frame_count == 0:
-                            logger.debug(f"TTS: About to push first audio frame from remaining text: {len(audio_frame.audio)} bytes, sample_rate={audio_frame.sample_rate}, direction={direction}")
-                    
-                    try:
-                        # Volume already applied inside run_tts — do NOT scale again.
-                        await self.push_frame(audio_frame, direction)
-                        # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
-                        if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                            audio_frame_count += 1
-                            if audio_frame_count == 1:
-                                logger.debug(f"TTS: First audio frame from remaining text pushed successfully to direction={direction}")
-                            elif audio_frame_count % 50 == 0:
-                                logger.debug(f"TTS: Pushed {audio_frame_count} audio frames from remaining text so far...")
-                    except Exception as e:
-                        logger.error(f"TTS: Error pushing frame from remaining text: {e}", exc_info=True)
-                        break
-                
-                if audio_frame_count > 0:
-                    logger.debug(f"TTS: {audio_frame_count} audio frames from remaining text")
-                else:
-                    logger.warning(f"TTS: No audio frames generated from remaining text")
+                logger.debug(f"TTS: Enqueueing remaining text: '{text[:50]}...'")
+                await self._enqueue_sentence(text, direction)
             else:
                 logger.debug("TTS: No remaining text to process (buffer empty or cancelled)")
+
+            if not self._cancelled:
+                await self._drain_speak_queue()
             
             # End TTS session - emit stop event with total accumulated duration
             if self._tts_session_active:

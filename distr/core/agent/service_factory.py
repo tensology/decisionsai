@@ -160,6 +160,12 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
     except KeyError:
         raise ValueError(f"Unsupported TTS engine: {engine}")
 
+    if not descriptor.enabled:
+        logger.warning("TTS provider %s is retired or disabled; falling back to Kokoro", engine)
+        descriptor = tts_registry.get("kokoro")
+        tts_config = dict(tts_config)
+        tts_config["engine"] = "kokoro"
+
     # Each descriptor's create_service() returns a fully initialised service
     # (including set_hands_free).
     return descriptor.create_service(
@@ -260,7 +266,7 @@ def resolve_agent_name_from_tts_config(tts_config: dict, settings: dict) -> str:
     # ElevenLabs also falls back to settings.
     if engine == 'elevenlabs':
         vm = tts_config.get('voice_id', '') or (settings or {}).get('elevenlabs_voice', '')
-    elif engine in ('kokoro', 'f5tts', 'voxcpm'):
+    elif engine == 'kokoro':
         vm = tts_config.get('voice_name', descriptor.default_voice)
     else:
         vm = tts_config.get('voice_id', descriptor.default_voice)

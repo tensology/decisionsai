@@ -468,6 +468,9 @@
             var tabMessages = document.getElementById("kb-tab-messages");
             if (tab === "messages") {
                 setSidebarTabInUrl("messages");
+                if (window.KanbanDocuments && typeof window.KanbanDocuments.onSidebarTabChange === "function") {
+                    window.KanbanDocuments.onSidebarTabChange("messages");
+                }
                 if (typeof deps.resetBoardSurfaceForMessagesMode === "function") {
                     deps.resetBoardSurfaceForMessagesMode();
                 }
@@ -481,6 +484,9 @@
                 deps.onEnterMessagesTab();
             } else {
                 setSidebarTabInUrl("tickets");
+                if (window.KanbanDocuments && typeof window.KanbanDocuments.onSidebarTabChange === "function") {
+                    window.KanbanDocuments.onSidebarTabChange("tickets");
+                }
                 if (typeof deps.resetMessagesSurfaceForBoardMode === "function") {
                     deps.resetMessagesSurfaceForBoardMode();
                 }
@@ -495,7 +501,7 @@
                     document.getElementById("kb-empty").classList.remove("hidden");
                 } else {
                     document.getElementById("kb-loading").classList.add("hidden");
-                    document.getElementById("kb-board-view").classList.remove("hidden");
+                    kbRevealBoardView();
                     document.getElementById("kb-empty").classList.add("hidden");
                 }
             }

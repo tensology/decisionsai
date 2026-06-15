@@ -343,6 +343,18 @@ def extract_memory_candidates_from_text(text: str) -> list[dict[str, Any]]:
                     "confidence": 0.72,
                 })
 
+    if re.search(
+        r"\bdon'?t\s+(?:want|send).{0,80}(?:daily|morning|day)\s+plan",
+        clean,
+        re.IGNORECASE,
+    ):
+        candidates.append({
+            "content": "Does not want scheduled daily or morning plans sent proactively.",
+            "category": "engagement_guardrail",
+            "tags": ["guardrail", "daily_plan", "automation"],
+            "confidence": 0.88,
+        })
+
     if re.search(r"\bstop\s+sending\s+(?:idle\s+)?voice\s+notes?\b", clean, re.IGNORECASE):
         candidates.append({
             "content": "Does not want idle or stale-session notifications sent as voice notes.",

@@ -467,11 +467,12 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
             "- Be concise and direct.\n"
             "- Use Current lane items as active commitments before looking at Backlog.\n"
             "- If Current is empty or thin, infer achievable outcomes from Backlog and connected-source pressure.\n"
-            "- Pull signal from Telegram, WhatsApp, Gmail/email, Slack, Jira, Trello, ClickUp, Monday, workflows, developer context, and memory when present.\n"
+            "- Pull signal from Telegram, WhatsApp, Gmail/email, Slack, Jira, Trello, ClickUp, Monday, workflows, developer context, ticket board notes, and memory when present.\n"
             "- Use work_scan.orchestrator_triage.candidates as the primary source of decisions, but do not mention internal system names.\n"
             "- Ask concrete questions, e.g. 'Should I create a ticket from this WhatsApp thread?'\n"
             "- If source context is thin, say exactly which connector or permission is missing.\n"
             "- Do not say only that a proactive brief ran.\n"
+            "- When board_notes are present, treat them as the user's own scratchpad and weave them into outcomes and decisions.\n"
             "- Prefer outcomes and decisions over lane maintenance or broad status lists.\n"
         )
     if scope == "day":
@@ -484,7 +485,7 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
             + "Use these sections (## headings):\n"
             "## Outcome for Today — the result the day should produce\n"
             "## Project Moves — what needs to move forward per project or board\n"
-            "## Source Pressure — Slack, Gmail/email, WhatsApp, Telegram, Jira, Trello, ClickUp, Monday, workflow, and developer signals that change priority\n"
+            "## Source Pressure — Slack, Gmail/email, WhatsApp, Telegram, Jira, Trello, ClickUp, Monday, workflow, ticket board notes, and developer signals that change priority\n"
             "## Schedule — suggested time blocks (if inferable from context)\n"
             "## Risks & blockers\n"
             "Rules:\n"
@@ -496,7 +497,7 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
     if scope == "week":
         return (
             "You are a week-planning assistant for DecisionsAI. Build a weekly arc from active commitments, "
-            "achievable backlog outcomes, connected messages, workflows, developer context, and memory. "
+            "achievable backlog outcomes, connected messages, workflows, ticket board notes, developer context, and memory. "
             "Do not create a ticket dump; explain what the week should accomplish.\n"
             + common
             + "Use these sections:\n"
@@ -546,6 +547,7 @@ def _user_payload(
             "chat_history": bundle.chat_history,
             "scheduled_sessions": bundle.scheduled_sessions,
             "kanban_summary": bundle.kanban_summary,
+            "board_notes": bundle.board_notes,
             "stuck_tasks": bundle.stuck_tasks,
             "unfinished_workflows": bundle.unfinished_workflows,
             "active_project": bundle.active_project,

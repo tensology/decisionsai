@@ -23,6 +23,7 @@ class AutomationPayload(BaseModel):
     automation_type: str = Field(default="scheduled_instruction")
     status: Optional[str] = None
     instruction: str = Field(default="")
+    preset_id: str = Field(default="")
     schedule: Dict[str, Any] = Field(default_factory=lambda: {"kind": "daily", "time": "09:00"})
     source_config: Dict[str, Any] = Field(default_factory=dict)
     linked_project_id: Optional[int] = None
@@ -41,6 +42,8 @@ class AutomationUpdate(BaseModel):
     status: Optional[str] = None
     instruction: Optional[str] = None
     schedule: Optional[Dict[str, Any]] = None
+    preset_id: Optional[str] = None
+    action_config: Optional[Dict[str, Any]] = None
     source_config: Optional[Dict[str, Any]] = None
     linked_project_id: Optional[int] = None
     linked_board_id: Optional[int] = None
@@ -94,12 +97,20 @@ def _workflow_id(automation_id: str | int) -> int:
     return int(raw)
 
 
-def _automation_marker(schedule: dict[str, Any] | None = None, automation_type: str = "scheduled_instruction") -> str:
+def _automation_marker(
+    schedule: dict[str, Any] | None = None,
+    automation_type: str = "scheduled_instruction",
+    *,
+    preset_id: str = "",
+    action_config: dict[str, Any] | None = None,
+) -> str:
     return json.dumps(
         {
             "decisions_surface": AUTOMATION_SURFACE,
             "automation_type": automation_type or "scheduled_instruction",
             "schedule": schedule or {"kind": "daily", "time": "09:00"},
+            "preset_id": str(preset_id or "").strip(),
+            "action_config": action_config if isinstance(action_config, dict) else {},
         },
         ensure_ascii=False,
         default=str,
@@ -238,12 +249,15 @@ def _serialize_automation(workflow: AutoWorkflow) -> dict[str, Any]:
     run_at_display = schedule.get("run_at") or ""
     if schedule.get("kind") == "once" and run_at_display:
         run_at_display = once_run_at_for_datetime_local_input(run_at_display)
+    action_config = marker.get("action_config") if isinstance(marker.get("action_config"), dict) else {}
     return {
         "id": _automation_id(workflow.id),
         "workflow_id": workflow.id,
         "step_id": step.id if step else None,
         "name": workflow.name or "Untitled Automation",
         "automation_type": marker.get("automation_type") or "scheduled_instruction",
+        "preset_id": str(marker.get("preset_id") or "").strip(),
+        "action_config": dict(action_config),
         "status": workflow.status or "active",
         "instruction": (step.instruction if step else "") or "",
         "schedule": {
@@ -356,6 +370,12 @@ def _dispatch_to_orchestrator(automation: Dict[str, Any]) -> Dict[str, Any]:
 def create_routes() -> APIRouter:
     router = APIRouter()
 
+    @router.get("/automations/presets")
+    async def list_automation_presets():
+        from distr.core.automation_presets import list_automation_presets as _list_presets
+
+        return JSONResponse({"presets": _list_presets()})
+
     @router.get("/automations")
     async def list_automations():
         with get_session() as db:
@@ -370,15 +390,35 @@ def create_routes() -> APIRouter:
 
     @router.post("/automations")
     async def create_automation(payload: AutomationPayload):
+        from distr.core.automation_presets import get_automation_preset
+
         schedule = _workflow_schedule(payload.schedule, strict=True)
+        preset_id = str(payload.preset_id or "").strip()
+        preset = get_automation_preset(preset_id) if preset_id else None
+        automation_type = payload.automation_type or "scheduled_instruction"
+        instruction = payload.instruction or ""
+        action_config = dict(payload.action_config or {})
+        if preset:
+            automation_type = preset.get("automation_type") or automation_type
+            if not instruction:
+                instruction = preset.get("instruction") or ""
+            if not action_config:
+                action_config = dict(preset.get("action_config") or {})
+            if not payload.schedule or payload.schedule == {"kind": "daily", "time": "09:00"}:
+                schedule = _workflow_schedule(preset.get("schedule") or schedule, strict=True)
         now = _utcnow()
         with get_session() as db:
             workflow = AutoWorkflow(
-                name=payload.name or "New Automation",
+                name=payload.name or (preset.get("name") if preset else None) or "New Automation",
                 description="Itemized DecisionsAI automation.",
                 status=payload.status or "active",
                 workflow_type="scheduled",
-                context_rules=_automation_marker(schedule, payload.automation_type),
+                context_rules=_automation_marker(
+                    schedule,
+                    automation_type,
+                    preset_id=preset_id,
+                    action_config=action_config,
+                ),
                 created_date=now,
                 modified_date=now,
             )
@@ -391,7 +431,7 @@ def create_routes() -> APIRouter:
                 name="Automation Instruction",
                 action_type="agent_instruction",
                 step_type="agent_instruction",
-                instruction=payload.instruction or "",
+                instruction=payload.instruction or instruction or "",
                 config=json.dumps({"source": "automation"}, ensure_ascii=False),
                 timeout_seconds=300,
             )
@@ -454,7 +494,17 @@ def create_routes() -> APIRouter:
             )
             if "schedule" in data or "status" in data:
                 _apply_schedule(workflow, schedule)
-            workflow.context_rules = _automation_marker(schedule, _json_config(workflow.context_rules).get("automation_type") or "scheduled_instruction")
+            marker = _json_config(workflow.context_rules)
+            preset_id = str(data.get("preset_id") if "preset_id" in data else marker.get("preset_id") or "").strip()
+            action_config = data.get("action_config") if "action_config" in data else marker.get("action_config")
+            if not isinstance(action_config, dict):
+                action_config = {}
+            workflow.context_rules = _automation_marker(
+                schedule,
+                marker.get("automation_type") or "scheduled_instruction",
+                preset_id=preset_id,
+                action_config=action_config,
+            )
             workflow.modified_date = _utcnow()
             db.commit()
             db.refresh(workflow)

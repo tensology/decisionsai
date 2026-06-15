@@ -122,6 +122,7 @@ class DeveloperWorkContext:
     active_executions: list[DeveloperExecutionContext] = field(default_factory=list)
     external_agent_context: dict[str, Any] = field(default_factory=dict)
     user_memory_context: str = ""
+    board_notes: list[dict[str, Any]] = field(default_factory=list)
     recommended_skills: list[DeveloperSkillContext] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -206,6 +207,13 @@ class DeveloperWorkContext:
         if self.user_memory_context:
             lines.append(self.user_memory_context)
 
+        if self.board_notes:
+            from distr.core.kanban.board_notes import format_board_notes_for_prompt
+
+            notes_block = format_board_notes_for_prompt(self.board_notes, max_notes=10, max_content_chars=320)
+            if notes_block:
+                lines.append(notes_block)
+
         if self.recommended_skills:
             lines.append("- recommended_skills:")
             for skill in self.recommended_skills:
@@ -250,6 +258,7 @@ class DeveloperContextAssembler:
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
         external_agent_context = _safe_call("external agent context", warnings, self._fetch_external_agent_context) or {}
         user_memory_context = _safe_call("Orchestrator user memory", warnings, self._fetch_user_memory_context) or ""
+        board_notes = _safe_call("ticket board notes", warnings, self._fetch_board_notes) or []
         recommended_skills = _safe_call("skill recommendations", warnings, self._recommend_skills, user_request) or []
 
         return DeveloperWorkContext(
@@ -261,6 +270,7 @@ class DeveloperContextAssembler:
             active_executions=active_executions,
             external_agent_context=external_agent_context,
             user_memory_context=user_memory_context,
+            board_notes=board_notes,
             recommended_skills=recommended_skills,
             warnings=warnings,
         )
@@ -556,6 +566,11 @@ class DeveloperContextAssembler:
 
         return build_memory_context(limit=30)
 
+    def _fetch_board_notes(self) -> list[dict[str, Any]]:
+        from distr.core.kanban.board_notes import load_board_notes
+
+        return load_board_notes()
+
     def _recommend_skills(self, user_request: str) -> list[DeveloperSkillContext]:
         if not (user_request or "").strip():
             return []
@@ -591,6 +606,7 @@ def format_developer_context_dict_for_prompt(
     executions = context.get("active_executions") or []
     external_agent_context = context.get("external_agent_context") or {}
     user_memory_context = context.get("user_memory_context") or ""
+    board_notes = context.get("board_notes") or []
     skills = context.get("recommended_skills") or []
 
     lines: list[str] = ["Developer workflow context:"]
@@ -667,6 +683,13 @@ def format_developer_context_dict_for_prompt(
 
     if user_memory_context:
         lines.append(str(user_memory_context))
+
+    if board_notes:
+        from distr.core.kanban.board_notes import format_board_notes_for_prompt
+
+        notes_block = format_board_notes_for_prompt(board_notes, max_notes=10, max_content_chars=320)
+        if notes_block:
+            lines.append(notes_block)
 
     if skills:
         lines.append("- recommended_skills:")

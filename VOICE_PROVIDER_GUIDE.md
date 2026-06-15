@@ -25,7 +25,9 @@ TTSProviderRegistry (auto-discovers descriptors)
     └── Constants (constants.py → registry-based normalize_voice_provider())
 ```
 
-**Current providers:** Kokoro (offline), ElevenLabs (online), OpenAI (online), Coqui TTS (offline, disabled), F5-TTS (offline, disabled), VoxCPM (offline).
+**Active providers:** Kokoro (offline), ElevenLabs (online), OpenAI (online), Coqui TTS (offline), Supertonic (offline).
+
+**Retired providers** (descriptor stubs only — not in the UI, no live TTS): F5-TTS, VoxCPM, Chatterbox. Legacy DB values still normalize to their ids; runtime falls back to Kokoro.
 
 ---
 
@@ -228,6 +230,8 @@ ids = tts_registry.provider_ids()
 ## Removing or Disabling a Provider
 
 **Soft disable (recommended):** Set `enabled` to `False` in your descriptor's property. The provider will be excluded from all consumer code paths automatically — no other files need changes.
+
+**Retire fully:** Set `enabled` to `False`, delete the `*_descriptor.py` service implementation file (e.g. `kokoro.py`), and replace the descriptor with a thin stub extending `RetiredTTSProviderDescriptor` (see `f5tts_descriptor.py`, `voxcpm_descriptor.py`, `chatterbox_descriptor.py`). Keep the descriptor module so `normalize_voice_provider()` still recognizes legacy settings.
 
 **Hard remove:** Delete the descriptor file from `distr/core/agent/services/tts/`. The registry will no longer discover it. No stale if/elif branches to clean up.
 

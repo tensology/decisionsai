@@ -172,6 +172,18 @@ def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
     assert health["callback_errors"] == 0
 
 
+def test_resume_input_clears_paused_flag():
+    transport = _transport()
+    transport._paused = True
+    transport._open_input_stream = lambda: None
+    transport._ensure_audio_task_ready = lambda: None
+
+    transport.resume_input()
+
+    assert transport._params.audio_in_enabled is True
+    assert transport._paused is False
+
+
 def test_audio_callback_ignores_closed_event_loop_during_shutdown(monkeypatch):
     transport = _transport()
     loop = asyncio.new_event_loop()

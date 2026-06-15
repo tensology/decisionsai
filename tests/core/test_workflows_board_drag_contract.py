@@ -201,6 +201,12 @@ def test_workflows_board_drag_row_state_uses_dataset_draggable():
     render_block = js.split("function renderWorkflowBoardTickets(board, selected, message)", 1)[1].split(
         "function getSelectedBoardLocalId", 1
     )[0]
+    refresh_block = js.split("function refreshWorkflowBoardTicketsFromQueue()", 1)[1].split(
+        "function rebuildWorkflowQueueExternalLinkIndex", 1
+    )[0]
+    restore_block = js.split("function restoreWorkflowBoardTicketAfterQueueRemove(ticketId, externalKey)", 1)[1].split(
+        "function workflowBoardTicketDropPayload", 1
+    )[0]
     remove_block = js.split("function removeWorkflowQueueTicket(ticketId, options)", 1)[1].split(
         "function createWorkflowQueueListRow", 1
     )[0]
@@ -212,6 +218,12 @@ def test_workflows_board_drag_row_state_uses_dataset_draggable():
     assert "linkedToCurrentWorkflow" in js
     assert "workflowExternalLinkKeyFromTicketRecord" in js
     assert "restoreWorkflowBoardTicketAfterQueueRemove(ticketId, externalKey)" in remove_block
-    assert "rebuildWorkflowQueueExternalLinkIndex()" in remove_block
+    assert "refreshWorkflowBoardTicketsFromQueue()" in restore_block
+    assert "rebuildWorkflowQueueExternalLinkIndex()" in refresh_block
+    assert "isBoardTicketQueuedInCurrentWorkflow(item)" in refresh_block
+    assert "item.ticket.linked_workflow_id = null" in refresh_block
+    assert 'String(selected.source).toLowerCase() + ":" + String(externalId)' in js
+    assert "external_source: ticket.external_source" in js
     assert "syncWorkflowBoardTicketRowUi(ticketKey, row)" in js
     assert "refreshWorkflowBoardTicketDragBindings(list)" in render_block
+    assert "refreshWorkflowBoardTicketsFromQueue()" in render_block

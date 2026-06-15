@@ -183,7 +183,7 @@ class BaseSTTService(STTService):
     # PTT activation / deactivation
     # ------------------------------------------------------------------
 
-    def set_ptt_active(self, active: bool):
+    def set_ptt_active(self, active: bool, *, queue_interruption: bool = True):
         """Full PTT state machine — shared across all STT services."""
         was_active = self._ptt_active
         self._ptt_active = active
@@ -202,36 +202,40 @@ class BaseSTTService(STTService):
 
         if active:
             # --- PTT just activated ---
-            logger.debug("STT: PTT ACTIVATED - interrupting current response, capturing audio")
+            logger.debug("STT: PTT ACTIVATED - capturing audio")
             self._ptt_buffer_accumulator = []
             self._ptt_flush_scheduled = False
             self._pending_ptt_process = False
             self._stt_cancelled = True
             self._audio_buffer = []
-            self._pending_interruption = True
+            self._pending_interruption = bool(queue_interruption)
 
             try:
                 self.event_queue.put(("stt_capture_started", {}), block=False)
             except Exception as e:
                 logger.debug(f"Could not emit stt_capture_started: {e}")
 
-            # Try immediate interruption via stored event loop
-            if (self._pipeline_direction is not None
-                    and self._event_loop is not None
-                    and self._event_loop.is_running()):
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        self._send_interruption(self._pipeline_direction),
-                        self._event_loop,
-                    )
-                    logger.debug("STT: Scheduled immediate InterruptionFrame on PTT activation")
-                except Exception as e:
-                    logger.warning(f"STT: Could not send immediate interruption: {e}")
-            else:
-                if self._pipeline_direction is None:
-                    logger.debug("STT: PTT activated but pipeline_direction not set yet - InterruptionFrame will be sent when first frame arrives")
-                elif self._event_loop is None or not (getattr(self._event_loop, "is_running", lambda: False)()):
-                    logger.debug("STT: event_loop not available for immediate InterruptionFrame")
+            if queue_interruption:
+                # Fallback for STT restore paths that do not go through command_handler.
+                if (self._pipeline_direction is not None
+                        and self._event_loop is not None
+                        and self._event_loop.is_running()):
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            self._send_interruption(self._pipeline_direction),
+                            self._event_loop,
+                        )
+                        logger.debug("STT: Scheduled immediate InterruptionFrame on PTT activation")
+                    except Exception as e:
+                        logger.warning(f"STT: Could not send immediate interruption: {e}")
+                else:
+                    if self._pipeline_direction is None:
+                        logger.debug(
+                            "STT: PTT activated but pipeline_direction not set yet - "
+                            "InterruptionFrame will be sent when first frame arrives"
+                        )
+                    elif self._event_loop is None or not (getattr(self._event_loop, "is_running", lambda: False)()):
+                        logger.debug("STT: event_loop not available for immediate InterruptionFrame")
         else:
             # --- PTT just released ---
             try:

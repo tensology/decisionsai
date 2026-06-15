@@ -14,6 +14,7 @@ from distr.core.agent.libs import (
 # Import text cleaning utility to remove markdown formatting
 from distr.core.agent.services.llm.utils import clean_text_for_tts
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
+from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def _normalize_text_for_tts(text: str) -> str:
     return _SMART_APOSTROPHE.sub("'", text)
 
 
-class KokoroTTSService(TTSService):
+class KokoroTTSService(TTSPipelineMixin, TTSService):
     """Kokoro-based TTS service using Pipecat"""
     
     def __init__(self, model_path: str, voices_path: str, voice_name: str = "af_heart", stt_service=None, playback_speed: float = 1.0, event_queue=None, speech_volume: int = 100, reference_voice_path: str = None, **kwargs):
@@ -59,6 +60,8 @@ class KokoroTTSService(TTSService):
         self._stt_service = stt_service
         self._cancelled = False
         self._cancelled_since = 0.0  # monotonic timestamp when cancellation was last set
+        self._volume_in_run_tts = True
+        self._init_tts_pipeline_state()
         self._is_hands_free = False  # Track hands-free mode state
         self._ptt_active = False  # Track PTT state
         self.event_queue = event_queue  # Queue to send events back to main process
@@ -157,6 +160,61 @@ class KokoroTTSService(TTSService):
         """Set PTT state."""
         self._ptt_active = active
         logger.debug(f"TTS: set_ptt_active(active={active})")
+
+    def _route_telegram_flags(self) -> tuple[bool, bool]:
+        import threading
+
+        force_desktop_tts = bool(
+            getattr(threading.current_thread(), "force_desktop_tts", False)
+            or getattr(self, "_force_desktop_tts", False)
+        )
+        has_telegram_request = (
+            hasattr(threading.current_thread(), "telegram_request")
+            and threading.current_thread().telegram_request
+        )
+        if (not force_desktop_tts) and (not has_telegram_request):
+            import threading as threading_module
+
+            for thread in threading_module.enumerate():
+                if hasattr(thread, "telegram_request") and thread.telegram_request:
+                    has_telegram_request = True
+                    threading.current_thread().telegram_request = True
+                    self._current_telegram_request = True
+                    break
+        if (not force_desktop_tts) and getattr(self, "_current_telegram_request", False):
+            has_telegram_request = True
+        if has_telegram_request:
+            self._current_telegram_request = True
+        if force_desktop_tts:
+            has_telegram_request = False
+            self._current_telegram_request = False
+        return has_telegram_request, force_desktop_tts
+
+    async def _play_queued_sentence(self, sentence: str, generation: int, direction) -> None:
+        has_telegram_request, force_desktop_tts = self._route_telegram_flags()
+        logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
+        audio_frame_count = 0
+        async for audio_frame in self.run_tts(sentence):
+            if generation != self._tts_generation or self._cancelled:
+                break
+            if isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
+                continue
+            is_audio = isinstance(audio_frame, AudioRawFrame) or (
+                OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)
+            )
+            if not is_audio:
+                continue
+            if has_telegram_request and not force_desktop_tts:
+                audio_frame_count += 1
+                continue
+            try:
+                await self.push_frame(audio_frame, direction)
+                audio_frame_count += 1
+            except Exception as e:
+                logger.error("TTS: Error pushing frame: %s", e, exc_info=True)
+                break
+        if audio_frame_count > 0:
+            logger.debug("TTS: Pushed %s audio frames for sentence", audio_frame_count)
 
     def _extract_complete_sentences(self, text: str):
         """Extract complete sentences from text buffer."""
@@ -374,15 +432,10 @@ class KokoroTTSService(TTSService):
         # - Hands-free mode: Pass through (needed for proper interruption)
         # - Push-to-talk mode: STOP here (transport breaks if it receives these)
         if isinstance(frame, CancelFrame):
-            # Ignore stale CancelFrames: interrupt_tts runs before process_text_input, but the frame can
-            # arrive at TTS after the new response has started (pipeline ordering). Don't kill the new response.
-            if getattr(self, '_in_response_after_start', False):
+            if self.is_stale_interrupt_frame():
                 logger.debug("TTS: CancelFrame ignored (stale - already in new response)")
                 return
-            # CancelFrame is still handled for backwards compatibility, but PTT now uses InterruptionFrame
-            self._cancelled = True
-            self._cancelled_since = time.monotonic()
-            self._text_buffer = ""  # Clear any buffered text
+            self.abort_pending_synthesis()
             logger.warning(f"TTS: CancelFrame received - FORCE cancelling TTS (hands_free={self._is_hands_free}, ptt_active={self._ptt_active})")
             logger.debug("TTS: _cancelled=True, clearing text buffer. All subsequent TextFrames will be DROPPED")
             
@@ -401,32 +454,14 @@ class KokoroTTSService(TTSService):
         # - PTT-generated InterruptionFrames always come through and should always interrupt
         # - Don't filter based on hands-free mode here - that's STT's job
         if isinstance(frame, InterruptionFrame):
-            # Guard: ignore stale InterruptionFrames that arrive after the current response
-            # has already started (e.g. from a pre-send interrupt_tts command that raced).
-            # Without this, creating a new chat sends interrupt_tts → InterruptionFrame,
-            # then the LLM response starts → LLMFullResponseStartFrame resets _cancelled,
-            # then the stale InterruptionFrame arrives and re-cancels, muting TTS output.
-            now = time.monotonic()
-            # Create-chat / load-in-agent send interrupt_tts before the first LLM token; on slow
-            # pipelines InterruptionFrame can arrive well after LLMFullResponseStartFrame. A short
-            # window caused _cancelled=True + all TextFrames dropped (audible silence, UI still streams).
-            _STALE_INTERRUPT_GRACE_SEC = 2.0
-            if (
-                self._llm_response_started_at > 0
-                and (now - self._llm_response_started_at) < _STALE_INTERRUPT_GRACE_SEC
-            ):
+            if self.is_stale_interrupt_frame():
                 logger.info(
-                    "TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame; "
-                    "grace=%.1fs — typical create-chat interrupt_tts race)",
-                    (now - self._llm_response_started_at) * 1000,
-                    _STALE_INTERRUPT_GRACE_SEC,
+                    "TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame)",
+                    (time.monotonic() - self._llm_response_started_at) * 1000,
                 )
                 return
             logger.debug("TTS: InterruptionFrame received - stopping playback")
-            # CRITICAL: KILL audio immediately - set cancelled flag FIRST
-            self._cancelled = True
-            self._cancelled_since = time.monotonic()
-            self._text_buffer = ""  # Clear any buffered text
+            self.abort_pending_synthesis()
             logger.debug("TTS: _cancelled=True, clearing text buffer. All subsequent TextFrames will be DROPPED")
             
             # Always emit tts_stopped on interrupt to close player (even if session wasn't active)
@@ -485,29 +520,13 @@ class KokoroTTSService(TTSService):
             
             # CRITICAL: If cancelled (e.g., by CancelFrame from PTT), DROP all TextFrames
             # Do NOT reset cancelled state - only LLMFullResponseStartFrame should do that
-            if self._cancelled:
-                # Recovery guard: stale cancellation can race ahead of a new
-                # response and leave TTS muted while chat tokens still stream.
-                # If no active PTT interruption is happening, auto-clear stale
-                # cancelled state after a short grace window.
-                _cancel_age = time.monotonic() - float(getattr(self, "_cancelled_since", 0.0) or 0.0)
-                if not self._ptt_active and _cancel_age > 1.5:
-                    logger.warning(
-                        "TTS: Auto-clearing stale _cancelled state before TextFrame "
-                        "(age=%.2fs, ptt_active=%s)",
-                        _cancel_age,
-                        self._ptt_active,
-                    )
-                    self._cancelled = False
-                    self._cancelled_since = 0.0
-                else:
-                    logger.warning(
-                        "TTS: TextFrame DROPPED while _cancelled=True (no audio for this chunk). "
-                        "preview=%r — if UI still streamed text, check interrupt_tts race or welcome cancel.",
-                        (frame.text or "")[:120],
-                    )
-                    # Don't process, don't accumulate, just drop it
-                    return
+            if not self.maybe_clear_stale_cancelled_for_text():
+                logger.warning(
+                    "TTS: TextFrame DROPPED while _cancelled=True (no audio for this chunk). "
+                    "preview=%r — if UI still streamed text, check interrupt_tts race or welcome cancel.",
+                    (frame.text or "")[:120],
+                )
+                return
             
             # CRITICAL: Check and store telegram_request flag EARLY when TextFrame arrives
             # This ensures it's available even if no sentences are processed (e.g., "Done" messages)
@@ -663,110 +682,9 @@ class KokoroTTSService(TTSService):
                     # This prevents the TTS from saying "asterisk asterisk" when it sees **bold**
                     cleaned_sentence = clean_text_for_tts(sentence)
 
-                    logger.debug(f"TTS: Generating audio for sentence: '{cleaned_sentence[:50]}...'")
-                    
-                    # CRITICAL: Check if this is a Telegram request - if so, don't push audio frames to desktop
-                    # Check on current thread AND check all threads (in case we're on a different thread)
-                    # Also store it in instance variable so it persists for the entire TTS session
-                    import threading
-                    force_desktop_tts = bool(
-                        getattr(threading.current_thread(), 'force_desktop_tts', False)
-                        or getattr(self, '_force_desktop_tts', False)
-                    )
-                    has_telegram_request = (
-                        hasattr(threading.current_thread(), 'telegram_request')
-                        and threading.current_thread().telegram_request
-                    )
-                    
-                    # If not found on current thread, check all threads (for thread pool scenarios)
-                    if (not force_desktop_tts) and (not has_telegram_request):
-                        import threading as threading_module
-                        for thread in threading_module.enumerate():
-                            if hasattr(thread, 'telegram_request') and thread.telegram_request:
-                                has_telegram_request = True
-                                # Store it on current thread and in instance variable for persistence
-                                threading.current_thread().telegram_request = True
-                                if not hasattr(self, '_current_telegram_request'):
-                                    self._current_telegram_request = True
-                                logger.debug(f"TTS: Found telegram_request=True on thread '{thread.name}' (not current thread) - stored for session")
-                                logger.debug(f"[Telegram TTS] 🔍 Found telegram_request on thread '{thread.name}', storing for session")
-                                break
-                    
-                    # Use instance variable if available (persists across the TTS session)
-                    if (not force_desktop_tts) and hasattr(self, '_current_telegram_request') and self._current_telegram_request:
-                        has_telegram_request = True
-                    
-                    # Store for future use in this TTS session
-                    if has_telegram_request:
-                        self._current_telegram_request = True
-                    if force_desktop_tts:
-                        has_telegram_request = False
-                        self._current_telegram_request = False
-                        logger.debug("TTS: force_desktop_tts=True, bypassing telegram-only mode")
-                    
-                    if has_telegram_request:
-                        logger.debug("TTS: Telegram request - generating audio for Telegram only")
-                        logger.debug(f"[Telegram TTS] 🔊 Generating audio for Telegram (not desktop)")
-                        # Still generate audio to get duration, but don't push frames downstream
-                        # CRITICAL: Consume all frames (including TTSStartedFrame/TTSStoppedFrame) but don't push any to desktop
-                        frame_count = 0
-                        audio_frame_count = 0
-                        async for audio_frame in self.run_tts(cleaned_sentence):
-                            # Filter out control frames - only count audio frames for duration
-                            if isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
-                                # Consume but don't push control frames for Telegram requests
-                                continue
-                            # Count audio frames for duration calculation, but don't push to desktop
-                            if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                audio_frame_count += 1
-                                frame_count += 1
-                            # CRITICAL: Do NOT push any frames to desktop for Telegram requests
-                        logger.debug(f"TTS: Generated {audio_frame_count} audio frames for Telegram")
-                    else:
-                        # Desktop request - generate and push audio frames normally
-                        logger.debug("TTS: Generating audio for desktop")
-                        frame_count = 0
-                        audio_frame_count = 0
-                        async for audio_frame in self.run_tts(cleaned_sentence):
-                            # CRITICAL: Check cancellation BEFORE processing each frame
-                            if self._cancelled:
-                                logger.warning("TTS: Generation cancelled - stopping immediately")
-                                break
-                            
-                            # CRITICAL: Check cancellation BEFORE pushing frame
-                            if self._cancelled:
-                                logger.debug("TTS: Cancelled before pushing frame - dropping")
-                                break
-                            
-                            frame_count += 1
-                            
-                            # Debug: Log frame details before pushing
-                            if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                if audio_frame_count == 0:
-                                    logger.debug(f"TTS: About to push first audio frame: {len(audio_frame.audio)} bytes, sample_rate={audio_frame.sample_rate}, direction={direction}")
-                            
-                            try:
-                                # Final check before pushing
-                                if self._cancelled:
-                                    logger.debug("TTS: Cancelled right before push - dropping frame")
-                                    break
-                                
-                                await self.push_frame(audio_frame, direction)
-                                # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
-                                if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                    audio_frame_count += 1
-                                    if audio_frame_count == 1:
-                                        logger.debug(f"TTS: First audio frame pushed successfully to direction={direction}")
-                                    elif audio_frame_count % 50 == 0:
-                                        logger.debug(f"TTS: Pushed {audio_frame_count} audio frames so far...")
-                            except Exception as e:
-                                logger.error(f"TTS: Error pushing frame: {e}", exc_info=True)
-                                break
-                    
-                    if audio_frame_count > 0:
-                        logger.debug(f"TTS: Pushed {audio_frame_count} audio frames for sentence")
-                    else:
-                        logger.warning(f"TTS: No audio frames generated for sentence: '{sentence[:50]}...'")
+                    logger.debug(f"TTS: Queueing sentence: '{cleaned_sentence[:50]}...'")
+                    self._route_telegram_flags()
+                    await self._enqueue_sentence(cleaned_sentence, direction)
             else:
                 logger.debug(f"TTS: No complete sentences yet, buffering (buffer: '{self._text_buffer[:50]}...')")
             
@@ -840,88 +758,14 @@ class KokoroTTSService(TTSService):
                     logger.debug(f"TTS: Added remaining buffer to session_text (len={len(self._session_text)})")
                 self._text_buffer = ""
                 
-                logger.debug(f"TTS: Processing remaining text: '{text[:50]}...'")
-
-                # CRITICAL: Check if this is a Telegram request - if so, don't push audio frames to desktop
-                import threading
-                force_desktop_tts = bool(
-                    getattr(threading.current_thread(), 'force_desktop_tts', False)
-                    or getattr(self, '_force_desktop_tts', False)
-                )
-                has_telegram_request = hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
-
-                # Use instance variable if available (persists across the TTS session)
-                if (not force_desktop_tts) and hasattr(self, '_current_telegram_request') and self._current_telegram_request:
-                    has_telegram_request = True
-
-                # If not found on current thread or instance, check all threads (for thread pool scenarios)
-                if (not force_desktop_tts) and (not has_telegram_request):
-                    import threading as threading_module
-                    for thread in threading_module.enumerate():
-                        if hasattr(thread, 'telegram_request') and thread.telegram_request:
-                            has_telegram_request = True
-                            # Store it for future use
-                            threading.current_thread().telegram_request = True
-                            self._current_telegram_request = True
-                            logger.debug(f"TTS: Found telegram_request=True on thread '{thread.name}' (remaining text) - stored")
-                            break
-                if force_desktop_tts:
-                    has_telegram_request = False
-                    self._current_telegram_request = False
-                    logger.debug("TTS: force_desktop_tts=True for remaining text, bypassing telegram-only mode")
-
-                audio_frame_count = 0
-                frame_count = 0
-                async for audio_frame in self.run_tts(text):
-                    if self._cancelled:
-                        logger.debug("TTS: Generation cancelled during remaining text processing")
-                        break
-                    frame_count += 1
-
-                    # Filter out control frames first
-                    if isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
-                        # For Telegram requests, consume but don't push control frames
-                        if has_telegram_request:
-                            continue
-                        # For desktop requests, control frames will be handled by the pipeline
-
-                    # Debug: Log frame details before pushing (same as regular TextFrame processing)
-                    if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                        if audio_frame_count == 0:
-                            logger.debug(f"TTS: About to push first audio frame from remaining text: {len(audio_frame.audio)} bytes, sample_rate={audio_frame.sample_rate}, direction={direction}")
-
-                    try:
-                        if has_telegram_request:
-                            # Telegram request - generate audio for duration calculation but don't push to desktop
-                            if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                audio_frame_count += 1
-                            # CRITICAL: Don't push ANY frames to desktop for Telegram requests
-                            continue
-
-                        # Desktop request - process and push frames normally
-                        await self.push_frame(audio_frame, direction)
-                        # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
-                        if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                            audio_frame_count += 1
-                            if audio_frame_count == 1:
-                                logger.debug(f"TTS: First audio frame from remaining text pushed successfully to direction={direction}")
-                            elif audio_frame_count % 50 == 0:
-                                logger.debug(f"TTS: Pushed {audio_frame_count} audio frames from remaining text so far...")
-                    except Exception as e:
-                        logger.error(f"TTS: Error pushing frame from remaining text: {e}", exc_info=True)
-                        break
-
-                if has_telegram_request:
-                    logger.debug(f"TTS: Generated {audio_frame_count} audio frames from remaining text for Telegram (not pushed to desktop)")
-                elif audio_frame_count > 0:
-                    logger.debug(f"TTS: Processed {audio_frame_count} audio frames from remaining text")
-
-                if audio_frame_count > 0:
-                    logger.debug(f"TTS: Processed {audio_frame_count} audio frames from remaining text")
-                else:
-                    logger.warning(f"TTS: No audio frames generated from remaining text")
+                logger.debug(f"TTS: Enqueueing remaining text: '{text[:50]}...'")
+                self._route_telegram_flags()
+                await self._enqueue_sentence(text, direction)
             else:
                 logger.debug("TTS: No remaining text to process (buffer empty or cancelled)")
+
+            if not self._cancelled:
+                await self._drain_speak_queue()
             
             # End TTS session - emit stop event with total accumulated duration
             # BUT ONLY for desktop requests - Telegram requests should NOT trigger player events

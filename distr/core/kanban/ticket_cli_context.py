@@ -138,6 +138,14 @@ def build_kanban_ticket_cli_instruction(
         for fl in t.files:
             lines.append(f"  - {fl.filename} (`{fl.file_path}`)")
 
+    if getattr(t, "context_notes", None):
+        notes = (t.context_notes or "").strip()
+        if notes:
+            lines.append("")
+            lines.append("Ticket notes (orchestrator):")
+            for note_line in notes.splitlines()[-12:]:
+                lines.append(f"  - {note_line}")
+
     meta_block = "\n".join(lines).strip()
     title = (t.title or "").strip() or f"Ticket #{t.id}"
     description = (t.description or "").strip()

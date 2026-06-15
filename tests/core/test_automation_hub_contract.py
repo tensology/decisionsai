@@ -114,6 +114,9 @@ def test_automation_hub_is_plain_crud_scheduler_surface():
     assert 'window.DecisionsAPI.confirm({' in js
     assert 'title: "Remove automation"' in js
     assert 'confirmLabel: "Remove"' in js
+    assert "automation-preset" in html
+    assert "loadAutomationPresets" in js
+    assert "/api/automations/presets" in js
 
     forbidden = [
         "WhatsApp",

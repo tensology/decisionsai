@@ -843,10 +843,13 @@ def _safe_attachment_basename(name: str, used: set) -> str:
 
 def _load_json_connected_accounts() -> List:
     try:
+        from distr.core.settings import load_settings_from_db
+
         settings = load_settings_from_db()
         raw = settings.get("connected_accounts") or "[]"
         return json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
     except Exception:
+        logger.debug("_load_json_connected_accounts failed", exc_info=True)
         return []
 
 
@@ -995,6 +998,149 @@ def _download_trello_card_attachments_for_project(
         return "".join(lines), None
 
     return "", "could not download Trello attachments (check credentials or card id)"
+
+
+def _resolve_ticket_external_link_for_import(
+    ticket: dict, *, is_local: bool, source: str = "", session=None
+) -> Tuple[str, str]:
+    """Resolve Jira/Trello issue key for attachment import during orchestrator handoff."""
+    ticket = ticket or {}
+    ext_src = (ticket.get("external_source") or ticket.get("source_provider") or "").lower().strip()
+    ext_id = (ticket.get("external_id") or ticket.get("source_external_id") or "").strip()
+
+    if is_local and ticket.get("id") and (not ext_src or not ext_id):
+        try:
+            from distr.core.db.kanban import KanbanTicket
+            from distr.core.db.orm_compat import orm_get_by_id
+
+            def _load(sess):
+                row = orm_get_by_id(sess, KanbanTicket, int(ticket["id"]))
+                if not row:
+                    return "", ""
+                src = (row.external_source or row.source_provider or "").lower().strip()
+                eid = (row.external_id or row.source_external_id or "").strip()
+                return src, eid
+
+            if session is not None:
+                loaded_src, loaded_id = _load(session)
+            else:
+                with get_session() as sess:
+                    loaded_src, loaded_id = _load(sess)
+            ext_src = ext_src or loaded_src
+            ext_id = ext_id or loaded_id
+        except Exception:
+            logger.debug("resolve external link from DB failed", exc_info=True)
+
+    if not is_local:
+        board_src = (source or "").lower().strip()
+        if board_src in ("jira", "trello"):
+            ext_src = ext_src or board_src
+            if not ext_id and ticket.get("id") is not None:
+                ext_id = str(ticket["id"]).strip()
+
+    return ext_src, ext_id
+
+
+def _import_attachments_for_orchestrator_engagement(
+    ticket: dict,
+    project_folder: str,
+    *,
+    is_local: bool,
+    source: str = "",
+) -> Tuple[str, Optional[str]]:
+    """Download Jira/Trello attachments into the project .tickets/_imported folder."""
+    ext_src, ext_id = _resolve_ticket_external_link_for_import(
+        ticket, is_local=is_local, source=source
+    )
+    if ext_src not in ("jira", "trello") or not ext_id:
+        logger.info(
+            "engage-orchestrator: skip attachment import (no external link) is_local=%s ticket_id=%s",
+            is_local,
+            ticket.get("id"),
+        )
+        return "", None
+    folder = (project_folder or "").strip()
+    if not folder:
+        logger.warning(
+            "engage-orchestrator: skip attachment import (no project folder) ext=%s/%s",
+            ext_src,
+            ext_id,
+        )
+        return "", "no project folder for attachment import"
+    proj_root = os.path.abspath(os.path.expanduser(folder))
+    if not os.path.isdir(proj_root):
+        logger.warning(
+            "engage-orchestrator: skip attachment import (bad folder) path=%r ext=%s/%s",
+            proj_root,
+            ext_src,
+            ext_id,
+        )
+        return "", f"project folder not found: {proj_root}"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        if ext_src == "jira":
+            import_md, warn = _download_jira_issue_attachments_for_project(proj_root, timestamp, ext_id)
+        else:
+            import_md, warn = _download_trello_card_attachments_for_project(proj_root, timestamp, ext_id)
+        logger.info(
+            "engage-orchestrator: attachment import ext=%s/%s stamp=%s warn=%r md_len=%s",
+            ext_src,
+            ext_id,
+            timestamp,
+            warn,
+            len(import_md or ""),
+        )
+        return import_md or "", warn
+    except Exception:
+        logger.exception("engage-orchestrator: attachment import failed ext=%s/%s", ext_src, ext_id)
+        return "", "attachment import failed (see server log)"
+
+
+def _schedule_orchestrator_attachment_followup(
+    *,
+    chat_id: int,
+    ticket: dict,
+    project_folder: str,
+    is_local: bool,
+    source: str,
+    board_label: str,
+) -> None:
+    """Retry attachment import in the background and notify the agent when files land."""
+    import threading
+
+    def _worker() -> None:
+        try:
+            import_md, warn = _import_attachments_for_orchestrator_engagement(
+                ticket, project_folder, is_local=is_local, source=source
+            )
+            if warn or not import_md or "_No files on this issue._" in import_md:
+                return
+            from distr.core.kanban.ticket_orchestrator_engagement import (
+                send_ticket_engagement_to_agent,
+            )
+
+            title = (ticket.get("title") or "").strip() or "(untitled)"
+            agent_text = (
+                f"[Ticket attachments ready]\n"
+                f'Jira/Trello attachments for "{title}" are now on disk in the linked project:\n'
+                f"{import_md}\n"
+                "Use document_extractor or pdf_page_extractor on these paths before answering "
+                "questions about spec or feedback documents."
+            )
+            send_ticket_engagement_to_agent(
+                int(chat_id),
+                f'Attachments for "{title}" are ready to read.',
+                agent_text,
+                speak=False,
+                board_label=board_label,
+            )
+        except Exception:
+            logger.exception("engage-orchestrator: background attachment followup failed")
+
+    threading.Thread(
+        target=_worker, daemon=True, name="orchestrator-attachment-import"
+    ).start()
 
 
 def _parse_jira_description(desc, attachments: Optional[List] = None):
@@ -1265,7 +1411,7 @@ def _is_valid_time_tracking_value(value: Optional[str]) -> bool:
     v = value.strip()
     if not v:
         return True
-    return bool(_re.match(r"^\d+\s*[wdhm](\s+\d+\s*[wdhm])*$", v, _re.I))
+    return bool(_re.match(r"^\d+\s*[wdhms](\s+\d+\s*[wdhms])*$", v, _re.I))
 
 
 def _ticket_source_payload(t: KanbanTicket) -> dict:
@@ -1351,6 +1497,31 @@ class BoardUpdate(BaseModel):
     color: Optional[str] = None
     position: Optional[int] = None
     orchestrator_policy: Optional[dict] = None
+
+
+KANBAN_SIDEBAR_DOCUMENTS_KEY = "kanban_sidebar_documents"
+
+
+class KanbanDocumentCreate(BaseModel):
+    title: Optional[str] = "Untitled"
+    content: Optional[str] = ""
+
+
+class KanbanDocumentUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+
+def _load_kanban_sidebar_documents() -> list:
+    from distr.core.kanban.board_notes import load_board_notes
+
+    return load_board_notes()
+
+
+def _save_kanban_sidebar_documents(docs: list) -> None:
+    from distr.core.kanban.board_notes import save_board_notes
+
+    save_board_notes(docs)
 
 
 class TicketCreate(BaseModel):
@@ -1714,9 +1885,7 @@ def _proxy_external_image_sync(provider: str, url: str) -> Tuple[bytes, str]:
     except Exception:
         raw_url = url
     try:
-        settings = load_settings_from_db()
-        raw = settings.get("connected_accounts") or "[]"
-        accounts = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+        accounts = _load_json_connected_accounts()
     except Exception:
         accounts = []
 
@@ -2309,6 +2478,50 @@ def create_routes():
                     board.position = pos
             return JSONResponse({"success": True})
 
+    @router.get("/tickets/documents")
+    async def list_kanban_documents():
+        return JSONResponse(_load_kanban_sidebar_documents())
+
+    @router.post("/tickets/documents")
+    async def create_kanban_document(payload: KanbanDocumentCreate):
+        docs = _load_kanban_sidebar_documents()
+        doc_id = secrets.token_hex(8)
+        title = (payload.title or "Untitled").strip() or "Untitled"
+        doc = {
+            "id": doc_id,
+            "title": title,
+            "content": payload.content or "",
+            "modified_at": datetime.utcnow().isoformat() + "Z",
+        }
+        docs.append(doc)
+        _save_kanban_sidebar_documents(docs)
+        return JSONResponse(doc)
+
+    @router.put("/tickets/documents/{doc_id}")
+    async def update_kanban_document(doc_id: str, payload: KanbanDocumentUpdate):
+        docs = _load_kanban_sidebar_documents()
+        idx = next((i for i, d in enumerate(docs) if d.get("id") == doc_id), None)
+        if idx is None:
+            raise HTTPException(404, "Note not found")
+        doc = docs[idx]
+        if payload.title is not None:
+            doc["title"] = payload.title.strip() or "Untitled"
+        if payload.content is not None:
+            doc["content"] = payload.content
+        doc["modified_at"] = datetime.utcnow().isoformat() + "Z"
+        docs[idx] = doc
+        _save_kanban_sidebar_documents(docs)
+        return JSONResponse(doc)
+
+    @router.delete("/tickets/documents/{doc_id}")
+    async def delete_kanban_document(doc_id: str):
+        docs = _load_kanban_sidebar_documents()
+        next_docs = [d for d in docs if d.get("id") != doc_id]
+        if len(next_docs) == len(docs):
+            raise HTTPException(404, "Note not found")
+        _save_kanban_sidebar_documents(next_docs)
+        return JSONResponse({"success": True})
+
     @router.get("/tickets/boards/{board_id}")
     async def get_board(board_id: int):
         with get_session() as s:
@@ -2522,6 +2735,7 @@ def create_routes():
                     for entry in audit_entries
                 ],
                 "source_chat_id": t.source_chat_id,
+                "context_notes": t.context_notes or "",
             })
 
     @router.get("/tickets/workflows/{workflow_id}/tickets")
@@ -2588,6 +2802,9 @@ def create_routes():
                     "external_id": t.external_id,
                     "source_label": t.source_label,
                     "source_url": t.source_url,
+                    "context_notes": t.context_notes or "",
+                    "time_spent": t.time_spent or "",
+                    "time_estimate": t.time_estimate or "",
                 }
                 for t, lane, board in rows
             ])
@@ -3640,12 +3857,7 @@ def create_routes():
         target_lane = (payload.target_lane_id or "").strip()
         if not ticket_id or not target_lane:
             raise HTTPException(400, "ticket_id and target_lane_id are required")
-        try:
-            settings = load_settings_from_db()
-            raw = settings.get("connected_accounts") or "[]"
-            accounts = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
-        except Exception:
-            accounts = []
+        accounts = _load_json_connected_accounts()
 
         if provider == "trello":
             import requests as req_lib
@@ -4230,20 +4442,54 @@ def create_routes():
         )
         board_label = body.board_name or board_data.get("name") or board_data.get("activated_board_name") or ""
 
+        project_folder = (
+            body.ticket.get("linked_project_folder")
+            or body.ticket.get("project_folder")
+            or body.ticket.get("folder_location")
+            or board_data.get("default_project_folder")
+            or board_data.get("activated_project_folder")
+            or ""
+        )
+        engage_source = (body.source or "database").strip() or "database"
+        attachment_md, attachment_warn = _import_attachments_for_orchestrator_engagement(
+            body.ticket,
+            project_folder,
+            is_local=bool(body.is_local),
+            source=engage_source,
+        )
+        attachments_ready = bool(
+            attachment_md and "_No files on this issue._" not in attachment_md
+        )
+        if not attachments_ready and project_folder:
+            _schedule_orchestrator_attachment_followup(
+                chat_id=chat_id,
+                ticket=body.ticket,
+                project_folder=project_folder,
+                is_local=bool(body.is_local),
+                source=engage_source,
+                board_label=board_label,
+            )
+
         display_message, agent_message = build_orchestrator_messages(
             body.ticket,
             is_local=bool(body.is_local),
             board_label=board_label,
-            source=(body.source or "database").strip() or "database",
+            source=engage_source,
             board_data=board_data,
+            attachment_markdown=attachment_md,
+            attachment_warning=attachment_warn,
         )
         try:
             from distr.core.settings import load_settings_from_db, save_settings_to_db
+            from distr.core.kanban.ticket_context_notes import register_ticket_chat_context
 
             settings = load_settings_from_db()
             settings["last_chat_id"] = chat_id
             settings["agent_current_chat_id"] = chat_id
             save_settings_to_db(settings)
+
+            if body.is_local and body.ticket.get("id"):
+                register_ticket_chat_context(chat_id, int(body.ticket["id"]))
 
             project_id = (
                 body.ticket.get("linked_project_id")
@@ -4715,6 +4961,7 @@ source: kanban_ticket_{t.id}
                 "requires_approval": bool(route.get("requires_approval")),
                 "codex_reasoning_effort": route.get("codex_reasoning_effort") or "",
                 "codex_service_tier": route.get("codex_service_tier") or "",
+                "context_notes": (ctx.get("ticket").context_notes or "") if ctx.get("ticket") else "",
                 **get_backend_statuses(active_backend),
             })
 

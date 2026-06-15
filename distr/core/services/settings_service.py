@@ -532,12 +532,14 @@ def save_voice_selection(voice_provider_id: str, voice_model: str) -> None:
     save_settings_to_db(settings)
 
     from distr.core.chat import resolve_voice_model_from_global_settings
-
-    notify_voice_hot_reload_for_running_agent(pid, resolve_voice_model_from_global_settings(pid, settings) or vm_raw)
-
     from distr.core.agent.constants import normalize_voice_provider as _norm_vp
 
     pid = _norm_vp(vp_raw)
+    notify_voice_hot_reload_for_running_agent(
+        pid,
+        resolve_voice_model_from_global_settings(pid, settings) or vm_raw,
+    )
+
     if pid == "elevenlabs":
         try:
             from distr.core.audio.tts_handler import clear_elevenlabs_voice_cache

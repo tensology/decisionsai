@@ -11,6 +11,7 @@ class ContextBundle:
     chat_history: list = field(default_factory=list)
     scheduled_sessions: list = field(default_factory=list)
     kanban_summary: list = field(default_factory=list)
+    board_notes: list = field(default_factory=list)
     stuck_tasks: list = field(default_factory=list)
     unfinished_workflows: list = field(default_factory=list)
     active_project: dict = field(default_factory=dict)
@@ -51,6 +52,13 @@ class ContextAssembler:
             kanban_summary = self._fetch_kanban_summary(now)
         except Exception:
             logger.warning("ContextAssembler: failed to fetch ticket board summary", exc_info=True)
+
+        # --- board_notes ---
+        board_notes = []
+        try:
+            board_notes = self._fetch_board_notes()
+        except Exception:
+            logger.warning("ContextAssembler: failed to fetch ticket board notes", exc_info=True)
 
         # --- stuck_tasks ---
         stuck_tasks = []
@@ -130,6 +138,7 @@ class ContextAssembler:
             chat_history=chat_history,
             scheduled_sessions=scheduled_sessions,
             kanban_summary=kanban_summary,
+            board_notes=board_notes,
             stuck_tasks=stuck_tasks,
             unfinished_workflows=unfinished_workflows,
             active_project=active_project,
@@ -285,6 +294,11 @@ class ContextAssembler:
             pass
 
         return summary
+
+    def _fetch_board_notes(self) -> list:
+        from distr.core.kanban.board_notes import load_board_notes
+
+        return load_board_notes()
 
     def _fetch_stuck_tasks(self, now: datetime) -> list:
         from distr.core.db.workflow import AutoWorkflow

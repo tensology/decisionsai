@@ -6,6 +6,7 @@
 
     var currentAutomationId = null;
     var automationsData = [];
+    var automationPresets = [];
     var isCreating = false;
     var mainView = "automations";
     var calendarMode = "month";
@@ -418,9 +419,79 @@
             name: "",
             status: "active",
             instruction: "",
+            preset_id: "",
+            action_config: {},
             schedule: { kind: "daily", time: "09:00" },
             next_run_at: null
         };
+    }
+
+    function findPreset(presetId) {
+        var key = String(presetId || "").trim();
+        if (!key) return null;
+        for (var i = 0; i < automationPresets.length; i += 1) {
+            if (automationPresets[i].preset_id === key) return automationPresets[i];
+        }
+        return null;
+    }
+
+    function renderPresetOptions(selectedId) {
+        var select = document.getElementById("automation-preset");
+        if (!select) return;
+        var selected = String(selectedId || "");
+        var html = '<option value="">Custom instruction</option>';
+        automationPresets.forEach(function(preset) {
+            html += '<option value="' + escapeAttr(preset.preset_id) + '"' +
+                (selected === preset.preset_id ? " selected" : "") + ">" +
+                escapeAttr(preset.name || preset.preset_id) + "</option>";
+        });
+        select.innerHTML = html;
+        updatePresetHint(selected);
+    }
+
+    function updatePresetHint(presetId) {
+        var hint = document.getElementById("automation-preset-hint");
+        if (!hint) return;
+        var preset = findPreset(presetId);
+        if (!preset || !preset.description) {
+            hint.textContent = "";
+            hint.classList.add("hidden");
+            return;
+        }
+        hint.textContent = preset.description;
+        hint.classList.remove("hidden");
+    }
+
+    function applyPresetToForm(presetId, force) {
+        var preset = findPreset(presetId);
+        var select = document.getElementById("automation-preset");
+        if (select) select.value = presetId || "";
+        updatePresetHint(presetId || "");
+        if (!preset) return;
+        if (force || !(document.getElementById("automation-name").value || "").trim()) {
+            setValue("automation-name", preset.name || "");
+        }
+        if (force || !(document.getElementById("automation-instruction").value || "").trim()) {
+            setValue("automation-instruction", preset.instruction || "");
+        }
+        if (preset.schedule && (force || !document.getElementById("automation-id").value)) {
+            var schedule = preset.schedule || {};
+            setValue("automation-kind", normalizeScheduleKind(schedule.kind || "daily"));
+            setValue("automation-time", schedule.time || "09:00");
+            updateScheduleControls();
+        }
+    }
+
+    function loadAutomationPresets() {
+        return apiFetch("/api/automations/presets")
+            .then(function(data) {
+                automationPresets = data.presets || [];
+                renderPresetOptions(document.getElementById("automation-preset") ?
+                    document.getElementById("automation-preset").value : "");
+            })
+            .catch(function() {
+                automationPresets = [];
+            });
     }
 
     function startOfDay(value) {
@@ -1104,6 +1175,9 @@
         setValue("automation-id", row.id || "");
         setValue("automation-name", row.name || "");
         setValue("automation-instruction", row.instruction || "");
+        renderPresetOptions(row.preset_id || "");
+        setValue("automation-preset", row.preset_id || "");
+        updatePresetHint(row.preset_id || "");
         setValue("automation-kind", kind);
         setValue("automation-time", schedule.time || "09:00");
         setValue("automation-once-at", String(schedule.run_at || ""));
@@ -1206,6 +1280,7 @@
             automation_type: "scheduled_instruction",
             status: document.getElementById("automation-status").value || "active",
             instruction: (document.getElementById("automation-instruction").value || "").trim(),
+            preset_id: (document.getElementById("automation-preset") && document.getElementById("automation-preset").value) || "",
             schedule: schedule
         };
     }
@@ -1479,6 +1554,12 @@
             deleteSelected();
         });
         document.getElementById("automation-run").addEventListener("click", runSelected);
+        var presetSelect = document.getElementById("automation-preset");
+        if (presetSelect) {
+            presetSelect.addEventListener("change", function() {
+                applyPresetToForm(presetSelect.value || "", true);
+            });
+        }
         document.getElementById("automation-kind").addEventListener("change", updateScheduleControls);
         document.querySelectorAll(".automation-weekday-btn").forEach(function(btn) {
             btn.addEventListener("click", function() {
@@ -1526,14 +1607,21 @@
             });
         }
         connectAutomationUpdatesSocket();
-        loadAutomations(location.hash === "#calendar").then(function() {
-            if (location.hash === "#calendar") {
-                setMainView("calendar");
-            }
+        loadAutomationPresets().finally(function() {
+            loadAutomations(location.hash === "#calendar").then(function() {
+                if (location.hash === "#calendar") {
+                    setMainView("calendar");
+                }
+            });
         });
         try {
             var prefill = sessionStorage.getItem("automation_prefill_instruction");
-            if (prefill) {
+            var prefillPreset = sessionStorage.getItem("automation_prefill_preset");
+            if (prefillPreset) {
+                sessionStorage.removeItem("automation_prefill_preset");
+                createNewAutomation();
+                applyPresetToForm(prefillPreset, true);
+            } else if (prefill) {
                 sessionStorage.removeItem("automation_prefill_instruction");
                 createNewAutomation();
                 setValue("automation-instruction", prefill);

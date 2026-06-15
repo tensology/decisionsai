@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DISABLED_TTS_PROVIDER_IDS = frozenset({"chatterbox"})
+DISABLED_TTS_PROVIDER_IDS = frozenset({"chatterbox", "f5tts", "voxcpm"})
 
 
 class TTSProviderRegistry:

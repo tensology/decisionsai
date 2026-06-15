@@ -352,6 +352,21 @@ class StepRouter:
             except Exception:
                 logger.debug("Could not emit Hermes workflow_step_completed event", exc_info=True)
 
+            if getattr(run, "ticket_id", None):
+                try:
+                    from distr.core.kanban.ticket_workflow_engagement import (
+                        notify_ticket_workflow_step_finished,
+                    )
+
+                    notify_ticket_workflow_step_finished(
+                        run_id=run_id,
+                        step_id=step_id,
+                        passed=bool(verified_passed),
+                        result_text=result or "",
+                    )
+                except Exception:
+                    logger.debug("Could not send ticket workflow step engagement", exc_info=True)
+
             correction_decision = self._maybe_auto_dispatch_correction(
                 db,
                 run=run,
@@ -526,7 +541,7 @@ class StepRouter:
                 "Step %d routes to itself — ending run to prevent infinite loop.",
                 step.id,
             )
-            return self._end_run(run, warning="Infinite loop prevented")
+            return self._end_run(run, status="failed", warning="Infinite loop prevented")
 
         # Advance
         run.current_step_id = next_step.id
@@ -1016,6 +1031,13 @@ class StepRouter:
         """Mark run as completed and return end_run decision."""
         run.status = status
         run.completed_at = utc_now_naive()
+        if warning:
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            run_data["terminal_warning"] = warning
+            run.run_data = json.dumps(run_data)
         decision: Dict[str, Any] = {
             "action": "end_run",
             "status": status,

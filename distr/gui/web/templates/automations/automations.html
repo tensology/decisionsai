@@ -1065,6 +1065,13 @@ body.sched-calendar-interacting .sched-block-resize-handle {
                             </div>
                         </div>
                     </div>
+                    <div class="flex-shrink-0 pb-2">
+                        <label class="block text-sm text-gray-400 mb-1">Preset</label>
+                        <select id="automation-preset" class="w-full max-w-md px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                            <option value="">Custom instruction</option>
+                        </select>
+                        <p id="automation-preset-hint" class="text-xs text-gray-500 mt-1 hidden"></p>
+                    </div>
                     <div class="flex flex-col flex-1 min-h-0 pt-4 mt-4 border-t border-white/10">
                         <label class="block text-sm text-gray-400 mb-1 flex-shrink-0">Instruction</label>
                         <textarea id="automation-instruction" class="flex-1 min-h-[12rem] w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-none" placeholder="Enter the instruction this automation should run..."></textarea>

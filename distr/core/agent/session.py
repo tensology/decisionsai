@@ -410,13 +410,20 @@ class AgentSession:
             config['tts']['engine'] = normalize_voice_provider(tts_engine_override)
 
         # Resolve voice provider: chat voice > voice_provider setting > tts_provider setting
+        from distr.core.agent.services.tts.registry import tts_registry
         voice_provider_raw = chat_voice_provider or self.settings.get('voice_provider', '') or self.settings.get('tts_provider', '')
         voice_provider = normalize_voice_provider(voice_provider_raw)
+        enabled_voice_providers = set(tts_registry.provider_ids())
+        if voice_provider not in enabled_voice_providers:
+            self.logger.warning(
+                "Voice provider %s is retired or unavailable; using Kokoro",
+                voice_provider,
+            )
+            voice_provider = 'kokoro'
         voice_model_from_chat = chat_voice_model
 
         # Voice settings lookup table: provider -> (engine, voice_key, default, extra_keys)
         # Built dynamically from the TTS provider registry.
-        from distr.core.agent.services.tts.registry import tts_registry
         _VOICE_SETTINGS = {d.id: d.get_voice_settings_entry() for d in tts_registry.all_providers()}
         vp_entry = _VOICE_SETTINGS.get(voice_provider, _VOICE_SETTINGS['kokoro'])
         tts_engine, voice_settings_key, voice_default, extra_keys = vp_entry
@@ -618,7 +625,7 @@ class AgentSession:
             # Restore PTT state if it was active (affects interruption handling)
             if ptt_state:
                 if hasattr(self.stt_service, 'set_ptt_active'):
-                    self.stt_service.set_ptt_active(ptt_state)
+                    self.stt_service.set_ptt_active(ptt_state, queue_interruption=True)
                     self.logger.debug(f"  ✅ PTT state restored: {ptt_state} (interruptions via InterruptionFrame)")
                 else:
                     self.logger.warning("  ⚠️  New STT service doesn't support set_ptt_active() - PTT may not work correctly")
@@ -640,13 +647,17 @@ class AgentSession:
             getattr(self, 'is_dictating', False),
         )
         
-        # Emit stt_ready event to notify GUI that PTT is safe to use
-        if self.event_queue:
-            try:
-                self.event_queue.put(('stt_ready', {}), block=False)
-                self.logger.info("📢 Emitted stt_ready event - PTT is now safe to use")
-            except Exception as e:
-                self.logger.warning(f"Failed to emit stt_ready event: {e}")
+        self._emit_stt_ready("stt_service_created")
+
+    def _emit_stt_ready(self, reason: str):
+        """Notify the GUI that STT/PTT capture is safe to use."""
+        if not self.event_queue:
+            return
+        try:
+            self.event_queue.put(('stt_ready', {'reason': reason}), block=False)
+            self.logger.info("Emitted stt_ready (%s)", reason)
+        except Exception as e:
+            self.logger.warning("Failed to emit stt_ready (%s): %s", reason, e)
 
     def _create_services(self):
         """Create STT, LLM, and TTS services based on configuration"""
@@ -1125,34 +1136,14 @@ class AgentSession:
                             self.chat_manager.current_voice_model = voice_model or ''
                         return
 
-            elif vp == 'f5tts':
-                from .services.tts.f5tts import F5TTSTTSService
-                if isinstance(old_service, F5TTSTTSService):
-                    ref_path = hot_swap_cfg.get('reference_audio_path')
-                    ref_text = hot_swap_cfg.get('reference_text')
-                    old_service.set_reference_voice(ref_path or '', ref_text)
-                    self._apply_agent_name(new_agent_name)
-                    self.logger.debug("HOT-SWAP TTS: F5-TTS in-place voice swap complete (voice=%s)", voice_model)
-                    if self.chat_manager:
-                        self.chat_manager.current_voice_provider = vp
-                        self.chat_manager.current_voice_model = voice_model or ''
-                    return
-
-            elif vp == 'voxcpm':
-                from .services.tts.voxcpm import VoxCPMTTSService
-                if isinstance(old_service, VoxCPMTTSService):
-                    ref_path = hot_swap_cfg.get('reference_audio_path')
-                    ref_text = hot_swap_cfg.get('reference_text')
-                    old_service.set_reference_voice(ref_path, ref_text)
-                    self._apply_agent_name(new_agent_name)
-                    self.logger.debug("HOT-SWAP TTS: VoxCPM in-place voice swap complete (voice=%s)", voice_model)
-                    if self.chat_manager:
-                        self.chat_manager.current_voice_provider = vp
-                        self.chat_manager.current_voice_model = voice_model or ''
-                    return
-
         # --- Full service replacement (non-in-place path) ---
         self._apply_agent_name(new_agent_name)
+
+        if old_service is not None and hasattr(old_service, "abort_pending_synthesis"):
+            try:
+                old_service.abort_pending_synthesis()
+            except Exception:
+                self.logger.debug("HOT-SWAP TTS: abort_pending_synthesis failed", exc_info=True)
 
         try:
             self._create_tts_service_only()
@@ -1171,6 +1162,11 @@ class AgentSession:
 
         setattr(self.tts_service, '_FrameProcessor__started', True)
 
+        if hasattr(self.tts_service, 'set_hands_free'):
+            self.tts_service.set_hands_free(self.is_hands_free)
+        if hasattr(self.tts_service, 'set_ptt_active'):
+            self.tts_service.set_ptt_active(bool(getattr(self, 'ptt_active', False)))
+
         if hasattr(self, 'llm_service') and self.llm_service:
             self.llm_service.set_tts_service(self.tts_service)
             if hasattr(self.llm_service, 'set_agent_name'):
@@ -1179,6 +1175,15 @@ class AgentSession:
         if self.chat_manager:
             self.chat_manager.current_voice_provider = vp
             self.chat_manager.current_voice_model = voice_model or ''
+
+        if hasattr(self.stt_service, 'set_dictating') and getattr(self, 'is_dictating', False):
+            self.stt_service.set_dictating(True)
+
+        try:
+            from .command_handler import _sync_audio_input_power
+            _sync_audio_input_power(self, "hot_swap_tts")
+        except Exception as exc:
+            self.logger.debug("HOT-SWAP TTS: audio input power sync failed: %s", exc)
 
         self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
 
@@ -1434,6 +1439,8 @@ class AgentSession:
             except Exception as e:
                 self.logger.debug("Initial audio input power sync failed: %s", e)
 
+            self._emit_stt_ready("pipeline_start")
+
             # Flush any process_text_input that arrived before the loop was ready (e.g. from web send-to-agent)
             pending = getattr(self, '_pending_text_inputs', None)
             if pending:
@@ -1529,6 +1536,8 @@ class AgentSession:
                             await asyncio.sleep(0.15)
                         
                         await tts.process_frame(LLMFullResponseEndFrame(), direction)
+                        if hasattr(tts, "_drain_speak_queue"):
+                            await tts._drain_speak_queue()
                     finally:
                         cur.force_desktop_tts = prev_force_desktop
                         tts._force_desktop_tts = prev_tts_force
@@ -1553,7 +1562,9 @@ class AgentSession:
                         except Exception:
                             pass
                     # Reset TTS cancelled flag so the next generation works
-                    if hasattr(tts, '_cancelled'):
+                    if hasattr(tts, "abort_pending_synthesis"):
+                        tts.abort_pending_synthesis()
+                    elif hasattr(tts, '_cancelled'):
                         tts._cancelled = False
                     if hasattr(tts, '_tts_session_active'):
                         tts._tts_session_active = False

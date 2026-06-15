@@ -63,7 +63,7 @@ SYSTEM_PROACTIVE_TASK_SPECS: tuple[dict, ...] = (
             "Produce a concise morning brief: calendar highlights, stuck tickets, "
             "and one suggested priority for today."
         ),
-        "enabled": True,
+        "enabled": False,
         "priority": 10,
         "tier": 1,
     },
@@ -76,7 +76,7 @@ SYSTEM_PROACTIVE_TASK_SPECS: tuple[dict, ...] = (
             "Draft today's structured plan (priorities, calendar blocks, stuck items) "
             "as markdown suitable for chat + optional voice readout."
         ),
-        "enabled": True,
+        "enabled": False,
         "priority": 11,
         "tier": 1,
     },
@@ -88,7 +88,7 @@ SYSTEM_PROACTIVE_TASK_SPECS: tuple[dict, ...] = (
         "instruction": (
             "Produce a weekly outlook: themes, deadlines, and backlog suggestions."
         ),
-        "enabled": True,
+        "enabled": False,
         "priority": 20,
         "tier": 1,
     },
@@ -100,10 +100,17 @@ SYSTEM_PROACTIVE_TASK_SPECS: tuple[dict, ...] = (
         "instruction": (
             "Produce a monthly goals recap and adjustments based on open work."
         ),
-        "enabled": True,
+        "enabled": False,
         "priority": 30,
         "tier": 1,
     },
+)
+
+LEGACY_PLANNER_TASK_NAMES: tuple[str, ...] = (
+    "Morning Brief",
+    "Day Planner",
+    "Week Planner",
+    "Month Planner",
 )
 
 
@@ -131,4 +138,19 @@ def ensure_system_proactive_tasks(session) -> int:
         logger.info("ensure_system_proactive_tasks: inserted %r", spec["name"])
     if inserted:
         session.commit()
+    disable_legacy_planner_proactive_tasks(session)
     return inserted
+
+
+def disable_legacy_planner_proactive_tasks(session) -> int:
+    """Turn off built-in planner rows; daily plans belong in Automations presets."""
+    updated = 0
+    for name in LEGACY_PLANNER_TASK_NAMES:
+        row = session.query(ProactiveTask).filter(ProactiveTask.name == name).first()
+        if row and row.enabled:
+            row.enabled = False
+            updated += 1
+    if updated:
+        session.commit()
+        logger.info("disable_legacy_planner_proactive_tasks: disabled %s row(s)", updated)
+    return updated

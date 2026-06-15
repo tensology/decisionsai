@@ -214,6 +214,8 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
     def resume_input(self):
         """Ensure the mic/CoreAudio input stream is ready for capture."""
         self._params.audio_in_enabled = True
+        # Pipecat sets _paused on StopFrame; ensure capture is not stuck paused.
+        self._paused = False
         try:
             self._ensure_audio_task_ready()
             self._open_input_stream()

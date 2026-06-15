@@ -12,6 +12,42 @@ logger = logging.getLogger(__name__)
 # appeared. This must not imply that the agent created or saved anything.
 _PATH_REDACT_PLACEHOLDER = "a local path"
 
+# Line ends with sentence-ending punctuation (., !, ?, ellipsis). Optional closers after.
+_TTS_LINE_SENTENCE_END_RE = re.compile(r'[.!?…]["\'\)\]]*\s*$')
+# Trailing clause punctuation to drop before appending a period.
+_TTS_LINE_TRAILING_CLAUSE_RE = re.compile(r'[,;:\-–—]+\s*$')
+
+
+def ensure_line_sentence_boundaries_for_tts(text: str) -> str:
+    """Ensure each non-empty line ends with sentence punctuation before newline collapse.
+
+    Copied email and clipboard text often breaks mid-thought at newlines without a
+    full stop. Kokoro and other TTS engines then run lines together. Add a single
+    period only when the line does not already end with ., !, or ? (no double stops).
+    """
+    if not text or "\n" not in text:
+        return text
+
+    lines = text.split("\n")
+    out_lines: list[str] = []
+    for line in lines:
+        core = line.rstrip()
+        if not core:
+            out_lines.append(line)
+            continue
+        if _TTS_LINE_SENTENCE_END_RE.search(core):
+            out_lines.append(line)
+            continue
+        core = _TTS_LINE_TRAILING_CLAUSE_RE.sub("", core).rstrip()
+        if not core:
+            out_lines.append(line)
+            continue
+        if _TTS_LINE_SENTENCE_END_RE.search(core):
+            out_lines.append(core)
+        else:
+            out_lines.append(core + ".")
+    return "\n".join(out_lines)
+
 
 def redact_filesystem_paths_for_conversation(text: str) -> str:
     """Replace local filesystem paths with plain prose.
@@ -187,6 +223,10 @@ def clean_text_for_tts(
     # Residual slash/backslash separators from copied snippets are unpleasant
     # in TTS ("slash slash slash", "forward slash"). Treat them as spacing.
     text = re.sub(r'\s*[\\/]+\s*', ' ', text)
+
+    # Email/clipboard paste: newline breaks without terminal punctuation should
+    # become sentence boundaries before we collapse lines into one utterance.
+    text = ensure_line_sentence_boundaries_for_tts(text)
 
     # Normalize whitespace — collapse newlines to spaces so TTS never receives bare
     # newline characters (Kokoro/espeak-ng phonemizer drops whitespace at utterance

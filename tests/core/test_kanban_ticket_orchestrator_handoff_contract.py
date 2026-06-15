@@ -31,6 +31,17 @@ def test_engage_route_activates_board_and_project_before_dispatch():
     assert "activate_engagement_context" in py
     assert "emit_ticket_engagement_memory_event" in py
     assert "local_board_id" in py
+    assert "_import_attachments_for_orchestrator_engagement" in py
+
+
+def test_orchestrator_engagement_imports_jira_attachments_into_prompt():
+    engagement = ENGAGEMENT_PY.read_text(encoding="utf-8")
+    kanban = KANBAN_PY.read_text(encoding="utf-8")
+    assert "attachment_markdown" in engagement
+    assert "Attachments (imported to project folder)" in engagement
+    assert "document_extractor" in engagement
+    assert "_import_attachments_for_orchestrator_engagement" in kanban
+    assert "_resolve_ticket_external_link_for_import" in kanban
 
 
 def test_load_chat_and_process_signal_exists():

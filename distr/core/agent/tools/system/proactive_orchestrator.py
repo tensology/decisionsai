@@ -83,7 +83,7 @@ class ProactiveOrchestratorTool(BaseTool):
 
         action_name = (action or "scan").strip().lower()
         if action_name in {"daily_plan", "daily plan", "plan", "day_plan", "morning_brief", "today"}:
-            result = self._build_daily_plan_result(format=format)
+            result = self._resolve_daily_plan_result(format=format)
         elif action_name in {"dispatch", "send", "approve"}:
             if not candidate_id:
                 return "Tell me which work candidate to dispatch first."
@@ -109,6 +109,34 @@ class ProactiveOrchestratorTool(BaseTool):
             spoken = "I checked the work queue and have the details ready."
         reference = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         return voice_then_reference(spoken, reference)
+
+    def _resolve_daily_plan_result(self, *, format: str = "summary") -> dict[str, Any]:
+        """Run the user's Daily plan automation when configured; else build inline."""
+        from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
+        from distr.core.automation_resolver import find_automation_for_daily_plan
+
+        automation = find_automation_for_daily_plan(active_only=True)
+        if automation:
+            dispatch = dispatch_automation_to_current_chat(automation, manual=True, speak=False)
+            if dispatch.get("status") in {"completed", "dispatched"}:
+                return {
+                    "success": True,
+                    "action": "daily_plan",
+                    "spoken_summary": str(dispatch.get("summary") or "I ran your Daily plan automation."),
+                    "automation_id": automation.get("id"),
+                    "execution_mode": "automation_preset",
+                    "dispatch": dispatch,
+                }
+            if dispatch.get("status") == "skipped":
+                return {
+                    "success": False,
+                    "action": "daily_plan",
+                    "spoken_summary": str(dispatch.get("summary") or "Daily plan was skipped."),
+                    "automation_id": automation.get("id"),
+                    "execution_mode": "automation_preset",
+                    "dispatch": dispatch,
+                }
+        return self._build_daily_plan_result(format=format)
 
     def _build_daily_plan_result(self, *, format: str = "summary") -> dict[str, Any]:
         from distr.core.initiative.context import ContextAssembler

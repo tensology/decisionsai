@@ -614,12 +614,6 @@ function openCustomVoiceModal() {
         if (uploadHelp) uploadHelp.textContent = 'Upload a Supertonic Voice Builder .json voice style file. Raw audio cloning is not local in Supertonic.';
         if (recordModeBtn) recordModeBtn.classList.add('hidden');
         if (promptLabel) promptLabel.textContent = 'Notes';
-    } else if (provider === 'chatterbox') {
-        audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
-        audioInput.multiple = false;
-        if (uploadHelp) uploadHelp.textContent = 'Upload a clean 5-20 second reference clip for Chatterbox voice cloning.';
-        if (recordModeBtn) recordModeBtn.classList.remove('hidden');
-        if (promptLabel) promptLabel.textContent = 'Notes';
     } else {
         audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
         audioInput.multiple = true;
@@ -725,7 +719,7 @@ function submitCustomVoice(e) {
     document.getElementById('cv_processing').classList.remove('hidden');
     document.getElementById('cv_processing_text').textContent = provider === 'supertonic'
         ? 'Importing Supertonic voice style...'
-        : (provider === 'chatterbox' ? 'Registering Chatterbox reference voice...' : 'Processing voice clone...');
+        : 'Processing voice clone...';
 
     fetch('/api/custom-voices', { method: 'POST', body: fd })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))

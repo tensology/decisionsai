@@ -382,6 +382,12 @@ class InitiativeService:
             args=(settings,),
             daemon=True,
         ).start()
+        try:
+            from distr.core.initiative.daily_plan_prompt import maybe_suggest_daily_plan_automation
+
+            maybe_suggest_daily_plan_automation(self, settings)
+        except Exception:
+            logger.debug("daily plan automation suggestion skipped", exc_info=True)
         level = self._get_level(settings)
         if level not in ("operate", "own"):
             return
@@ -697,22 +703,10 @@ class InitiativeService:
 
             planner_scope = planner_scope_for_task_name(name)
             if planner_scope:
-                try:
-                    self._run_planner_proactive_task(
-                        scope=planner_scope,
-                        task_name=name,
-                        task_id=tid,
-                        instruction=instruction,
-                        settings=settings,
-                        tier=tier,
-                    )
-                except Exception:
-                    logger.error(
-                        "InitiativeService: planner task id=%s name=%r failed",
-                        tid,
-                        name,
-                        exc_info=True,
-                    )
+                logger.info(
+                    "InitiativeService: skipping legacy planner task %r — use Automations preset instead",
+                    name,
+                )
                 try:
                     with get_session() as session:
                         mark_proactive_task_run(session, tid)
@@ -1509,6 +1503,25 @@ class InitiativeService:
             return
         if allow_voice is None:
             allow_voice = kind not in {"idle_nudge", "workflow_idle_nudge"}
+        if kind not in {"initiative_suggestion"} and not requires_response:
+            try:
+                from distr.core.engagement_gates import proactive_delivery_blocked
+
+                blocked, reason = proactive_delivery_blocked(
+                    delivery_kind=kind,
+                    body=text,
+                    manual=False,
+                )
+                if blocked:
+                    logger.info(
+                        "InitiativeService: suppressed %s delivery (%s): %s",
+                        kind,
+                        reason,
+                        text[:120],
+                    )
+                    return
+            except Exception:
+                logger.debug("engagement gate check failed", exc_info=True)
         allow_telegram = settings.get("initiative_allow_telegram", False)
         service = HumanEngagementService(
             telegram_manager=self.telegram_manager,

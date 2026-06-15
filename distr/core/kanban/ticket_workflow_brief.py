@@ -122,6 +122,10 @@ def build_ticket_workflow_brief(
     if attachments:
         context_lines.append("Attachments:\n" + "\n".join(f"- {item['filename']}: {item['path']}" for item in attachments))
 
+    context_notes = (getattr(ticket, "context_notes", None) or "").strip()
+    if context_notes:
+        context_lines.append("Ticket notes:\n" + context_notes)
+
     return {
         "source_type": "kanban_ticket",
         "ticket_id": int(ticket.id),

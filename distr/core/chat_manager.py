@@ -211,16 +211,11 @@ class ChatManagerCore:
                             agent_name = COQUI_VOICES.get(coqui_voice, coqui_voice)
                         except Exception:
                             agent_name = coqui_voice
-                    elif tts_provider == "F5-TTS (Offline)":
-                        f5tts_voice = (
-                            getattr(settings, "f5tts_voice", "default") or "default"
-                        )
-                        agent_name = f5tts_voice.capitalize() if f5tts_voice != "default" else "F5-TTS"
-                    elif tts_provider == "VoxCPM (Offline)":
-                        voxcpm_voice = (
-                            getattr(settings, "voxcpm_voice", "default") or "default"
-                        )
-                        agent_name = voxcpm_voice.capitalize() if voxcpm_voice != "default" else "VoxCPM"
+                    elif tts_provider in ("F5-TTS (Offline)", "VoxCPM (Offline)", "Chatterbox (Offline)"):
+                        from distr.core.agent.constants import normalize_voice_provider
+                        from distr.core.agent.services.tts.registry import tts_registry
+                        retired_id = normalize_voice_provider(tts_provider)
+                        agent_name = tts_registry.get(retired_id).resolve_display_name("", {})
                     elif tts_provider == "Supertonic (Offline)":
                         supertonic_voice = (
                             getattr(settings, "supertonic_voice", "M1") or "M1"
@@ -230,18 +225,6 @@ class ChatManagerCore:
                             agent_name = SUPERTONIC_VOICES.get(supertonic_voice, supertonic_voice)
                         except Exception:
                             agent_name = supertonic_voice
-                    elif tts_provider == "Chatterbox (Offline)":
-                        chatterbox_voice = (
-                            getattr(settings, "chatterbox_voice", "default") or "default"
-                        )
-                        if str(chatterbox_voice).startswith("custom_"):
-                            try:
-                                from distr.core.agent.services.tts.chatterbox_descriptor import ChatterboxDescriptor
-                                agent_name = ChatterboxDescriptor._resolve_custom_voice_name(chatterbox_voice) or "Chatterbox"
-                            except Exception:
-                                agent_name = "Chatterbox"
-                        else:
-                            agent_name = "Chatterbox"
         except Exception as e:
             logger.warning(
                 "ChatManagerCore: Could not determine agent from settings: %s", e

@@ -1654,6 +1654,7 @@ def run_migrations():
         ("time_estimate", "VARCHAR", "NULL"),
         ("time_spent", "VARCHAR", "NULL"),
         ("workflow_queue_position", "INTEGER", "0"),
+        ("context_notes", "TEXT", "NULL"),
     ]:
         try:
             with Session() as s:

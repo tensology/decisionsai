@@ -22,6 +22,8 @@
     var latestSteeringMemory = null;
     var latestActiveRuns = [];
     var latestWorkflowRunHistory = [];
+    var latestWorkflowRunHistoryAll = [];
+    var workflowRunsFilterTicketId = null;
     var workflowRunsSeenByWorkflowId = {};
     var latestWorkflowExecutionSessions = [];
     var latestOrchestratorEvents = [];
@@ -56,6 +58,9 @@
     var workflowLinkedExternalTicketKeys = {};
     var workflowLocalTicketSourceKeys = {};
     var selectedWorkflowQueueTicketId = null;
+    var workflowTicketPendingRunStartedAt = {};
+    var workflowTicketTimerInterval = null;
+    var workflowActiveTicketIdsSnapshot = [];
     var workflowTicketModalState = null;
     var workflowWhatsappTicketDraft = null;
     var workflowWhatsappProgressTimer = null;
@@ -578,7 +583,8 @@
     function workflowTicketExternalLinkKey(selected, ticket) {
         if (!selected || !ticket || selected.source === "database") return "";
         var externalId = ticket.id || ticket.key || ticket.external_id || "";
-        return externalId ? (selected.source + ":" + String(externalId)) : "";
+        if (!externalId) return "";
+        return String(selected.source).toLowerCase() + ":" + String(externalId);
     }
 
     function workflowStatusBadge(ticket) {
@@ -737,7 +743,13 @@
             linked_project_name: ticket.linked_project_name || ticket.board_default_project_name || null,
             board_id: ticket.board_id,
             board_name: ticket.board_name || "",
-            cli_route: ticket.cli_route || null
+            external_source: ticket.external_source || "",
+            external_id: ticket.external_id || "",
+            source_provider: ticket.source_provider || "",
+            source_external_id: ticket.source_external_id || "",
+            cli_route: ticket.cli_route || null,
+            time_spent: ticket.time_spent || "",
+            time_estimate: ticket.time_estimate || ""
         };
     }
 
@@ -934,7 +946,20 @@
     }
 
     function refreshWorkflowBoardTicketsFromQueue() {
+        rebuildWorkflowQueueExternalLinkIndex();
         Object.keys(workflowBoardTicketByKey || {}).forEach(function (ticketKey) {
+            var item = workflowBoardTicketByKey[ticketKey];
+            if (!item || !item.ticket) return;
+            if (!isBoardTicketQueuedInCurrentWorkflow(item)) {
+                var linkedWorkflowId = item.ticket.linked_workflow_id;
+                if (
+                    currentWorkflowId
+                    && linkedWorkflowId != null
+                    && String(linkedWorkflowId) === String(currentWorkflowId)
+                ) {
+                    item.ticket.linked_workflow_id = null;
+                }
+            }
             syncWorkflowBoardTicketRowUi(ticketKey);
         });
         refreshWorkflowLaneAddAllButtons();
@@ -1085,34 +1110,20 @@
     }
 
     function restoreWorkflowBoardTicketAfterQueueRemove(ticketId, externalKey) {
-        if (!ticketId && !externalKey) return;
-        if (ticketId) delete workflowPendingTicketLinks["database:" + String(ticketId)];
-        if (externalKey) delete workflowLinkedExternalTicketKeys[externalKey];
-
-        var keysToSync = {};
-        Object.keys(workflowBoardTicketByKey || {}).forEach(function (key) {
-            var item = workflowBoardTicketByKey[key];
-            if (!item || !item.ticket) return;
-            var matchesLocal = ticketId && String(item.ticket.id) === String(ticketId);
-            var matchesExternal = externalKey && workflowTicketExternalLinkKey(item.selected, item.ticket) === externalKey;
-            if (!matchesLocal && !matchesExternal) return;
-            item.ticket.linked_workflow_id = null;
-            keysToSync[key] = true;
-        });
-
-        var sourceBoardKey = ticketId ? workflowLocalTicketSourceKeys[String(ticketId)] : "";
-        if (sourceBoardKey && workflowBoardTicketByKey[sourceBoardKey]) {
-            var sourceItem = workflowBoardTicketByKey[sourceBoardKey];
-            var sourceExternalKey = workflowTicketExternalLinkKey(sourceItem.selected, sourceItem.ticket);
-            if (sourceExternalKey) delete workflowLinkedExternalTicketKeys[sourceExternalKey];
-            keysToSync[sourceBoardKey] = true;
+        if (ticketId) {
+            delete workflowPendingTicketLinks["database:" + String(ticketId)];
+            delete workflowLocalTicketSourceKeys[String(ticketId)];
         }
-        if (ticketId) delete workflowLocalTicketSourceKeys[String(ticketId)];
-
-        Object.keys(keysToSync).forEach(function (key) {
-            syncWorkflowBoardTicketRowUi(key);
-        });
-        refreshWorkflowLaneAddAllButtons();
+        if (externalKey) {
+            var normalizedExternalKey = String(externalKey).toLowerCase();
+            delete workflowLinkedExternalTicketKeys[normalizedExternalKey];
+            Object.keys(workflowLinkedExternalTicketKeys).forEach(function (key) {
+                if (String(key).toLowerCase() === normalizedExternalKey) {
+                    delete workflowLinkedExternalTicketKeys[key];
+                }
+            });
+        }
+        refreshWorkflowBoardTicketsFromQueue();
     }
 
     function workflowBoardTicketDropPayload(ticketKey) {
@@ -1754,7 +1765,7 @@
         var backendOptions = workflowExecRouteBackendOptionsHtml();
         return workflowExecRouteLevels().map(function (level) {
             var label = level.charAt(0).toUpperCase() + level.slice(1);
-            return '<div class="wf-exec-route-block space-y-1" data-level="' + level + '">' +
+            return '<div class="wf-exec-route-block space-y-2" data-level="' + level + '">' +
                 '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto;">' +
                     '<label class="text-xs text-gray-400 font-medium">' + label + "</label>" +
                     '<select id="' + prefix + "-" + level + '-backend" class="wf-exec-backend w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
@@ -1765,6 +1776,7 @@
                     "</select>" +
                     '<button type="button" id="' + prefix + "-" + level + '-codex-cog" class="wf-exec-codex-cog inline-flex h-8 w-8 items-center justify-center rounded border border-white/20 text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed" data-level="' + level + '" title="Codex CLI preferences (intelligence &amp; speed)" aria-label="Codex CLI preferences">&#9881;</button>' +
                 "</div>" +
+                '<p id="' + prefix + "-" + level + '-model-hint" class="wf-exec-model-hint hidden text-[10px] leading-snug text-amber-200/90" style="margin-left: 7.75rem;"></p>' +
                 '<div id="' + prefix + "-" + level + '-codex-prefs" class="hidden ml-[7.75rem] grid grid-cols-2 gap-2 rounded border border-white/10 bg-[#10183f] p-2">' +
                     '<label class="space-y-1"><span class="text-[11px] text-gray-400">Intelligence</span>' +
                         '<select id="' + prefix + "-" + level + '-codex-intelligence" class="wf-exec-codex-intelligence w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
@@ -1812,12 +1824,30 @@
         panel.classList.toggle("hidden");
     }
 
+    function workflowExecModelsSourceIsVerified(source) {
+        var s = String(source || "").toLowerCase();
+        return s === "cursor-api" || s === "codex-cli" || s === "anthropic-api" || s === "pi-models";
+    }
+
+    function setWorkflowExecRouteModelHint(root, level, message) {
+        var hint = workflowExecRouteEl(root, level, "model-hint");
+        if (!hint) return;
+        var text = (message || "").trim();
+        if (text) {
+            hint.textContent = text;
+            hint.classList.remove("hidden");
+        } else {
+            hint.textContent = "";
+            hint.classList.add("hidden");
+        }
+    }
+
     function setWorkflowExecRouteIdeModelSelect(select) {
         if (!select) return;
         select.innerHTML = "";
         var opt = document.createElement("option");
         opt.value = "";
-        opt.textContent = "Chosen in IDE";
+        opt.textContent = "Determined inside the IDE";
         select.appendChild(opt);
         select.value = "";
         select.disabled = true;
@@ -1828,16 +1858,17 @@
         var select = workflowExecRouteEl(root, level, "model");
         if (!select) return Promise.resolve();
         backendId = (backendId || "codex").trim();
+        setWorkflowExecRouteModelHint(root, level, "");
         if (workflowExecBackendIsIde(backendId)) {
             setWorkflowExecRouteIdeModelSelect(select);
             updateWorkflowExecCodexPrefVisibility(level, root);
             return Promise.resolve();
         }
-        var current = selectedModel || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model || "auto";
+        var preferred = (selectedModel || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model || "auto").trim();
         select.disabled = true;
         select.innerHTML = "";
         var loadingOpt = document.createElement("option");
-        loadingOpt.value = current;
+        loadingOpt.value = "auto";
         loadingOpt.textContent = "Loading...";
         select.appendChild(loadingOpt);
         var params = "backend_id=" + encodeURIComponent(backendId);
@@ -1845,12 +1876,18 @@
         if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
         return api("GET", "/projects/cli-models?" + params)
             .then(function (data) {
+                var source = (data && data.source) || "";
+                var message = (data && data.message) || "";
                 var models = Array.isArray(data.models) ? data.models : [];
+                var sourceLower = String(source).toLowerCase();
+                var verified = workflowExecModelsSourceIsVerified(source);
+                var aliasesOnly = sourceLower === "claude-code-aliases";
+                var defaultsOnly = sourceLower.indexOf("defaults") >= 0 || sourceLower === "error";
                 var seen = {};
                 select.innerHTML = "";
                 function append(value, label) {
-                    value = value || "auto";
-                    if (seen[value]) return;
+                    value = (value || "auto").trim();
+                    if (!value || seen[value]) return;
                     seen[value] = true;
                     var opt = document.createElement("option");
                     opt.value = value;
@@ -1858,24 +1895,52 @@
                     select.appendChild(opt);
                 }
                 append("auto", "Auto");
-                models.forEach(function (model) {
-                    var value = workflowExecRouteModelValue(model);
-                    if (!value) return;
-                    append(value, workflowExecRouteModelLabel(model));
-                });
-                if (current && !seen[current]) append(current, current);
-                select.value = current || "auto";
+                if (verified || aliasesOnly) {
+                    models.forEach(function (model) {
+                        var value = workflowExecRouteModelValue(model);
+                        if (!value || value === "auto") return;
+                        append(value, workflowExecRouteModelLabel(model));
+                    });
+                    if (aliasesOnly && message) setWorkflowExecRouteModelHint(root, level, message);
+                } else if (defaultsOnly) {
+                    setWorkflowExecRouteModelHint(
+                        root,
+                        level,
+                        message || "Could not load models from this executor. Use Auto or fix the CLI/API setup."
+                    );
+                } else if (models.length) {
+                    models.forEach(function (model) {
+                        var value = workflowExecRouteModelValue(model);
+                        if (!value || value === "auto") return;
+                        append(value, workflowExecRouteModelLabel(model));
+                    });
+                    if (message) setWorkflowExecRouteModelHint(root, level, message);
+                } else {
+                    setWorkflowExecRouteModelHint(
+                        root,
+                        level,
+                        message || "No models reported by this executor."
+                    );
+                }
+                var current = preferred || "auto";
+                if (!seen[current]) current = "auto";
+                select.value = current;
                 select.disabled = false;
                 updateWorkflowExecCodexPrefVisibility(level, root);
             })
-            .catch(function () {
+            .catch(function (e) {
                 select.innerHTML = "";
                 var opt = document.createElement("option");
-                opt.value = current || "auto";
-                opt.textContent = current || "Auto";
+                opt.value = "auto";
+                opt.textContent = "Auto";
                 select.appendChild(opt);
-                select.value = current || "auto";
+                select.value = "auto";
                 select.disabled = false;
+                setWorkflowExecRouteModelHint(
+                    root,
+                    level,
+                    (e && e.message) ? e.message : "Could not load models from this executor."
+                );
                 updateWorkflowExecCodexPrefVisibility(level, root);
             });
     }
@@ -3093,6 +3158,8 @@
         currentWorkflowId = id;
         expandedStepId = null;
         selectedWorkflowQueueTicketId = null;
+        workflowRunsFilterTicketId = null;
+        loopFeedRunId = null;
         try { localStorage.setItem("wf_last_selected", id); } catch (e) {}
         loadList();
         loadDetail(id);
@@ -3155,6 +3222,9 @@
 
     function saveWorkflowName() {
         if (!currentWorkflowId) return;
+        if (document.getElementById("wf-loop-step-modal") && !document.getElementById("wf-loop-step-modal").classList.contains("hidden")) {
+            return;
+        }
         var statusEl = document.getElementById("wf-name-save-status");
         var nextName = getWorkflowRenameDraftName() || "Untitled Workflow";
         var currentName = currentWorkflow && currentWorkflow.name ? String(currentWorkflow.name).trim() : "";
@@ -3865,6 +3935,7 @@
         });
         refreshWorkflowBoardTicketDragBindings(list);
         initWorkflowListRowMarquees(list);
+        refreshWorkflowBoardTicketsFromQueue();
     }
 
     function getSelectedBoardLocalId() {
@@ -3905,13 +3976,157 @@
     }
 
     function formatElapsed(seconds) {
-        var total = parseInt(seconds, 10) || 0;
+        var total = Math.max(0, parseInt(seconds, 10) || 0);
         var h = Math.floor(total / 3600);
         var m = Math.floor((total % 3600) / 60);
         var s = total % 60;
-        if (h > 0) return h + "h " + String(m).padStart(2, "0") + "m";
-        if (m > 0) return m + "m " + String(s).padStart(2, "0") + "s";
-        return s + "s";
+        return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    }
+
+    function parseJiraDurationToSeconds(text) {
+        if (!text) return 0;
+        var raw = String(text).trim().toLowerCase();
+        if (!raw || raw === "-") return 0;
+        var total = 0;
+        var re = /(\d+)\s*([wdhms])/g;
+        var match;
+        while ((match = re.exec(raw))) {
+            var n = parseInt(match[1], 10) || 0;
+            if (match[2] === "w") total += n * 5 * 8 * 3600;
+            else if (match[2] === "d") total += n * 8 * 3600;
+            else if (match[2] === "h") total += n * 3600;
+            else if (match[2] === "m") total += n * 60;
+            else if (match[2] === "s") total += n;
+        }
+        return total;
+    }
+
+    function workflowQueueTicketBaseSeconds(ticket) {
+        return parseJiraDurationToSeconds(ticket && ticket.time_spent);
+    }
+
+    function workflowQueueTicketRunSeconds(ticket) {
+        if (!ticket || !ticket.id) return 0;
+        var run = activeRunByTicketId(ticket.id);
+        if (run) {
+            var status = String(run.status || "").toLowerCase();
+            if (status === "running" || status === "waiting") {
+                delete workflowTicketPendingRunStartedAt[String(ticket.id)];
+                return workflowRunDurationSeconds(run);
+            }
+        }
+        var pendingStarted = workflowTicketPendingRunStartedAt[String(ticket.id)];
+        if (pendingStarted) {
+            return Math.max(0, Math.floor((Date.now() - pendingStarted) / 1000));
+        }
+        return 0;
+    }
+
+    function workflowQueueTicketDisplaySeconds(ticket) {
+        return workflowQueueTicketBaseSeconds(ticket) + workflowQueueTicketRunSeconds(ticket);
+    }
+
+    function workflowQueueTicketTimeLabel(ticket) {
+        return formatElapsed(workflowQueueTicketDisplaySeconds(ticket));
+    }
+
+    function workflowQueueTicketTimeIsLive(ticket) {
+        if (!ticket || !ticket.id) return false;
+        if (workflowTicketPendingRunStartedAt[String(ticket.id)]) return true;
+        var run = activeRunByTicketId(ticket.id);
+        if (!run) return false;
+        var status = String(run.status || "").toLowerCase();
+        return status === "running" || status === "waiting";
+    }
+
+    function tickWorkflowTicketTimers() {
+        var hasLive = false;
+        document.querySelectorAll(".wf-ticket-time-display").forEach(function (el) {
+            var ticketId = el.dataset.ticketId;
+            var ticket = workflowQueueTicketById(ticketId);
+            if (!ticket) return;
+            el.textContent = formatElapsed(workflowQueueTicketDisplaySeconds(ticket));
+            if (workflowQueueTicketTimeIsLive(ticket)) hasLive = true;
+        });
+        renderWorkflowBoardTimeTotal();
+        if (!hasLive && workflowTicketTimerInterval) {
+            clearInterval(workflowTicketTimerInterval);
+            workflowTicketTimerInterval = null;
+        }
+    }
+
+    function ensureWorkflowTicketTimerTick() {
+        tickWorkflowTicketTimers();
+        if (workflowTicketTimerInterval) return;
+        var needsTimer = (workflowQueueTickets || []).some(function (ticket) {
+            return workflowQueueTicketTimeIsLive(ticket);
+        });
+        if (!needsTimer) return;
+        workflowTicketTimerInterval = setInterval(tickWorkflowTicketTimers, 1000);
+    }
+
+    function workflowRunDurationSeconds(run) {
+        if (!run) return 0;
+        var status = String(run.status || "").toLowerCase();
+        if ((status === "running" || status === "waiting") && run.elapsed_seconds != null) {
+            return Math.max(0, parseInt(run.elapsed_seconds, 10) || 0);
+        }
+        if (run.started_at && run.completed_at) {
+            var started = Date.parse(run.started_at);
+            var ended = Date.parse(run.completed_at);
+            if (!isNaN(started) && !isNaN(ended) && ended > started) {
+                return Math.floor((ended - started) / 1000);
+            }
+        }
+        if (run.started_at && (status === "running" || status === "waiting")) {
+            var startMs = Date.parse(run.started_at);
+            if (!isNaN(startMs)) return Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+        }
+        return 0;
+    }
+
+    function workflowRunMatchesSelectedBoard(run) {
+        if (!run) return false;
+        var selected = getSelectedWorkflowBoardOption();
+        if (!selected) return true;
+        var localBoardId = workflowBoardLocalId(selected);
+        if (localBoardId && run.board_id != null && String(run.board_id) === String(localBoardId)) return true;
+        if (selected.name && run.board_name && String(run.board_name).toLowerCase() === String(selected.name).toLowerCase()) return true;
+        if (run.ticket_id) {
+            var ticket = workflowQueueTicketById(run.ticket_id);
+            if (ticket && workflowTicketMatchesSelectedBoard(ticket, selected)) return true;
+        }
+        return false;
+    }
+
+    function boardWorkflowRunTotalSeconds() {
+        var runs = (latestActiveRuns || []).concat(latestWorkflowRunHistoryAll || []);
+        var seen = {};
+        var total = 0;
+        runs.forEach(function (run) {
+            if (!run || !run.id || seen[String(run.id)]) return;
+            if (currentWorkflowId && String(run.workflow_id) !== String(currentWorkflowId)) return;
+            if (!workflowRunMatchesSelectedBoard(run)) return;
+            seen[String(run.id)] = true;
+            total += workflowRunDurationSeconds(run);
+        });
+        return total;
+    }
+
+    function renderWorkflowBoardTimeTotal() {
+        var el = document.getElementById("wf-workflow-board-time-total");
+        if (!el) return;
+        var visible = workflowQueueTicketsForSelectedBoard(workflowQueueTickets || []);
+        if (!visible.length) {
+            el.classList.add("hidden");
+            el.textContent = "";
+            return;
+        }
+        var total = visible.reduce(function (sum, ticket) {
+            return sum + workflowQueueTicketDisplaySeconds(ticket);
+        }, 0);
+        el.classList.remove("hidden");
+        el.textContent = "Ticket time: " + formatElapsed(total);
     }
 
     function executionSessionIsActive(session) {
@@ -4087,11 +4302,31 @@
     function renderLoopRunTicketContext() {
         var mainEl = document.getElementById("wf-loop-run-ticket-context");
         var feedEl = document.getElementById("wf-loop-feed-ticket-context");
-        var feedRun = loopFeedActiveRun() || currentWorkflowActiveRun();
-        var feedHtml = isRunActiveForTicketContext(feedRun) ? loopRunTicketContextHtml(feedRun, "feed") : "";
+        var contextRun = loopFeedContextRun();
+        var feedHtml = contextRun ? loopRunTicketContextHtml(contextRun, "feed") : "";
         if (mainEl) {
-            mainEl.classList.add("hidden");
-            mainEl.innerHTML = "";
+            if (contextRun && isRunActiveForTicketContext(contextRun)) {
+                mainEl.classList.add("hidden");
+                mainEl.innerHTML = "";
+            } else if (selectedWorkflowQueueTicketId) {
+                var ticket = workflowQueueTicketById(selectedWorkflowQueueTicketId);
+                if (ticket) {
+                    mainEl.classList.remove("hidden");
+                    mainEl.innerHTML =
+                        '<div class="wf-loop-ticket-kicker"><span>Selected for queue</span></div>' +
+                        '<div class="wf-loop-ticket-title">' + esc(ticket.title || ("Ticket #" + ticket.id)) + '</div>' +
+                        '<div class="wf-loop-ticket-meta"><span>Queued · not running</span></div>';
+                } else {
+                    mainEl.classList.add("hidden");
+                    mainEl.innerHTML = "";
+                }
+            } else if (contextRun && !isRunActiveForTicketContext(contextRun)) {
+                mainEl.classList.remove("hidden");
+                mainEl.innerHTML = loopRunTicketContextHtml(contextRun, "main");
+            } else {
+                mainEl.classList.add("hidden");
+                mainEl.innerHTML = "";
+            }
         }
         if (feedEl) {
             feedEl.classList.toggle("hidden", !feedHtml);
@@ -4308,6 +4543,27 @@
             if (workflowRunsSubtab === "memory") loadWorkflowSteeringMemory({ quiet: true });
             if (workflowRunsSubtab === "timeline") loadOrchestratorTimeline({ quiet: true });
             renderWorkflowTickets(workflowQueueTickets);
+            renderWorkflowBoardTimeTotal();
+            ensureWorkflowTicketTimerTick();
+            var nextActiveTicketIds = latestActiveRuns
+                .filter(function (r) {
+                    return r && r.ticket_id && (r.status === "running" || r.status === "waiting");
+                })
+                .map(function (r) { return String(r.ticket_id); });
+            workflowActiveTicketIdsSnapshot.forEach(function (ticketId) {
+                if (nextActiveTicketIds.indexOf(ticketId) !== -1) return;
+                fetchWorkflowQueueTicketRecord(ticketId).then(function (ticket) {
+                    if (!ticket || !ticket.id) return;
+                    var idx = workflowQueueTickets.findIndex(function (item) {
+                        return String(item.id) === String(ticket.id);
+                    });
+                    if (idx < 0) return;
+                    workflowQueueTickets[idx].time_spent = ticket.time_spent || workflowQueueTickets[idx].time_spent;
+                    delete workflowTicketPendingRunStartedAt[String(ticket.id)];
+                    renderWorkflowTickets(workflowQueueTickets);
+                }).catch(function () {});
+            });
+            workflowActiveTicketIdsSnapshot = nextActiveTicketIds;
             if (stopAllBtn) {
                 var hasActiveCurrentWorkflowRuns = latestActiveRuns.some(function (r) {
                     return currentWorkflowId && String(r.workflow_id) === String(currentWorkflowId);
@@ -4851,16 +5107,8 @@
     }
 
     function workflowQueueTicketTitle(ticketId) {
-        var ticket = (workflowQueueTickets || []).filter(function (item) {
-            return String(item.id) === String(ticketId);
-        })[0];
+        var ticket = workflowQueueTicketById(ticketId);
         return ticket ? (ticket.title || ("Ticket #" + ticket.id)) : ("Ticket #" + ticketId);
-    }
-
-    function workflowQueueTicketById(ticketId) {
-        return (workflowQueueTickets || []).filter(function (item) {
-            return String(item.id) === String(ticketId);
-        })[0] || null;
     }
 
     function copyWorkflowQueueTicket(ticketId) {
@@ -4899,22 +5147,6 @@
         }, 1000);
     }
 
-    function syncWorkflowQueueRemoveButton() {
-        var btn = document.getElementById("wf-delete-btn");
-        if (!btn) return;
-        var ticketId = selectedWorkflowQueueTicketId;
-        var locked = ticketId && workflowQueueTicketLocked(ticketId);
-        var canRemove = !!(ticketId && currentWorkflowId && !locked);
-        btn.disabled = !canRemove;
-        if (!ticketId) {
-            btn.title = "Select a ticket in the queue to remove";
-        } else if (locked) {
-            btn.title = "Cannot remove a ticket while it is running";
-        } else {
-            btn.title = "Remove selected ticket from this workflow";
-        }
-    }
-
     function syncWorkflowQueueSelectionUi() {
         document.querySelectorAll(".wf-workflow-ticket-row").forEach(function (row) {
             var selected = selectedWorkflowQueueTicketId &&
@@ -4922,7 +5154,56 @@
             row.classList.toggle("is-selected", !!selected);
             row.setAttribute("aria-selected", selected ? "true" : "false");
         });
-        syncWorkflowQueueRemoveButton();
+        syncWorkflowQueueActionButtons();
+        renderLoopRunTicketContext();
+    }
+
+    function syncWorkflowQueueActionButtons() {
+        var runAll = document.getElementById("wf-run-all-btn");
+        var queue = workflowQueueTicketsForSelectedBoard(workflowQueueTickets || []);
+        var runnable = queue.filter(function (t) { return !activeRunByTicketId(t.id); });
+        if (runAll) {
+            runAll.disabled = !(currentWorkflowId && runnable.length && !workflowHasActiveRuns());
+        }
+    }
+
+    function runAllWorkflowQueueTickets() {
+        if (!currentWorkflowId || workflowHasActiveRuns()) {
+            snack("A run is already active", "error");
+            return;
+        }
+        var queue = workflowQueueTicketsForSelectedBoard(workflowQueueTickets || [])
+            .filter(function (t) { return !activeRunByTicketId(t.id); });
+        if (!queue.length) {
+            snack("No runnable tickets in the queue", "error");
+            return;
+        }
+        var first = queue[0];
+        snack("Running queue (" + queue.length + " tickets). First: " + (first.title || ("#" + first.id)), "info");
+        openWorkflowRunPreview(first.id);
+    }
+
+    function filterRunsForSelectedTicket(runs) {
+        if (!workflowRunsFilterTicketId) return runs;
+        return (runs || []).filter(function (r) {
+            return String(r.ticket_id) === String(workflowRunsFilterTicketId);
+        });
+    }
+
+    function focusWorkflowRun(runId, options) {
+        options = options || {};
+        if (!runId || !currentWorkflowId) return;
+        loopFeedRunId = runId;
+        workflowMemoryRunId = runId;
+        if (options.ticketId) workflowRunsFilterTicketId = String(options.ticketId);
+        if (options.switchTab === "loop") switchTab("loop", { persist: true });
+        else if (options.switchTab === "runs") {
+            switchTab("runs", { persist: true });
+            switchRunsSubtab("history");
+        }
+        syncLoopFeedRunSelect();
+        loadLoopActivityFeed({ quiet: false });
+        renderLoopRunTicketContext();
     }
 
     function selectWorkflowQueueTicket(ticketId, rowEl) {
@@ -4975,7 +5256,6 @@
                     workflowQueueTickets = workflowQueueTickets.filter(function (item) {
                         return String(item.id) !== String(ticketId);
                     });
-                    rebuildWorkflowQueueExternalLinkIndex();
                     if (selectedWorkflowQueueTicketId && String(selectedWorkflowQueueTicketId) === String(ticketId)) {
                         selectedWorkflowQueueTicketId = null;
                     }
@@ -5002,10 +5282,12 @@
         var locked = !!(run || executionSession);
         var loopLocked = workflowHasActiveRuns();
         var canReorder = !locked && !loopLocked;
-        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : (ticket.workflow_status || "Queued"));
-        var statusClass = run || executionSession
-            ? (status === "waiting" || status === "queued" ? "bg-amber-500/20 text-amber-200" : "bg-sky-500/20 text-sky-200")
-            : (String(status || "").toLowerCase() === "completed" ? "bg-emerald-500/15 text-emerald-200" : "bg-white/10 text-gray-300");
+        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : "");
+        var timeLabel = workflowQueueTicketTimeLabel(ticket);
+        var timeLive = workflowQueueTicketTimeIsLive(ticket);
+        var timeClass = timeLive
+            ? "bg-sky-500/20 text-sky-200"
+            : "bg-white/10 text-gray-300";
         var nextUp = nextQueuedTicketAfterRunning();
         var isUpNext = nextUp && String(nextUp.id) === String(ticket.id);
         var title = ticket.title || ("Ticket #" + ticket.id);
@@ -5015,6 +5297,7 @@
             ? '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + esc(cleanDesc) + "</span></div></div>"
             : "";
         var contentClass = "kb-ticket-list-content" + (cleanDesc ? "" : " kb-ticket-list-content--no-desc");
+        var titleHtml = '<div class="kb-ticket-list-title-wrap" tabindex="0"><div class="kb-ticket-list-title-track"><span>' + esc(title) + "</span></div></div>";
         var row = document.createElement("div");
         row.className = "kb-ticket-list-row wf-workflow-ticket-row" + (run ? " wf-workflow-ticket-row--running" : "") + (isUpNext ? " wf-workflow-ticket-row--up-next" : "");
         row.dataset.ticketId = String(ticket.id);
@@ -5035,11 +5318,11 @@
                 "</span>" +
             "</div>" +
             '<div class="' + contentClass + '">' +
-                '<span class="kb-ticket-list-title">' + esc(title) + "</span>" +
+                titleHtml +
                 descHtml +
             "</div>" +
             '<div class="kb-ticket-list-actions wf-workflow-queue-actions">' +
-                '<span class="inline-flex whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded ' + statusClass + '">' + esc(status) + "</span>" +
+                '<span class="wf-ticket-time-display inline-flex whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded tabular-nums ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '" title="Time spent on this ticket">' + esc(timeLabel) + "</span>" +
                 '<button type="button" class="wf-workflow-ticket-copy kb-card-action-btn kb-act-copy" data-ticket-id="' + esc(ticket.id) + '" title="Copy title and description" aria-label="Copy title and description">' +
                     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
                 "</button>" +
@@ -5052,9 +5335,55 @@
         if (canReorder) {
             attachWorkflowQueueTicketDrag(row);
         }
-        var ticketUi = ensureWorkflowTicketUi();
-        if (ticketUi && ticketUi.initListRowMarquee) ticketUi.initListRowMarquee(row);
         return row;
+    }
+
+    function initWorkflowQueueTextMarquee(container, trackSelector, marqueeClass) {
+        if (!container || container.dataset.marqueeInit === "done") return;
+        var track = container.querySelector(trackSelector);
+        if (!track) {
+            container.dataset.marqueeInit = "done";
+            return;
+        }
+        var first = track.querySelector("span");
+        if (!first) return;
+        var text = (first.textContent || "").trim();
+        if (!text) {
+            container.dataset.marqueeInit = "done";
+            return;
+        }
+        requestAnimationFrame(function () {
+            if (container.dataset.marqueeInit === "done") return;
+            if (track.scrollWidth <= container.clientWidth + 1) {
+                container.dataset.marqueeInit = "done";
+                return;
+            }
+            container.dataset.marqueeInit = "done";
+            container.classList.add(marqueeClass);
+            var clone = first.cloneNode(true);
+            clone.setAttribute("aria-hidden", "true");
+            track.appendChild(clone);
+            var duration = Math.max(10, Math.round(track.scrollWidth / 40));
+            track.style.setProperty("--kb-marquee-duration", duration + "s");
+        });
+    }
+
+    function initWorkflowQueueRowMarquees(rootEl) {
+        (rootEl || document).querySelectorAll(".wf-workflow-ticket-row").forEach(function (row) {
+            row.querySelectorAll(".kb-ticket-list-desc, .kb-ticket-list-title-wrap").forEach(function (node) {
+                node.dataset.marqueeInit = "";
+            });
+            initWorkflowQueueTextMarquee(
+                row.querySelector(".kb-ticket-list-title-wrap"),
+                ".kb-ticket-list-title-track",
+                "kb-ticket-list-title-wrap--marquee"
+            );
+            initWorkflowQueueTextMarquee(
+                row.querySelector(".kb-ticket-list-desc"),
+                ".kb-ticket-list-desc-track",
+                "kb-ticket-list-desc--marquee"
+            );
+        });
     }
 
     function renderWorkflowTickets(tickets) {
@@ -5071,6 +5400,7 @@
             listEl.classList.add("border-dashed");
             selectWorkflowQueueTicket(null);
             bindWorkflowTicketDropZone();
+            renderWorkflowBoardTimeTotal();
             refreshWorkflowCliTabIfVisible();
             return;
         }
@@ -5081,6 +5411,7 @@
             listEl.classList.add("border-dashed");
             selectWorkflowQueueTicket(null);
             bindWorkflowTicketDropZone();
+            renderWorkflowBoardTimeTotal();
             refreshWorkflowCliTabIfVisible();
             return;
         }
@@ -5099,6 +5430,11 @@
         bindWorkflowQueueMetricBadges(listEl);
         bindWorkflowTicketDropZone();
         ensureWorkflowQueueSelection(tickets);
+        requestAnimationFrame(function () {
+            initWorkflowQueueRowMarquees(listWrap);
+            ensureWorkflowTicketTimerTick();
+        });
+        renderWorkflowBoardTimeTotal();
         refreshWorkflowCliTabIfVisible();
     }
 
@@ -5337,6 +5673,29 @@
         })[0] || null;
     }
 
+    function workflowExecutorLabel(backend) {
+        var b = String(backend || "").toLowerCase();
+        if (b === "cursor") return "Cursor IDE";
+        if (b === "codex") return "Codex CLI";
+        if (b === "claude_code") return "Claude Code CLI";
+        if (b === "pi") return "Pi CLI";
+        if (b === "hermes_agent") return "Hermes";
+        if (!b || b === "auto") return "Auto";
+        return backend;
+    }
+
+    function workflowRunPreviewKvRow(label, value, options) {
+        options = options || {};
+        var val = value || "-";
+        var valueHtml;
+        if (options.marquee && val.length > 42) {
+            valueHtml = '<span class="wf-run-preview-marquee"><span>' + esc(val) + " · " + esc(val) + "</span></span>";
+        } else {
+            valueHtml = '<span class="break-words">' + esc(val) + "</span>";
+        }
+        return '<div class="wf-run-preview-label">' + esc(label) + '</div><div class="wf-run-preview-value">' + valueHtml + "</div>";
+    }
+
     function workflowRunPreviewRouteHtml(ticket, ctx) {
         ticket = ticket || {};
         ctx = ctx || {};
@@ -5346,23 +5705,72 @@
         var backend = ctx.backend_id || route.backend || route.backend_id || "auto";
         var model = ctx.model || route.model || "auto";
         var complexity = ctx.complexity || ticket.complexity || "medium";
-        var rows = [
-            ["Ticket", ticket.title || ctx.title || ("Ticket #" + (ticket.id || ctx.ticket_id || ""))],
-            ["Board", ticket.board_name || "Unknown board"],
-            ["Project", projectName || "No linked project"],
-            ["Complexity", complexity],
-            ["Executor", backend],
-            ["Model", model || "auto"]
-        ];
-        if (projectFolder) rows.push(["Folder", projectFolder]);
+        var priority = ctx.priority || ticket.priority || "medium";
+        var executor = workflowExecutorLabel(backend);
         var skills = workflowCleanStringList(ctx.skills || route.skills);
-        if (skills.length) rows.push(["Skills", skills.join(", ")]);
-        return '<div class="space-y-2">' + rows.map(function (row) {
-            return '<div class="grid grid-cols-[7rem,1fr] gap-3 text-sm">' +
-                '<div class="text-gray-500">' + esc(row[0]) + '</div>' +
-                '<div class="text-gray-100 break-words">' + esc(row[1] || "-") + '</div>' +
-            '</div>';
-        }).join("") + '</div>';
+        var ticketTitle = ticket.title || ctx.title || ("Ticket #" + (ticket.id || ctx.ticket_id || ""));
+        var ticketDesc = ticket.description || ctx.description || "";
+        var contextNotes = ctx.context_notes || ticket.context_notes || "";
+
+        var runPanel = '<div class="wf-run-preview-panel active" data-panel="run">' +
+            '<div class="wf-run-preview-kv-row wf-run-preview-kv-row--split">' +
+                workflowRunPreviewKvRow("Board", ticket.board_name || "Unknown board") +
+                workflowRunPreviewKvRow("Project", projectName || "No linked project") +
+            "</div>" +
+            '<div class="wf-run-preview-kv-row wf-run-preview-kv-row--split">' +
+                workflowRunPreviewKvRow("Complexity", complexity) +
+                workflowRunPreviewKvRow("Priority", priority) +
+            "</div>" +
+            '<div class="wf-run-preview-kv-row wf-run-preview-kv-row--split">' +
+                workflowRunPreviewKvRow("Executor", executor) +
+                workflowRunPreviewKvRow("Model", model || "auto") +
+            "</div>";
+        if (projectFolder) {
+            runPanel += '<div class="wf-run-preview-kv-row">' +
+                workflowRunPreviewKvRow("Folder", projectFolder, { marquee: true }) +
+            "</div>";
+        }
+        if (skills.length) {
+            runPanel += '<div class="wf-run-preview-kv-row">' +
+                workflowRunPreviewKvRow("Skills", skills.join(", ")) +
+            "</div>";
+        }
+        runPanel += "</div>";
+
+        var infoPanel = '<div class="wf-run-preview-panel" data-panel="info">' +
+            '<div class="wf-run-preview-kv-row">' +
+                workflowRunPreviewKvRow("Ticket", ticketTitle) +
+            "</div>";
+        if (ticketDesc) {
+            infoPanel += '<div class="text-xs text-gray-400 mt-2 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">' + esc(ticketDesc) + "</div>";
+        }
+        if (contextNotes) {
+            infoPanel += '<div class="wf-run-preview-notes">' + esc(contextNotes) + "</div>";
+        } else {
+            infoPanel += '<p class="text-xs text-gray-500 mt-2">No orchestrator notes on this ticket yet.</p>';
+        }
+        infoPanel += "</div>";
+
+        return '<div class="wf-run-preview-tabs">' +
+            '<button type="button" class="wf-run-preview-tab active" data-tab="run">Run</button>' +
+            '<button type="button" class="wf-run-preview-tab" data-tab="info">Info</button>' +
+        "</div>" + runPanel + infoPanel;
+    }
+
+    function bindWorkflowRunPreviewTabs(root) {
+        if (!root) return;
+        var tabs = root.querySelectorAll(".wf-run-preview-tab");
+        tabs.forEach(function (tab) {
+            tab.onclick = function () {
+                var name = tab.getAttribute("data-tab");
+                root.querySelectorAll(".wf-run-preview-tab").forEach(function (el) {
+                    el.classList.toggle("active", el.getAttribute("data-tab") === name);
+                });
+                root.querySelectorAll(".wf-run-preview-panel").forEach(function (panel) {
+                    panel.classList.toggle("active", panel.getAttribute("data-panel") === name);
+                });
+            };
+        });
     }
 
     function closeWorkflowRunPreview() {
@@ -5392,9 +5800,10 @@
         }
         if (subtitle) subtitle.textContent = ticket ? (ticket.title || ("Ticket #" + ticketId)) : ("Ticket #" + ticketId);
         body.innerHTML = workflowRunPreviewRouteHtml(ticket, {});
+        bindWorkflowRunPreviewTabs(body);
         if (warning) {
-            warning.textContent = "Checking project and executor route...";
-            warning.classList.remove("hidden");
+            warning.textContent = "";
+            warning.classList.add("hidden");
         }
         confirmBtn.disabled = true;
         modal.classList.remove("hidden");
@@ -5402,15 +5811,14 @@
             .then(function (ctx) {
                 if (pendingWorkflowRunTicketId !== String(ticketId)) return;
                 body.innerHTML = workflowRunPreviewRouteHtml(ticket, ctx);
-                if (warning) {
-                    warning.textContent = "This will start the workflow run. The agent will execute, validate, and report back through the run log.";
-                    warning.classList.remove("hidden");
-                }
+                bindWorkflowRunPreviewTabs(body);
+                if (warning) warning.classList.add("hidden");
                 confirmBtn.disabled = false;
             })
             .catch(function (e) {
                 if (pendingWorkflowRunTicketId !== String(ticketId)) return;
                 body.innerHTML = workflowRunPreviewRouteHtml(ticket, {});
+                bindWorkflowRunPreviewTabs(body);
                 if (warning) {
                     warning.textContent = e.message || "This ticket does not have a complete project/executor route yet. Link the board or ticket to a project before running.";
                     warning.classList.remove("hidden");
@@ -5434,6 +5842,8 @@
             snack("This ticket already has an active workflow run", "error");
             return;
         }
+        workflowTicketPendingRunStartedAt[String(ticketId)] = Date.now();
+        ensureWorkflowTicketTimerTick();
         var buttons = document.querySelectorAll('.wf-workflow-ticket-run[data-ticket-id="' + esc(ticketId) + '"]');
         buttons.forEach(function (btn) { btn.disabled = true; btn.textContent = "Starting"; });
         var runsTabBtn = document.getElementById("wf-runs-tab-btn");
@@ -5458,6 +5868,8 @@
             loadWorkflowExecutionSessions();
             loadLoopActivityFeed({ quiet: true });
         }).catch(function (e) {
+            delete workflowTicketPendingRunStartedAt[String(ticketId)];
+            tickWorkflowTicketTimers();
             snack(workflowErrorText(e, "Failed to start ticket run"), "error");
             buttons.forEach(function (btn) { btn.disabled = false; btn.textContent = "Run"; });
         });
@@ -8063,13 +8475,27 @@
         var el = document.getElementById("wf-runs-list");
         var empty = document.getElementById("wf-runs-empty");
         var clearBtn = document.getElementById("wf-clear-runs-btn");
+        var filterHint = document.getElementById("wf-runs-filter-hint");
         if (!el || !empty) return;
         runs = (Array.isArray(runs) ? runs : []).filter(function (run) {
             var status = String(run && run.status || "").toLowerCase();
             return status !== "running" && status !== "waiting";
         });
+        latestWorkflowRunHistoryAll = runs.slice();
+        runs = filterRunsForSelectedTicket(runs);
         latestWorkflowRunHistory = runs;
         renderLoopRunTicketContext();
+        if (filterHint) {
+            if (workflowRunsFilterTicketId) {
+                var ticket = workflowQueueTicketById(workflowRunsFilterTicketId);
+                filterHint.classList.remove("hidden");
+                filterHint.innerHTML = 'Showing runs for <strong>' + esc(ticket ? (ticket.title || ("Ticket #" + ticket.id)) : ("Ticket #" + workflowRunsFilterTicketId)) +
+                    '</strong> · <button type="button" class="wf-runs-clear-filter text-[#f97316] hover:underline">Show all</button>';
+            } else {
+                filterHint.classList.add("hidden");
+                filterHint.innerHTML = "";
+            }
+        }
         if (currentWorkflowId && runs.length) {
             workflowRunsSeenByWorkflowId[String(currentWorkflowId)] = true;
         }
@@ -8081,7 +8507,7 @@
             var started = r.started_at ? new Date(r.started_at).toLocaleString() : "—";
             var ended = r.completed_at ? new Date(r.completed_at).toLocaleString() : "—";
             var meta = runMetaText(r, currentWorkflow && currentWorkflow.name);
-            return '<div class="wf-run-item bg-[#152054]/50 rounded px-3 py-2 border border-white/10" data-run-id="' + r.id + '">' +
+            return '<div class="wf-run-item bg-[#152054]/50 rounded px-3 py-2 border border-white/10 cursor-pointer hover:border-[#f97316]/40" data-run-id="' + r.id + '" data-ticket-id="' + esc(r.ticket_id || "") + '" title="View loop activity for this run">' +
                 '<div class="flex items-center gap-3">' +
                     '<span class="text-xs text-gray-500">#' + r.id + '</span>' +
                     '<span class="text-xs ' + statusColor + ' font-medium">' + esc(r.status) + '</span>' +
@@ -8089,6 +8515,7 @@
                     '<span class="text-xs text-gray-500 ml-auto">' + started + '</span>' +
                     '<span class="text-xs text-gray-600">→</span>' +
                     '<span class="text-xs text-gray-500">' + ended + '</span>' +
+                    '<button type="button" class="wf-run-item-rerun px-2 py-0.5 rounded border border-[#f97316]/50 text-[#f97316] text-[10px] hover:bg-[#f97316]/10" data-ticket-id="' + esc(r.ticket_id || "") + '" title="Run this ticket again">Run again</button>' +
                 '</div>' +
                 '<div class="mt-2 grid grid-cols-1 md:grid-cols-4 gap-1 text-xs">' +
                     '<div><span class="text-gray-500">Board:</span> <span class="text-gray-200">' + esc(meta.boardText) + '</span></div>' +
@@ -8107,9 +8534,10 @@
             renderRuns([]);
             return Promise.resolve([]);
         }
-        return api("GET", "/workflows/" + currentWorkflowId + "/runs?limit=20")
+        return api("GET", "/workflows/" + currentWorkflowId + "/runs?limit=100")
             .then(function (runs) {
                 renderRuns(runs || []);
+                renderWorkflowBoardTimeTotal();
                 return runs || [];
             })
             .catch(function (e) {
@@ -8137,7 +8565,7 @@
     }
 
     function switchRunsSubtab(tab) {
-        workflowRunsSubtab = tab === "sessions" || tab === "timeline" || tab === "memory" ? tab : "active";
+        workflowRunsSubtab = tab === "sessions" || tab === "timeline" || tab === "memory" || tab === "history" ? tab : "active";
         document.querySelectorAll(".wf-runs-subtab").forEach(function (btn) {
             var active = (btn.dataset.runsTab || "active") === workflowRunsSubtab;
             btn.classList.toggle("text-white", active);
@@ -8151,6 +8579,30 @@
         if (pane) pane.classList.remove("hidden");
         if (workflowRunsSubtab === "timeline") loadOrchestratorTimeline({ quiet: true });
         if (workflowRunsSubtab === "memory") loadWorkflowSteeringMemory({ quiet: true });
+        if (workflowRunsSubtab === "history") loadWorkflowRunHistory({ quiet: true });
+    }
+
+    function loopFeedSelectableRuns() {
+        var active = currentWorkflowActiveRuns();
+        var activeIds = {};
+        active.forEach(function (r) { activeIds[String(r.id)] = true; });
+        var history = (latestWorkflowRunHistoryAll || []).filter(function (r) {
+            return r && r.id && !activeIds[String(r.id)];
+        });
+        return active.concat(history);
+    }
+
+    function runRecordById(runId) {
+        if (!runId) return null;
+        return (latestActiveRuns || []).concat(latestWorkflowRunHistoryAll || []).filter(function (r) {
+            return String(r.id) === String(runId);
+        })[0] || null;
+    }
+
+    function loopFeedContextRun() {
+        var active = loopFeedActiveRun();
+        if (active) return active;
+        return runRecordById(loopFeedRunId);
     }
 
     function currentWorkflowActiveRuns() {
@@ -8454,9 +8906,10 @@
 
     function syncLoopFeedRunSelect() {
         var select = document.getElementById("wf-loop-feed-run-select");
-        var runs = currentWorkflowActiveRuns();
+        var runs = loopFeedSelectableRuns();
         if (!loopFeedRunId || !runs.some(function (r) { return String(r.id) === String(loopFeedRunId); })) {
-            loopFeedRunId = runs.length ? runs[0].id : null;
+            var active = currentWorkflowActiveRuns();
+            loopFeedRunId = active.length ? active[0].id : (runs.length ? runs[0].id : null);
         }
         if (select) {
             if (!runs.length) {
@@ -8468,6 +8921,7 @@
                     var label = "Run #" + r.id;
                     if (r.ticket_title) label += " · " + r.ticket_title;
                     if (r.current_step_name) label += " · " + r.current_step_name;
+                    else if (r.status) label += " · " + r.status;
                     return '<option value="' + esc(r.id) + '">' + esc(label) + "</option>";
                 }).join("");
                 select.value = String(loopFeedRunId || runs[0].id);
@@ -8910,6 +9364,8 @@
         }
         var scrollWrap = document.getElementById("wf-detail-tab-scroll");
         if (scrollWrap) scrollWrap.classList.toggle("wf-tab-scroll--loop", tab === "loop");
+        var runAllBtn = document.getElementById("wf-run-all-btn");
+        if (runAllBtn) runAllBtn.classList.toggle("hidden", tab !== "tickets");
         if (tab === "loop" && currentWorkflow) {
             renderSteps(currentWorkflow.steps || []);
             restoreLoopFeedExpandedState();
@@ -9269,6 +9725,37 @@
         }
         bindWorkflowTicketDropZone();
         initWorkflowBoardTicketMouseDrag();
+
+        var runAllBtn = document.getElementById("wf-run-all-btn");
+        if (runAllBtn) runAllBtn.addEventListener("click", runAllWorkflowQueueTickets);
+        var refreshRunHistory = document.getElementById("wf-refresh-run-history");
+        if (refreshRunHistory) refreshRunHistory.addEventListener("click", function () { loadWorkflowRunHistory({ quiet: false }); });
+        var runsHistoryPane = document.getElementById("wf-runs-pane-history");
+        if (runsHistoryPane) {
+            runsHistoryPane.addEventListener("click", function (evt) {
+                var clearFilter = evt.target.closest(".wf-runs-clear-filter");
+                if (clearFilter) {
+                    evt.preventDefault();
+                    workflowRunsFilterTicketId = null;
+                    loadWorkflowRunHistory({ quiet: false });
+                    return;
+                }
+                var rerunBtn = evt.target.closest(".wf-run-item-rerun");
+                if (rerunBtn) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    var tid = rerunBtn.dataset.ticketId || "";
+                    if (tid) openWorkflowRunPreview(tid);
+                    return;
+                }
+                var item = evt.target.closest(".wf-run-item");
+                if (!item || evt.target.closest(".wf-run-item-rerun")) return;
+                focusWorkflowRun(item.dataset.runId || "", {
+                    ticketId: item.dataset.ticketId || "",
+                    switchTab: "loop"
+                });
+            });
+        }
 
         var activeRunsScopeEl = document.getElementById("wf-active-runs-scope");
         if (activeRunsScopeEl) {

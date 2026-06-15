@@ -188,6 +188,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.ptt_pulse_timer = QTimer()  # kept for stop() calls in drag/release handlers
         self.ptt_requested = False
         self.stt_ready = False
+        self._voice_capture_blocked_not_listening = False
         
         # Dictation state
         self.is_dictating = False
@@ -198,6 +199,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.ptt_delay_timer.setSingleShot(True)  # Only fire once
         self.ptt_delay_timer.timeout.connect(self._on_ptt_delay_complete)
         self.ptt_delay_ms = 300  # Delay in milliseconds before sending interrupt
+
+        # If stt_ready is lost on first boot, do not block PTT forever.
+        self._stt_ready_safety_timer = QTimer()
+        self._stt_ready_safety_timer.setSingleShot(True)
+        self._stt_ready_safety_timer.timeout.connect(self._on_stt_ready_safety_timeout)
+        self._stt_ready_safety_timer.start(10000)
 
         self.round_container = RoundContainer(self)
         self.round_container.setGeometry(self.shadow_size + self.stroke_width, 
@@ -792,6 +799,38 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         except Exception as e:
             logging.error(f"Error saving listening state: {e}")
 
+    def _mark_voice_capture_blocked_not_listening(self):
+        """Remember that the user tried to speak while listening was off."""
+        self._voice_capture_blocked_not_listening = True
+
+    def _maybe_prompt_enable_listening_on_release(self):
+        """On key/button release, offer to turn listening back on if capture was blocked."""
+        if not getattr(self, "_voice_capture_blocked_not_listening", False):
+            return
+        self._voice_capture_blocked_not_listening = False
+        if self.is_listening:
+            return
+        self._prompt_enable_listening_after_blocked_capture()
+
+    def _prompt_enable_listening_after_blocked_capture(self):
+        """Ask whether to enable listening after a blocked PTT/dictation attempt."""
+        msg = QtWidgets.QMessageBox(self)
+        msg.setWindowTitle("Not Listening")
+        msg.setText("The agent wasn't listening, so nothing was captured.")
+        msg.setInformativeText("Turn on listening now?")
+        msg.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        msg.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.Yes)
+        try:
+            self._keep_dialog_on_oracle_screen(msg)
+        except Exception:
+            pass
+        if msg.exec() == QtWidgets.QMessageBox.StandardButton.Yes:
+            self.enable_tray()
+
     def enable_hands_free(self):
         """Enable hands-free mode and start the glow (oracle only — avatar skins have glow: false)."""
         if not self.is_listening:
@@ -861,12 +900,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         # Disable PTT if Hands-Free is active - VAD handles interruptions in hands-free mode
         if self.is_hands_free:
-            logging.info("[ORACLE] Push-to-talk ignored - Hands-Free mode is active (VAD handles interruptions)")
+            logging.info(
+                "[ORACLE] Push-to-talk ignored - Hands-Free mode is ON "
+                "(right-click oracle → turn Hands-Free OFF to use click-and-hold PTT)"
+            )
             return
 
         # Check if STT service has finished loading (model ready)
         if not self.stt_ready:
-            logging.warning("[ORACLE] Push-to-talk ignored - STT service not ready yet (model still loading or agent reloading)")
+            logging.warning(
+                "[ORACLE] Push-to-talk ignored - STT not ready yet "
+                "(model loading or agent reloading; will auto-enable within ~10s)"
+            )
             return
 
         if self.ptt_requested:
@@ -878,6 +923,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.ptt_requested = False
             self._cleanup_ptt()
         if not self.is_listening or self.dragging:
+            if not self.is_listening and not self.dragging:
+                self._mark_voice_capture_blocked_not_listening()
             logging.info(f"[ORACLE] Push-to-talk NOT requested - conditions not met (listening={self.is_listening}, dragging={self.dragging})")
             return
 
@@ -938,6 +985,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         # Always clean up PTT state and revert hook
         self._cleanup_ptt()
+        self._maybe_prompt_enable_listening_on_release()
 
     def _apply_immediate_release_visual(self):
         """Reset the glow and border instantly when the user releases the mouse."""
@@ -1529,6 +1577,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         Fires the 'dictation' visual hook so the oracle shows the right
         animation while the user is speaking.
         """
+        if not self.is_listening:
+            self._mark_voice_capture_blocked_not_listening()
+            return
         self._dictation_hotkey_active = True
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
@@ -1547,6 +1598,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             logging.debug("[ORACLE] dictation hook fire failed: %s", exc)
 
     def _on_ticket_dictation_hotkey_pressed(self):
+        if not self.is_listening:
+            self._mark_voice_capture_blocked_not_listening()
+            return
         self._dictation_hotkey_active = True
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
@@ -1601,6 +1655,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             signal_manager.dictation_hotkey_released.emit()
         except Exception:
             pass
+        self._maybe_prompt_enable_listening_on_release()
 
     def _on_ticket_dictation_hotkey_released(self):
         self._dictation_hotkey_active = False
@@ -1626,6 +1681,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             signal_manager.ticket_dictation_hotkey_released.emit()
         except Exception:
             pass
+        self._maybe_prompt_enable_listening_on_release()
 
     def _on_global_recording_toggle(self):
         """Toggle action recording from global hotkey (e.g., Command+Option+S)."""
