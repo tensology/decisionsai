@@ -1,37 +1,12 @@
 """
-About.py - About Window Management System
+About window for DecisionsAI.
 
-This module provides the About window interface for DecisionsAI with features including:
-- Clickable links to external resources
-- Scrollable credits section
-- Responsive layout with image and text content
-- Window positioning utilities
-- Custom styling and theming
-
-The system uses PyQt6 for the GUI components with support for:
-- Custom widget implementations
-- Event handling
-- Window management
-- Layout management
-
-Key Features:
-- Clickable external links
-- Scrollable credits section
-- Responsive layout system
-- Custom styling
-- Window positioning
-- Event handling
-
-Class Organization:
-1. Link Management (ClickableLabel)
-2. Credits Display (Credits)
-3. Main Window (AboutWindow)
+Shows app description, changelog, and credits in a tabbed layout.
 """
 
 from distr.core.paths import IMAGES_DIR
 from PyQt6 import QtWidgets, QtGui, QtCore
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt
 import os
 from datetime import datetime
 
@@ -111,89 +86,48 @@ def _configure_tab_browser(browser: QtWidgets.QTextBrowser) -> None:
     )
 
 
-# ===========================================
-# 1. Link Management
-# ===========================================
-class ClickableLabel(QtWidgets.QLabel):
-    """
-    Custom QLabel implementation that provides clickable links to external resources.
-    
-    This class extends QLabel to create clickable text that opens URLs in the default browser.
-    It includes custom styling and cursor behavior for better user experience.
-    """
-    
-    def __init__(self, text, url, parent=None):
-        """
-        Initialize the clickable label with text and target URL.
-        
-        Args:
-            text (str): The text to display
-            url (str): The URL to open when clicked
-            parent (QWidget, optional): Parent widget
-        """
-        super().__init__(text, parent)
-        self.url = url
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet("color: white; text-decoration: underline;")
+def _embed_browser_with_back(tab_layout: QtWidgets.QVBoxLayout, browser: QtWidgets.QTextBrowser) -> None:
+    """Place a QTextBrowser in a tab with an in-content Back control when history exists."""
+    browser.setOpenExternalLinks(True)
+    browser.setOpenLinks(True)
 
-    def mousePressEvent(self, event):
-        """
-        Handle mouse press events by opening the URL.
-        
-        Args:
-            event (QMouseEvent): The mouse event
-        """
-        QDesktopServices.openUrl(QUrl(self.url))
+    nav = QtWidgets.QWidget()
+    nav_layout = QtWidgets.QHBoxLayout(nav)
+    nav_layout.setContentsMargins(12, 8, 12, 0)
+    nav_layout.setSpacing(8)
 
-# ===========================================
-# 2. Credits Display
-# ===========================================
-class Credits(QtWidgets.QScrollArea):
-    """
-    Scrollable credits display that shows all attribution links.
-    
-    Provides a scrollable area containing clickable links to all libraries,
-    tools, and resources used in the application.
-    """
-    
-    def __init__(self, credits, parent=None):
-        """
-        Initialize the credits scroll area.
-        
-        Args:
-            credits (dict): Dictionary of credit titles and their URLs
-            parent (QWidget, optional): Parent widget
-        """
-        super().__init__(parent)
-        self._setup_scroll_area()
-        self._create_content(credits)
+    back_button = QtWidgets.QPushButton("Back")
+    back_button.setFixedWidth(72)
+    back_button.setVisible(False)
+    back_button.setStyleSheet("""
+        QPushButton {
+            background-color: #2a3a4c;
+            color: #ffffff;
+            border: 1px solid #3a4a5c;
+            border-radius: 4px;
+            padding: 4px 12px;
+            font-size: 13px;
+        }
+        QPushButton:disabled {
+            color: #667788;
+            border-color: #2a3a4c;
+        }
+        QPushButton:hover:enabled {
+            background-color: #3a4a5c;
+        }
+    """)
+    back_button.clicked.connect(browser.backward)
+    browser.backwardAvailable.connect(back_button.setVisible)
+    browser.backwardAvailable.connect(back_button.setEnabled)
 
-    def _setup_scroll_area(self):
-        """Configure the scroll area properties and styling."""
-        self.setWidgetResizable(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.setStyleSheet("background-color: #1a2a3c; border: none;")
+    nav_layout.addWidget(back_button)
+    nav_layout.addStretch()
+    tab_layout.addWidget(nav)
+    tab_layout.addWidget(browser)
 
-    def _create_content(self, credits):
-        """
-        Create and populate the credits content.
-        
-        Args:
-            credits (dict): Dictionary of credit titles and their URLs
-        """
-        content = QtWidgets.QWidget()
-        self.setWidget(content)
-        layout = QtWidgets.QVBoxLayout(content)
-
-        for title, url in credits.items():
-            label = ClickableLabel(title, url)
-            layout.addWidget(label)
-
-        layout.addStretch()
 
 # ===========================================
-# 3. Main Window
+# 1. Main Window
 # ===========================================
 class AboutWindow(QtWidgets.QMainWindow):
     """
@@ -282,9 +216,6 @@ class AboutWindow(QtWidgets.QMainWindow):
         # Go up 4 levels: about.py -> dialogs -> gui -> distr -> project root
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-        def local_doc_url(*parts):
-            return QUrl.fromLocalFile(os.path.join(project_root, *parts)).toString()
-
         # Create tabbed widget
         tab_widget = QtWidgets.QTabWidget()
         tab_widget.setStyleSheet(f"""
@@ -339,12 +270,8 @@ class AboutWindow(QtWidgets.QMainWindow):
         about_layout.setSpacing(0)
 
         about_content = QtWidgets.QTextBrowser()
-        about_content.setOpenExternalLinks(True)
         about_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         _configure_tab_browser(about_content)
-
-        orchestrator_url = local_doc_url("docs", "orchestrator.md")
-        readme_url = local_doc_url("README.md")
 
         about_paragraphs = [
             _html_paragraph(
@@ -370,16 +297,8 @@ class AboutWindow(QtWidgets.QMainWindow):
             _html_paragraph(
                 "If you opened this window you already found the app. "
                 "We are not going to pitch you from an About box. "
-                "The docs are linked below. The changelog is the other tab. "
+                "The changelog is the other tab. "
                 "The credits are the people and libraries we owe."
-            ),
-            _html_paragraph(
-                f"<b>Links:</b> {_html_link(readme_url, 'README')} · "
-                f"{_html_link(orchestrator_url, 'Orchestrator')} · "
-                f"{_html_link('https://www.decisionsai.net/', 'Website')} · "
-                f"{_html_link('https://github.com/tensology/decisionsai', 'GitHub')} · "
-                f"{_html_link('https://www.decisionsai.net/privacy', 'Privacy')} · "
-                f"{_html_link('https://www.decisionsai.net/terms', 'Terms')}"
             ),
             _html_paragraph(
                 "<em>It really whips the llama's ass.</em> Winamp buried that line in its "
@@ -390,7 +309,7 @@ class AboutWindow(QtWidgets.QMainWindow):
             ),
         ]
         about_content.setHtml(_wrap_tab_html("".join(about_paragraphs)))
-        about_layout.addWidget(about_content)
+        _embed_browser_with_back(about_layout, about_content)
         tab_widget.addTab(about_tab, "About")
         
         # Create Changelog tab - simple QTextBrowser with its own scrolling
@@ -402,7 +321,6 @@ class AboutWindow(QtWidgets.QMainWindow):
         
         # Use QTextBrowser directly - it handles scrolling itself
         changelog_content = QtWidgets.QTextBrowser()
-        changelog_content.setOpenExternalLinks(True)
         changelog_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         _configure_tab_browser(changelog_content)
         
@@ -420,7 +338,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         else:
             changelog_content.setPlainText("Changelog file not found.")
         
-        changelog_layout.addWidget(changelog_content)
+        _embed_browser_with_back(changelog_layout, changelog_content)
         tab_widget.addTab(changelog_tab, "Changelog")
         
         # Create Credits tab - simple QTextBrowser like changelog
@@ -432,11 +350,9 @@ class AboutWindow(QtWidgets.QMainWindow):
         
         # Use QTextBrowser directly - it handles scrolling itself
         credits_content = QtWidgets.QTextBrowser()
-        credits_content.setOpenExternalLinks(True)
         credits_content.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         _configure_tab_browser(credits_content)
         
-        # Convert credits dictionary to HTML
         credits = {
             "Pipecat: Real-Time AI Voice Framework": "https://pipecat.ai/",
             "Vosk: Low Latency ASR Toolkit": "https://alphacephei.com/vosk/",
@@ -455,8 +371,7 @@ class AboutWindow(QtWidgets.QMainWindow):
             "PyQt6: GUI Framework": "https://www.riverbankcomputing.com/software/pyqt/",
             "Masko: AI-Powered Design & Creative Tools": "http://masko.ai/",
         }
-        
-        # Oracle Globe Animation credits
+
         animation_credits = {
             "Paarth Desai (iesight)": "https://dribbble.com/iesight/about",
             "KlausHuang": "https://dribbble.com/KlausHuang/about",
@@ -465,22 +380,19 @@ class AboutWindow(QtWidgets.QMainWindow):
             "Hicy Won": "https://www.behance.net/Hicy",
             "Krystalgy": "https://dribbble.com/Krystalgy/about",
         }
-        
+
         credits_parts = [
             _html_paragraph(_html_link(url, title), margin="8px 0")
             for title, url in credits.items()
         ]
         credits_parts.append(_html_section_title("Oracle Globe Animation Credits"))
         for title, url in animation_credits.items():
-            if url:
-                credits_parts.append(
-                    _html_paragraph(_html_link(url, title), margin="6px 0 6px 16px")
-                )
-            else:
-                credits_parts.append(_html_section_title(title))
+            credits_parts.append(
+                _html_paragraph(_html_link(url, title), margin="6px 0 6px 16px")
+            )
 
         credits_content.setHtml(_wrap_tab_html("".join(credits_parts)))
-        credits_layout.addWidget(credits_content)
+        _embed_browser_with_back(credits_layout, credits_content)
         tab_widget.addTab(credits_tab, "Credits")
         
         # Force tabs to left-align after all tabs are added
@@ -705,23 +617,10 @@ class AboutWindow(QtWidgets.QMainWindow):
         built_by_layout.setSpacing(4)
         built_by_layout.addStretch()  # Push content to the right
         
-        built_by_text = QtWidgets.QLabel("Built by")
-        built_by_text.setStyleSheet("font-size: 12px; color: #cccccc; line-height: 1.2;")
-        built_by_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        built_by_layout.addWidget(built_by_text)
-        
-        tensology_label = ClickableLabel("tensology.com", "https://www.tensology.com")
-        tensology_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        built_by_layout.addWidget(tensology_label)
-        
-        separator = QtWidgets.QLabel("|")
-        separator.setStyleSheet("font-size: 12px; color: #cccccc; line-height: 1.2;")
-        separator.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        built_by_layout.addWidget(separator)
-        
-        decisionsai_label = ClickableLabel("decisionsai.net", "https://www.decisionsai.net")
-        decisionsai_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        built_by_layout.addWidget(decisionsai_label)
+        built_by_label = QtWidgets.QLabel("Built by tensology.com · decisionsai.net")
+        built_by_label.setStyleSheet("font-size: 12px; color: #cccccc; line-height: 1.2;")
+        built_by_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        built_by_layout.addWidget(built_by_label)
         
         footer_layout.addWidget(built_by_widget)
         
@@ -732,14 +631,10 @@ class AboutWindow(QtWidgets.QMainWindow):
         developer_layout.setSpacing(4)
         developer_layout.addStretch()  # Push content to the right
         
-        developer_text = QtWidgets.QLabel("Lead Developer:")
-        developer_text.setStyleSheet("font-size: 12px; color: #cccccc; line-height: 1.2;")
-        developer_text.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        developer_layout.addWidget(developer_text)
-        
-        paul_label = ClickableLabel("paulhoft.com", "https://www.paulhoft.com")
-        paul_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        developer_layout.addWidget(paul_label)
+        developer_label = QtWidgets.QLabel("Lead Developer: paulhoft.com")
+        developer_label.setStyleSheet("font-size: 12px; color: #cccccc; line-height: 1.2;")
+        developer_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        developer_layout.addWidget(developer_label)
         
         footer_layout.addWidget(developer_widget)
 
@@ -747,7 +642,7 @@ class AboutWindow(QtWidgets.QMainWindow):
             QWidget {
                 background-color: transparent;
             }
-            QLabel, ClickableLabel {
+            QLabel {
                 font-size: 12px;
                 color: #cccccc;
                 font-weight: 400;
