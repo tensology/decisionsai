@@ -133,6 +133,31 @@ class FastActionMixin:
             except Exception as e:
                 logger.warning("LLM: Could not save fast action response: %s", e)
 
+    def _fa_record_read_aloud_activity(
+        self,
+        chat_id,
+        label: str,
+        text: str,
+        user_text: str | None = None,
+    ) -> None:
+        """Record read-aloud as expandable system activity (not an assistant bubble)."""
+        if not chat_id:
+            return
+        try:
+            from distr.core.agent.tool_audit import record_tool_execution
+
+            record_tool_execution(
+                int(chat_id),
+                "read_aloud",
+                text or "",
+                "completed",
+                instruction_hint=label,
+                user_text=user_text,
+                chat_visible=True,
+            )
+        except Exception as e:
+            logger.warning("LLM: Could not record read aloud activity: %s", e)
+
     async def _fa_handle_clipboard_rework(self, fast_action, chat_id, result_str: str) -> bool:
         if result_str.startswith("Error"):
             response_text = result_str.replace("Error: ", "").strip()
@@ -237,6 +262,8 @@ class FastActionMixin:
         return True
 
     async def _fa_handle_tts(self, fast_action, chat_id, result, tool) -> bool:
+        user_text = getattr(fast_action, "original_text", None)
+        text_read = ""
         # Check for async read task
         if hasattr(tool, '_read_task') and tool._read_task:
             logger.debug("LLM: Awaiting tool's async read task for TTS")
@@ -247,13 +274,19 @@ class FastActionMixin:
                 await self._fa_push_tts("Error reading content.")
             finally:
                 tool._read_task = None
-            self._fa_save_to_history(chat_id, "[Read aloud]")
+            text_read = getattr(tool, "_last_read_text", "") or ""
+            if hasattr(tool, "_last_read_text"):
+                tool._last_read_text = None
+            if text_read:
+                self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
+            else:
+                self._fa_record_read_aloud_activity(chat_id, "Read aloud", "(selection read aloud)", user_text)
 
         elif result and isinstance(result, str) and result.startswith("READ_ACTION:"):
             text_to_read = result[len("READ_ACTION:"):]
+            text_read = text_to_read
             await self._fa_push_tts(text_to_read)
-            preview = text_to_read[:50] + "..." if len(text_to_read) > 50 else text_to_read
-            self._fa_save_to_history(chat_id, f"[Read aloud: {preview}]")
+            self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
         else:
             logger.warning("LLM: TTS path fallback, no _read_task and no READ_ACTION, result=%s", result)
             await self._fa_push_tts("I couldn't read that aloud.")
@@ -261,6 +294,7 @@ class FastActionMixin:
         return True
 
     async def _fa_handle_tts_clipboard(self, fast_action, chat_id, result, tool) -> bool:
+        user_text = getattr(fast_action, "original_text", None)
         if result and isinstance(result, str):
             text_to_read = result
             if result.startswith("CLIPBOARD CONTENT:"):
@@ -270,11 +304,14 @@ class FastActionMixin:
 
             if text_to_read and text_to_read.strip():
                 await self._fa_push_tts(text_to_read)
-                preview = text_to_read[:100] + "..." if len(text_to_read) > 100 else text_to_read
-                self._fa_save_to_history(chat_id, f"[Read from clipboard: {preview}]")
+                self._fa_record_read_aloud_activity(
+                    chat_id, "Read from clipboard", text_to_read, user_text
+                )
             else:
                 await self._fa_push_tts("The clipboard is empty.")
-                self._fa_save_to_history(chat_id, "The clipboard is empty.")
+                self._fa_record_read_aloud_activity(
+                    chat_id, "Read from clipboard", "The clipboard is empty.", user_text
+                )
         else:
             error_msg = str(result) if result else "Could not read the clipboard."
             await self._fa_push_tts(error_msg)

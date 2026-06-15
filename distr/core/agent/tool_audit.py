@@ -225,6 +225,8 @@ def _chat_title(tool_name: str, result: Optional[str], instruction_hint: Optiona
         if first_line:
             return first_line
         return "Updated chat settings"
+    if tool_name == "read_aloud":
+        return (instruction_hint or "").strip() or "Read aloud"
     return tool_name.replace("_", " ").title()
 
 

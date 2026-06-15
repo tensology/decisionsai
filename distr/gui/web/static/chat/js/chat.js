@@ -1420,7 +1420,8 @@ function toolEventName(message) {
 }
 
 function isStandaloneSystemActivity(message) {
-    return toolEventName(message) === 'chat_settings';
+    const name = toolEventName(message);
+    return name === 'chat_settings' || name === 'read_aloud';
 }
 
 function shouldEmbedToolInAssistantTurn(toolMessage) {
@@ -2577,6 +2578,51 @@ function pushStandaloneToolGroups(grouped, standaloneTools) {
     grouped.push(...buildStandaloneToolGroups(standaloneTools));
 }
 
+function normalizeReadAloudAssistantMessages(messages) {
+    if (!Array.isArray(messages)) return [];
+    return messages.flatMap(message => {
+        const converted = parseLegacyReadAloudAssistant(message);
+        return converted ? [converted] : [message];
+    });
+}
+
+function parseLegacyReadAloudAssistant(message) {
+    if (!message || message.role !== 'assistant') return null;
+    const raw = String(message.content || '').trim();
+    if (!raw) return null;
+    let label = '';
+    let detail = '';
+    const clipMatch = raw.match(/^\[Read from clipboard:\s*(.+)\]$/s);
+    const aloudMatch = raw.match(/^\[Read aloud(?::\s*(.+))?\]$/s);
+    if (clipMatch) {
+        label = 'Read from clipboard';
+        detail = clipMatch[1].replace(/\.\.\.$/, '').trim();
+    } else if (aloudMatch) {
+        label = 'Read aloud';
+        detail = (aloudMatch[1] || '').replace(/\.\.\.$/, '').trim();
+    } else if (raw === 'The clipboard is empty.') {
+        label = 'Read from clipboard';
+        detail = raw;
+    } else {
+        return null;
+    }
+    return {
+        role: 'tool',
+        timestamp: message.timestamp,
+        chat_row_id: message.chat_row_id,
+        turn_chat_id: message.chat_row_id,
+        content: detail,
+        tool_event: {
+            tool_name: 'read_aloud',
+            title: label,
+            status: 'completed',
+            result_summary: detail,
+            result_detail: detail,
+            compact: false
+        }
+    };
+}
+
 function normalizeTraceMessages(messages) {
     const toolsByAssistantTurn = new Map();
     const standaloneTools = [];
@@ -2645,7 +2691,7 @@ function renderMessages(messages, preserveOnEmpty) {
     // "Listening…" never sits next to persisted rows from the socket.
     _discardLiveTranscriptionUi();
 
-    messages = normalizeTraceMessages(sortMessagesForDisplay(messages || []));
+    messages = normalizeTraceMessages(sortMessagesForDisplay(normalizeReadAloudAssistantMessages(messages || [])));
 
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;
@@ -3169,6 +3215,9 @@ function activityStepLabel(title, event) {
         const detail = String((event.result_detail || event.result_summary || '')).trim();
         const firstLine = detail.split('\n').map(line => line.trim()).find(Boolean);
         if (firstLine) return firstLine;
+    }
+    if (toolName === 'read_aloud') {
+        return String((event && event.title) || title || 'Read aloud').trim();
     }
     const short = activityCollapsedActionLabel(title, event);
     return String(short || '').replace(/^system activity:\s*/i, '').trim() || 'Activity';

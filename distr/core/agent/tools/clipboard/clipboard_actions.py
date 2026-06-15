@@ -157,6 +157,7 @@ class ClipboardActionTool(BaseTool):
         self._chat_manager = chat_manager
         self._llm_service = llm_service
         self._read_task = None
+        self._last_read_text = None
         
     def get_triggers(self) -> list[str]:
         """Get triggers for clipboard actions."""
@@ -412,17 +413,6 @@ class ClipboardActionTool(BaseTool):
         
         logger.info(f"Starting clipboard read: {len(text)} chars")
         
-        # Add to chat history as a user message (simulating a paste) so the user sees what is being read
-        if self._chat_manager:
-            try:
-                chat_id = self._chat_manager.get_current_chat()
-                if chat_id:
-                    display_text = f"📋 Clipboard Content:\n\n{text}"
-                    self._chat_manager.add_user_message(chat_id, display_text)
-                    logger.info(f"Added clipboard content to chat {chat_id}")
-            except Exception as e:
-                logger.error(f"Error adding to chat history: {e}")
-        
         try:
             # Send TextFrame to TTS via the LLM service's pipeline
             # Sanitize emojis for TTS but preserve text content
@@ -508,6 +498,7 @@ class ClipboardActionTool(BaseTool):
             import asyncio
             logger.info(f"Spawning async read task for {len(content_to_read)} chars")
             logger.info(f"ClipboardActionTool: Creating _read_task for {len(content_to_read)} chars")
+            self._last_read_text = content_to_read
             self._read_task = asyncio.create_task(self._handle_read_async(content_to_read))
             logger.info(f"ClipboardActionTool: _read_task created: {self._read_task}")
             
