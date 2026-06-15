@@ -78,3 +78,69 @@ def test_download_email_attachment_writes_decoded_file(tmp_path, monkeypatch):
 
     assert path.endswith("changes.pdf")
     assert (tmp_path / "changes.pdf").read_bytes() == b"pdf bytes"
+
+
+def test_read_email_tool_lists_attachment_metadata(monkeypatch):
+    from distr.core.agent.tools.integrations.google_workspace_tool import GoogleWorkspaceTool
+
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    connector = type("Conn", (), {})()
+    connector.is_connected = lambda: True
+    connector.get_email = lambda message_id: {
+        "id": message_id,
+        "from": "Julie <julie@example.com>",
+        "to": "me@example.com",
+        "subject": "Order updates",
+        "date": "Tue, 9 Jun 2026",
+        "body": "See attached.",
+        "attachments": [
+            {
+                "message_id": message_id,
+                "attachment_id": "att-1",
+                "filename": "changes.pdf",
+                "mime_type": "application/pdf",
+                "size": 123,
+            }
+        ],
+    }
+    object.__setattr__(tool, "connector", connector)
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+
+    result = tool._run(action="read_email", params={"message_id": "msg-1"})
+
+    assert "changes.pdf" in result
+    assert "attachment_id=att-1" in result
+    assert "download_email_attachment" in result
+
+
+def test_download_email_attachments_tool_saves_all_files(tmp_path, monkeypatch):
+    from distr.core.agent.tools.integrations.google_workspace_tool import GoogleWorkspaceTool
+
+    tool = GoogleWorkspaceTool.__new__(GoogleWorkspaceTool)
+    connector = type("Conn", (), {})()
+    connector.is_connected = lambda: True
+    connector.get_email = lambda message_id: {
+        "id": message_id,
+        "attachments": [
+            {
+                "attachment_id": "att-1",
+                "filename": "changes.pdf",
+            }
+        ],
+    }
+    connector.download_email_attachment = (
+        lambda message_id, attachment_id, filename, destination_dir: str(
+            tmp_path / filename
+        )
+    )
+    object.__setattr__(tool, "connector", connector)
+    monkeypatch.setattr(tool, "_ensure_initialized", lambda: None)
+    monkeypatch.setattr(tool, "_default_downloads_dir", lambda: str(tmp_path))
+
+    result = tool._run(
+        action="download_email_attachments",
+        params={"message_id": "msg-1", "destination_dir": str(tmp_path)},
+    )
+
+    assert "Saved attachment to" in result
+    assert str(tmp_path / "changes.pdf") in result

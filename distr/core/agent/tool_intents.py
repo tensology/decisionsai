@@ -87,6 +87,27 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "google_workspace",
+        (
+            r"\b(gmail|email)\b.*\battachment",
+            r"\battachment\b.*\b(gmail|email|inbox)\b",
+            r"\bdownload\b.*\b(gmail|email)\b.*\battachment",
+            r"\b(get|grab|pull|save)\b.*\b(gmail|email)\b.*\battachment",
+        ),
+    ),
+    (
+        "screenshot_analyzer",
+        (
+            r"\b(take|capture|grab|get)\s+(?:a\s+)?(?:screenshot|screen\s*shot|picture)\b",
+            r"\b(give|send|show)\s+(?:me\s+)?(?:a\s+)?screenshots?\b",
+            r"\bscreenshot\s+(?:of\s+)?screen\s+\d+\b",
+            r"\b(what\s+do\s+you\s+see|what'?s?\s+on\s+(?:the\s+)?screen|describe\s+(?:the\s+)?screen|what'?s?\s+on\s+my\s+screen)\b",
+            r"\b(see|look\s+at|analyze|check|examine)\b.*?\b(?:my\s+)?(?:screen|display|monitor)\b",
+            r"\bsee\s+what\s+i(?:'m|\s+am)\s+looking\s+at\b",
+            r"\bscreen\s+(?:capture|interaction|shot)\b",
+        ),
+    ),
+    (
         "visual_baseline",
         (
             r"\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?|gold(?:en)?\s+standard)\b",

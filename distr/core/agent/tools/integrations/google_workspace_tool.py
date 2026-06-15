@@ -10,6 +10,7 @@ This tool provides comprehensive access to Google Workspace services including:
 
 import json
 import logging
+import os
 from typing import Optional, Dict, Any
 
 from langchain.tools import BaseTool
@@ -43,7 +44,7 @@ class GoogleWorkspaceInput(BaseModel):
     """Input schema for Google Workspace tool."""
 
     action: str = Field(
-        description="The action to perform. Options: 'check_inbox', 'read_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
+        description="The action to perform. Options: 'check_inbox', 'read_email', 'get_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'download_email_attachment', 'download_email_attachments', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
     )
     params: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -87,7 +88,9 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "\n"
         "GMAIL:\n"
                 "- 'check_inbox': Check Gmail inbox - shows all inbox emails by default (params: max_results, query). Default query is 'in:inbox' to show all emails. Use 'is:unread' to show only unread emails. Each email includes a Message ID — use this ID with read_email.\n"
-        "- 'read_email': Read email by ID. Use the Message ID from check_inbox output. (params: message_id)\n"
+        "- 'read_email' or 'get_email': Read full email by Message ID from check_inbox. Includes attachment list with attachment_id values. (params: message_id)\n"
+        "- 'download_email_attachment': Download one Gmail attachment to disk (default ~/Downloads). (params: message_id, attachment_id, filename; or message_id + filename to match). Optional destination_dir.\n"
+        "- 'download_email_attachments': Download every attachment on an email to disk (default ~/Downloads). (params: message_id, optional destination_dir)\n"
         "- 'send_email': Send email (params: to, subject, body, body_type, cc, bcc)\n"
         "- 'draft_email': Create draft email in Gmail (params: to (required), subject (optional), body (required), body_type (optional, default='plain')). Example: action='draft_email', params={'to': 'bob@bob.com', 'subject': 'Thank you', 'body': 'Thank you for the pineapples.'}\n"
         "- 'list_drafts': List all draft emails (params: max_results, default=10). Returns list of drafts with details including draft_id.\n"
@@ -122,6 +125,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- 'check my inbox' or 'check inbox' -> action='check_inbox' (shows all inbox emails)\n"
         "- 'check my unread inbox' or 'check unread email' or 'check new email' -> action='check_inbox', params={'query': 'is:unread'} (shows only unread emails)\n"
         "- 'read my emails' or 'read emails' -> action='check_inbox' (shows all inbox emails)\n"
+        "- 'download the attachment from that email' -> action='read_email' with message_id to list attachments, then action='download_email_attachment' or action='download_email_attachments'\n"
         "- 'send email' or 'send an email' -> action='send_email' (email = Gmail)\n"
         "- 'send email to john@example.com' -> action='send_email', params={'to': 'john@example.com', 'subject': '...', 'body': '...'}\n"
         "- 'create a draft' or 'draft an email' or 'create draft email' -> action='draft_email', params={'to': '...', 'subject': '...', 'body': '...'}\n"
@@ -147,6 +151,78 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
 
     def _lazy_init(self):
         object.__setattr__(self, 'connector', GoogleWorkspaceConnector())
+
+    @staticmethod
+    def _default_downloads_dir() -> str:
+        return os.path.expanduser("~/Downloads")
+
+    @staticmethod
+    def _format_attachments_section(attachments: list) -> str:
+        if not attachments:
+            return "Attachments: none\n"
+        lines = ["Attachments:"]
+        for item in attachments:
+            lines.append(
+                f"  - {item.get('filename', 'attachment')} "
+                f"(attachment_id={item.get('attachment_id', '')}, "
+                f"mime_type={item.get('mime_type', '')}, size={item.get('size', 0)})"
+            )
+        lines.append(
+            "Use download_email_attachment or download_email_attachments with the Message ID and attachment_id."
+        )
+        return "\n".join(lines) + "\n"
+
+    def _resolve_email_attachment(
+        self,
+        message_id: str,
+        attachment_id: Optional[str] = None,
+        filename: Optional[str] = None,
+    ) -> tuple[Optional[dict], Optional[str]]:
+        """Resolve a single attachment record from message_id + id or filename."""
+        if attachment_id and filename:
+            return (
+                {
+                    "message_id": message_id,
+                    "attachment_id": attachment_id,
+                    "filename": filename,
+                },
+                None,
+            )
+
+        email = self.connector.get_email(message_id)
+        if not email:
+            return None, "Error: Could not retrieve email"
+
+        attachments = email.get("attachments") or []
+        if not attachments:
+            return None, "No attachments found on this email."
+
+        if attachment_id:
+            for item in attachments:
+                if item.get("attachment_id") == attachment_id:
+                    return item, None
+            return None, f"Error: No attachment with attachment_id={attachment_id!r} on this email."
+
+        if filename:
+            needle = filename.strip().lower()
+            matches = [
+                item for item in attachments
+                if (item.get("filename") or "").strip().lower() == needle
+            ]
+            if len(matches) == 1:
+                return matches[0], None
+            if len(matches) > 1:
+                return None, "Error: Multiple attachments match that filename. Use attachment_id."
+            return None, f"Error: No attachment named {filename!r} on this email."
+
+        if len(attachments) == 1:
+            return attachments[0], None
+
+        names = ", ".join(item.get("filename", "attachment") for item in attachments)
+        return None, (
+            "Error: This email has multiple attachments. "
+            f"Specify attachment_id or filename. Available: {names}"
+        )
     
     def _run(
         self,
@@ -195,6 +271,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
             'start_time', 'end_time', 'description', 'location', 'time_min',
             'time_max', 'title', 'markdown_content', 'convert_to_google_doc',
             'events', 'calendar_events', 'calendarEvents',
+            'attachment_id', 'filename', 'destination_dir',
         }
         for key in KNOWN_PARAM_KEYS:
             if key in kwargs and key not in params:
@@ -246,7 +323,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     result += f"Message ID: {msg.get('id', '')}\n\n"
                 return result
             
-            elif action == 'read_email':
+            elif action in ('read_email', 'get_email'):
                 message_id = params.get('message_id') or params.get('id') or params.get('email_id')
                 if not message_id:
                     logger.warning(f"read_email called without message_id. action={action}, params={params}, kwargs_keys={list(kwargs.keys())}")
@@ -254,12 +331,71 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 email = self.connector.get_email(message_id)
                 if not email:
                     return "Error: Could not retrieve email"
-                result = f"From: {email.get('from', 'Unknown')}\n"
+                result = f"Message ID: {email.get('id', message_id)}\n"
+                result += f"From: {email.get('from', 'Unknown')}\n"
                 result += f"To: {email.get('to', 'Unknown')}\n"
                 result += f"Subject: {email.get('subject', 'No Subject')}\n"
                 result += f"Date: {email.get('date', '')}\n\n"
-                result += f"Body:\n{email.get('body', '')}\n"
+                result += self._format_attachments_section(email.get('attachments') or [])
+                result += f"\nBody:\n{email.get('body', '')}\n"
                 return result
+
+            elif action == 'download_email_attachment':
+                message_id = params.get('message_id') or params.get('id') or params.get('email_id')
+                if not message_id:
+                    return "Error: message_id is required."
+                attachment_id = params.get('attachment_id')
+                filename = params.get('filename')
+                destination_dir = params.get('destination_dir') or self._default_downloads_dir()
+
+                attachment, error = self._resolve_email_attachment(
+                    message_id,
+                    attachment_id=attachment_id,
+                    filename=filename,
+                )
+                if error:
+                    return error
+                if not attachment:
+                    return "Error: Could not resolve attachment."
+
+                saved_path = self.connector.download_email_attachment(
+                    message_id=message_id,
+                    attachment_id=attachment.get('attachment_id', ''),
+                    filename=attachment.get('filename', 'attachment'),
+                    destination_dir=destination_dir,
+                )
+                if not saved_path:
+                    return "Error: Failed to download attachment."
+                return f"Saved attachment to {saved_path}"
+
+            elif action == 'download_email_attachments':
+                message_id = params.get('message_id') or params.get('id') or params.get('email_id')
+                if not message_id:
+                    return "Error: message_id is required."
+                destination_dir = params.get('destination_dir') or self._default_downloads_dir()
+                email = self.connector.get_email(message_id)
+                if not email:
+                    return "Error: Could not retrieve email"
+                attachments = email.get('attachments') or []
+                if not attachments:
+                    return "No attachments found on this email."
+
+                saved_paths = []
+                for item in attachments:
+                    saved_path = self.connector.download_email_attachment(
+                        message_id=message_id,
+                        attachment_id=item.get('attachment_id', ''),
+                        filename=item.get('filename', 'attachment'),
+                        destination_dir=destination_dir,
+                    )
+                    if saved_path:
+                        saved_paths.append(saved_path)
+
+                if not saved_paths:
+                    return "Error: Failed to download attachments."
+                if len(saved_paths) == 1:
+                    return f"Saved attachment to {saved_paths[0]}"
+                return "Saved attachments:\n" + "\n".join(f"- {path}" for path in saved_paths)
             
             elif action == 'send_email':
                 to = params.get('to')
@@ -609,7 +745,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 return f"Document created successfully (ID: {doc_id})" if doc_id else "Error: Failed to create document"
             
             else:
-                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
+                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, get_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, download_email_attachment, download_email_attachments, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
         
         except Exception as e:
             logger.error(f"Error executing Google Workspace action: {e}", exc_info=True)

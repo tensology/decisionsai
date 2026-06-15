@@ -23,54 +23,52 @@ from distr.core.kanban.ticket_time_tracking import (
 )
 
 
-def _human_result_snippet(
-    result_text: str,
-    *,
-    passed: bool,
-    step_name: str,
-    action_type: str = "",
-) -> str:
+def _step_label(step_index: int | None, step_name: str) -> str:
+    name = (step_name or "").strip()
+    if step_index and step_index > 0:
+        if name:
+            return f"Step {step_index}: {name}"
+        return f"Step {step_index}"
+    return name or "Step"
+
+
+def _brief_failure(result_text: str) -> str:
     clean = re.sub(r"\s+", " ", (result_text or "").strip())
-    for prefix in (
-        "Cursor reported status: failed",
-        "Codex reported status: failed",
-        "failed.",
-        "Error:",
-    ):
-        if clean.lower().startswith(prefix.lower()):
-            clean = clean[len(prefix) :].strip(" .:-")
-    if not clean:
-        if passed:
-            return "That step finished cleanly."
-        return "That step didn't come back with anything useful."
-
+    low = clean.lower()
+    if "no linked project" in low:
+        return "Link the ticket to a project first."
+    if "llm judgment not available" in low:
+        return "LLM validation is unavailable."
+    if "usage limit" in low or "hit your usage" in low:
+        return "Cursor usage limit reached — switch backend or wait for reset."
+    if "bypassed" in low:
+        return "No project was linked for this step."
     sentence = re.split(r"[.!?\n]", clean, maxsplit=1)[0].strip()
-    if len(sentence) > 180:
-        sentence = sentence[:177].rsplit(" ", 1)[0] + "..."
-
-    action = (action_type or "").strip().lower()
-    if "cursor" in action or "cursor" in clean.lower():
-        worker = "Cursor"
-    elif action == "send_to_project_cli" or "codex" in clean.lower():
-        worker = "the project CLI"
-    else:
-        worker = (step_name or "the step").strip() or "the step"
-
-    if passed:
-        return f"{worker} came back — {sentence}."
-    return f"{worker} hit a snag — {sentence}."
+    if len(sentence) > 100:
+        sentence = sentence[:97] + "..."
+    return sentence or "Check the activity feed for details."
 
 
-def build_run_start_message(*, ticket_title: str, step_name: str) -> str:
-    title = (ticket_title or "this ticket").strip()
-    step = (step_name or "the first step").strip()
-    return f"Picking up {title}. Starting with {step}."
+def build_run_start_message(
+    *,
+    ticket_title: str,
+    step_name: str,
+    step_index: int | None = None,
+) -> str:
+    return f"{_step_label(step_index, step_name)} has started."
 
 
-def build_step_start_message(*, ticket_title: str, step_name: str) -> str:
-    title = (ticket_title or "the ticket").strip()
-    step = (step_name or "the next step").strip()
-    return f"Working on {step} for {title}."
+def build_step_start_message(
+    *,
+    ticket_title: str,
+    step_name: str,
+    step_index: int | None = None,
+) -> str:
+    return build_run_start_message(
+        ticket_title=ticket_title,
+        step_name=step_name,
+        step_index=step_index,
+    )
 
 
 def build_step_done_message(
@@ -80,18 +78,12 @@ def build_step_done_message(
     passed: bool,
     result_text: str,
     action_type: str = "",
+    step_index: int | None = None,
 ) -> str:
-    title = (ticket_title or "the ticket").strip()
-    step = (step_name or "that step").strip()
-    detail = _human_result_snippet(
-        result_text,
-        passed=passed,
-        step_name=step,
-        action_type=action_type,
-    )
+    label = _step_label(step_index, step_name)
     if passed:
-        return f"Done with {step} on {title}. {detail}"
-    return f"{step} on {title} didn't clear. {detail}"
+        return f"{label} passed."
+    return f"{label} failed. {_brief_failure(result_text)}"
 
 
 def build_run_done_message(
@@ -101,18 +93,17 @@ def build_run_done_message(
     warning: str = "",
     elapsed_label: str = "",
 ) -> str:
-    title = (ticket_title or "the ticket").strip()
     normalized = (status or "").strip().lower()
     if warning and "loop" in warning.lower():
-        base = f"Got stuck in a loop on {title}, so I stopped the run."
+        base = "Run stopped in a loop."
     elif normalized == "completed":
-        base = f"Finished working on {title}."
+        base = "Run finished."
     elif normalized == "cancelled":
-        base = f"Stopped work on {title}."
+        base = "Run stopped."
     else:
-        base = f"Couldn't get {title} all the way through."
+        base = "Run failed."
     if elapsed_label:
-        base = f"{base} That took about {elapsed_label}."
+        base = f"{base} Elapsed {elapsed_label}."
     return base
 
 
@@ -312,9 +303,18 @@ def notify_ticket_workflow_step_started(run_id: int, step_id: int) -> None:
             ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(run.ticket_id)).first()
             ticket_title = (ticket.title if ticket else "") or ""
         step_name = (step.name or "").strip() or f"step {step.position + 1}"
-        body = build_step_start_message(ticket_title=ticket_title, step_name=step_name)
+        step_index = int(step.position) + 1
+        body = build_step_start_message(
+            ticket_title=ticket_title,
+            step_name=step_name,
+            step_index=step_index,
+        )
         if int(run.current_step_id or 0) == int(step_id) and not run_data.get("run_start_announced"):
-            body = build_run_start_message(ticket_title=ticket_title, step_name=step_name)
+            body = build_run_start_message(
+                ticket_title=ticket_title,
+                step_name=step_name,
+                step_index=step_index,
+            )
             run_data["run_start_announced"] = True
             run.run_data = json.dumps(run_data)
             db.commit()
@@ -323,6 +323,7 @@ def notify_ticket_workflow_step_started(run_id: int, step_id: int) -> None:
         step_id=step_id,
         body=body,
         state_fingerprint=f"step_start:{step_id}",
+        priority="high",
     )
 
 
@@ -348,6 +349,7 @@ def notify_ticket_workflow_step_finished(
             ticket_title = (ticket.title if ticket else "") or ""
         step_name = (step.name or "").strip() or f"step {step.position + 1}"
         action_type = (step.action_type or "").strip()
+        step_index = int(step.position) + 1
     notify_ticket_workflow_progress(
         run_id=run_id,
         step_id=step_id,
@@ -357,6 +359,7 @@ def notify_ticket_workflow_step_finished(
             passed=passed,
             result_text=result_text,
             action_type=action_type,
+            step_index=step_index,
         ),
         state_fingerprint=f"step_done:{step_id}:{'pass' if passed else 'fail'}",
         priority="normal" if passed else "high",

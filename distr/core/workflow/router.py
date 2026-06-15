@@ -104,25 +104,46 @@ class StepRouter:
                     verify_project_id = int(raw_project_id) if raw_project_id not in (None, "") else None
                 except Exception:
                     verify_project_id = None
-            verified_passed = _run_verification(
-                step, result, passed, project_id=verify_project_id
-            )
-            orchestrator_overlay = None
+            ticket_context = ""
             standards_context = ""
             try:
                 from distr.core.db.kanban import KanbanTicket
-                from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
                 from distr.core.workflow.standards_memory import build_standards_context
 
-                ticket_context = ""
                 if run and getattr(run, "ticket_id", None):
                     ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(run.ticket_id)).first()
                     if ticket:
                         ticket_context = f"{getattr(ticket, 'title', '')}\n{getattr(ticket, 'description', '')}".strip()
+                if run:
+                    try:
+                        brief_data = json.loads(run.run_data or "{}") or {}
+                        brief = (brief_data.get("ticket_workflow_brief") or "").strip()
+                        if brief:
+                            ticket_context = (
+                                f"{ticket_context}\n\n{brief}".strip()
+                                if ticket_context
+                                else brief
+                            )
+                    except Exception:
+                        pass
                 standards_context = build_standards_context(
                     getattr(run.workflow, "context_rules", None) if run and run.workflow else None,
                     board_id=getattr(run, "board_id", None) if run else None,
                 )
+            except Exception:
+                logger.debug("Could not build verification context", exc_info=True)
+
+            verified_passed = _run_verification(
+                step,
+                result,
+                passed,
+                project_id=verify_project_id,
+                ticket_context=ticket_context,
+                standards_context=standards_context,
+            )
+            orchestrator_overlay = None
+            try:
+                from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
                 orchestrator_overlay = apply_orchestrator_validator_overlay(
                     step=step,
                     result=result,
@@ -141,6 +162,14 @@ class StepRouter:
             )
             if orchestrator_overlay:
                 validation_snapshot["orchestrator_validator"] = orchestrator_overlay
+                if not verified_passed:
+                    hint = (
+                        orchestrator_overlay.get("correction_hint")
+                        or orchestrator_overlay.get("explanation")
+                        or ""
+                    ).strip()
+                    if hint:
+                        validation_snapshot["correction_hint"] = hint
             if standards_context:
                 validation_snapshot["standards_context"] = standards_context
 
@@ -689,13 +718,14 @@ class StepRouter:
 
     @staticmethod
     def _static_route(db, step: AutoWorkflowStep, passed: bool) -> Optional[int]:
-        """Follow explicit goto, otherwise default to next step by position."""
+        """Follow explicit goto, otherwise advance on pass or end on fail."""
         goto = step.on_pass_goto if passed else step.on_fail_goto
         if goto is not None:
             return goto
 
-        # Backward-compatible default: if no explicit route is configured,
-        # advance to the next step in sequence.
+        if not passed:
+            return -1
+
         next_step = (
             db.query(AutoWorkflowStep)
             .filter(

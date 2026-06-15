@@ -60,6 +60,7 @@
     var selectedWorkflowQueueTicketId = null;
     var workflowTicketPendingRunStartedAt = {};
     var workflowTicketTimerInterval = null;
+    var workflowTabRunTimerInterval = null;
     var workflowActiveTicketIdsSnapshot = [];
     var workflowTicketModalState = null;
     var workflowWhatsappTicketDraft = null;
@@ -1764,9 +1765,22 @@
         }).join("");
     }
 
+    function workflowExecCliBackendOptionsHtml(readyMap, includeEmpty) {
+        readyMap = readyMap || {};
+        var html = includeEmpty ? '<option value="">None</option>' : "";
+        WORKFLOW_EXEC_BACKEND_OPTIONS.forEach(function (item) {
+            if (workflowExecBackendIsIde(item.id)) return;
+            var ready = readyMap[item.id];
+            var suffix = ready === false ? " (setup required)" : "";
+            html += '<option value="' + esc(item.id) + '">' + esc(item.label + suffix) + "</option>";
+        });
+        return html;
+    }
+
     function workflowExecRouteHtml(rootOrPrefix) {
         var prefix = typeof rootOrPrefix === "string" ? rootOrPrefix : workflowExecRoutePrefix(rootOrPrefix);
         var backendOptions = workflowExecRouteBackendOptionsHtml();
+        var fallbackBackendOptions = workflowExecCliBackendOptionsHtml({}, true);
         return workflowExecRouteLevels().map(function (level) {
             var label = level.charAt(0).toUpperCase() + level.slice(1);
             return '<div class="wf-exec-route-block space-y-2" data-level="' + level + '">' +
@@ -1779,6 +1793,19 @@
                         '<option value="auto">Auto</option>' +
                     "</select>" +
                     '<button type="button" id="' + prefix + "-" + level + '-codex-cog" class="wf-exec-codex-cog inline-flex h-8 w-8 items-center justify-center rounded border border-white/20 text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed" data-level="' + level + '" title="Codex CLI preferences (intelligence &amp; speed)" aria-label="Codex CLI preferences">&#9881;</button>' +
+                "</div>" +
+                '<div id="' + prefix + "-" + level + '-fallback-row" class="wf-exec-route-fallback hidden space-y-1">' +
+                    '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto;">' +
+                        '<span class="text-xs text-gray-500">Fallback</span>' +
+                        '<select id="' + prefix + "-" + level + '-fallback-backend" class="wf-exec-fallback-backend w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
+                            fallbackBackendOptions +
+                        "</select>" +
+                        '<select id="' + prefix + "-" + level + '-fallback-model" class="wf-exec-fallback-model w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
+                            '<option value="auto">Auto</option>' +
+                        "</select>" +
+                        '<span class="inline-flex h-8 w-8" aria-hidden="true"></span>' +
+                    "</div>" +
+                    '<p class="text-[10px] leading-snug text-gray-500" style="margin-left: 7.75rem;">CLI executor and model used when the IDE is unavailable or not set up.</p>' +
                 "</div>" +
                 '<p id="' + prefix + "-" + level + '-model-hint" class="wf-exec-model-hint hidden text-[10px] leading-snug text-amber-200/90" style="margin-left: 7.75rem;"></p>' +
                 '<div id="' + prefix + "-" + level + '-codex-prefs" class="hidden ml-[7.75rem] grid grid-cols-2 gap-2 rounded border border-white/10 bg-[#10183f] p-2">' +
@@ -1803,11 +1830,35 @@
             readyMap[row.id] = !!(row.ready || row.available);
         });
         var optionsHtml = workflowExecRouteBackendOptionsHtml(readyMap);
+        var fallbackOptionsHtml = workflowExecCliBackendOptionsHtml(readyMap, true);
         root.querySelectorAll(".wf-exec-backend").forEach(function (select) {
             var current = select.value;
             select.innerHTML = optionsHtml;
             if (current) select.value = current;
         });
+        root.querySelectorAll(".wf-exec-fallback-backend").forEach(function (select) {
+            var current = select.value;
+            select.innerHTML = fallbackOptionsHtml;
+            if (current) select.value = current;
+        });
+    }
+
+    function updateWorkflowExecFallbackVisibility(level, root) {
+        root = root || document;
+        var backend = workflowExecRouteEl(root, level, "backend");
+        var row = workflowExecRouteEl(root, level, "fallback-row");
+        var isIde = backend && workflowExecBackendIsIde(backend.value);
+        if (row) row.classList.toggle("hidden", !isIde);
+        if (!isIde) {
+            var fbBackend = workflowExecRouteEl(root, level, "fallback-backend");
+            var fbModel = workflowExecRouteEl(root, level, "fallback-model");
+            if (fbBackend) fbBackend.value = "";
+            if (fbModel) {
+                fbModel.innerHTML = '<option value="auto">Auto</option>';
+                fbModel.value = "auto";
+                fbModel.disabled = true;
+            }
+        }
     }
 
     function updateWorkflowExecCodexPrefVisibility(level, root) {
@@ -1866,6 +1917,7 @@
         if (workflowExecBackendIsIde(backendId)) {
             setWorkflowExecRouteIdeModelSelect(select);
             updateWorkflowExecCodexPrefVisibility(level, root);
+            updateWorkflowExecFallbackVisibility(level, root);
             return Promise.resolve();
         }
         var preferred = (selectedModel || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model || "auto").trim();
@@ -1949,6 +2001,56 @@
             });
     }
 
+    function loadWorkflowExecRouteFallbackModels(level, backendId, selectedModel, root) {
+        root = root || document;
+        var select = workflowExecRouteEl(root, level, "fallback-model");
+        var backendSelect = workflowExecRouteEl(root, level, "fallback-backend");
+        if (!select) return Promise.resolve();
+        backendId = (backendId || (backendSelect && backendSelect.value) || "").trim();
+        if (!backendId || workflowExecBackendIsIde(backendId)) {
+            select.innerHTML = '<option value="auto">Auto</option>';
+            select.value = "auto";
+            select.disabled = true;
+            return Promise.resolve();
+        }
+        var preferred = (selectedModel || "auto").trim();
+        select.disabled = true;
+        select.innerHTML = '<option value="auto">Loading...</option>';
+        var params = "backend_id=" + encodeURIComponent(backendId);
+        var projectId = workflowBoardProjectId();
+        if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
+        return api("GET", "/projects/cli-models?" + params)
+            .then(function (data) {
+                var models = Array.isArray(data.models) ? data.models : [];
+                var seen = {};
+                select.innerHTML = "";
+                function append(value, label) {
+                    value = (value || "auto").trim();
+                    if (!value || seen[value]) return;
+                    seen[value] = true;
+                    var opt = document.createElement("option");
+                    opt.value = value;
+                    opt.textContent = label || value;
+                    select.appendChild(opt);
+                }
+                append("auto", "Auto");
+                models.forEach(function (model) {
+                    var value = workflowExecRouteModelValue(model);
+                    if (!value || value === "auto") return;
+                    append(value, workflowExecRouteModelLabel(model));
+                });
+                var current = preferred || "auto";
+                if (!seen[current]) current = "auto";
+                select.value = current;
+                select.disabled = false;
+            })
+            .catch(function () {
+                select.innerHTML = '<option value="auto">Auto</option>';
+                select.value = "auto";
+                select.disabled = false;
+            });
+    }
+
     function populateWorkflowExecRouting(data, llmData, root) {
         root = root || document;
         data = data || {};
@@ -1959,7 +2061,15 @@
             var route = (data.routing && data.routing[level]) || {};
             var backendValue = route.backend || llmData["project_cli_" + level + "_backend"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend;
             var modelValue = route.model || llmData["project_cli_" + level + "_model"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model;
+            var fallbackBackendValue = route.fallback_backend || llmData["project_cli_" + level + "_fallback_backend"] || "";
+            var fallbackModelValue = route.fallback_model || llmData["project_cli_" + level + "_fallback_model"] || "";
+            if (workflowExecBackendIsIde(backendValue) && !fallbackBackendValue) {
+                fallbackBackendValue = backendValue === "codex_ide" ? "codex" : "cursor";
+                if (!fallbackModelValue) fallbackModelValue = "auto";
+            }
             if (backend) backend.value = backendValue;
+            var fallbackBackend = workflowExecRouteEl(root, level, "fallback-backend");
+            if (fallbackBackend) fallbackBackend.value = fallbackBackendValue || "";
             var intelligence = workflowExecRouteEl(root, level, "codex-intelligence");
             var speed = workflowExecRouteEl(root, level, "codex-speed");
             if (intelligence) intelligence.value = route.codex_intelligence || "";
@@ -1967,7 +2077,9 @@
             var prefsPanel = workflowExecRouteEl(root, level, "codex-prefs");
             if (prefsPanel) prefsPanel.classList.add("hidden");
             loads.push(loadWorkflowExecRouteModels(level, backendValue, modelValue, root));
+            loads.push(loadWorkflowExecRouteFallbackModels(level, fallbackBackendValue, fallbackModelValue, root));
             updateWorkflowExecCodexPrefVisibility(level, root);
+            updateWorkflowExecFallbackVisibility(level, root);
         });
         return Promise.all(loads);
     }
@@ -1987,6 +2099,14 @@
                     ? ""
                     : ((model && model.value) || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model)
             };
+            if (workflowExecBackendIsIde(backendValue)) {
+                var fallbackBackend = workflowExecRouteEl(root, level, "fallback-backend");
+                var fallbackModel = workflowExecRouteEl(root, level, "fallback-model");
+                row.fallback_backend = (fallbackBackend && fallbackBackend.value) || "";
+                row.fallback_model = row.fallback_backend
+                    ? ((fallbackModel && fallbackModel.value) || "auto")
+                    : "";
+            }
             if (row.backend === "codex") {
                 row.codex_intelligence = (intelligence && intelligence.value) || "";
                 row.codex_speed = (speed && speed.value) || "";
@@ -2003,7 +2123,15 @@
             select.dataset.execBound = "1";
             select.addEventListener("change", function () {
                 loadWorkflowExecRouteModels(select.dataset.level, select.value, "auto", root);
+                updateWorkflowExecFallbackVisibility(select.dataset.level, root);
                 refreshWorkflowConfigExecutorPills(root);
+            });
+        });
+        root.querySelectorAll(".wf-exec-fallback-backend").forEach(function (select) {
+            if (select.dataset.execBound === "1") return;
+            select.dataset.execBound = "1";
+            select.addEventListener("change", function () {
+                loadWorkflowExecRouteFallbackModels(select.dataset.level, select.value, "auto", root);
             });
         });
         root.querySelectorAll(".wf-exec-codex-cog").forEach(function (btn) {
@@ -2761,7 +2889,7 @@
         if (existing) existing.remove();
         var color = /^#[0-9a-f]{6}$/i.test(opt.color || "") ? opt.color : "#f97316";
         var html = '' +
-            '<div id="wf-board-edit-modal" class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60">' +
+            '<div id="wf-board-edit-modal" role="dialog" aria-modal="true">' +
                 '<div class="w-full max-w-3xl mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">' +
                     '<div class="flex items-start justify-between gap-3 px-5 pt-5 pb-3">' +
                         '<div class="min-w-0 flex-1">' +
@@ -4089,6 +4217,64 @@
         return 0;
     }
 
+    function currentWorkflowActiveRun(activeRuns) {
+        activeRuns = activeRuns || latestActiveRuns || [];
+        if (!currentWorkflowId) return null;
+        return activeRuns.filter(function (r) {
+            return r && String(r.workflow_id) === String(currentWorkflowId) &&
+                (r.status === "running" || r.status === "waiting");
+        })[0] || null;
+    }
+
+    function updateWorkflowTabRunControls(activeRuns) {
+        var run = currentWorkflowActiveRun(activeRuns);
+        var timerEl = document.getElementById("wf-tab-run-timer");
+        var stopBtn = document.getElementById("wf-tab-run-stop");
+        if (!timerEl || !stopBtn) return;
+        if (!run) {
+            timerEl.classList.add("hidden");
+            stopBtn.classList.add("hidden");
+            timerEl.textContent = "";
+            if (workflowTabRunTimerInterval) {
+                clearInterval(workflowTabRunTimerInterval);
+                workflowTabRunTimerInterval = null;
+            }
+            return;
+        }
+        timerEl.classList.remove("hidden");
+        stopBtn.classList.remove("hidden");
+        stopBtn.dataset.workflowId = String(run.workflow_id);
+        stopBtn.dataset.runId = String(run.id);
+        timerEl.textContent = formatElapsed(workflowRunDurationSeconds(run));
+        if (!workflowTabRunTimerInterval) {
+            workflowTabRunTimerInterval = setInterval(function () {
+                var active = currentWorkflowActiveRun();
+                if (!active) {
+                    updateWorkflowTabRunControls([]);
+                    return;
+                }
+                var el = document.getElementById("wf-tab-run-timer");
+                if (el) el.textContent = formatElapsed(workflowRunDurationSeconds(active));
+            }, 1000);
+        }
+    }
+
+    function cancelWorkflowRun(workflowId, runId, buttonEl) {
+        if (!workflowId || !runId) return Promise.resolve();
+        if (buttonEl) buttonEl.disabled = true;
+        return api("POST", "/workflows/" + encodeURIComponent(workflowId) + "/cancel-run/" + encodeURIComponent(runId))
+            .then(function (resp) {
+                snack(workflowFeedbackText(resp, "Run cancelled"));
+                stopPolling();
+                loadActiveRuns();
+                if (currentWorkflowId) loadDetail(currentWorkflowId);
+            })
+            .catch(function (e) {
+                if (buttonEl) buttonEl.disabled = false;
+                snack(workflowErrorText(e, "Failed to cancel"), "error");
+            });
+    }
+
     function workflowRunMatchesSelectedBoard(run) {
         if (!run) return false;
         var selected = getSelectedWorkflowBoardOption();
@@ -4576,6 +4762,7 @@
             }
             syncWorkflowRunsTabVisibility();
             renderWorkflowRunBar(latestActiveRuns);
+            updateWorkflowTabRunControls(latestActiveRuns);
             if (!latestActiveRuns.length) {
                 listEl.innerHTML = "";
                 emptyEl.classList.remove("hidden");
@@ -4658,18 +4845,7 @@
             });
             listEl.querySelectorAll(".wf-active-stop").forEach(function (btn) {
                 btn.addEventListener("click", function () {
-                    btn.disabled = true;
-                    api("POST", "/workflows/" + encodeURIComponent(btn.dataset.workflowId) + "/cancel-run/" + encodeURIComponent(btn.dataset.runId))
-                        .then(function (resp) {
-                            snack(workflowFeedbackText(resp, "Run cancelled"));
-                            stopPolling();
-                            loadActiveRuns();
-                            if (currentWorkflowId) loadDetail(currentWorkflowId);
-                        })
-                        .catch(function (e) {
-                            btn.disabled = false;
-                            snack(workflowErrorText(e, "Failed to cancel"), "error");
-                        });
+                    cancelWorkflowRun(btn.dataset.workflowId, btn.dataset.runId, btn);
                 });
             });
         }).catch(function () {
@@ -8816,8 +8992,8 @@
     function clearWorkflowRunAudit() {
         if (!currentWorkflowId) return;
         showConfirmModal({
-            title: "Clear activity log",
-            message: "Clear the activity log for this workflow?\n\nThis removes completed run records and step result records only. Executor sessions and event logs stay intact.",
+            title: "Clear history",
+            message: "Clear completed run history for this workflow?\n\nThis removes finished run records so you can start fresh. Active runs, executor logs, and event streams are not removed.",
             confirmLabel: "Clear",
             onConfirm: function () {
                 var btn = document.getElementById("wf-clear-runs-btn");
@@ -9013,13 +9189,24 @@
         var type = String((event && event.event_type) || "").toLowerCase();
         var summary = String((event && event.summary) || "").trim();
         var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
+        var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+        var validation = evidence.validation && typeof evidence.validation === "object" ? evidence.validation : {};
+        var status = String((event && event.status) || payload.decision || "").toLowerCase();
+        if (type === "workflow_step_completed") {
+            var stepName = payload.step_name || "Step";
+            if (status === "failed" || status === "fail" || validation.verdict === "fail") {
+                var reason = validation.correction_hint || payload.correction_hint || "";
+                if (!reason && validation.expected) {
+                    reason = "Expected: " + validation.expected;
+                }
+                return stepName + " failed" + (reason ? ". " + reason : ".");
+            }
+            return stepName + " passed.";
+        }
         if (summary) return summary;
         if (type === "workflow_run_started") return "Run started.";
         if (type === "workflow_run_completed") return "Run finished.";
         if (type === "workflow_run_cancelled") return "Run cancelled.";
-        if (type === "workflow_step_completed") {
-            return payload.step_name ? ("Step completed: " + payload.step_name) : "Step completed.";
-        }
         if (type === "loop_started") return "Loop started.";
         if (type === "loop_iteration") {
             var iter = payload.iteration != null ? payload.iteration : payload.loop_iteration;
@@ -9032,6 +9219,7 @@
     function loopFeedEventDetailLines(event) {
         var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
         var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+        var validation = evidence.validation && typeof evidence.validation === "object" ? evidence.validation : {};
         var lines = [];
         var ticketId = event && (event.ticket_id || payload.ticket_id);
         var ticketTitle = payload.ticket_title || payload.title || "";
@@ -9039,6 +9227,16 @@
             lines.push("Ticket: " + workflowTicketLabel(ticketId, ticketTitle));
         }
         if (payload.step_name) lines.push("Step: " + payload.step_name);
+        if (payload.action_type) lines.push("Executor: " + payload.action_type);
+        if (validation.validation_type) lines.push("Check: " + validation.validation_type);
+        if (validation.verdict === "fail" && validation.expected) {
+            lines.push("Expected: " + validation.expected);
+        }
+        var orch = validation.orchestrator_validator && typeof validation.orchestrator_validator === "object"
+            ? validation.orchestrator_validator
+            : (payload.orchestrator_validator || {});
+        if (orch.correction_hint) lines.push(orch.correction_hint);
+        else if (orch.explanation) lines.push(orch.explanation);
         if (payload.decision && payload.decision.backend) {
             lines.push("Route: " + payload.decision.backend + (payload.decision.model ? " / " + payload.decision.model : ""));
             var decisionSkills = workflowCleanStringList(payload.decision.skills);
@@ -9054,7 +9252,7 @@
         if (payload.correction_hint) lines.push(payload.correction_hint);
         if (evidence.result_preview) lines.push(evidence.result_preview);
         if (evidence.error) lines.push("Error: " + evidence.error);
-        return lines.filter(Boolean).slice(0, 6);
+        return lines.filter(Boolean).slice(0, 8);
     }
 
     function steeringEntryToFeedItem(entry) {
@@ -10010,6 +10208,12 @@
         var clearRunsBtn = document.getElementById("wf-clear-runs-btn");
         if (clearRunsBtn) {
             clearRunsBtn.addEventListener("click", clearWorkflowRunAudit);
+        }
+        var tabRunStopBtn = document.getElementById("wf-tab-run-stop");
+        if (tabRunStopBtn) {
+            tabRunStopBtn.addEventListener("click", function () {
+                cancelWorkflowRun(tabRunStopBtn.dataset.workflowId, tabRunStopBtn.dataset.runId, tabRunStopBtn);
+            });
         }
         var clearExecutionSessionsBtn = document.getElementById("wf-clear-execution-sessions");
         if (clearExecutionSessionsBtn) {

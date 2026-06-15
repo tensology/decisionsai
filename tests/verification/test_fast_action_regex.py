@@ -5,7 +5,34 @@ import sys
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from distr.core.agent.services.llm.fast_action_detector import FastActionDetector, ActionType
+from distr.core.agent.tool_intents import forced_tool_names_for_text
+from distr.core.agent.services.llm.fast_action_detector import (
+    FastActionDetector,
+    ActionType,
+    detect_fast_action,
+)
+
+
+def test_screenshot_intent_forces_screenshot_analyzer() -> None:
+    cases = [
+        "Take a screenshot. I'm looking at the projects. Can you help me delete them?",
+        "I want you to take a screenshot so you can see what I'm looking at.",
+        "you take a screenshot and assist me",
+        "what do you see on my screen",
+    ]
+    for text in cases:
+        assert "screenshot_analyzer" in forced_tool_names_for_text(text), text
+
+
+def test_direct_screenshot_with_extra_context_fast_actions() -> None:
+    text = (
+        "Take a screenshot. I'm looking at the projects. "
+        "I want to be able to delete these projects. Can you just help me?"
+    )
+    result = detect_fast_action(text)
+    assert result.action_type == ActionType.SCREENSHOT_ANALYZE
+    assert result.tool_name == "screenshot_analyzer"
+    assert result.confidence >= 0.9
 
 
 def test_summarize_regex_clipboard_and_read_variants() -> None:

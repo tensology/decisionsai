@@ -62,12 +62,25 @@ class TestStaticRoute:
         result = StepRouter._static_route(db, step, passed=False)
         assert result == 9
 
-    def test_null_goto_ends_run(self):
+    def test_null_goto_ends_run_on_pass(self):
         db = MagicMock()
         step = _make_step(on_pass_goto=None, on_fail_goto=None)
         db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
         assert StepRouter._static_route(db, step, passed=True) is None
-        assert StepRouter._static_route(db, step, passed=False) is None
+
+    def test_fail_without_goto_ends_run_even_when_next_step_exists(self):
+        db = MagicMock()
+        step = _make_step(on_pass_goto=None, on_fail_goto=None)
+        next_step = _make_step(id=2, position=1)
+        db.query.return_value.filter.return_value.order_by.return_value.first.return_value = next_step
+        assert StepRouter._static_route(db, step, passed=False) == -1
+
+    def test_pass_without_goto_advances_to_next_step(self):
+        db = MagicMock()
+        step = _make_step(on_pass_goto=None, on_fail_goto=None)
+        next_step = _make_step(id=2, position=1)
+        db.query.return_value.filter.return_value.order_by.return_value.first.return_value = next_step
+        assert StepRouter._static_route(db, step, passed=True) == 2
 
     def test_minus_one_ends_run(self):
         db = MagicMock()

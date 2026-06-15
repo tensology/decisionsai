@@ -1018,6 +1018,8 @@ def register_routes(router, templates):
                     settings.get(f"project_cli_{level}_codex_intelligence")
                 ),
                 "codex_speed": normalize_codex_speed(settings.get(f"project_cli_{level}_codex_speed")),
+                "fallback_backend": (settings.get(f"project_cli_{level}_fallback_backend") or "").strip().lower(),
+                "fallback_model": (settings.get(f"project_cli_{level}_fallback_model") or "").strip(),
             }
 
         try:
@@ -1131,12 +1133,22 @@ def register_routes(router, templates):
                 row = routing.get(level) or {}
                 settings[f"project_cli_{level}_backend"] = normalize_backend_id(row.get("backend") or default_backend)
                 backend_id = settings[f"project_cli_{level}_backend"]
+                fallback_backend = normalize_backend_id(row.get("fallback_backend") or "")
+                fallback_model = (row.get("fallback_model") or "").strip()
                 if is_ide_backend(backend_id):
                     settings[f"project_cli_{level}_model"] = ""
+                    settings[f"project_cli_{level}_fallback_backend"] = (
+                        fallback_backend if fallback_backend and not is_ide_backend(fallback_backend) else ""
+                    )
+                    settings[f"project_cli_{level}_fallback_model"] = (
+                        fallback_model if settings[f"project_cli_{level}_fallback_backend"] else ""
+                    )
                     settings.pop(f"project_cli_{level}_codex_intelligence", None)
                     settings.pop(f"project_cli_{level}_codex_speed", None)
                     continue
                 settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
+                settings[f"project_cli_{level}_fallback_backend"] = ""
+                settings[f"project_cli_{level}_fallback_model"] = ""
                 if backend_id == "codex":
                     settings[f"project_cli_{level}_codex_intelligence"] = normalize_codex_intelligence(
                         row.get("codex_intelligence") or row.get("codex_reasoning_effort")
@@ -1648,6 +1660,13 @@ def register_routes(router, templates):
     @router.post("/workflows/{workflow_id}/cancel-run/{run_id}")
     async def workflow_cancel_run(workflow_id: int, run_id: int):
         try:
+            try:
+                from distr.core.signals import signal_manager
+
+                signal_manager.interrupt_tts.emit()
+                signal_manager.player_stop.emit()
+            except Exception:
+                pass
             from distr.core.workflow.dispatcher import cancel_run
             if not cancel_run(run_id):
                 return JSONResponse(_workflow_error_payload("Run not found", "cancel"), status_code=404)

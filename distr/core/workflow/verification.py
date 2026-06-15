@@ -46,6 +46,8 @@ def _run_verification(
     caller_passed: bool,
     *,
     project_id: int | None = None,
+    ticket_context: str = "",
+    standards_context: str = "",
 ) -> bool:
     """
     Run the configured validation for a step. Returns True if passed.
@@ -66,7 +68,12 @@ def _run_verification(
         elif vtype == "rule_based":
             return _verify_rule_based(result, prompt)
         elif vtype == "llm_judgment":
-            return _verify_llm_judgment(result, prompt)
+            return _verify_llm_judgment(
+                result,
+                prompt,
+                standards_context=standards_context,
+                ticket_context=ticket_context,
+            )
         elif vtype == "screenshot_compare":
             return _verify_screenshot(step, result, prompt)
         elif vtype == "playwright":
@@ -193,9 +200,17 @@ def _verify_llm_judgment(result: str, validation_prompt: str, *, standards_conte
             standards = "\n\nQUALITY STANDARDS:\n" + UNIVERSAL_WORKFLOW_STANDARDS.strip()
         except Exception:
             standards = ""
+        ticket_block = ""
+        if (ticket_context or "").strip():
+            ticket_block = f"TICKET CONTEXT:\n{ticket_context.strip()}\n\n"
+        standards_block = ""
+        if (standards_context or "").strip():
+            standards_block = f"WORKFLOW STANDARDS:\n{standards_context.strip()}\n\n"
         judgment_prompt = (
             f"You are a validation judge. Evaluate whether the following result passes the validation criteria.\n\n"
             f"VALIDATION CRITERIA:\n{validation_prompt}\n\n"
+            f"{ticket_block}"
+            f"{standards_block}"
             f"{standards}\n\n"
             f"RESULT TO VALIDATE:\n{result}\n\n"
             f"Respond with exactly PASS or FAIL followed by a brief explanation."

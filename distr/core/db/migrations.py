@@ -1540,6 +1540,27 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"Ticket Board settings migration: {e}")
 
+    _cli_fallback_columns = [
+        ("project_cli_low_fallback_backend", "VARCHAR DEFAULT ''"),
+        ("project_cli_low_fallback_model", "VARCHAR DEFAULT ''"),
+        ("project_cli_medium_fallback_backend", "VARCHAR DEFAULT ''"),
+        ("project_cli_medium_fallback_model", "VARCHAR DEFAULT ''"),
+        ("project_cli_high_fallback_backend", "VARCHAR DEFAULT ''"),
+        ("project_cli_high_fallback_model", "VARCHAR DEFAULT ''"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for col, col_def in _cli_fallback_columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} {col_def}"))
+                    conn.commit()
+                    logger.info(f"Added {col} column to settings table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.debug(f"Could not add {col} to settings: {e}")
+    except Exception as e:
+        logger.debug(f"CLI fallback settings migration: {e}")
+
     # Add color column to kanban_boards table
     try:
         with engine.connect() as conn:

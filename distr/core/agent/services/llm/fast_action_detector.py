@@ -907,8 +907,9 @@ class FastActionDetector:
             # This is a cursor ticket command - skip conversational/context checks and go straight to pattern matching
             logger.debug(f"FastActionDetector: Detected 'tell cursor' command, skipping conversational/context checks")
         elif screenshot_direct_pattern.search(text):
-            # Direct screenshot request - skip conversational checks and go straight to pattern matching
+            # Direct screenshot request — execute immediately even when extra context follows.
             logger.info(f"FastActionDetector: Detected DIRECT screenshot command: '{text}'")
+            return self._screenshot_fast_action(text)
         elif screenshot_analysis_pattern.search(text):
             # This is a screenshot analysis command - skip conversational/context checks and go straight to pattern matching
             logger.debug(f"FastActionDetector: Detected screenshot analysis command, skipping conversational/context checks")
@@ -1172,6 +1173,24 @@ class FastActionDetector:
             original_text=text
         )
     
+    def _screenshot_fast_action(self, text: str) -> DetectedAction:
+        """Route obvious screenshot requests straight to screenshot_analyzer."""
+        direct_send = bool(
+            re.search(r"\b(give|send|show)\s+(me\s+)?a?\s*screenshot\b", text, re.IGNORECASE)
+        )
+        tool_args = {"prompt": text, "region": "all"}
+        if direct_send:
+            tool_args["direct_send"] = True
+        return DetectedAction(
+            action_type=ActionType.SCREENSHOT_ANALYZE,
+            tool_name="screenshot_analyzer",
+            tool_args=tool_args,
+            needs_copy_first=False,
+            response_type="done" if direct_send else "llm_response",
+            confidence=0.95,
+            original_text=text,
+        )
+
     def _is_compound_with_conversation(self, text_lower: str) -> bool:
         """Detect compound sentences that mix conversational questions with action commands.
         

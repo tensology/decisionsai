@@ -1,6 +1,19 @@
 from distr.core.agent.tool_intents import forced_tool_names_for_text
 
 
+def test_screenshot_intent_forces_screenshot_analyzer() -> None:
+    assert "screenshot_analyzer" in forced_tool_names_for_text(
+        "I'm trying to delete projects. Take a screenshot and assist me."
+    )
+    assert "screenshot_analyzer" in forced_tool_names_for_text("what do you see on screen")
+
+
+def test_gmail_attachment_intent_forces_google_workspace() -> None:
+    assert "google_workspace" in forced_tool_names_for_text(
+        "Get Julie's Gmail attachment and put it in my downloads folder."
+    )
+
+
 def test_forces_clipboard_for_read_and_write_requests():
     assert "clipboard_action" in forced_tool_names_for_text("read my clipboard")
     assert "clipboard_action" in forced_tool_names_for_text("read the clipboard and let's talk about it")

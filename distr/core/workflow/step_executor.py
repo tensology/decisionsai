@@ -360,6 +360,15 @@ class StepExecutorMixin:
         if not instruction:
             return {"output": "No instruction provided for Send to Project CLI", "passed": False}
 
+        if run_id is not None:
+            try:
+                instruction = self._build_agent_prompt(step_data, run_id)
+            except Exception as exc:
+                logger.warning(
+                    "_run_send_to_project_cli: enriched handoff prompt failed, using raw instruction: %s",
+                    exc,
+                )
+
         step_project_id = step_data.get("linked_project_id")
         project_id = None
         project_folder = None
@@ -391,21 +400,6 @@ class StepExecutorMixin:
                     if run_obj and run_obj.run_data:
                         try:
                             run_data = json.loads(run_obj.run_data or "{}")
-                            packet_context = summarize_packet_for_step_context(
-                                run_data.get("result_packet") or {},
-                            )
-                            if packet_context:
-                                instruction = f"{packet_context}\n\n{instruction}"
-                            workflow_brief = run_data.get("ticket_workflow_brief")
-                            if workflow_brief:
-                                try:
-                                    from distr.core.kanban.ticket_workflow_brief import render_ticket_workflow_brief
-
-                                    brief_text = render_ticket_workflow_brief(workflow_brief)
-                                except Exception:
-                                    brief_text = json.dumps(workflow_brief, indent=2, default=str)
-                                if brief_text:
-                                    instruction = f"{brief_text}\n\n{instruction}"
                             if run_data.get("ticket_id") is not None:
                                 instruction = instruction.replace("{{ticket_id}}", str(run_data.get("ticket_id")))
                             if run_data.get("project_id") is not None:
@@ -443,9 +437,11 @@ class StepExecutorMixin:
 
         if not project_id or not project_folder:
             return {
-                "output": "Bypassed: no linked project context available for Send to Project CLI.",
-                "passed": True,
-                "skip_wait": True,
+                "output": (
+                    "No linked project for this ticket. "
+                    "Link the ticket to a project with a folder on the board, then run again."
+                ),
+                "passed": False,
             }
 
         try:

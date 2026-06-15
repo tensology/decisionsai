@@ -58,3 +58,33 @@ def test_complexity_route_maps_legacy_default_to_policy_backend(monkeypatch):
 
     assert resolve_ticket_cli_route(project, "low")["backend"] == "cursor"
     assert resolve_ticket_cli_route(project, "medium")["backend"] == "codex"
+
+
+def test_complexity_route_uses_configured_ide_fallback(monkeypatch):
+    class Backend:
+        def __init__(self, backend_id):
+            self.backend_id = backend_id
+
+        def setup_status(self):
+            ready = self.backend_id != "cursor_ide"
+            return type("Status", (), {"ready": ready})()
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.get_backend",
+        lambda backend_id: Backend(backend_id),
+    )
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {
+            "project_cli_low_backend": "cursor_ide",
+            "project_cli_low_model": "",
+            "project_cli_low_fallback_backend": "cursor",
+            "project_cli_low_fallback_model": "composer-2.5",
+        },
+    )
+    project = type("Project", (), {"coding_backend": "pi", "coding_backend_model": ""})()
+
+    route = resolve_ticket_cli_route(project, "low")
+
+    assert route["backend"] == "cursor"
+    assert route["model"] == "composer-2.5"

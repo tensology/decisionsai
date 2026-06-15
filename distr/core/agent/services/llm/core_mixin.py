@@ -271,6 +271,61 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     )
                     return (True, msg, True)
 
+            # Screen capture / vision: fuzzy match often misses ScreenshotAnalyzerTool.
+            screenshot_routing_tokens = (
+                "screenshot",
+                "screen capture",
+                "screen shot",
+                "screen interaction",
+                "capture screen",
+                "see my screen",
+                "what do you see",
+                "look at my screen",
+                "see what i'm looking",
+                "see what i am looking",
+            )
+            wants_screenshot_tool = any(token in qlow for token in screenshot_routing_tokens) or (
+                "screen" in qlow
+                and any(word in qlow for word in ("click", "see", "look", "capture", "shot", "assist"))
+            )
+            if wants_screenshot_tool:
+                sa_tool = self._tools_dict.get("screenshot_analyzer")
+                if sa_tool is not None:
+                    msg = (
+                        "For screenshots and on-screen vision tasks, use 'screenshot_analyzer' directly. "
+                        "It is already available in your active set."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="screenshot_analyzer",
+                        model_name=_mn,
+                        injection_performed=False,
+                        message=msg,
+                    )
+                    return (True, msg, False)
+
+                cached_sa_tool = _tool_cache.get("screenshot_analyzer")
+                if cached_sa_tool is not None:
+                    self._tools.append(cached_sa_tool)
+                    self._tools_dict[cached_sa_tool.name] = cached_sa_tool
+                    if not hasattr(self, "_sticky_tool_names"):
+                        self._sticky_tool_names = set()
+                    self._sticky_tool_names.add(cached_sa_tool.name)
+                    msg = (
+                        "Tool 'screenshot_analyzer' is now available. "
+                        "Call it to capture and analyze the screen."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="screenshot_analyzer",
+                        model_name=_mn,
+                        injection_performed=True,
+                        message=msg,
+                    )
+                    return (True, msg, True)
+
             # Workflow questions: models often call request_tool with vague text instead of get_workflow.
             wf_topic = "workflow" in qlow or "automation" in qlow
             wf_detail = any(
@@ -339,6 +394,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     or "recurring" in qlow
                 ):
                     best = min(100, best + 24)
+                if class_name == "ScreenshotAnalyzerTool" and wants_screenshot_tool:
+                    best = min(100, best + 30)
                 scores.append((class_name, best))
 
             scores.sort(key=lambda x: x[1], reverse=True)

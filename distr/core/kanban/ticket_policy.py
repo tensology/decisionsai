@@ -92,6 +92,11 @@ def _global_complexity_route(level: str) -> dict[str, str]:
     if is_ide_backend(backend):
         model = ""
     route: dict[str, str] = {"backend": backend, "model": model}
+    fallback_backend = normalize_backend_id(settings.get(f"project_cli_{level}_fallback_backend") or "")
+    fallback_model = (settings.get(f"project_cli_{level}_fallback_model") or "").strip()
+    if fallback_backend and not is_ide_backend(fallback_backend):
+        route["fallback_backend"] = fallback_backend
+        route["fallback_model"] = fallback_model or "auto"
     if backend == "codex":
         route["codex_reasoning_effort"] = normalize_codex_intelligence(
             settings.get(f"project_cli_{level}_codex_intelligence")
@@ -100,6 +105,37 @@ def _global_complexity_route(level: str) -> dict[str, str]:
             settings.get(f"project_cli_{level}_codex_speed")
         )
     return route
+
+
+def _apply_configured_fallback(route: dict[str, str], level: str) -> dict[str, str]:
+    """Use the user-configured CLI fallback when the primary backend is unavailable."""
+    from distr.core.project_cli_backends import get_backend, normalize_backend_id
+
+    fallback_backend = normalize_backend_id(route.get("fallback_backend") or "")
+    if not fallback_backend:
+        fallback = DEFAULT_COMPLEXITY_ROUTES[level]
+        fallback_backend = normalize_backend_id(fallback.get("backend") or "pi")
+        fallback_model = str(fallback.get("model") or "auto").strip()
+    else:
+        fallback_model = str(route.get("fallback_model") or "auto").strip()
+    try:
+        if get_backend(fallback_backend).setup_status().ready:
+            out = {
+                "complexity": level,
+                "backend": fallback_backend,
+                "model": fallback_model,
+            }
+            if fallback_backend == "codex":
+                out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
+                out["codex_service_tier"] = route.get("codex_service_tier", "")
+            return out
+    except Exception:
+        pass
+    return {
+        "complexity": level,
+        "backend": "pi",
+        "model": "",
+    }
 
 
 def resolve_ticket_cli_route(
@@ -144,15 +180,9 @@ def resolve_ticket_cli_route(
     model = route["model"]
     try:
         if not get_backend(backend).setup_status().ready:
-            fallback = DEFAULT_COMPLEXITY_ROUTES[level]
-            backend = fallback["backend"]
-            model = fallback["model"]
-            if not get_backend(backend).setup_status().ready:
-                backend = "pi"
-                model = ""
+            return _apply_configured_fallback({**route, "complexity": level}, level)
     except Exception:
-        backend = "pi"
-        model = ""
+        return _apply_configured_fallback({**route, "complexity": level}, level)
     out: dict[str, str] = {"complexity": level, "backend": backend, "model": model}
     if backend == "codex":
         out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
