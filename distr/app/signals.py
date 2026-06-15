@@ -528,6 +528,10 @@ class SignalBridgeMixin:
                 }
                 if opts.get('skip_user_persist'):
                     params['skip_user_persist'] = True
+                if opts.get('automation_run_id') is not None:
+                    params['automation_run_id'] = int(opts['automation_run_id'])
+                if opts.get('automation_name'):
+                    params['automation_name'] = str(opts['automation_name'])
                 # Pass speak_bool directly into process_text_input so process_chat_input applies it
                 # as a per-request override — no separate set_speaker_enabled needed, and no second
                 # current_chat_changed that would create a new LLM service after set_speaker_enabled ran.

@@ -1707,8 +1707,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     ):
                         cleaned = clean_text_for_tts(display_result)
                         if cleaned:
-                            from distr.core.agent.libs import LLMFullResponseStartFrame
-                            await self.push_frame(LLMFullResponseStartFrame(), direction)
                             await self.push_frame(TextFrame(text=cleaned))
                 except Exception as e:
                     logger.error("Error running fast tool %s: %s", tool.name, e, exc_info=True)

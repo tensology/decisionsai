@@ -211,6 +211,51 @@ def _bound_tool_name(automation: dict[str, Any]) -> str:
     return str(action_config.get("tool") or "").strip()
 
 
+def _automation_already_running(automation: dict[str, Any]) -> bool:
+    from distr.core.automation_subagent import _workflow_id_from_automation, workflow_run_in_progress
+
+    workflow_id = _workflow_id_from_automation(automation)
+    return workflow_id is not None and workflow_run_in_progress(workflow_id)
+
+
+def _skip_duplicate_running_response(
+    automation: dict[str, Any],
+    *,
+    manual: bool,
+    chat_id: int | None,
+    schedule_metadata: dict[str, Any] | None,
+    execution_mode: str,
+    emit_event: Callable[..., int | None],
+) -> dict[str, Any]:
+    summary = "Automation is already running."
+    workflow_run_id = _record_dispatch_run(
+        automation=automation,
+        status="skipped",
+        summary=summary,
+        event_ids=[],
+        manual=manual,
+        prompt="",
+        chat_id=chat_id,
+        schedule_metadata=schedule_metadata,
+        execution_mode=execution_mode,
+    )
+    emit_event(
+        automation=automation,
+        event_type="worker_skipped",
+        status="skipped",
+        summary=summary,
+        payload={"skip_reason": "already_running", "workflow_run_id": workflow_run_id, "manual": manual},
+    )
+    return {
+        "status": "skipped",
+        "summary": summary,
+        "workflow_run_id": workflow_run_id,
+        "event_ids": [],
+        "chat_id": chat_id,
+        "skip_reason": "already_running",
+    }
+
+
 def _dispatch_tool_bound_automation(
     automation: dict[str, Any],
     *,
@@ -220,12 +265,8 @@ def _dispatch_tool_bound_automation(
     speak: bool,
     emit_event: Callable[..., int | None],
 ) -> dict[str, Any]:
-    from distr.core.automation_tool_runner import run_automation_tool
+    from distr.core.automation_subagent import start_automation_subagent
     from distr.core.engagement_gates import proactive_delivery_blocked
-
-    action_config = automation.get("action_config") if isinstance(automation.get("action_config"), dict) else {}
-    tool_name = str(action_config.get("tool") or "").strip()
-    tool_args = action_config.get("args") if isinstance(action_config.get("args"), dict) else {}
 
     blocked, reason = proactive_delivery_blocked(
         delivery_kind="automation_tool",
@@ -247,7 +288,7 @@ def _dispatch_tool_bound_automation(
             prompt="",
             chat_id=chat_id,
             schedule_metadata=schedule_metadata,
-            execution_mode="tool_direct",
+            execution_mode="automation_subagent_tool",
         )
         emit_event(
             automation=automation,
@@ -265,6 +306,16 @@ def _dispatch_tool_bound_automation(
             "skip_reason": reason,
         }
 
+    if _automation_already_running(automation):
+        return _skip_duplicate_running_response(
+            automation,
+            manual=manual,
+            chat_id=chat_id,
+            schedule_metadata=schedule_metadata,
+            execution_mode="automation_subagent_tool",
+            emit_event=emit_event,
+        )
+
     event_ids: list[int] = []
     started_event_id = emit_event(
         automation=automation,
@@ -272,8 +323,7 @@ def _dispatch_tool_bound_automation(
         status="running",
         summary=f"Automation started: {automation.get('name') or 'Untitled Automation'}",
         payload={
-            "tool": tool_name,
-            "tool_args": tool_args,
+            "tool": _bound_tool_name(automation),
             "manual": bool(manual),
             **(schedule_metadata or {}),
         },
@@ -281,56 +331,48 @@ def _dispatch_tool_bound_automation(
     if started_event_id is not None:
         event_ids.append(started_event_id)
 
-    tool_result = run_automation_tool(tool_name, tool_args)
-    output = str(tool_result.get("output") or "").strip()
-    spoken = str(tool_result.get("spoken_summary") or output).strip()
-    success = bool(tool_result.get("success"))
-    status = "completed" if success else "failed"
-    summary = spoken or output or ("Tool run finished." if success else "Tool run failed.")
-
     target_chat_id = chat_id or resolve_current_agent_chat_id()
-    chat_body = f"[Automation — {automation.get('name') or 'Untitled Automation'}]\n\n{output or summary}"
-    if target_chat_id:
-        try:
-            emit_to_agent_chat(int(target_chat_id), chat_body, bool(speak), skip_user_persist=True)
-        except Exception as exc:
-            logger.debug("Automation tool chat delivery failed", exc_info=True)
-            if success:
-                status = "completed"
-                summary = f"{summary} (chat delivery failed: {exc})"
-
     workflow_run_id = _record_dispatch_run(
         automation=automation,
-        status=status,
-        summary=summary,
+        status="running",
+        summary="Automation subagent started.",
         event_ids=event_ids,
         manual=manual,
-        prompt=chat_body,
+        prompt="",
         chat_id=target_chat_id,
         schedule_metadata=schedule_metadata,
-        execution_mode="tool_direct",
-        tool_result=tool_result,
+        execution_mode="automation_subagent_tool",
     )
 
-    finished_event_id = emit_event(
+    dispatched_event_id = emit_event(
         automation=automation,
-        event_type="worker_completed" if success else "worker_failed",
-        status=status,
-        summary=summary,
+        event_type="worker_dispatched",
+        status="running",
+        summary="Automation subagent started.",
         payload={
-            "tool": tool_name,
             "workflow_run_id": workflow_run_id,
             "chat_id": target_chat_id,
             "manual": bool(manual),
             **(schedule_metadata or {}),
         },
     )
-    if finished_event_id is not None:
-        event_ids.append(finished_event_id)
+    if dispatched_event_id is not None:
+        event_ids.append(dispatched_event_id)
+
+    if workflow_run_id:
+        start_automation_subagent(
+            automation=automation,
+            run_id=int(workflow_run_id),
+            manual=manual,
+            chat_id=target_chat_id,
+            speak=speak,
+            schedule_metadata=schedule_metadata,
+            emit_event=emit_event,
+        )
 
     return {
-        "status": status,
-        "summary": summary,
+        "status": "running",
+        "summary": "Automation subagent started.",
         "workflow_run_id": workflow_run_id,
         "event_ids": event_ids,
         "chat_id": target_chat_id,
@@ -368,6 +410,16 @@ def dispatch_automation_to_current_chat(
             emit_event=event_fn,
         )
 
+    if _automation_already_running(automation):
+        return _skip_duplicate_running_response(
+            automation,
+            manual=manual,
+            chat_id=chat_id,
+            schedule_metadata=schedule_metadata,
+            execution_mode="automation_subagent_instruction",
+            emit_event=event_fn,
+        )
+
     event_ids: list[int] = []
     started_event_id = event_fn(
         automation=automation,
@@ -385,40 +437,47 @@ def dispatch_automation_to_current_chat(
 
     prompt = augment_bulk_instruction(automation_prompt(automation), source="automation")
     target_chat_id = chat_id or resolve_current_agent_chat_id()
-    status = "dispatched"
-    summary = "Automation instruction sent to the orchestrator."
+    status = "running"
+    summary = "Automation subagent started."
 
     if not target_chat_id:
         status = "failed"
         summary = "Automation needs an active agent chat before it can run."
-    elif emit_signal:
-        try:
-            emit_to_agent_chat(
-                int(target_chat_id),
-                prompt,
-                bool(speak),
-                skip_user_persist=True,
-            )
-        except Exception as exc:
-            logger.debug("Automation chat dispatch failed", exc_info=True)
-            status = "failed"
-            summary = f"Automation could not reach the orchestrator: {exc}"
+        workflow_run_id = _record_dispatch_run(
+            automation=automation,
+            status=status,
+            summary=summary,
+            event_ids=event_ids,
+            manual=manual,
+            prompt=prompt,
+            chat_id=target_chat_id,
+            schedule_metadata=schedule_metadata,
+            execution_mode="automation_subagent_instruction",
+        )
+        return {
+            "status": status,
+            "summary": summary,
+            "workflow_run_id": workflow_run_id,
+            "event_ids": event_ids,
+            "chat_id": target_chat_id,
+        }
 
     workflow_run_id = _record_dispatch_run(
         automation=automation,
-        status=status,
+        status="running",
         summary=summary,
         event_ids=event_ids,
         manual=manual,
         prompt=prompt,
         chat_id=target_chat_id,
         schedule_metadata=schedule_metadata,
+        execution_mode="automation_subagent_instruction",
     )
 
     dispatched_event_id = event_fn(
         automation=automation,
-        event_type="worker_dispatched" if status == "dispatched" else "worker_failed",
-        status=status,
+        event_type="worker_dispatched",
+        status="running",
         summary=summary,
         payload={
             "instruction": instruction,
@@ -430,6 +489,19 @@ def dispatch_automation_to_current_chat(
     )
     if dispatched_event_id is not None:
         event_ids.append(dispatched_event_id)
+
+    if workflow_run_id and emit_signal:
+        from distr.core.automation_subagent import start_automation_subagent
+
+        start_automation_subagent(
+            automation=automation,
+            run_id=int(workflow_run_id),
+            manual=manual,
+            chat_id=target_chat_id,
+            speak=speak,
+            schedule_metadata=schedule_metadata,
+            emit_event=event_fn,
+        )
 
     if workflow_run_id:
         try:

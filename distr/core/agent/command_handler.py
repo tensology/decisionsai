@@ -721,6 +721,19 @@ def _cmd_process_text_input(session, params):
             )
 
             async def _run_and_restore():
+                automation_run_id = (
+                    int(params.get('automation_run_id'))
+                    if isinstance(params, dict) and params.get('automation_run_id') is not None
+                    else None
+                )
+                automation_name = (
+                    str(params.get('automation_name') or 'Automation')
+                    if isinstance(params, dict) and params.get('automation_name')
+                    else 'Automation'
+                )
+                if automation_run_id is not None:
+                    _llm._automation_subagent_run_id = automation_run_id
+                    _llm._automation_subagent_name = automation_name
                 try:
                     await _llm.process_chat_input(
                         text,
@@ -739,6 +752,23 @@ def _cmd_process_text_input(session, params):
                             "process_text_input: restored _speaker_enabled=%s after speak=%s request",
                             _prev, speaker_override,
                         )
+                    if automation_run_id is not None and getattr(_llm, '_automation_subagent_run_id', None):
+                        try:
+                            from distr.core.automation_subagent import finalize_automation_subagent_from_agent
+
+                            finalize_automation_subagent_from_agent(
+                                int(automation_run_id),
+                                automation_name=automation_name,
+                                success=False,
+                                summary="Automation was interrupted before completion.",
+                            )
+                        except Exception:
+                            session.logger.debug(
+                                "process_text_input: automation finalize after interrupt failed",
+                                exc_info=True,
+                            )
+                        _llm._automation_subagent_run_id = None
+                        _llm._automation_subagent_name = None
 
             asyncio.run_coroutine_threadsafe(_run_and_restore(), _loop)
         else:

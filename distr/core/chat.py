@@ -374,6 +374,9 @@ class ChatService:
         if not title and starting_question:
             title = _title_from_question(starting_question)
         title = (title or "").strip() or "New Chat"
+        from distr.core.db.time import utc_now_naive
+
+        now = utc_now_naive()
         with get_session() as session:
             root = Chat(
                 parent_id=None,
@@ -384,8 +387,8 @@ class ChatService:
                 model_name=model_name,
                 voice_provider=voice_provider,
                 voice_model=voice_model,
-                created_date=datetime.now(timezone.utc),
-                modified_date=datetime.now(timezone.utc),
+                created_date=now,
+                modified_date=now,
             )
             session.add(root)
             session.commit()
@@ -401,8 +404,8 @@ class ChatService:
                     model_name=model_name,
                     voice_provider=voice_provider,
                     voice_model=voice_model,
-                    created_date=datetime.now(timezone.utc),
-                    modified_date=datetime.now(timezone.utc),
+                    created_date=now,
+                    modified_date=now,
                 )
                 session.add(child)
                 session.commit()

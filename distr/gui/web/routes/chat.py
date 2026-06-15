@@ -731,7 +731,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         Chat.is_archived == False,
                         Chat.is_hidden == False,
                     )
-                    .order_by(Chat.modified_date.desc())
+                    .order_by(Chat.created_date.desc(), Chat.id.desc())
                     .all()
                 )
 

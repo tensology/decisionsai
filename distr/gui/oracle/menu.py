@@ -80,7 +80,7 @@ def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
                 Chat.is_archived.is_(False),
                 Chat.is_hidden.is_(False),
             )
-            .order_by(Chat.modified_date.desc())
+            .order_by(Chat.created_date.desc(), Chat.id.desc())
             .limit(limit)
             .all()
         )

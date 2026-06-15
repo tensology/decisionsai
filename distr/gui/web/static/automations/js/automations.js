@@ -1501,7 +1501,7 @@
         }
         apiFetch("/api/automations/" + encodeURIComponent(id) + "/run", { method: "POST" })
             .then(function(data) {
-                showSnackbar("Automation run recorded", "success");
+                showSnackbar("Automation started in the background", "success");
                 setActiveTab("history");
                 renderRuns(data && data.run ? [data.run] : []);
                 return loadAutomations(true).then(function() {

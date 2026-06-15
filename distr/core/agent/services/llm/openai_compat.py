@@ -252,6 +252,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             system = messages[0] if messages and messages[0].get('role') == 'system' else None
             recent = messages[-34:] if system else messages[-35:]
             messages = ([system] + recent) if system else recent
+            self._messages = list(messages)
         return self._validate_messages(messages)
 
     def _apply_response_style_overrides(self, messages: list) -> list:
@@ -1001,6 +1002,18 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         generic_ack = brief_tool_completion_message(last_tool_name)
 
+        # Fast-action screenshot already saved/spoke a user-facing reply — do not
+        # append a second assistant line or replay TTS from the raw tool payload.
+        if last_tool_name == "screenshot_analyzer":
+            for msg in reversed(self._messages):
+                role = msg.get("role")
+                if role == "assistant" and (msg.get("content") or "").strip():
+                    await self.push_frame(LLMFullResponseStartFrame())
+                    await self.push_frame(LLMFullResponseEndFrame())
+                    return True
+                if role == "tool":
+                    break
+
         if getattr(self, '_is_telegram_request', False):
             # For Telegram, include the tool result as context
             fallback = tool_result_text or generic_ack
@@ -1074,6 +1087,27 @@ class OpenAICompatibleLLMService(BaseLLMService):
     def _cleanup_generation(self, end_frame_sent, full_content="", follow_up_content=""):
         """Cleanup telegram flags, emit typing finished. Returns True if EndFrame needed."""
         self._cleanup_telegram_flags()
+
+        automation_run_id = getattr(self, '_automation_subagent_run_id', None)
+        if automation_run_id is not None:
+            try:
+                from distr.core.automation_subagent import finalize_automation_subagent_from_agent
+                from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
+
+                automation_name = getattr(self, '_automation_subagent_name', None) or 'Automation'
+                result_text = clean_model_text_for_chat(follow_up_content or full_content or "")
+                finalize_automation_subagent_from_agent(
+                    int(automation_run_id),
+                    automation_name=automation_name,
+                    success=bool((result_text or '').strip()),
+                    summary=(result_text or '').strip() or 'Automation finished with no reply.',
+                    speech_text=(result_text or '').strip(),
+                )
+            except Exception as exc:
+                logger.debug("Automation subagent finalize failed: %s", exc, exc_info=True)
+            finally:
+                self._automation_subagent_run_id = None
+                self._automation_subagent_name = None
 
         # Don't turn off typing indicator if a background chain is still running
         bg_running = hasattr(self, '_background_chain') and self._background_chain and (

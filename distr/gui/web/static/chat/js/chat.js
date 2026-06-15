@@ -983,11 +983,14 @@ function compareMessageInsertOrder(message, node) {
 }
 
 function compareMessageOrder(a, b) {
+    const rowA = a && a.chat_row_id != null ? Number(a.chat_row_id) : null;
+    const rowB = b && b.chat_row_id != null ? Number(b.chat_row_id) : null;
+    const turnA = a && a.turn_chat_id != null ? Number(a.turn_chat_id) : rowA;
+    const turnB = b && b.turn_chat_id != null ? Number(b.turn_chat_id) : rowB;
+    if (turnA != null && turnB != null && turnA !== turnB) return turnA - turnB;
     const tsA = messageTimestampMs(a);
     const tsB = messageTimestampMs(b);
     if (tsA !== tsB) return tsA - tsB;
-    const rowA = a && a.chat_row_id != null ? Number(a.chat_row_id) : null;
-    const rowB = b && b.chat_row_id != null ? Number(b.chat_row_id) : null;
     if (rowA != null && rowB != null && rowA !== rowB) return rowA - rowB;
     return messageRoleRank(a && a.role) - messageRoleRank(b && b.role);
 }
@@ -1062,6 +1065,7 @@ function handleChatEventMessageAdded(msg) {
         _discardLiveTranscriptionUi();
         const div = createMessageElement({ role, content, timestamp: msg.timestamp });
         insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
+        _optimisticUserMessages.add(key);
         repairOrphanAssistantBeforeUser();
         scrollToBottom();
         scheduleRefreshChatHeaderStats();
@@ -1082,6 +1086,9 @@ function handleChatEventMessageAdded(msg) {
     }
     if (role === 'assistant') {
         const plainA = _normalizeMsgPlain(content);
+        if (plainA && hasRenderedMessagePlain('assistant', plainA)) {
+            return;
+        }
         if (plainA && _lastStreamFinalizedPlain && plainA === _lastStreamFinalizedPlain) {
             return;
         }
@@ -1158,7 +1165,14 @@ function mergeChatUpdatedDuringStream(messages) {
 
 function handleChatEventStreamStarted(msg) {
     if (msg.chat_id !== currentChatId) return;
-    promoteTranscriptionPreviewToUserMessage();
+    const preview = document.getElementById('transcriptionStatus');
+    const previewTextEl = preview ? preview.querySelector('#transcriptionStatusText') : null;
+    const previewPlain = _normalizeMsgPlain(previewTextEl ? previewTextEl.textContent : '');
+    if (!previewPlain || !hasRenderedMessagePlain('user', previewPlain)) {
+        promoteTranscriptionPreviewToUserMessage();
+    } else {
+        _discardLiveTranscriptionUi();
+    }
     streamingChatId = msg.chat_id;
     _streamTextBuffer = '';
     _streamRafPending = false;
@@ -1956,6 +1970,12 @@ async function createNewChat() {
 async function selectChat(chatId) {
     const seq = ++_selectSeq;
     currentChatId = chatId;
+    removeTypingIndicator();
+    const staleStream = document.getElementById('streamingAssistantMessage');
+    if (staleStream) staleStream.remove();
+    const staleActivity = document.getElementById('streamingAssistantActivity');
+    if (staleActivity) staleActivity.remove();
+    _renderedMessageCount = 0;
     updateActiveChat();
     try {
         const response = await fetch(`${API_BASE}/chats/${chatId}`);
@@ -1996,6 +2016,12 @@ async function loadChat(chatId, options = {}) {
     _lastStreamFinalizedPlain = null;
     isStreaming = false;
     setSendButtonStreaming(false);
+    removeTypingIndicator();
+    const staleStream = document.getElementById('streamingAssistantMessage');
+    if (staleStream) staleStream.remove();
+    const staleActivity = document.getElementById('streamingAssistantActivity');
+    if (staleActivity) staleActivity.remove();
+    _renderedMessageCount = 0;
     updateActiveChat();
     // Close TTS player when switching chats — agent TTS is interrupted server-side, player should clear too
     if (ttsPlayerCard) { ttsPlayerCard.style.display = 'none'; }
@@ -2685,6 +2711,14 @@ function normalizeTraceMessages(messages) {
     return sortMessagesForDisplay([...grouped, ...looseGroups]);
 }
 
+function messagesAreChronological(messages) {
+    if (!Array.isArray(messages) || messages.length < 2) return true;
+    for (let i = 1; i < messages.length; i++) {
+        if (compareMessageOrder(messages[i], messages[i - 1]) < 0) return false;
+    }
+    return true;
+}
+
 function renderMessages(messages, preserveOnEmpty) {
     const preserveLiveUi = Boolean(isStreaming || document.getElementById('typingIndicator') || document.getElementById('streamingAssistantMessage'));
     if (!preserveLiveUi) {
@@ -2710,10 +2744,8 @@ function renderMessages(messages, preserveOnEmpty) {
     }
     // Incremental render: only append new messages instead of wiping the whole DOM.
     // When messages.length < _renderedMessageCount, the chat was reloaded (e.g. switching chats),
-    // so we do a full rebuild. Also rebuild if order regressed (late-arriving user rows).
-    const previousMessage = _renderedMessageCount > 0 ? messages[_renderedMessageCount - 1] : null;
-    const nextMessage = messages.length > _renderedMessageCount ? messages[_renderedMessageCount] : null;
-    const orderRegressed = previousMessage && nextMessage && compareMessageOrder(nextMessage, previousMessage) < 0;
+    // so we do a full rebuild. Also rebuild if the list is out of chronological order.
+    const orderRegressed = !messagesAreChronological(messages);
     if (messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10 && !orderRegressed) {
         // Fast path: append only new messages, skipping ones already rendered optimistically
         for (let i = _renderedMessageCount; i < messages.length; i++) {

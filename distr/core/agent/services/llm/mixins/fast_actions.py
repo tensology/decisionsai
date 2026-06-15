@@ -126,12 +126,123 @@ class FastActionMixin:
                 self.chat_manager.add_assistant_message(chat_id, text)
                 if emit_signals:
                     try:
+                        # Fast paths speak via _fa_push_tts without stream_started — emit the
+                        # assistant bubble directly so the web UI does not refetch on a bare
+                        # stream_finished (which duplicated rows and replayed TTS context).
+                        signal_manager.chat_message_added.emit(int(chat_id), "assistant", text)
                         signal_manager.chat_stream_finished.emit(chat_id)
                         signal_manager.typing_indicator_changed.emit(False)
                     except RuntimeError:
                         pass
             except Exception as e:
                 logger.warning("LLM: Could not save fast action response: %s", e)
+
+    @staticmethod
+    def _fa_screenshot_response_text(result_str: str) -> str:
+        """Short voice/chat reply from screenshot_analyzer output."""
+        raw = (result_str or "").strip()
+        if not raw:
+            return "I couldn't complete that screen action just now."
+
+        if raw.startswith("Error:"):
+            return raw.replace("Error: ", "").strip()[:300]
+
+        # Drop machine directives — not for the user.
+        lines = [
+            ln.strip()
+            for ln in raw.splitlines()
+            if ln.strip() and not ln.strip().startswith("[ACTION REQUIRED")
+        ]
+        body = "\n".join(lines).strip() or raw
+
+        if "TARGET NOT FOUND:" in body:
+            summary = body.split("TARGET NOT FOUND:", 1)[1].split("\n")[0].strip()
+            if summary:
+                return f"I couldn't find that on screen. {summary}"[:300]
+            return "I couldn't find that on screen. Try bringing it into view and ask again."[:300]
+
+        if "TARGET AMBIGUOUS:" in body:
+            line = body.split("\n")[0].replace("TARGET AMBIGUOUS:", "").strip()
+            return (line or "I found a possible match but couldn't click it safely.")[:300]
+
+        lowered = body.lower()
+        if any(tok in lowered for tok in ("failed", "could not", "couldn't", "unable to", "not visible")):
+            first = body.split("\n")[0].strip()
+            return first[:300] if first else "I couldn't complete that screen action just now."
+
+        first_line = body.split("\n")[0].strip()
+        if first_line and len(first_line) <= 160:
+            return first_line
+        return brief_tool_completion_message("screenshot_analyzer")
+
+    @staticmethod
+    def _fa_is_screenshot_pointer_request(original_text: str) -> bool:
+        text = (original_text or "").strip().lower()
+        if not text:
+            return False
+        return bool(
+            re.search(
+                r"\b(move|put|hover|click|double[- ]?click|right[- ]?click|tap|press|drag)\b",
+                text,
+            )
+        )
+
+    @staticmethod
+    def _fa_is_screenshot_describe_request(original_text: str) -> bool:
+        text = (original_text or "").strip().lower()
+        if not text:
+            return False
+        return bool(
+            re.search(
+                r"\b(what|describe|read|tell me|show me|look at|analyze|analyse|identify|explain)\b",
+                text,
+            )
+        )
+
+    async def _fa_handle_screenshot_analyzer(self, fast_action, chat_id, result, tool) -> bool:
+        """Handle screenshot fast actions without a second LLM pass (duplicate chat + TTS)."""
+        result_str = str(result or "").strip()
+        original = getattr(fast_action, "original_text", None) or ""
+        pointer_request = self._fa_is_screenshot_pointer_request(original)
+        describe_request = self._fa_is_screenshot_describe_request(original)
+
+        hard_error = result_str.startswith("Error:")
+        failure_like = any(
+            marker in result_str
+            for marker in ("TARGET NOT FOUND:", "TARGET AMBIGUOUS:")
+        ) or (
+            pointer_request
+            and any(
+                tok in result_str.lower()
+                for tok in ("failed", "could not", "couldn't", "unable to", "not visible", "ui scan")
+            )
+        )
+
+        if hard_error or failure_like or (pointer_request and not describe_request):
+            response_text = self._fa_screenshot_response_text(result_str)
+            if not self._cancelled:
+                await self._fa_push_tts(response_text)
+            self._fa_save_to_history(chat_id, response_text, emit_signals=True)
+            self._messages.append({"role": "assistant", "content": response_text})
+            return True
+
+        if describe_request:
+            self._messages.append({
+                "role": "tool",
+                "content": result_str or "Tool executed successfully.",
+                "name": fast_action.tool_name,
+            })
+            if not self._cancelled:
+                await self._generate_response()
+            return True
+
+        # Non-pointer capture-only / short operational result.
+        response_text = self._fa_screenshot_response_text(result_str)
+        if not self._cancelled:
+            await self._fa_push_tts(response_text)
+        self._fa_save_to_history(chat_id, response_text, emit_signals=True)
+        self._messages.append({"role": "assistant", "content": response_text})
+        return True
 
     def _fa_record_read_aloud_activity(
         self,
@@ -326,14 +437,8 @@ class FastActionMixin:
         if fast_action.tool_name == 'clipboard_action' and result and "Processing" in str(result):
             return True
 
-        # screenshot_analyzer error → speak directly
-        if fast_action.tool_name == 'screenshot_analyzer' and result and isinstance(result, str) and str(result).startswith("Error:"):
-            error_msg = str(result).replace("Error: ", "").strip()
-            if not self._cancelled:
-                await self._fa_push_tts(error_msg)
-            self._fa_save_to_history(chat_id, error_msg, emit_signals=True)
-            self._messages.append({"role": "assistant", "content": error_msg})
-            return True
+        if fast_action.tool_name == "screenshot_analyzer":
+            return await self._fa_handle_screenshot_analyzer(fast_action, chat_id, result, tool)
 
         # web_search → use result directly
         if fast_action.tool_name == 'web_search' and result:

@@ -135,20 +135,32 @@ def test_tool_bound_automation_dispatches_directly(tmp_path, monkeypatch):
         lambda settings=None: 42,
     )
     monkeypatch.setattr(
-        "distr.core.automation_orchestrator.emit_to_agent_chat",
-        lambda *args, **kwargs: emitted.append((args, kwargs)),
+        "distr.core.automation_subagent._speak_orchestrator",
+        lambda text: emitted.append(text) or True,
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._deliver_automation_speech",
+        lambda *args, **kwargs: ("desktop_tts", "queued for voice"),
     )
 
     from distr.core.automation_orchestrator import serialize_automation_workflow
+    from distr.core.automation_subagent import _automation_worker
+
+    def run_inline(**kwargs):
+        _automation_worker(**kwargs)
+
+    monkeypatch.setattr(
+        "distr.core.automation_subagent.start_automation_subagent",
+        run_inline,
+    )
 
     with get_session() as session:
         wf = session.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         automation = serialize_automation_workflow(wf)
 
     result = dispatch_automation_to_current_chat(automation, manual=True, speak=False)
-    assert result["status"] == "completed"
-    assert emitted
-    assert "Plan ready" in emitted[0][0][1]
+    assert result["status"] == "running"
+    assert any("Daily plan finished" in str(item) for item in emitted)
 
 
 def test_proactive_orchestrator_uses_configured_daily_plan_automation(monkeypatch):
@@ -172,9 +184,80 @@ def test_proactive_orchestrator_uses_configured_daily_plan_automation(monkeypatc
     )
 
     tool = ProactiveOrchestratorTool()
-    result = tool._resolve_daily_plan_result(format="summary")
+    result = tool._resolve_daily_plan_result(format="summary", from_automation_run=False)
     assert result["execution_mode"] == "automation_preset"
     assert calls
+
+
+def test_proactive_orchestrator_daily_plan_from_automation_run_skips_redispatch(monkeypatch):
+    from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+
+    calls = []
+    monkeypatch.setattr(
+        "distr.core.automation_resolver.find_automation_for_daily_plan",
+        lambda **kwargs: {
+            "id": "wf_9",
+            "name": "Daily plan",
+            "workflow_id": 9,
+            "action_config": {"tool": "proactive_orchestrator", "args": {"action": "daily_plan"}},
+        },
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.dispatch_automation_to_current_chat",
+        lambda automation, **kwargs: calls.append((automation, kwargs))
+        or {"status": "running", "summary": "Should not run."},
+    )
+    monkeypatch.setattr(
+        ProactiveOrchestratorTool,
+        "_build_daily_plan_result",
+        lambda self, **kwargs: {
+            "success": True,
+            "action": "daily_plan",
+            "spoken_summary": "Inline plan ready.",
+            "markdown": "# Plan",
+        },
+    )
+
+    tool = ProactiveOrchestratorTool()
+    result = tool._run(action="daily_plan", from_automation_run=True)
+    assert not calls
+    assert "REFERENCE:" in result or "plan" in result.lower()
+
+
+def test_automation_subagent_skips_duplicate_workflow_run(monkeypatch):
+    from distr.core.automation_subagent import (
+        release_workflow_run,
+        start_automation_subagent,
+        try_acquire_workflow_run,
+    )
+
+    automation = {"id": "wf_42", "workflow_id": 42, "name": "Daily plan", "action_config": {"tool": "noop"}}
+    assert try_acquire_workflow_run(42) is True
+
+    updates = []
+    monkeypatch.setattr(
+        "distr.core.automation_subagent.update_automation_run",
+        lambda run_id, **kwargs: updates.append((run_id, kwargs)),
+    )
+    acks = []
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._orchestrator_delivery_ack",
+        lambda **kwargs: acks.append(kwargs),
+    )
+    started = []
+    monkeypatch.setattr(
+        "threading.Thread.start",
+        lambda self: started.append(self.name),
+    )
+
+    start_automation_subagent(automation=automation, run_id=99, manual=True)
+    assert not started
+    assert updates
+    assert updates[0][0] == 99
+    assert updates[0][1]["status"] == "skipped"
+    assert acks
+
+    release_workflow_run(42)
 
 
 def test_legacy_planner_proactive_tasks_disabled_on_seed(tmp_path, monkeypatch):

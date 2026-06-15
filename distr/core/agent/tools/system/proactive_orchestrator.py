@@ -82,8 +82,9 @@ class ProactiveOrchestratorTool(BaseTool):
         from distr.core import orchestrator_proactive
 
         action_name = (action or "scan").strip().lower()
+        from_automation_run = bool(kwargs.get("from_automation_run"))
         if action_name in {"daily_plan", "daily plan", "plan", "day_plan", "morning_brief", "today"}:
-            result = self._resolve_daily_plan_result(format=format)
+            result = self._resolve_daily_plan_result(format=format, from_automation_run=from_automation_run)
         elif action_name in {"dispatch", "send", "approve"}:
             if not candidate_id:
                 return "Tell me which work candidate to dispatch first."
@@ -110,32 +111,33 @@ class ProactiveOrchestratorTool(BaseTool):
         reference = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         return voice_then_reference(spoken, reference)
 
-    def _resolve_daily_plan_result(self, *, format: str = "summary") -> dict[str, Any]:
+    def _resolve_daily_plan_result(self, *, format: str = "summary", from_automation_run: bool = False) -> dict[str, Any]:
         """Run the user's Daily plan automation when configured; else build inline."""
-        from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
-        from distr.core.automation_resolver import find_automation_for_daily_plan
+        if not from_automation_run:
+            from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
+            from distr.core.automation_resolver import find_automation_for_daily_plan
 
-        automation = find_automation_for_daily_plan(active_only=True)
-        if automation:
-            dispatch = dispatch_automation_to_current_chat(automation, manual=True, speak=False)
-            if dispatch.get("status") in {"completed", "dispatched"}:
-                return {
-                    "success": True,
-                    "action": "daily_plan",
-                    "spoken_summary": str(dispatch.get("summary") or "I ran your Daily plan automation."),
-                    "automation_id": automation.get("id"),
-                    "execution_mode": "automation_preset",
-                    "dispatch": dispatch,
-                }
-            if dispatch.get("status") == "skipped":
-                return {
-                    "success": False,
-                    "action": "daily_plan",
-                    "spoken_summary": str(dispatch.get("summary") or "Daily plan was skipped."),
-                    "automation_id": automation.get("id"),
-                    "execution_mode": "automation_preset",
-                    "dispatch": dispatch,
-                }
+            automation = find_automation_for_daily_plan(active_only=True)
+            if automation:
+                dispatch = dispatch_automation_to_current_chat(automation, manual=True, speak=False)
+                if dispatch.get("status") in {"completed", "dispatched", "running"}:
+                    return {
+                        "success": True,
+                        "action": "daily_plan",
+                        "spoken_summary": str(dispatch.get("summary") or "I ran your Daily plan automation."),
+                        "automation_id": automation.get("id"),
+                        "execution_mode": "automation_preset",
+                        "dispatch": dispatch,
+                    }
+                if dispatch.get("status") == "skipped":
+                    return {
+                        "success": False,
+                        "action": "daily_plan",
+                        "spoken_summary": str(dispatch.get("summary") or "Daily plan was skipped."),
+                        "automation_id": automation.get("id"),
+                        "execution_mode": "automation_preset",
+                        "dispatch": dispatch,
+                    }
         return self._build_daily_plan_result(format=format)
 
     def _build_daily_plan_result(self, *, format: str = "summary") -> dict[str, Any]:
