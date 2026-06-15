@@ -874,6 +874,24 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         except Exception as e:
             logger.warning("Error in _emit_interruption_cleanup: %s", e)
 
+    def _prepare_agent_voice_response(self) -> None:
+        """Clear stale PTT interrupt flags so the next spoken reply can play."""
+        self._cancelled = False
+        tts = getattr(self, "_tts_service", None)
+        if not tts:
+            return
+        tts._cancelled = False
+        if hasattr(tts, "_cancelled_since"):
+            tts._cancelled_since = 0.0
+        if hasattr(tts, "reset_tts_response_start"):
+            tts.reset_tts_response_start()
+
+    def _is_dictation_transcript(self) -> bool:
+        return bool(
+            self._is_dictating
+            or getattr(self, "_one_shot_dictation_armed", False)
+        )
+
     def _is_critical_tool_run_in_progress(self) -> bool:
         """Return True when a tool run is actively executing and should not be interrupted."""
         return bool(getattr(self, '_tool_execution_in_progress', False))
@@ -884,6 +902,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         text: str,
         done: bool = False,
         clear_live_preview: bool = False,
+        discard_live_preview: bool = False,
     ) -> None:
         """Forward live STT / preview to the desktop app and web (agent runs in a subprocess).
 
@@ -894,6 +913,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             'status_text': text or '',
             'done': bool(done),
             'clear_live_preview': bool(clear_live_preview),
+            'discard_live_preview': bool(discard_live_preview),
         }
         if getattr(self, 'event_queue', None):
             try:
@@ -903,7 +923,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return
         try:
             signal_manager.transcription_progress.emit(
-                int(chat_id), text or '', bool(done), bool(clear_live_preview),
+                int(chat_id), text or '', bool(done), bool(clear_live_preview), bool(discard_live_preview),
             )
         except Exception:
             pass
@@ -1471,8 +1491,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             text = frame.text.strip()
             if not text:
                 logger.info("LLM: Received empty TranscriptionFrame — ignoring")
-                if self._is_dictating and getattr(self, '_dictation_one_shot', False):
-                    self._stop_dictation()
                 return
 
             logger.info("LLM: Received transcription: '%s'", text[:100])
@@ -1486,7 +1504,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     "LLM: Duplicate TranscriptionFrame within 2.5s — ignoring (%.50s…)",
                     text,
                 )
-                if self._is_dictating and getattr(self, '_dictation_one_shot', False):
+                if self._is_dictation_transcript() and getattr(self, '_dictation_one_shot', False):
+                    cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                    if cid:
+                        self._notify_transcription_progress(
+                            int(cid), "", False, False, discard_live_preview=True
+                        )
                     self._stop_dictation()
                 return
             self._last_ptt_transcription_text = text
@@ -1497,21 +1520,26 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # Dictation is a text-entry mode. It must win before wake phrases,
             # voice commands, fast actions, or the conversational agent can see
             # the transcript.
-            if self._is_dictating:
+            if self._is_dictation_transcript():
                 cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
                 if cid:
-                    self._notify_transcription_progress(int(cid), "", True, True)
+                    self._notify_transcription_progress(
+                        int(cid), "", False, False, discard_live_preview=True
+                    )
                 if not getattr(self, '_dictation_one_shot', False) and self._check_dictation_commands(text_lower, text):
                     return
                 self._last_dictation_transcription_mono = time.monotonic()
                 text_to_type = self._process_dictation_text(text)
                 if text_to_type:
                     await self._type_dictation_text(text_to_type)
+                self._one_shot_dictation_armed = False
                 if getattr(self, '_dictation_one_shot', False):
                     self._stop_dictation()
                 return
 
-            # When listening is disabled, only wake phrases get through.
+            # Agent PTT / hands-free utterance — never keep stale interrupt flags.
+            self._one_shot_dictation_armed = False
+            self._prepare_agent_voice_response()
             if not self._is_listening:
                 if self._check_start_listening_command(text_lower):
                     return

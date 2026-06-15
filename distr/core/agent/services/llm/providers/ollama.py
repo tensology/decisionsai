@@ -74,6 +74,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         self._is_hands_free = False
         self._is_listening = is_listening
         self._is_dictating = False
+        self._one_shot_dictation_armed = False
         self._hands_free_before_dictation = False
         self.event_queue = event_queue
         self.chat_manager = chat_manager

@@ -612,7 +612,8 @@ function startChatWebSocket(force) {
                         showTranscriptionStatus(
                             msg.status != null ? msg.status : '',
                             Boolean(msg.done),
-                            Boolean(msg.clear_live_preview)
+                            Boolean(msg.clear_live_preview),
+                            Boolean(msg.discard_live_preview)
                         );
                     }
                     return;
@@ -1555,7 +1556,7 @@ function handleChatEventWorkflow(msg) {
     scrollToBottom();
 }
 
-function showTranscriptionStatus(text, done, clearLivePreview) {
+function showTranscriptionStatus(text, done, clearLivePreview, discardLivePreview) {
     if (!chatMessages) return;
     const t = text != null ? String(text) : '';
     const trimmed = t.trim();
@@ -1568,6 +1569,12 @@ function showTranscriptionStatus(text, done, clearLivePreview) {
         }
         const el = document.getElementById('transcriptionStatus');
         if (el) el.remove();
+    }
+
+    // Dictation finished — drop any live preview without committing a user message.
+    if (discardLivePreview) {
+        _discardLiveTranscriptionUi();
+        return;
     }
 
     // Committed user message — real bubble arrives via message_added

@@ -594,6 +594,7 @@ class EventHandlerMixin:
                 data.get('status_text') or '',
                 bool(data.get('done')),
                 bool(data.get('clear_live_preview')),
+                bool(data.get('discard_live_preview')),
             )
         elif event == 'chat_stream_error':
             error = data.get('error')

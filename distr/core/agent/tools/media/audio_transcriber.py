@@ -128,7 +128,7 @@ def _transcribe_worker_thread(audio_file_path: str, output_file_path: str, use_a
             return
         try:
             from distr.core.signals import signal_manager
-            signal_manager.transcription_progress.emit(int(chat_id), status_text, bool(done), False)
+            signal_manager.transcription_progress.emit(int(chat_id), status_text, bool(done), False, False)
         except Exception:
             pass
 

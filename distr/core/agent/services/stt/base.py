@@ -316,7 +316,18 @@ class BaseSTTService(STTService):
             logger.warning("STT: Could not schedule PTT buffer flush: %s", exc)
 
     def _schedule_dictation_empty_transcription_unblock(self):
-        """Unblock one-shot dictation when capture produced no audio (avoids 60s stuck state)."""
+        """End one-shot dictation when capture produced no audio (avoids 60s stuck state)."""
+        if self.event_queue:
+            try:
+                self.event_queue.put(("stop_dictation", {}), block=False)
+                logger.info(
+                    "STT: Queued stop_dictation after empty dictation capture "
+                    "(no mic audio captured)"
+                )
+                return
+            except Exception as exc:
+                logger.warning("STT: Could not queue stop_dictation for empty capture: %s", exc)
+
         direction = self._pipeline_direction
         loop = self._event_loop
         if direction is None or loop is None or not getattr(loop, "is_running", lambda: False)():

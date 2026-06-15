@@ -92,8 +92,8 @@ class SignalManager(QObject):
     chat_stream_error = pyqtSignal(str)
     chat_message_added = pyqtSignal(int, str, str)  # chat_id, role, content
     typing_indicator_changed = pyqtSignal(bool)
-    # chat_id, status_text, done, clear_live_preview (clear web “live STT” bubble when utterance commits)
-    transcription_progress = pyqtSignal(int, str, bool, bool)
+    # chat_id, status_text, done, clear_live_preview, discard_live_preview
+    transcription_progress = pyqtSignal(int, str, bool, bool, bool)
 
     # Chat input signals (GUI -> Agent)
     # (text, is_telegram, uploaded_image_path, speak=None)

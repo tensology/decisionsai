@@ -103,5 +103,62 @@ def test_ptt_start_forces_mic_resume_before_stt_arms():
     command_handler._cmd_push_to_talk_start(session, {})
 
     input_transport.resume_input.assert_called_once()
-    assert calls == [("set_ptt", True, False)]
+    assert calls == [("set_ptt", True, True)]
     assert session.ptt_active is True
+
+
+def test_ptt_start_with_running_loop_does_not_break_asyncio_scope():
+    """Regression: inner `import asyncio` made module asyncio unbound on the success path."""
+    input_transport = MagicMock()
+    input_transport.get_input_health.return_value = {
+        "enabled": True,
+        "stream_active": True,
+        "audio_task_alive": True,
+        "stream_callbacks_stale": False,
+    }
+    loop = MagicMock()
+    loop.is_running.return_value = True
+    loop.call_later = MagicMock()
+
+    stt_service = MagicMock()
+    stt_service._FrameProcessor__started = True
+    stt_service.push_interruption_task_frame_and_wait = MagicMock(return_value=None)
+
+    session = SimpleNamespace(
+        transport=SimpleNamespace(input=lambda: input_transport),
+        runner=SimpleNamespace(_loop=loop),
+        _main_loop=None,
+        logger=MagicMock(),
+        ptt_active=False,
+        tts_service=None,
+        stt_service=stt_service,
+        llm_service=None,
+    )
+
+    command_handler._cmd_push_to_talk_start(session, {})
+
+    loop.call_later.assert_called_once()
+    assert session.ptt_active is True
+
+
+def test_dictation_ptt_start_skips_agent_interrupt_path():
+    input_transport = MagicMock()
+    stt_service = MagicMock()
+    stt_service._FrameProcessor__started = True
+    llm_service = SimpleNamespace(_one_shot_dictation_armed=True, _cancelled=False)
+    session = SimpleNamespace(
+        transport=SimpleNamespace(input=lambda: input_transport),
+        runner=SimpleNamespace(_loop=MagicMock()),
+        _main_loop=None,
+        logger=MagicMock(),
+        ptt_active=False,
+        tts_service=None,
+        stt_service=stt_service,
+        llm_service=llm_service,
+    )
+
+    command_handler._cmd_push_to_talk_start(session, {"for_dictation": True})
+
+    stt_service.set_ptt_active.assert_called_once_with(True, queue_interruption=False)
+    assert session.ptt_active is True
+    assert llm_service._cancelled is False

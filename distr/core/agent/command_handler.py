@@ -754,7 +754,11 @@ def _cmd_process_text_input(session, params):
 
 
 def _cmd_push_to_talk_start(session, params):
-    session.logger.debug("PTT: Push-to-talk START received")
+    for_dictation = bool((params or {}).get("for_dictation"))
+    session.logger.debug(
+        "PTT: Push-to-talk START received (for_dictation=%s)",
+        for_dictation,
+    )
     session.ptt_active = True
     # Resume mic forwarding before STT arms capture or pipeline interruption runs.
     _set_audio_input_active(session, True, "push_to_talk_start", force=True)
@@ -763,7 +767,8 @@ def _cmd_push_to_talk_start(session, params):
         session.tts_service.set_ptt_active(True)
 
     if hasattr(session, 'stt_service') and session.stt_service:
-        session.stt_service.set_ptt_active(True, queue_interruption=False)
+        # Agent PTT must interrupt current speech; dictation only captures for typing.
+        session.stt_service.set_ptt_active(True, queue_interruption=not for_dictation)
     else:
         session.logger.debug("PTT: STT service not yet available - PTT state will be restored when STT starts")
 
@@ -781,7 +786,6 @@ def _cmd_push_to_talk_start(session, params):
         try:
             target_loop.call_later(0.05, _retry_resume)
         except Exception:
-            import asyncio
 
             async def _delayed_resume():
                 await asyncio.sleep(0.05)
@@ -789,15 +793,20 @@ def _cmd_push_to_talk_start(session, params):
 
             asyncio.run_coroutine_threadsafe(_delayed_resume(), target_loop)
 
-    # Immediate cancel so TTS/LLM stop before frame propagates
-    if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_cancelled'):
-        session.llm_service._cancelled = True
+    if for_dictation:
+        return
+
+    # Agent PTT: stop any in-flight speech before the new utterance is processed.
+    if hasattr(session, 'llm_service') and session.llm_service:
+        if hasattr(session.llm_service, '_one_shot_dictation_armed'):
+            session.llm_service._one_shot_dictation_armed = False
+        if hasattr(session.llm_service, '_cancelled'):
+            session.llm_service._cancelled = True
     if hasattr(session, 'tts_service') and session.tts_service:
         if hasattr(session.tts_service, '_cancelled'):
             session.tts_service._cancelled = True
             if hasattr(session.tts_service, '_cancelled_since'):
-                import time as _time
-                session.tts_service._cancelled_since = _time.monotonic()
+                session.tts_service._cancelled_since = time.monotonic()
         if hasattr(session.tts_service, '_text_buffer'):
             session.tts_service._text_buffer = ""
 
@@ -857,28 +866,34 @@ def _cmd_dictation_hotkey_pressed(session, params):
     GUI emits Qt signals; agent runs in a subprocess so we bridge via command_queue only.
     """
     session.logger.debug("Dictation hotkey: pressed")
+    dictation_params = dict(params or {})
+    dictation_params["for_dictation"] = True
+    if hasattr(session, 'llm_service') and session.llm_service:
+        session.llm_service._one_shot_dictation_armed = True
     # Coalesce rapid TTS teardown so dictation capture is not starved by interrupt storms
     if hasattr(session, 'tts_service') and session.tts_service:
         if hasattr(session.tts_service, '_cancelled'):
             session.tts_service._cancelled = True
         if hasattr(session.tts_service, '_text_buffer'):
             session.tts_service._text_buffer = ""
-    _cmd_push_to_talk_start(session, params)
-    # Enable STT dictation flag immediately in-process. _start_dictation also queues
-    # set_dictating for the main UI loop, but that round-trip can arrive after key-up,
-    # breaking buffering / routing for short utterances.
+    # Enable STT dictation flag before capture so short utterances stay in typing mode.
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
         session.llm_service._start_dictation(one_shot=True)
+    _cmd_push_to_talk_start(session, dictation_params)
 
 
 def _cmd_ticket_dictation_hotkey_pressed(session, params):
     """Hold-to-dictate ticket tool: capture audio, then type a cleaned ticket."""
     session.logger.debug("Ticket dictation hotkey: pressed")
-    _cmd_push_to_talk_start(session, params)
+    dictation_params = dict(params or {})
+    dictation_params["for_dictation"] = True
+    if hasattr(session, 'llm_service') and session.llm_service:
+        session.llm_service._one_shot_dictation_armed = True
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
         session.llm_service._start_dictation(one_shot=True, output_mode="ticket")
+    _cmd_push_to_talk_start(session, dictation_params)
 
 
 def _cmd_dictation_hotkey_released(session, params):

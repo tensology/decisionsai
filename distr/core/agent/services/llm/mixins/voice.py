@@ -229,6 +229,9 @@ class VoiceDictationMixin:
                 transcript is typed — release runs push_to_talk_stop before LLM sees text.
         """
         if self._is_dictating:
+            if one_shot:
+                self._dictation_one_shot = True
+                self._one_shot_dictation_armed = True
             return
 
         self._hands_free_before_dictation = self._is_hands_free
@@ -244,6 +247,8 @@ class VoiceDictationMixin:
 
         self._is_dictating = True
         self._dictation_one_shot = bool(one_shot)
+        if one_shot:
+            self._one_shot_dictation_armed = True
         self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
         logger.info(
             "Dictation: Dictation mode started (one_shot=%s, output_mode=%s)",
@@ -268,6 +273,7 @@ class VoiceDictationMixin:
 
         self._is_dictating = False
         self._dictation_one_shot = False
+        self._one_shot_dictation_armed = False
         self._dictation_output_mode = "plain"
         logger.info("Dictation: Dictation mode stopped")
 

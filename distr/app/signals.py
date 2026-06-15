@@ -456,7 +456,7 @@ class SignalBridgeMixin:
             _post_chat_event({"event": "stream_error", "chat_id": int(cid) if cid else None, "error": str(error)})
         signal_manager.chat_stream_error.connect(on_chat_stream_error_web)
 
-        def on_transcription_progress_web(chat_id, status_text, done, clear_live_preview=False):
+        def on_transcription_progress_web(chat_id, status_text, done, clear_live_preview=False, discard_live_preview=False):
             try:
                 _post_chat_event({
                     "event": "transcription_progress",
@@ -464,6 +464,7 @@ class SignalBridgeMixin:
                     "status": status_text or "",
                     "done": bool(done),
                     "clear_live_preview": bool(clear_live_preview),
+                    "discard_live_preview": bool(discard_live_preview),
                 })
             except Exception:
                 pass
