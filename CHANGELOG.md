@@ -23,10 +23,6 @@ Ticket in, verified outcome out, without standing over the IDE.
 
 ## [2.8.0] - 2026-06-14
 
-### Orchestrator replaces Hermes
-
-The orchestration layer that ties together chat, boards, workflows, automations, and IDE handoffs was renamed from **Hermes** to **Orchestrator**. Database tables, settings keys, memory export, board policy, and workflow events now use `orchestrator_*` naming. The old Hermes modules, routes, and compatibility shims were removed. The separate **Nous Hermes Agent** backend name is unchanged; that refers to the external worker, not this orchestration layer.
-
 ### Automations are no longer workflows in disguise
 
 Until 2.8, scheduled automations were stored as special workflow rows. That made history hard to read and could schedule the same job twice. Automations are now first-class records with their own tables, APIs, and scheduler. On upgrade, existing automation workflows migrate into the new store; schedules on the leftover workflow copies are disabled so nothing fires in duplicate. Scheduled and on-demand runs execute in background workers so they do not block live chat or the orchestrator.
