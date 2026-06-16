@@ -13,6 +13,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -42,6 +43,102 @@ def _debug_enabled() -> bool:
 
 def _project_folder(args: argparse.Namespace) -> str:
     return args.project_folder or args.cwd or os.getcwd()
+
+
+def _is_workflow_bridge_url(url: str) -> bool:
+    return "/codex-events" in (url or "")
+
+
+def _discover_packet_meta(cwd: str) -> dict:
+    roots: list[Path] = []
+    project_root = Path(cwd or os.getcwd()).expanduser().resolve()
+    roots.append(project_root)
+    if project_root.name != ".tickets":
+        roots.append(project_root / ".tickets")
+
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            packets = sorted(
+                root.glob("decisionsai_*.md"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            continue
+        for packet in packets:
+            try:
+                head = packet.read_text(encoding="utf-8", errors="replace")[:8000]
+            except Exception:
+                continue
+            for marker in ("<!-- decisions-ide-meta:", "<!-- decisions-meta:"):
+                if marker not in head:
+                    continue
+                start = head.index(marker) + len(marker)
+                end = head.find("-->", start)
+                if end < 0:
+                    continue
+                try:
+                    meta = json.loads(head[start:end].strip())
+                except Exception:
+                    continue
+                if isinstance(meta, dict) and meta:
+                    meta["_packet_path"] = str(packet)
+                    return meta
+    return {}
+
+
+def _apply_packet_meta(args: argparse.Namespace) -> None:
+    meta = _discover_packet_meta(args.cwd)
+    if not meta:
+        return
+    if not args.callback_url:
+        bridge = str(meta.get("bridge_url") or "").strip()
+        if bridge:
+            args.callback_url = bridge
+    for attr, key in (
+        ("execution_session_id", "execution_session_id"),
+        ("step_id", "step_id"),
+        ("ticket_id", "ticket_id"),
+        ("board_id", "board_id"),
+        ("project_id", "project_id"),
+        ("workflow_id", "workflow_id"),
+        ("run_id", "run_id"),
+    ):
+        if getattr(args, attr, None) is None:
+            raw = meta.get(key)
+            if str(raw or "").isdigit():
+                setattr(args, attr, int(raw))
+
+
+def _bridge_event_body(
+    args: argparse.Namespace,
+    *,
+    event_type: str,
+    status: str,
+    message: str,
+    input_text: str,
+    output_text: str,
+) -> dict:
+    return {
+        "event_type": event_type,
+        "status": status or "",
+        "message": message or output_text or input_text,
+        "input": input_text,
+        "output": output_text,
+        "execution_session_id": args.execution_session_id,
+        "step_id": args.step_id,
+        "ticket_id": args.ticket_id,
+        "project_id": args.project_id,
+        "payload": _json_arg(args.payload_json),
+        "evidence": _json_arg(args.evidence_json),
+    }
 
 
 def _event_body(
@@ -177,6 +274,7 @@ def _body_for(
     args: argparse.Namespace,
     *,
     harness_endpoint: bool,
+    bridge_endpoint: bool,
     event_type: str,
     status: str,
     message: str,
@@ -184,6 +282,15 @@ def _body_for(
     output_text: str,
     session_id: int | None = None,
 ) -> dict:
+    if bridge_endpoint:
+        return _bridge_event_body(
+            args,
+            event_type=event_type,
+            status=status,
+            message=message,
+            input_text=input_text,
+            output_text=output_text,
+        )
     if harness_endpoint:
         return _harness_body(
             args,
@@ -234,8 +341,10 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true", help="Return non-zero and print errors when DecisionsAI is offline.")
     args = parser.parse_args()
 
+    _apply_packet_meta(args)
     target_url = _target_url(args)
-    harness_endpoint = _uses_harness_endpoint(args, target_url)
+    bridge_endpoint = _is_workflow_bridge_url(target_url)
+    harness_endpoint = _uses_harness_endpoint(args, target_url) and not bridge_endpoint
     if args.turn_input or args.turn_output:
         session_id = args.execution_session_id
         outputs: list[str] = []
@@ -245,6 +354,7 @@ def main() -> int:
                 _body_for(
                     args,
                     harness_endpoint=harness_endpoint,
+                    bridge_endpoint=bridge_endpoint,
                     event_type=f"{args.source}_prompt_submitted",
                     status="observed",
                     message=args.message or "IDE prompt submitted.",
@@ -257,7 +367,8 @@ def main() -> int:
             if code:
                 return code
             outputs.append(text)
-            session_id = _response_session_id(text) or session_id
+            if not bridge_endpoint:
+                session_id = _response_session_id(text) or session_id
         if args.turn_output:
             event_status = args.turn_status or "completed"
             code, text = _post_event(
@@ -265,6 +376,7 @@ def main() -> int:
                 _body_for(
                     args,
                     harness_endpoint=harness_endpoint,
+                    bridge_endpoint=bridge_endpoint,
                     event_type=f"{args.source}_completed" if event_status == "completed" else f"{args.source}_{event_status}",
                     status=event_status,
                     message=args.message or "IDE response completed.",
@@ -287,6 +399,7 @@ def main() -> int:
         _body_for(
             args,
             harness_endpoint=harness_endpoint,
+            bridge_endpoint=bridge_endpoint,
             event_type=args.event_type,
             status=args.status,
             message=args.message,

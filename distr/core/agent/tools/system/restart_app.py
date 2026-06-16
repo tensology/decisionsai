@@ -49,12 +49,12 @@ class RestartAppTool(BaseTool):
             if not eq and self._llm_service and hasattr(self._llm_service, 'event_queue'):
                 eq = self._llm_service.event_queue
             if eq:
-                # Notify Telegram/chat that we're restarting
                 eq.put(('send_to_telegram', {
                     'text': 'Restarting now.',
                     'is_done': False,
                     'analyzed_image_path': None,
                     'skip_screenshot': True,
+                    'input_type': 'text',
                 }), block=False)
                 import time
                 time.sleep(0.5)  # Give the message time to send

@@ -12,12 +12,16 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+from distr.core.dock_app import load_dock_launch_preference, resolve_app_bundle_path
 
 logger = logging.getLogger(__name__)
 
-RESTART_SLEEP_SECONDS = 3
+RESTART_SLEEP_SECONDS = 5
 RESTART_LOG_NAME = "restart.log"
+RESTART_PENDING_NAME = "restart_pending"
 
 
 def resolve_project_root() -> Path:
@@ -49,16 +53,54 @@ def restart_log_path() -> Path:
     return path
 
 
+def restart_pending_path() -> Path:
+    """Marker file read by decisions-cleanup.sh to avoid killing the respawn."""
+    path = Path.home() / ".decisions" / "run" / RESTART_PENDING_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def mark_restart_pending() -> None:
+    """Tell external cleanup that a detached restart child is about to launch."""
+    try:
+        restart_pending_path().write_text(str(time.time()), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[RESTART] Could not write restart pending marker: %s", exc)
+
+
+def clear_restart_pending() -> None:
+    try:
+        restart_pending_path().unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def restart_script_path() -> Path:
     path = Path.home() / ".decisions" / "logs" / "restart_decisions.sh"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def build_restart_shell_script(*, project_root: Path, python_path: str) -> str:
-    """Build a bash script that relaunches ``bin/start.py`` after the parent exits."""
+def build_restart_shell_script(
+    *,
+    project_root: Path,
+    python_path: str,
+    dock_app_bundle: str | None = None,
+) -> str:
+    """Build a bash script that relaunches Decisions after the parent exits."""
+    if dock_app_bundle and Path(dock_app_bundle).is_dir():
+        return "\n".join(
+            [
+                "#!/bin/bash",
+                "set -euo pipefail",
+                f"sleep {RESTART_SLEEP_SECONDS}",
+                f"exec /usr/bin/open -n {shlex.quote(dock_app_bundle)}",
+            ]
+        ) + "\n"
+
     start_script = project_root / "bin" / "start.py"
     log_path = restart_log_path()
+    run_script = project_root / "bin" / "decisions-run.sh"
     lines = [
         "#!/bin/bash",
         "set -euo pipefail",
@@ -66,11 +108,14 @@ def build_restart_shell_script(*, project_root: Path, python_path: str) -> str:
         f"sleep {RESTART_SLEEP_SECONDS}",
         "export DECISIONS_RESTARTING=1",
     ]
-    if start_script.is_file():
+    if run_script.is_file() and load_dock_launch_preference().get("dock"):
+        lines.append("export DECISIONS_DOCK_APP=1")
+        lines.append(f"exec /bin/bash {shlex.quote(str(run_script))} >> {shlex.quote(str(log_path))} 2>&1")
+    elif start_script.is_file():
         cmd = f"{shlex.quote(python_path)} {shlex.quote(str(start_script))} --skip-kill-existing"
+        lines.append(f"exec {cmd} >> {shlex.quote(str(log_path))} 2>&1")
     else:
-        cmd = shlex.quote(python_path)
-    lines.append(f"exec {cmd} >> {shlex.quote(str(log_path))} 2>&1")
+        lines.append(f"exec {shlex.quote(python_path)} >> {shlex.quote(str(log_path))} 2>&1")
     return "\n".join(lines) + "\n"
 
 
@@ -88,6 +133,7 @@ def spawn_restart_process(*, project_root: Path | None = None, python_path: str 
     """Spawn a detached process that relaunches Decisions after the current app quits."""
     root = project_root or resolve_project_root()
     py = python_path or resolve_restart_python(root)
+    mark_restart_pending()
 
     app_bundle = _frozen_macos_app_bundle()
     if app_bundle:
@@ -131,7 +177,11 @@ def spawn_restart_process(*, project_root: Path | None = None, python_path: str 
 
     script_path = restart_script_path()
     script_path.write_text(
-        build_restart_shell_script(project_root=root, python_path=py),
+        build_restart_shell_script(
+            project_root=root,
+            python_path=py,
+            dock_app_bundle=resolve_app_bundle_path(root) or None,
+        ),
         encoding="utf-8",
     )
     os.chmod(script_path, 0o755)

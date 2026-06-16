@@ -139,6 +139,13 @@ def _connected_telegram(manager: Any) -> bool:
 
 
 def _recent_remote_context(manager: Any, now: float, window_s: float) -> bool:
+    try:
+        from distr.core.integrations.telegram.remote_tts_delivery import is_remote_delivery_available
+
+        if is_remote_delivery_available(manager, now=now, window_s=window_s):
+            return True
+    except Exception:
+        pass
     ctx = getattr(manager, "_pending_remote_agent_response", None) if manager is not None else None
     if not isinstance(ctx, dict):
         return False

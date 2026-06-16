@@ -56,6 +56,8 @@ def bootstrap_gui_launch_environment() -> None:
             continue
         if name in ("_", "SHLVL", "PWD", "OLDPWD"):
             continue
+        if name.startswith("DECISIONS_"):
+            continue
         os.environ[name] = value.decode("utf-8", errors="replace")
 
     logger.info(

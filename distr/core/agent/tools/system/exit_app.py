@@ -62,6 +62,7 @@ class ExitAppTool(BaseTool):
                     'is_done': False,
                     'analyzed_image_path': None,
                     'skip_screenshot': True,
+                    'input_type': 'text',
                 }), block=False)
                 import time
                 time.sleep(0.5)

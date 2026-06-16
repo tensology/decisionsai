@@ -526,6 +526,15 @@ class SignalBridgeMixin:
                     'speak': speak_bool,
                     'chat_id': chat_id,
                 }
+                mgr = getattr(self, 'telegram_manager', None)
+                if speak_bool and mgr is not None:
+                    from distr.core.integrations.telegram.remote_tts_delivery import (
+                        is_remote_delivery_available,
+                    )
+
+                    pending = getattr(mgr, '_pending_remote_agent_response', None)
+                    if is_remote_delivery_available(mgr) or isinstance(pending, dict):
+                        params['is_telegram'] = True
                 if opts.get('skip_user_persist'):
                     params['skip_user_persist'] = True
                 if opts.get('automation_run_id') is not None:

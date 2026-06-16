@@ -56,17 +56,9 @@ def _litellm_model(provider: str, model: str, settings: dict) -> str:
 
 
 def _llm_candidates(settings: dict) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = []
-    conv_provider = (settings.get("conversational_llm_provider") or "").strip().lower()
-    conv_model = (settings.get("conversational_llm_model") or "").strip()
-    agent_provider = (settings.get("agent_provider") or "").strip().lower()
-    agent_model = (settings.get("agent_model") or "").strip()
-    if conv_provider and conv_model:
-        candidates.append((conv_provider, conv_model))
-    if agent_provider and agent_model and (agent_provider, agent_model) != (conv_provider, conv_model):
-        candidates.append((agent_provider, agent_model))
-    candidates.append(("ollama", "llama3.2"))
-    return candidates
+    from distr.core.llm_factory import resolve_llm_candidates
+
+    return resolve_llm_candidates(settings)
 
 
 def _completion_options(litellm_model: str) -> dict[str, Any]:
@@ -83,6 +75,37 @@ def _clip_text(value: Any, limit: int = 140) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rsplit(" ", 1)[0].rstrip() + "…"
+
+
+_USER_INSTRUCTION_RE = re.compile(r"^user instruction:\s*", re.IGNORECASE)
+
+
+def _normalize_ticket_title(raw: Any) -> str:
+    text = _USER_INSTRUCTION_RE.sub("", str(raw or "")).strip()
+    text = re.sub(r"\s+", " ", text)
+    return _clip_text(text, 120) or "the next useful outcome"
+
+
+def extract_markdown_section(markdown: str, heading_prefix: str) -> str:
+    """Return bullet lines under the first ## heading that starts with *heading_prefix*."""
+    if not markdown or not heading_prefix:
+        return ""
+    lines = str(markdown).splitlines()
+    collecting = False
+    body: list[str] = []
+    prefix_lower = heading_prefix.strip().lower()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("##"):
+            heading = re.sub(r"^#+\s*", "", stripped).strip()
+            if collecting:
+                break
+            if heading.lower().startswith(prefix_lower):
+                collecting = True
+            continue
+        if collecting and stripped:
+            body.append(stripped)
+    return "\n".join(body).strip()
 
 
 def _first_nonempty(*values: Any, default: str = "") -> str:
@@ -102,23 +125,57 @@ def _count_phrase(count: int, singular: str, plural: str | None = None) -> str:
 
 
 def _ticket_title(ticket: dict[str, Any]) -> str:
-    return _first_nonempty(
-        ticket.get("title"),
-        ticket.get("name"),
-        ticket.get("description_preview"),
-        ticket.get("description"),
-        default="the next useful outcome",
+    return _normalize_ticket_title(
+        _first_nonempty(
+            ticket.get("title"),
+            ticket.get("name"),
+            ticket.get("description_preview"),
+            ticket.get("description"),
+            default="the next useful outcome",
+        )
     )
 
 
 def _ticket_why(ticket: dict[str, Any]) -> str:
+    title = _ticket_title(ticket).lower()
     text = _first_nonempty(
         ticket.get("description_preview"),
         ticket.get("description"),
         ticket.get("source_label"),
         default="",
     )
-    return f" — {text}" if text else ""
+    if not text:
+        return ""
+    normalized = _normalize_ticket_title(text).lower()
+    if normalized == title or normalized.startswith(title[:40]) or title.startswith(normalized[:40]):
+        return ""
+    return f" — {_clip_text(text, 90)}"
+
+
+def _append_period_phrase(title: str, period: str) -> str:
+    clean = str(title or "").rstrip(".")
+    lowered = clean.lower()
+    if period == "today" and lowered.endswith("today"):
+        return clean
+    if period == "this week" and lowered.endswith("this week"):
+        return clean
+    return f"{clean} {period}"
+
+
+def _finish_outcome_line(board_name: str, ticket: dict[str, Any], period: str) -> str:
+    title = _ticket_title(ticket)
+    why = _ticket_why(ticket)
+    lowered = title.lower()
+    title_with_period = _append_period_phrase(title, period)
+    if lowered.startswith(("finish ", "complete ", "send ", "review ", "fix ", "ship ", "prepare ")):
+        return f"{board_name}: {title_with_period}{why}."
+    return f"{board_name}: finish {title_with_period}{why}."
+
+
+def _backlog_outcome_line(board_name: str, ticket: dict[str, Any], period: str) -> str:
+    title = _ticket_title(ticket)
+    why = _ticket_why(ticket)
+    return f"{board_name}: today's focus is {title}{why}."
 
 
 def _priority_rank(ticket: dict[str, Any]) -> int:
@@ -159,14 +216,12 @@ def _fallback_board_outcomes(boards: list[dict[str, Any]], *, scope: str) -> lis
 
         if current_tickets:
             for ticket in current_tickets[:2]:
-                outcomes.append(f"{board_name}: finish {_ticket_title(ticket)} {period}{_ticket_why(ticket)}.")
+                outcomes.append(_finish_outcome_line(board_name, ticket, period))
             continue
 
         if backlog_tickets:
             for ticket in backlog_tickets[:2 if scope == "week" else 1]:
-                outcomes.append(
-                    f"{board_name}: Current is empty; make {_ticket_title(ticket)} the achievable outcome {period}{_ticket_why(ticket)}."
-                )
+                outcomes.append(_backlog_outcome_line(board_name, ticket, period))
             continue
 
         backlog_count = int((backlog or {}).get("ticket_count") or 0)
@@ -309,11 +364,15 @@ def _fallback_planner_markdown(
             default="Stuck task needs review.",
         ))
     for proposal in proposals[:6]:
-        attention_items.append(_first_nonempty(
+        description = _first_nonempty(
             proposal.get("description"),
             proposal.get("action_type"),
-            default="Proposed work item needs review.",
-        ))
+            default="",
+        )
+        lowered = description.lower()
+        if "backlog item" in lowered and "promot" in lowered:
+            continue
+        attention_items.append(description or "Proposed work item needs review.")
     for workflow in bundle.unfinished_workflows[:4]:
         attention_items.append(_first_nonempty(
             workflow.get("name") if isinstance(workflow, dict) else workflow,
@@ -340,6 +399,12 @@ def _fallback_planner_markdown(
         ][:4]
     if not outcome_items:
         outcome_items.append("Choose one meaningful work thread and turn it into a finished next step.")
+
+    outcome_keys = {item.lower()[:72] for item in outcome_items}
+    attention_items = [
+        item for item in attention_items
+        if item.lower()[:72] not in outcome_keys
+    ]
 
     blockers = []
     if unavailable_sources:
@@ -654,6 +719,16 @@ def generate_planner_markdown(
 def tts_excerpt_from_markdown(markdown: str, max_len: int = 950) -> str:
     """Flatten markdown to a single spoken line, capped for TTS."""
     text = markdown or ""
+    for heading in (
+        "Outcome for Today",
+        "Today's Outcomes",
+        "Morning Check-in",
+        "Week Outcome",
+    ):
+        section = extract_markdown_section(text, heading)
+        if section:
+            text = section
+            break
     text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
     text = re.sub(r"```[^`]*```", " ", text, flags=re.DOTALL)
     text = re.sub(r"`([^`]+)`", r"\1", text)
@@ -661,6 +736,9 @@ def tts_excerpt_from_markdown(markdown: str, max_len: int = 950) -> str:
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"^[-*]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\bUser instruction:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bPlanner LLM fallback was used\b.*", "", text, flags=re.IGNORECASE)
     text = " ".join(text.split())
     if len(text) <= max_len:
         return text

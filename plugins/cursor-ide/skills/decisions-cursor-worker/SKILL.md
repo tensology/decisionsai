@@ -45,12 +45,11 @@ Next step: ...
     DecisionsAI as a project IDE session. At the start of the prompt, call:
     `python3 ~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py --event-type cursor_prompt_submitted --status observed --input "<user prompt>"`
     Before the final response, call:
-    `python3 ~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py --event-type cursor_completed --status completed --output "<short result summary>"`
+    `python3 ~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py --cwd "<project folder>" --turn-output "Status: completed\nSummary: <short result summary>"`
     If both sides of a completed turn are only available at the end, call:
-    `python3 ~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py --turn-input "<user prompt>" --turn-output "<short result summary>"`
-    The reporter resolves the DecisionsAI project from the current working
-    directory and creates or resumes the Cursor IDE session. If DecisionsAI is
-    not running, the reporter exits quietly and Cursor continues normally.
+    `python3 ~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py --cwd "<project folder>" --turn-input "<user prompt>" --turn-output "Status: completed\nSummary: <short result summary>"`
+    For workflow work packets, the reporter auto-discovers the bridge URL and
+    execution session from the newest `.tickets/decisionsai_*.md` file.
 12. If the prompt includes a `[DECISIONS CURSOR CALLBACK]` block, treat that as
     live workflow metadata. Use the callback URL or reporter script in that
     block to report meaningful events back to DecisionsAI:

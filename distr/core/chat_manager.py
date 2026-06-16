@@ -201,7 +201,7 @@ class ChatManagerCore:
                 if settings:
                     tts_provider = settings.tts_provider or ""
                     if tts_provider == "Kokoro (Offline)":
-                        from distr.core.agent.session import KOKORO_VOICES
+                        from distr.core.agent.constants import KOKORO_VOICES
                         kokoro_voice = (
                             getattr(settings, "kokoro_voice", "af_heart") or "af_heart"
                         )

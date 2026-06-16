@@ -435,6 +435,8 @@ def get_workflow_type(workflow_id: int) -> Optional[str]:
 
 
 def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    from distr.core.automation_orchestrator import is_automation_workflow
+
     with get_session() as db:
         q = db.query(AutoWorkflow)
         if workflow_type:
@@ -443,7 +445,9 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
             q = q.filter(AutoWorkflow.workflow_type.in_(sorted(USER_VISIBLE_WORKFLOW_TYPES)))
         if search and search.strip():
             q = q.filter(AutoWorkflow.name.ilike(f"%{search.strip()}%"))
-        rows = q.order_by(AutoWorkflow.modified_date.desc()).limit(limit).all()
+        fetch_limit = max(int(limit or 50) * 4, int(limit or 50) + 20)
+        rows = q.order_by(AutoWorkflow.modified_date.desc()).limit(fetch_limit).all()
+        visible = [w for w in rows if not is_automation_workflow(w)][: int(limit or 50)]
         return [
             {
                 "id": w.id, "name": w.name,
@@ -457,7 +461,7 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
                 "created_date": w.created_date.isoformat() if w.created_date else None,
                 "modified_date": w.modified_date.isoformat() if w.modified_date else None,
             }
-            for w in rows
+            for w in visible
         ]
 
 

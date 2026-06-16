@@ -432,6 +432,10 @@ else
     exit 1
 fi
 
+if [ "$(uname -s)" = "Darwin" ] && [ -x "$SCRIPT_DIR/bin/install-dock-app-launcher.sh" ]; then
+    "$SCRIPT_DIR/bin/install-dock-app-launcher.sh" >/dev/null 2>&1 || true
+fi
+
 # Check pip version (skip upgrade to avoid hanging)
 echo -e "${YELLOW}Checking pip...${NC}"
 PIP_VERSION=$("$VENV_DIR/bin/pip" --version 2>/dev/null | awk '{print $2}' || echo "unknown")

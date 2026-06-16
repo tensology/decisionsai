@@ -9,31 +9,44 @@ from datetime import datetime
 from typing import Any, Callable
 
 from distr.core.db import get_session
+from distr.core.db.automation import Automation, AutomationRun
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
 
 logger = logging.getLogger(__name__)
 
 _active_threads: dict[int, threading.Thread] = {}
-_active_workflow_ids: set[int] = set()
+_active_run_lock_keys: set[int] = set()
 _thread_lock = threading.Lock()
 
 
-def _workflow_id_from_automation(automation: dict[str, Any]) -> int | None:
-    raw = automation.get("workflow_id") if automation.get("workflow_id") is not None else automation.get("id")
+def _run_lock_key_from_automation(automation: dict[str, Any]) -> int | None:
+    record_id = automation.get("record_id")
+    if record_id is not None:
+        try:
+            return int(record_id)
+        except (TypeError, ValueError):
+            pass
+    raw = automation.get("workflow_id")
+    if raw is None:
+        raw = automation.get("id")
     if raw is None:
         return None
     try:
-        return int(str(raw).replace("wf_", "").strip())
+        return int(str(raw).replace("wf_", "").replace("auto_", "").strip())
     except (TypeError, ValueError):
         return None
 
 
+def _workflow_id_from_automation(automation: dict[str, Any]) -> int | None:
+    return _run_lock_key_from_automation(automation)
+
+
 def try_acquire_workflow_run(workflow_id: int) -> bool:
-    """Return False when this workflow already has a live subagent thread."""
+    """Return False when this automation already has a live subagent thread."""
     with _thread_lock:
-        if int(workflow_id) in _active_workflow_ids:
+        if int(workflow_id) in _active_run_lock_keys:
             return False
-        _active_workflow_ids.add(int(workflow_id))
+        _active_run_lock_keys.add(int(workflow_id))
         return True
 
 
@@ -41,12 +54,12 @@ def release_workflow_run(workflow_id: int | None) -> None:
     if workflow_id is None:
         return
     with _thread_lock:
-        _active_workflow_ids.discard(int(workflow_id))
+        _active_run_lock_keys.discard(int(workflow_id))
 
 
 def workflow_run_in_progress(workflow_id: int) -> bool:
     with _thread_lock:
-        return int(workflow_id) in _active_workflow_ids
+        return int(workflow_id) in _active_run_lock_keys
 
 
 def _json_config(raw: Any) -> dict[str, Any]:
@@ -134,10 +147,14 @@ def _deliver_automation_speech(
                 "skip_screenshot": True,
                 "explicit_artifact_intent": False,
                 "input_type": "automation",
+                # Automations must reach the Telegram chat, not the remote web UI.
+                "force_telegram_delivery": True,
+                "explicit_notification_intent": True,
+                "engagement_source": "automation",
             },
         )
         if queued:
-            return "telegram", "sent to Telegram"
+            return "telegram", "queued for Telegram"
         return "telegram", "Telegram is connected but the send queue is unavailable"
 
     queued = _speak_orchestrator(body[:650])
@@ -158,7 +175,7 @@ def _orchestrator_delivery_ack(
         _speak_orchestrator(f"{label} failed. {channel_detail or 'Check run history for details.'}")
         return
     if channel == "telegram":
-        _speak_orchestrator(f"{label} finished. I sent the summary to Telegram.")
+        _speak_orchestrator(f"{label} finished. The summary is on Telegram.")
     elif channel == "desktop_tts":
         _speak_orchestrator(f"{label} finished. The summary is queued for voice.")
     elif channel == "none":
@@ -176,6 +193,25 @@ def update_automation_run(
 ) -> None:
     now = datetime.utcnow().replace(microsecond=0)
     with get_session() as session:
+        run = session.query(AutomationRun).filter(AutomationRun.id == int(run_id)).first()
+        if run:
+            run.status = status
+            data = _json_config(run.run_data)
+            data["summary"] = summary
+            data["message"] = summary
+            if extra:
+                data.update(extra)
+            run.run_data = json.dumps(data, ensure_ascii=False, default=str)
+            if status in {"completed", "failed", "skipped", "dispatched"}:
+                if status != "dispatched":
+                    run.completed_at = now
+            auto_row = session.query(Automation).filter(Automation.id == run.automation_id).first()
+            if auto_row:
+                auto_row.last_run_at = now
+                auto_row.modified_date = now
+            session.commit()
+            _notify_automation_data_changed()
+            return
         run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
         if not run:
             return

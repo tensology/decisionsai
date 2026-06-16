@@ -5,25 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from distr.core.automation_orchestrator import is_automation_workflow, serialize_automation_workflow
-from distr.core.db import get_session
-from distr.core.db.workflow import AutoWorkflow
+from distr.core.automation.store import list_automations
 
 logger = logging.getLogger(__name__)
-
-
-def _json_config(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    if not raw:
-        return {}
-    try:
-        import json
-
-        loaded = json.loads(str(raw))
-        return loaded if isinstance(loaded, dict) else {}
-    except Exception:
-        return {}
 
 
 def find_automations_by_preset(
@@ -36,22 +20,12 @@ def find_automations_by_preset(
         return []
     rows: list[dict[str, Any]] = []
     try:
-        with get_session() as session:
-            candidates = (
-                session.query(AutoWorkflow)
-                .filter(AutoWorkflow.workflow_type == "scheduled")
-                .order_by(AutoWorkflow.modified_date.desc())
-                .all()
-            )
-            for workflow in candidates:
-                if not is_automation_workflow(workflow):
-                    continue
-                marker = _json_config(workflow.context_rules)
-                if str(marker.get("preset_id") or "").strip().lower() != key:
-                    continue
-                if active_only and (workflow.status or "").strip().lower() != "active":
-                    continue
-                rows.append(serialize_automation_workflow(workflow))
+        for automation in list_automations():
+            if str(automation.get("preset_id") or "").strip().lower() != key:
+                continue
+            if active_only and (automation.get("status") or "").strip().lower() != "active":
+                continue
+            rows.append(automation)
     except Exception:
         logger.debug("find_automations_by_preset failed", exc_info=True)
     return rows

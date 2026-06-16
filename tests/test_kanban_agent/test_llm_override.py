@@ -193,6 +193,31 @@ class TestLLMOverrideResolution:
         assert provider == "OpenAI"
         assert model == "gpt-4o"
 
+    def test_resolve_llm_candidates_prefers_workflow_then_conversational(self):
+        from distr.core.llm_factory import resolve_llm_candidates
+
+        settings = {
+            "workflow_llm_provider": "openai",
+            "workflow_llm_model": "gpt-5",
+            "conversational_llm_provider": "openai",
+            "conversational_llm_model": "gpt-5.2",
+        }
+        candidates = resolve_llm_candidates(settings)
+        assert candidates[0] == ("openai", "gpt-5")
+        assert ("openai", "gpt-5.2") in candidates
+
+    def test_resolve_llm_candidates_inherits_conversational_when_workflow_empty(self):
+        from distr.core.llm_factory import resolve_llm_candidates
+
+        settings = {
+            "workflow_llm_provider": "",
+            "workflow_llm_model": "",
+            "conversational_llm_provider": "Ollama",
+            "conversational_llm_model": "deepseek-v4-pro:cloud",
+        }
+        candidates = resolve_llm_candidates(settings)
+        assert candidates[0] == ("ollama", "deepseek-v4-pro:cloud")
+
 
 class TestLLMOverrideLifecycle:
     """Property 13: LLM Override lifecycle scoping.

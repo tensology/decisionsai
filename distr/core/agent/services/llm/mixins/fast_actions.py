@@ -107,17 +107,23 @@ class FastActionMixin:
     # --- fast-action sub-handlers (private) ---
 
     async def _fa_push_tts(self, text: str):
-        """Helper: push text through TTS pipeline frames.
-        Skips TTS for Telegram requests — responses go via _emit_telegram_response instead."""
-        if getattr(self, '_is_telegram_request', False):
-            logger.debug("Skipping TTS for fast action: Telegram request")
-            return
+        """Push text through the desktop TTS pipeline."""
         from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame
         await self.push_frame(LLMFullResponseStartFrame())
         cleaned = clean_text_for_tts(text)
         if cleaned:
             await self.push_frame(TextFrame(text=cleaned))
         await self.push_frame(LLMFullResponseEndFrame())
+
+    async def _fa_deliver_spoken_response(self, text: str) -> None:
+        """Speak on desktop speakers or deliver voice to Telegram / remote control."""
+        cleaned = clean_text_for_tts(str(text or "").strip(), spoken_prose=True)
+        if not cleaned:
+            return
+        if getattr(self, "_is_telegram_request", False):
+            self._emit_telegram_response(cleaned, "")
+            return
+        await self._fa_push_tts(cleaned)
 
     def _fa_save_to_history(self, chat_id, text: str, emit_signals: bool = False):
         """Helper: save assistant message and optionally emit UI signals."""
@@ -382,7 +388,7 @@ class FastActionMixin:
                 await tool._read_task
             except Exception as e:
                 logger.error("LLM: Error awaiting read task: %s", e)
-                await self._fa_push_tts("Error reading content.")
+                await self._fa_deliver_spoken_response("Error reading content.")
             finally:
                 tool._read_task = None
             text_read = getattr(tool, "_last_read_text", "") or ""
@@ -390,17 +396,19 @@ class FastActionMixin:
                 tool._last_read_text = None
             if text_read:
                 self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
+                if getattr(self, "_is_telegram_request", False):
+                    await self._fa_deliver_spoken_response(text_read)
             else:
                 self._fa_record_read_aloud_activity(chat_id, "Read aloud", "(selection read aloud)", user_text)
 
         elif result and isinstance(result, str) and result.startswith("READ_ACTION:"):
             text_to_read = result[len("READ_ACTION:"):]
             text_read = text_to_read
-            await self._fa_push_tts(text_to_read)
+            await self._fa_deliver_spoken_response(text_to_read)
             self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
         else:
             logger.warning("LLM: TTS path fallback, no _read_task and no READ_ACTION, result=%s", result)
-            await self._fa_push_tts("I couldn't read that aloud.")
+            await self._fa_deliver_spoken_response("I couldn't read that aloud.")
 
         return True
 
@@ -414,18 +422,18 @@ class FastActionMixin:
                     text_to_read = text_to_read.split("\n\nThis is the current clipboard content.")[0].strip()
 
             if text_to_read and text_to_read.strip():
-                await self._fa_push_tts(text_to_read)
+                await self._fa_deliver_spoken_response(text_to_read)
                 self._fa_record_read_aloud_activity(
                     chat_id, "Read from clipboard", text_to_read, user_text
                 )
             else:
-                await self._fa_push_tts("The clipboard is empty.")
+                await self._fa_deliver_spoken_response("The clipboard is empty.")
                 self._fa_record_read_aloud_activity(
                     chat_id, "Read from clipboard", "The clipboard is empty.", user_text
                 )
         else:
             error_msg = str(result) if result else "Could not read the clipboard."
-            await self._fa_push_tts(error_msg)
+            await self._fa_deliver_spoken_response(error_msg)
         return True
 
     async def _fa_handle_llm_response(self, fast_action, chat_id, result, tool) -> bool:

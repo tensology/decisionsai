@@ -167,3 +167,79 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
     assert events[-1]["event_type"] == "needs_input"
     assert events[-1]["legacy_event_type"] == "user_steer"
     assert "Hermes" not in events[-1]["notification"]["text"]
+
+
+def test_cursor_completed_auto_continues_waiting_ide_handoff(monkeypatch):
+    factory = _make_factory()
+
+    with _session_ctx(factory) as session:
+        workflow = AutoWorkflow(name="Cursor IDE Handoff", status="active")
+        session.add(workflow)
+        session.flush()
+        step = AutoWorkflowStep(
+            workflow_id=workflow.id,
+            name="Send to Cursor",
+            position=0,
+            action_type="send_to_project_cli",
+            status="running",
+        )
+        session.add(step)
+        session.flush()
+        run = AutoWorkflowRun(
+            workflow_id=workflow.id,
+            status="waiting",
+            current_step_id=step.id,
+            ticket_id=88,
+            board_id=13,
+            run_data=json.dumps({
+                "project_id": 41,
+                "execution_session_id": 27,
+                "waiting_kind": "ide_handoff",
+                "ide_handoff_pending": True,
+            }),
+        )
+        session.add(run)
+        session.flush()
+        workflow_id = workflow.id
+        run_id = run.id
+        step_id = step.id
+
+    def get_session():
+        return _session_ctx(factory)
+
+    continue_waiting_step = MagicMock(return_value={"success": True, "status": "running"})
+    monkeypatch.setattr("distr.core.db.get_session", get_session)
+    monkeypatch.setattr("distr.core.orchestrator.get_session", get_session)
+    monkeypatch.setattr("distr.core.workflow.standards_memory.get_session", get_session)
+    monkeypatch.setattr("distr.core.orchestrator.is_orchestrator_enabled", lambda: False)
+    monkeypatch.setattr(
+        "distr.gui.web.routes.settings.workflows.increment_workflow_updated",
+        MagicMock(),
+        raising=False,
+    )
+    monkeypatch.setattr("distr.gui.web.workflow_events.increment_workflow_updated", MagicMock())
+    monkeypatch.setattr(
+        "distr.core.workflow.dispatcher.continue_waiting_step",
+        continue_waiting_step,
+    )
+
+    client = _make_client()
+    response = client.post(
+        f"/api/workflows/{workflow_id}/runs/{run_id}/codex-events",
+        json={
+            "event_type": "cursor_completed",
+            "status": "completed",
+            "message": "IDE work finished.",
+            "output": "Updated files and ran tests.",
+            "execution_session_id": 27,
+            "step_id": step_id,
+            "ticket_id": 88,
+            "project_id": 41,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["auto_continue"] == {"success": True, "status": "running"}
+    continue_waiting_step.assert_called_once_with(run_id, "Updated files and ran tests.")

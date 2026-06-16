@@ -454,7 +454,7 @@ class IdeHandoffBackend(ProjectCliBackend):
         return status
 
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
-        from .ide_handoff import build_ide_callback_meta, open_ide_project, write_ide_work_packet
+        from .ide_handoff import build_ide_callback_meta, open_ide_project, write_ide_work_packet, _reporter_path
 
         status = self.check_availability()
         if not status.ready:
@@ -491,14 +491,12 @@ class IdeHandoffBackend(ProjectCliBackend):
         opened = open_ide_project(task.folder, packet_path)
         _emit(on_event, {"type": "ide_handoff_dispatched", "backend": self.id, "work_packet": packet_path, "opened": opened})
         output_lines = [
-            f"Backend: {self.name}",
-            f"Work packet: {packet_path}",
-            f"IDE opened: {'yes' if opened else 'no — open the project manually'}",
+            f"Opened {self.name} with your work packet.",
+            f"Packet: {packet_path}",
             "",
-            "The workflow is waiting for IDE completion. Use the DecisionsAI plugin to report progress and completion.",
+            "Finish in the IDE, then report completion:",
+            f"python3 {json.dumps(_reporter_path(self.id))} --turn-output \"Status: completed\\nSummary: ...\"",
         ]
-        if meta.get("bridge_url"):
-            output_lines.append(f"Bridge: {meta['bridge_url']}")
         return BackendTaskResult(
             True,
             self.id,

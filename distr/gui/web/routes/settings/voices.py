@@ -209,7 +209,7 @@ def register_routes(router, templates):
     async def get_kokoro_voices():
         """Return canonical Kokoro voice list plus any custom cloned voices."""
         try:
-            from distr.core.agent.session import KOKORO_VOICES
+            from distr.core.agent.constants import KOKORO_VOICES
             voices = [{"id": vid, "name": name} for vid, name in KOKORO_VOICES.items()]
         except Exception as e:
             logger.warning(f"Could not load KOKORO_VOICES: {e}")

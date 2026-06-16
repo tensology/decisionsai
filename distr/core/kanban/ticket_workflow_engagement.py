@@ -107,6 +107,47 @@ def build_run_done_message(
     return base
 
 
+def build_ide_handoff_waiting_message(
+    *,
+    ticket_title: str = "",
+    project_name: str = "",
+    backend_label: str = "Cursor",
+) -> str:
+    subject = (ticket_title or project_name or "your ticket").strip()
+    return (
+        f"I opened {backend_label} for {subject}. "
+        "Finish the work there, then report completion from Cursor or reply continue here."
+    )
+
+
+def build_workflow_waiting_message(
+    *,
+    run_id: int,
+    step_id: int,
+    result_text: str,
+    ticket_title: str = "",
+) -> str:
+    clean = (result_text or "").strip()
+    low = clean.lower()
+    if "waiting in ide" in low or "ide opened" in low or "work packet" in low:
+        backend = "Cursor"
+        if "codex" in low:
+            backend = "Codex"
+        return build_ide_handoff_waiting_message(
+            ticket_title=ticket_title,
+            backend_label=backend,
+        )
+    summary = _brief_failure(clean) if "failed" in low else clean
+    if len(summary) > 180:
+        summary = summary[:177].rstrip() + "..."
+    label = (ticket_title or "Workflow").strip()
+    return (
+        f"{label} paused at step {step_id}. "
+        f"{summary or 'It needs your input.'} "
+        "Reply continue, retry, skip, or add instructions."
+    )
+
+
 def _run_context(run_id: int) -> dict[str, Any]:
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -131,6 +172,16 @@ def _run_context(run_id: int) -> dict[str, Any]:
         }
 
 
+def _telegram_manager_from_app():
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        return getattr(app, "telegram_manager", None) if app else None
+    except Exception:
+        return None
+
+
 def notify_ticket_workflow_progress(
     *,
     run_id: int,
@@ -146,7 +197,10 @@ def notify_ticket_workflow_progress(
         return
 
     ctx = _run_context(run_id)
-    service = HumanEngagementService(allow_telegram=True)
+    service = HumanEngagementService(
+        allow_telegram=True,
+        telegram_manager=_telegram_manager_from_app(),
+    )
     decision = service.decide(
         EngagementIntent(
             source="workflow",
@@ -179,6 +233,26 @@ def notify_ticket_workflow_progress(
             from distr.core.signals import speak_text_directly_event_queue
 
             speak_text_directly_event_queue(outbound)
+        elif decision.channel == "remote":
+            from distr.core.integrations.telegram.remote_tts_delivery import enqueue_remote_tts_delivery
+
+            if not enqueue_remote_tts_delivery(
+                outbound,
+                data={
+                    "mode": "proactive",
+                    "source_command": "workflow_progress",
+                    "engagement_kind": "workflow_progress",
+                    "engagement_source": "workflow",
+                    "engagement_priority": priority,
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "state_fingerprint": state_fingerprint,
+                    "explicit_notification_intent": True,
+                },
+            ):
+                from distr.core.signals import speak_text_directly_event_queue
+
+                speak_text_directly_event_queue(outbound)
         elif decision.channel == "telegram":
             from distr.core.signals import get_agent_event_queue
 

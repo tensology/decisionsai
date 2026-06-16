@@ -87,6 +87,22 @@ class WorkflowOrchestrationMixin:
                         self._start_workflow_orchestration(wid, rid, steps, wtype)
                     ),
                 )
+
+            from distr.core.automation.scheduler import get_due_automations, run_scheduled_automation
+
+            due_automations = get_due_automations()
+            if due_automations:
+                logger.debug("Automation scheduler tick: %d automation(s) due", len(due_automations))
+            for automation in due_automations:
+                logger.info(
+                    "Automation scheduler: firing %s (%s)",
+                    automation.get("id"),
+                    (automation.get("schedule") or {}).get("kind"),
+                )
+                run_scheduled_automation(
+                    automation,
+                    event_queue=getattr(self, "agent_event_queue", None),
+                )
             # Recompute the next wake time after runs advance next_run_at (or when idle).
             apply_workflow_scheduler_timer_interval(
                 getattr(self, "workflow_scheduler_timer", None),
@@ -237,12 +253,63 @@ class WorkflowOrchestrationMixin:
             "Workflow: step %d (workflow %d, run %d) is waiting for feedback",
             step_id, workflow_id, run_id,
         )
-        self._send_workflow_waiting_to_telegram(
+        self._notify_workflow_waiting(
             step_id=step_id,
             workflow_id=workflow_id,
             run_id=run_id,
             result_text=result_text,
         )
+
+    def _notify_workflow_waiting(
+        self,
+        *,
+        step_id: int,
+        workflow_id: int,
+        run_id: int,
+        result_text: str,
+    ) -> None:
+        """Notify the user when a workflow pauses for IDE work or feedback."""
+        try:
+            from distr.core.kanban.ticket_workflow_engagement import (
+                build_workflow_waiting_message,
+                notify_ticket_workflow_progress,
+            )
+
+            ctx = {}
+            try:
+                from distr.core.db import get_session
+                from distr.core.db.workflow import AutoWorkflowRun
+
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                    if run and run.run_data:
+                        import json
+
+                        ctx = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                ctx = {}
+
+            message = build_workflow_waiting_message(
+                run_id=run_id,
+                step_id=step_id,
+                result_text=result_text,
+                ticket_title=str(ctx.get("ticket_title") or ""),
+            )
+            notify_ticket_workflow_progress(
+                run_id=run_id,
+                body=message,
+                state_fingerprint=f"waiting:{step_id}",
+                step_id=step_id,
+                priority="high",
+                requires_response=True,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Workflow: waiting notification failed for run %s: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
 
     def _send_workflow_waiting_to_telegram(
         self,
@@ -252,56 +319,13 @@ class WorkflowOrchestrationMixin:
         run_id: int,
         result_text: str,
     ) -> None:
-        """Notify Telegram when a workflow pauses for user input."""
-        manager = getattr(self, "telegram_manager", None)
-        if manager is None:
-            return
-        try:
-            if hasattr(manager, "is_connected") and not manager.is_connected():
-                return
-        except Exception:
-            return
-
-        summary = (result_text or "The workflow step finished and needs input.").strip()
-        if len(summary) > 700:
-            summary = summary[:697].rstrip() + "..."
-        message = (
-            f"Workflow paused and is waiting for you.\n\n"
-            f"Run: {run_id}\n"
-            f"Step: {step_id}\n\n"
-            f"{summary}\n\n"
-            "Reply with what should happen next, for example: continue, retry, skip, or add extra instructions."
-        )
-        decision = HumanEngagementService(
-            telegram_manager=manager,
-            allow_telegram=True,
-        ).decide(EngagementIntent(
-            source="workflow",
-            surface="telegram",
-            kind="workflow_waiting",
-            priority="high",
-            subject_type="workflow_run",
-            subject_id=str(run_id),
-            state_fingerprint=str(step_id),
-            body=message,
-            requires_response=True,
-            run_id=run_id,
+        """Backward-compatible alias for workflow waiting notifications."""
+        self._notify_workflow_waiting(
             step_id=step_id,
-        ))
-        if not decision.should_send:
-            return
-        outbound_text = decision.final_text or decision.final_voice_text or message
-        try:
-            manager.send_to_telegram(text=outbound_text)
-        except TypeError:
-            manager.send_to_telegram(outbound_text)
-        except Exception as exc:
-            logger.debug(
-                "Workflow: failed to notify Telegram for waiting run %s: %s",
-                run_id,
-                exc,
-                exc_info=True,
-            )
+            workflow_id=workflow_id,
+            run_id=run_id,
+            result_text=result_text,
+        )
 
     def _provide_workflow_feedback(
         self, run_id: int, feedback: str,

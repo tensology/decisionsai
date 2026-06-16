@@ -92,6 +92,60 @@ def test_send_to_telegram_event_reaches_worker_when_socket_disconnected(monkeypa
     }]
 
 
+def test_automation_send_to_telegram_bypasses_remote_delivery(monkeypatch):
+    app = DummyApp(DummyTelegramManager(connected=True))
+    remote_calls = []
+    monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)
+    monkeypatch.setattr(
+        "distr.core.integrations.telegram.remote_tts_delivery.resolve_remote_delivery_context",
+        lambda manager, data, consume_pending=False: {
+            "request_id": "remote-test",
+            "source_command": "notification",
+            "mode": "proactive",
+        },
+    )
+    monkeypatch.setattr(
+        app,
+        "_send_to_remote_worker",
+        lambda data, remote_ctx: remote_calls.append((data, remote_ctx)),
+    )
+
+    app._evt_send_to_telegram({
+        "text": "My Board: finish taxes today.",
+        "provider": "tool",
+        "is_done": True,
+        "input_type": "automation",
+        "force_telegram_delivery": True,
+    })
+
+    assert remote_calls == []
+    assert app.worker_calls and app.worker_calls[0]["force_telegram_delivery"] is True
+
+
+def test_automation_delivery_payload_requests_telegram(monkeypatch):
+    queued = []
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._telegram_connected",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._put_main_event",
+        lambda event, data: queued.append((event, data)) or True,
+    )
+    from distr.core.automation_subagent import _deliver_automation_speech
+
+    channel, detail = _deliver_automation_speech(
+        "Finish Player1Sport today.",
+        automation_name="Daily plan",
+        manual=True,
+    )
+
+    assert channel == "telegram"
+    assert "Telegram" in detail
+    assert queued[0][0] == "send_to_telegram"
+    assert queued[0][1]["force_telegram_delivery"] is True
+    assert queued[0][1]["input_type"] == "automation"
+
 def test_explicit_voice_note_keeps_prebuilt_audio_in_text_response_mode(monkeypatch, tmp_path):
     import distr.app.events as events
 

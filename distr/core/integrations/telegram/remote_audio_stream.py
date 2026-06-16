@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-REMOTE_AUDIO_CHUNK_SIZE = 24 * 1024
+REMOTE_AUDIO_CHUNK_SIZE = 64 * 1024
 REMOTE_AUDIO_MIME = "audio/ogg; codecs=opus"
 
 

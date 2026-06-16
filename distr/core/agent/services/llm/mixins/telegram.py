@@ -127,13 +127,21 @@ class TelegramMixin:
             'text': response_text,
             'is_done': is_done,
             'skip_screenshot': skip_screenshot,
-            'provider': 'kokoro',
+            'provider': self._voice_delivery_provider_for_event(),
             'analyzed_image_path': analyzed_image_path,
             'explicit_artifact_intent': explicit_artifact_intent,
             'input_type': getattr(self, '_telegram_input_type', None) or getattr(threading.current_thread(), 'telegram_input_type', None),
         }), block=False)
         logger.info("%s: Emitted send_to_telegram from LLM (bypassed TTS pipeline)",
                     getattr(self, 'SERVICE_NAME', self.__class__.__name__))
+
+    def _voice_delivery_provider_for_event(self) -> str:
+        try:
+            from distr.core.agent.services.tts.outbound_voice import voice_delivery_provider_for_event
+
+            return voice_delivery_provider_for_event()
+        except Exception:
+            return "kokoro"
 
     def _cleanup_telegram_flags(self):
         """Clean up telegram thread-local and instance flags.

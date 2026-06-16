@@ -2332,3 +2332,10 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
                         logger.debug("Could not rename kanban_boards.hermes_policy: %s", exc)
     except Exception as exc:
         logger.debug("Legacy hermes schema migration skipped: %s", exc)
+
+    try:
+        from distr.core.automation.scheduler import ensure_automation_schema
+
+        ensure_automation_schema()
+    except Exception as exc:
+        logger.warning("Automation schema migration failed: %s", exc)

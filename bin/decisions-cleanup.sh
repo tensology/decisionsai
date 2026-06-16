@@ -99,6 +99,37 @@ _kill_pids_from_file() {
     done <"$file"
 }
 
+_restart_pending_active() {
+    local marker="$RUN_DIR/restart_pending"
+    [ -f "$marker" ] || return 1
+    local now mtime age
+    now=$(date +%s)
+    if stat -f %m "$marker" >/dev/null 2>&1; then
+        mtime=$(stat -f %m "$marker")
+    else
+        mtime=$(stat -c %Y "$marker" 2>/dev/null || echo 0)
+    fi
+    age=$((now - mtime))
+    [ "$age" -lt 60 ]
+}
+
+_kill_other_start_py() {
+    local sig="$1"
+    if _restart_pending_active; then
+        _log "restart pending — skipping start.py sweep"
+        return 0
+    fi
+    if ! command -v pgrep &>/dev/null; then
+        return 0
+    fi
+    local pid
+    while IFS= read -r pid; do
+        [ -z "$pid" ] && continue
+        [ -n "$MAIN_PID" ] && [ "$pid" = "$MAIN_PID" ] && continue
+        _kill_tree "$pid" "$sig"
+    done < <(pgrep -f "${SCRIPT_DIR}/bin/start.py" 2>/dev/null || true)
+}
+
 _log "starting (main=${MAIN_PID:-none} agent=${AGENT_PID:-none})"
 
 # Graceful pass
@@ -106,14 +137,7 @@ if [ -n "$AGENT_PID" ]; then
     _kill_tree "$AGENT_PID" TERM
 fi
 _kill_pids_from_file TERM "$WORKER_PID_FILE"
-
-if command -v pgrep &>/dev/null; then
-    while IFS= read -r pid; do
-        [ -z "$pid" ] && continue
-        [ -n "$MAIN_PID" ] && [ "$pid" = "$MAIN_PID" ] && continue
-        _kill_tree "$pid" TERM
-    done < <(pgrep -f "${SCRIPT_DIR}/bin/start.py" 2>/dev/null || true)
-fi
+_kill_other_start_py TERM
 
 sleep 0.75
 
@@ -122,14 +146,7 @@ if [ -n "$AGENT_PID" ]; then
     _kill_tree "$AGENT_PID" KILL
 fi
 _kill_pids_from_file KILL "$WORKER_PID_FILE"
-
-if command -v pgrep &>/dev/null; then
-    while IFS= read -r pid; do
-        [ -z "$pid" ] && continue
-        [ -n "$MAIN_PID" ] && [ "$pid" = "$MAIN_PID" ] && continue
-        _kill_tree "$pid" KILL
-    done < <(pgrep -f "${SCRIPT_DIR}/bin/start.py" 2>/dev/null || true)
-fi
+_kill_other_start_py KILL
 
 decisions_stop_sidecar
 rm -f "$RUN_DIR/decisions.pid" "$RUN_DIR/decisions-run.pid" "$WORKER_PID_FILE"

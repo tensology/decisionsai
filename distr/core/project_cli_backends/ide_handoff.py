@@ -59,9 +59,9 @@ def _callback_block(backend_id: str, meta: dict[str, Any]) -> str:
         f"{json.dumps(meta, ensure_ascii=False, separators=(',', ':'))}\n"
         "When this work is opened, prompted, steered, paused, interrupted, blocked, completed, "
         "or materially updated, report the event back to DecisionsAI if DecisionsAI is reachable. "
-        "Prefer the reporter script when available:\n"
-        f"python3 {json.dumps(reporter)} --callback-url {json.dumps(bridge_url)} "
-        f'--event-type {event_prompt} --status observed --message "<what the human asked or changed>"\n'
+        "Prefer the reporter script when available (meta is auto-discovered from this packet):\n"
+        f"python3 {json.dumps(reporter)} --cwd {json.dumps(meta.get('project_folder') or '')} "
+        f'--turn-output "Status: completed\\nSummary: <what changed>"\n'
         f"Use event_type values: {event_started}, {event_prompt}, user_steer, {prefix}_waiting, "
         f"{prefix}_interrupted, {prefix}_progress, {prefix}_completed, {prefix}_failed, {prefix}_needs_input.\n"
         "Do not wait until the final answer if the human submits another prompt, changes direction, "
@@ -89,6 +89,7 @@ def build_ide_callback_meta(task: ProjectTask, *, backend_id: str, handoff_event
     return {
         "project_id": task.project_id,
         "project_name": task.project_name,
+        "project_folder": task.folder,
         "backend": backend_id,
         "origin": task.origin,
         "run_id": task.run_id,
@@ -163,7 +164,8 @@ def write_ide_work_packet(
             "## Callback",
             "",
             "The workflow stays waiting until you report completion.",
-            "- VS Code/Cursor command: `DecisionsAI: Report Workflow Complete`",
+            f"- Reporter: python3 {json.dumps(meta.get('reporter') or _reporter_path(backend_id))} "
+            '--turn-output "Status: completed\\nSummary: ..."',
         ]
     )
     if meta.get("continue_url"):

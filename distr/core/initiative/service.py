@@ -96,15 +96,11 @@ def _initiative_update_text(text: str) -> str:
 
 def _planner_telegram_excerpt(markdown: str, max_len: int = 320) -> str:
     """Keep scheduled planner notifications readable in chat previews."""
-    clean = re.sub(r"<!--.*?-->", " ", str(markdown or ""), flags=re.DOTALL)
-    clean = re.sub(r"#+\s*", "", clean)
-    clean = re.sub(r"[-*]\s+", "", clean)
-    clean = re.sub(r"\bTask instruction:\s*", "", clean, flags=re.IGNORECASE)
+    from distr.core.initiative.planners import tts_excerpt_from_markdown
+
+    clean = tts_excerpt_from_markdown(markdown, max_len=max_len)
     clean = re.sub(r"\bHermes\b", "I", clean)
-    clean = " ".join(clean.split())
-    if len(clean) <= max_len:
-        return clean
-    return clean[: max_len - 1].rsplit(" ", 1)[0].rstrip() + "…"
+    return clean
 
 
 def _planner_ready_text(scope_label: str, excerpt: str) -> str:
@@ -876,23 +872,10 @@ class InitiativeService:
         except ImportError:
             raise RuntimeError("InitiativeService: litellm is not installed")
 
-        # Collect candidate providers in priority order:
-        #   1. conversational_llm_provider/model (preferred for lightweight calls)
-        #   2. agent_provider/model (main agent model — may be expensive)
-        #   3. ollama fallback (always available locally)
-        candidates = []
+        # Collect candidate providers in priority order (workflow → conversational → agent → ollama).
+        from distr.core.llm_factory import resolve_llm_candidates
 
-        conv_provider = (settings.get("conversational_llm_provider") or "").strip().lower()
-        conv_model = (settings.get("conversational_llm_model") or "").strip()
-        agent_provider = (settings.get("agent_provider") or "").strip().lower()
-        agent_model = (settings.get("agent_model") or "").strip()
-
-        if conv_provider and conv_model:
-            candidates.append((conv_provider, conv_model))
-        if agent_provider and agent_model and (agent_provider, agent_model) != (conv_provider, conv_model):
-            candidates.append((agent_provider, agent_model))
-        # Always add Ollama as final fallback
-        candidates.append(("ollama", "llama3.2"))
+        candidates = resolve_llm_candidates(settings)
 
         system_prompt = self._build_system_prompt(settings, bundle, level)
         user_prompt = json.dumps({
@@ -1600,26 +1583,17 @@ class InitiativeService:
             logger.debug("InitiativeService: could not record notification route", exc_info=True)
 
     def _send_remote_notification(self, text: str) -> bool:
-        manager = self.telegram_manager
-        if manager is None or not hasattr(manager, "_send_websocket_message"):
-            return False
-        ctx = getattr(manager, "_pending_remote_agent_response", None)
-        request_id = ctx.get("request_id") if isinstance(ctx, dict) else None
-        try:
-            manager._send_websocket_message({
-                "type": "remote_agent_response",
-                "request_id": request_id,
-                "data": {
-                    "text": text,
-                    "mode": "proactive",
-                    "source_command": "initiative_notification",
-                    "audio": None,
-                },
-            })
-            return True
-        except Exception:
-            logger.debug("InitiativeService: remote notification send failed", exc_info=True)
-            return False
+        from distr.core.integrations.telegram.remote_tts_delivery import enqueue_remote_tts_delivery
+
+        return enqueue_remote_tts_delivery(
+            text,
+            data={
+                "mode": "proactive",
+                "source_command": "initiative_notification",
+                "engagement_source": "initiative",
+                "explicit_notification_intent": True,
+            },
+        )
 
     def _notice_allowed(self, key: str, *, repeat_after_s: float | None = None) -> bool:
         now = time.time()

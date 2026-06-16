@@ -1901,22 +1901,40 @@ def register_routes(router, templates):
                     else {}
                 )
                 lower_event_type = event_type.lower().replace("-", "_").replace(" ", "_")
-                needs_human = lower_event_type in {
+                bridge_suffix = lower_event_type
+                for prefix in ("cursor_", "codex_", "worker_"):
+                    if bridge_suffix.startswith(prefix):
+                        bridge_suffix = bridge_suffix[len(prefix):]
+                        break
+                run_status_before = run.status
+                waiting_kind_before = str(run_data.get("waiting_kind") or "").strip()
+                needs_human = bridge_suffix in {
+                    "needs_input",
+                    "waiting",
+                    "interrupted",
+                } or lower_event_type in {
                     "needs_input",
                     "worker_needs_input",
                     "codex_needs_input",
+                    "cursor_needs_input",
                     "codex_waiting",
+                    "cursor_waiting",
                     "human_takeover",
                     "manual_fix",
                     "changes_requested",
                 }
-                worker_terminal = lower_event_type in {
+                worker_terminal = bridge_suffix in {
+                    "completed",
+                    "failed",
+                } or lower_event_type in {
                     "completed",
                     "worker_completed",
                     "codex_completed",
+                    "cursor_completed",
                     "failed",
                     "worker_failed",
                     "codex_failed",
+                    "cursor_failed",
                 }
 
                 history = run_data.get("codex_bridge_events") or []
@@ -1950,10 +1968,10 @@ def register_routes(router, templates):
                 })
                 if event_type == "user_steer" and message:
                     live_context["latest_user_steer"] = message
-                if event_type in {"codex_completed", "codex_failed"} and message:
+                if event_type in {"codex_completed", "codex_failed", "cursor_completed", "cursor_failed"} and message:
                     live_context["latest_terminal_summary"] = message
                 run_data["live_agent_context"] = live_context
-                if event_type in {"user_steer", "codex_interrupted", "codex_waiting", "codex_needs_input"}:
+                if event_type in {"user_steer", "codex_interrupted", "codex_waiting", "codex_needs_input", "cursor_interrupted", "cursor_waiting", "cursor_needs_input"}:
                     run_data["last_codex_bridge_state"] = {
                         "event_type": event_type,
                         "status": status,
@@ -2032,7 +2050,7 @@ def register_routes(router, templates):
                 status=status,
             )
             captured_standard = False
-            if event_type in {"user_steer", "codex_interrupted", "codex_needs_input"} and message:
+            if event_type in {"user_steer", "codex_interrupted", "codex_needs_input", "cursor_interrupted", "cursor_needs_input"} and message:
                 captured_standard = capture_feedback_as_standard(workflow_id, message)
             if message:
                 try:
@@ -2086,6 +2104,21 @@ def register_routes(router, templates):
             )
 
             increment_workflow_updated()
+
+            auto_continue_result = None
+            if (
+                bridge_suffix == "completed"
+                and run_status_before == "waiting"
+                and waiting_kind_before in {"ide_handoff", "needs_human_input"}
+            ):
+                try:
+                    from distr.core.workflow.dispatcher import continue_waiting_step
+
+                    resume_text = (event.output or event.message or "IDE work completed.").strip()
+                    auto_continue_result = continue_waiting_step(int(run_id), resume_text)
+                except Exception:
+                    logger.debug("IDE bridge auto-continue failed", exc_info=True)
+
             return JSONResponse({
                 "success": True,
                 "workflow_id": workflow_id,
@@ -2096,6 +2129,7 @@ def register_routes(router, templates):
                 "orchestrator_event_id": orchestrator_event_id,
                 "human_intervention_event_id": mistake_event_id,
                 "captured_standard": captured_standard,
+                "auto_continue": auto_continue_result,
             })
         except Exception as e:
             logger.error("Workflow Codex bridge event failed: %s", e, exc_info=True)

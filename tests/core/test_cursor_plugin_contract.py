@@ -30,8 +30,9 @@ def test_cursor_plugin_ships_decisions_event_reporter():
     assert "Report Cursor-side workflow events back to DecisionsAI" in reporter
     assert "--callback-url" in reporter
     assert "--cwd" in reporter
-    assert "--event-type" in reporter
-    assert "/api/ide/sessions/event" in reporter
+    assert "_discover_packet_meta" in reporter
+    assert "/codex-events" in reporter
+    assert "execution_session_id" in reporter
     assert "urllib.request" in reporter
 
 

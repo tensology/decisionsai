@@ -29,39 +29,27 @@ def _json_config(raw: Any) -> dict[str, Any]:
 
 
 def automation_id(workflow_id: int | str) -> str:
-    return f"wf_{int(workflow_id)}"
+    from distr.core.automation.store import legacy_public_id, public_id
+
+    try:
+        return public_id(int(workflow_id))
+    except (TypeError, ValueError):
+        return legacy_public_id(workflow_id)
 
 
 def is_automation_workflow(workflow: AutoWorkflow | None) -> bool:
-    if workflow is None:
-        return False
-    marker = _json_config(workflow.context_rules)
-    return (
-        workflow.workflow_type == "scheduled"
-        and str(marker.get("decisions_surface") or "").strip().lower() == AUTOMATION_SURFACE
-    )
+    from distr.core.automation.store import is_automation_workflow as _is_auto
 
-
-def _first_instruction_step(workflow: AutoWorkflow) -> AutoWorkflowStep | None:
-    steps = sorted(list(workflow.steps or []), key=lambda s: s.position or 0)
-    return steps[0] if steps else None
+    return _is_auto(workflow)
 
 
 def serialize_automation_workflow(workflow: AutoWorkflow) -> dict[str, Any]:
-    marker = _json_config(workflow.context_rules)
-    step = _first_instruction_step(workflow)
-    action_config = marker.get("action_config") if isinstance(marker.get("action_config"), dict) else {}
-    return {
-        "id": automation_id(workflow.id),
-        "workflow_id": workflow.id,
-        "step_id": step.id if step else None,
-        "name": workflow.name or "Untitled Automation",
-        "automation_type": marker.get("automation_type") or "scheduled_instruction",
-        "preset_id": str(marker.get("preset_id") or "").strip(),
-        "action_config": dict(action_config),
-        "instruction": (step.instruction if step else "") or "",
-        "status": workflow.status or "active",
-    }
+    from distr.core.automation.store import get_automation, serialize_legacy_workflow
+
+    migrated = get_automation(f"wf_{workflow.id}")
+    if migrated and migrated.get("record_id"):
+        return migrated
+    return serialize_legacy_workflow(workflow)
 
 
 def automation_prompt(automation: dict[str, Any]) -> str:
@@ -162,46 +150,20 @@ def _record_dispatch_run(
     execution_mode: str = "agent_chat_orchestrator",
     tool_result: dict[str, Any] | None = None,
 ) -> int | None:
-    workflow_id = automation.get("workflow_id")
-    if not workflow_id:
-        return None
-    now = datetime.utcnow().replace(microsecond=0)
-    run_data = {
-        "source_type": "automation",
-        "source_label": "Automation",
-        "execution_mode": execution_mode,
-        "automation_id": automation.get("id"),
-        "automation_name": automation.get("name"),
-        "preset_id": automation.get("preset_id") or "",
-        "instruction": automation.get("instruction"),
-        "action_config": automation.get("action_config") or {},
-        "manual": bool(manual),
-        "message": summary,
-        "summary": summary,
-        "chat_id": chat_id,
-        "is_workflow_attached": True,
-        "orchestration_event_ids": event_ids,
-        "prompt_preview": prompt[:1500],
-        **(schedule_metadata or {}),
-    }
-    if tool_result:
-        run_data["tool_result"] = tool_result
-    with get_session() as session:
-        run = AutoWorkflowRun(
-            workflow_id=int(workflow_id),
-            status=status,
-            started_at=now,
-            completed_at=now if status in {"failed", "skipped", "completed"} else None,
-            current_step_id=automation.get("step_id"),
-            run_data=json.dumps(run_data, ensure_ascii=False, default=str),
-        )
-        session.add(run)
-        workflow = session.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
-        if workflow:
-            workflow.last_run_at = now
-            workflow.modified_date = now
-        session.commit()
-        return run.id
+    from distr.core.automation.store import record_automation_run
+
+    return record_automation_run(
+        automation=automation,
+        status=status,
+        summary=summary,
+        event_ids=event_ids,
+        manual=manual,
+        prompt=prompt,
+        chat_id=chat_id,
+        schedule_metadata=schedule_metadata,
+        execution_mode=execution_mode,
+        tool_result=tool_result,
+    )
 
 
 def _bound_tool_name(automation: dict[str, Any]) -> str:
@@ -505,13 +467,22 @@ def dispatch_automation_to_current_chat(
 
     if workflow_run_id:
         try:
+            from distr.core.db.automation import AutomationRun
+
             with get_session() as session:
-                run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == workflow_run_id).first()
+                run = session.query(AutomationRun).filter(AutomationRun.id == workflow_run_id).first()
                 if run:
                     data = _json_config(run.run_data)
                     data["orchestration_event_ids"] = event_ids
                     run.run_data = json.dumps(data, ensure_ascii=False, default=str)
                     session.commit()
+                else:
+                    run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == workflow_run_id).first()
+                    if run:
+                        data = _json_config(run.run_data)
+                        data["orchestration_event_ids"] = event_ids
+                        run.run_data = json.dumps(data, ensure_ascii=False, default=str)
+                        session.commit()
         except Exception:
             logger.debug("Automation run event id update failed", exc_info=True)
 

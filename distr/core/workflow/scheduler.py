@@ -452,6 +452,13 @@ def get_due_scheduled_workflows() -> List[dict]:
         )
         result = []
         for wf in rows:
+            try:
+                from distr.core.automation.store import is_automation_workflow
+
+                if is_automation_workflow(wf):
+                    continue
+            except Exception:
+                pass
             # Skip if an active run exists (status running or waiting)
             active_run = (
                 session.query(AutoWorkflowRun)

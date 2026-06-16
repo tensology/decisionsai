@@ -13,6 +13,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
@@ -36,7 +37,110 @@ def _with_internal_token(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
-def _event_body(args: argparse.Namespace, *, event_type: str, status: str, message: str, input_text: str, output_text: str, session_id: int | None = None) -> dict:
+def _is_workflow_bridge_url(url: str) -> bool:
+    return "/codex-events" in (url or "")
+
+
+def _discover_packet_meta(cwd: str) -> dict:
+    """Read the newest DecisionsAI work packet meta from the project .tickets folder."""
+    roots: list[Path] = []
+    project_root = Path(cwd or os.getcwd()).expanduser().resolve()
+    roots.append(project_root)
+    if project_root.name != ".tickets":
+        roots.append(project_root / ".tickets")
+
+    seen: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            packets = sorted(
+                root.glob("decisionsai_*.md"),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            continue
+        for packet in packets:
+            try:
+                head = packet.read_text(encoding="utf-8", errors="replace")[:8000]
+            except Exception:
+                continue
+            for marker in ("<!-- decisions-ide-meta:", "<!-- decisions-meta:"):
+                if marker not in head:
+                    continue
+                start = head.index(marker) + len(marker)
+                end = head.find("-->", start)
+                if end < 0:
+                    continue
+                try:
+                    meta = json.loads(head[start:end].strip())
+                except Exception:
+                    continue
+                if isinstance(meta, dict) and meta:
+                    meta["_packet_path"] = str(packet)
+                    return meta
+    return {}
+
+
+def _apply_packet_meta(args: argparse.Namespace) -> None:
+    meta = _discover_packet_meta(args.cwd)
+    if not meta:
+        return
+    if not args.callback_url:
+        bridge = str(meta.get("bridge_url") or "").strip()
+        if bridge:
+            args.callback_url = bridge
+    for attr, key in (
+        ("execution_session_id", "execution_session_id"),
+        ("step_id", "step_id"),
+        ("ticket_id", "ticket_id"),
+        ("project_id", "project_id"),
+    ):
+        if getattr(args, attr, None) is None:
+            raw = meta.get(key)
+            if str(raw or "").isdigit():
+                setattr(args, attr, int(raw))
+
+
+def _bridge_event_body(
+    args: argparse.Namespace,
+    *,
+    event_type: str,
+    status: str,
+    message: str,
+    input_text: str,
+    output_text: str,
+) -> dict:
+    return {
+        "event_type": event_type,
+        "status": status or "",
+        "message": message or output_text or input_text,
+        "input": input_text,
+        "output": output_text,
+        "execution_session_id": args.execution_session_id,
+        "step_id": args.step_id,
+        "ticket_id": args.ticket_id,
+        "project_id": args.project_id,
+        "payload": _json_arg(args.payload_json),
+        "evidence": _json_arg(args.evidence_json),
+    }
+
+
+def _ide_event_body(
+    args: argparse.Namespace,
+    *,
+    event_type: str,
+    status: str,
+    message: str,
+    input_text: str,
+    output_text: str,
+    session_id: int | None = None,
+) -> dict:
     return {
         "source": args.source,
         "cwd": args.cwd,
@@ -93,6 +197,37 @@ def _response_session_id(text: str) -> int | None:
     return int(value) if str(value or "").isdigit() else None
 
 
+def _body_for(
+    args: argparse.Namespace,
+    *,
+    bridge_endpoint: bool,
+    event_type: str,
+    status: str,
+    message: str,
+    input_text: str,
+    output_text: str,
+    session_id: int | None = None,
+) -> dict:
+    if bridge_endpoint:
+        return _bridge_event_body(
+            args,
+            event_type=event_type,
+            status=status,
+            message=message,
+            input_text=input_text,
+            output_text=output_text,
+        )
+    return _ide_event_body(
+        args,
+        event_type=event_type,
+        status=status,
+        message=message,
+        input_text=input_text,
+        output_text=output_text,
+        session_id=session_id,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report a Cursor event to DecisionsAI.")
     parser.add_argument("--callback-url", default="")
@@ -116,15 +251,19 @@ def main() -> int:
     parser.add_argument("--strict", action="store_true", help="Return non-zero and print errors when DecisionsAI is offline.")
     args = parser.parse_args()
 
+    _apply_packet_meta(args)
     target_url = args.callback_url or f"{args.api_base.rstrip('/')}/api/ide/sessions/event"
+    bridge_endpoint = _is_workflow_bridge_url(target_url)
+
     if args.turn_input or args.turn_output:
         session_id = args.execution_session_id
         outputs: list[str] = []
         if args.turn_input:
             code, text = _post_event(
                 target_url,
-                _event_body(
+                _body_for(
                     args,
+                    bridge_endpoint=bridge_endpoint,
                     event_type=f"{args.source}_prompt_submitted",
                     status="observed",
                     message=args.message or "IDE prompt submitted.",
@@ -137,14 +276,17 @@ def main() -> int:
             if code:
                 return code
             outputs.append(text)
-            session_id = _response_session_id(text) or session_id
+            if not bridge_endpoint:
+                session_id = _response_session_id(text) or session_id
         if args.turn_output:
+            event_status = args.turn_status or "completed"
             code, text = _post_event(
                 target_url,
-                _event_body(
+                _body_for(
                     args,
-                    event_type=f"{args.source}_completed" if args.turn_status == "completed" else f"{args.source}_{args.turn_status}",
-                    status=args.turn_status,
+                    bridge_endpoint=bridge_endpoint,
+                    event_type=f"{args.source}_completed" if event_status == "completed" else f"{args.source}_{event_status}",
+                    status=event_status,
                     message=args.message or "IDE response completed.",
                     input_text="",
                     output_text=args.turn_output,
@@ -162,8 +304,9 @@ def main() -> int:
 
     code, text = _post_event(
         target_url,
-        _event_body(
+        _body_for(
             args,
+            bridge_endpoint=bridge_endpoint,
             event_type=args.event_type,
             status=args.status,
             message=args.message,

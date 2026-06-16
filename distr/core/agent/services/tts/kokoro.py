@@ -361,7 +361,16 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                                     self._tts_started_emitted = True
                                     if self.event_queue:
                                         try:
-                                            self.event_queue.put(('tts_started', {}), block=False)
+                                            _, force_desktop_tts = self._route_telegram_flags()
+                                            started_payload = (
+                                                {"source": "direct_desktop"}
+                                                if force_desktop_tts
+                                                else {}
+                                            )
+                                            self.event_queue.put(
+                                                ('tts_started', started_payload),
+                                                block=False,
+                                            )
                                             logger.debug("TTS: tts_started emitted")
                                         except Exception:
                                             pass
@@ -1025,10 +1034,12 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                         logger.debug(f"TTS: Sending to Telegram - text='{session_text_normalized[:100]}...', is_done={is_done}, analyzed_image_path={analyzed_image_path}")
                         logger.debug(f"[Telegram TTS] 📤 Sending: text='{session_text_normalized[:50]}...', is_done={is_done}, screenshot={analyzed_image_path is not None}")
                         
+                        from distr.core.agent.services.tts.outbound_voice import voice_delivery_provider_for_event
+
                         self.event_queue.put(('send_to_telegram', {
                             'text': session_text_normalized,
                             'is_done': is_done,
-                            'provider': 'kokoro',  # Only send for Kokoro TTS
+                            'provider': voice_delivery_provider_for_event(),
                             'analyzed_image_path': analyzed_image_path,  # Image from vision analysis (if from Telegram)
                             'explicit_artifact_intent': bool(should_send_raw_screenshot),
                         }), block=False)

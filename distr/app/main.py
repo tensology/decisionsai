@@ -86,7 +86,7 @@ else:
 # 3. Local Imports
 # ===========================================
 from distr.core.utils import load_settings_from_db, save_settings_to_db
-from distr.core.dock_app import configure_qt_dock_identity, is_dock_app
+from distr.core.dock_app import configure_qt_dock_identity, ensure_macos_dock_visible, is_dock_app, persist_dock_launch_preference, resolve_app_bundle_path, wants_dock_icon
 from distr.core.signals import signal_manager
 from distr.core.chat import ChatService
 from distr.core.chat_manager import ChatManagerCore
@@ -460,6 +460,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             self.setFont(font)
             
         self._quitting = False
+        if is_dock_app():
+            persist_dock_launch_preference(resolve_app_bundle_path(CORE_DIR))
         self.agent_process = None
         self.selected_input_device = None
         self.selected_output_device = None
@@ -584,13 +586,10 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         signal_manager.stt_model_changed.connect(self.update_agent_stt_model)
         # macOS-specific: set activation policy and dock icon (only on macOS)
         if platform.system() == 'Darwin' and APPKIT_AVAILABLE:
-            if is_dock_app():
-                AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
-            else:
-                AppKit.NSApp.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
-            # Set the application icon so macOS shows it properly when pinned to dock
-            # (instead of the generic glass square)
+            ensure_macos_dock_visible(self)
             self._set_macos_dock_icon()
+            QTimer.singleShot(0, lambda: ensure_macos_dock_visible(self))
+            QTimer.singleShot(1500, lambda: ensure_macos_dock_visible(self))
         configure_qt_dock_identity(self)
         
         # Initialize windows

@@ -175,10 +175,14 @@ if sys.platform == 'darwin':
     # Import AppKit only on macOS
     try:
         import AppKit
-        from distr.core.dock_app import is_dock_app
+        from distr.core.dock_app import is_dock_app, wants_dock_icon
 
-        if not is_dock_app():
-            AppKit.NSBundle.mainBundle().infoDictionary()['LSUIElement'] = '1'
+        info = AppKit.NSBundle.mainBundle().infoDictionary()
+        if wants_dock_icon():
+            if isinstance(info, dict):
+                info.pop("LSUIElement", None)
+        else:
+            info["LSUIElement"] = "1"
     except ImportError:
         print("Warning: AppKit (PyObjC) not found. Install with: pip install pyobjc")
         print("Continuing anyway...")
@@ -397,6 +401,14 @@ if __name__ == "__main__":
         or os.environ.get("DECISIONS_RESTARTING") == "1"
     )
     if skip_kill:
+        try:
+            from distr.core.app_restart import clear_restart_pending
+
+            clear_restart_pending()
+        except Exception:
+            pass
+        if wants_dock_icon():
+            os.environ.setdefault("DECISIONS_DOCK_APP", "1")
         print("Starting Decisions (restart launch — skipping duplicate-process cleanup)...")
     else:
         kill_existing_decisions_processes()

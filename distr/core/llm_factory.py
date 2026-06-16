@@ -119,6 +119,58 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     return normalize_provider(provider), model
 
 
+def resolve_llm_candidates(settings: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Return provider/model pairs for retryable lightweight LLM calls.
+
+    Matches WorkflowAgent resolution: workflow LLM when configured, otherwise
+    conversational (Settings → Workflow → "Inherit from Conversational"), then
+    legacy agent keys, then a local Ollama fallback.
+    """
+    from distr.core.llm_override import get_llm_override
+
+    candidates: List[Tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(provider: Any, model: Any) -> None:
+        raw_provider = str(provider or "").strip()
+        if not raw_provider:
+            return
+        raw_model = str(model or "").strip()
+        normalized = normalize_provider(raw_provider).lower()
+        key = (normalized, raw_model.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append((normalized, raw_model))
+
+    override = get_llm_override()
+    if override and override.orchestrator_provider:
+        add(override.orchestrator_provider, override.orchestrator_model or "")
+
+    workflow_provider = (settings.get("workflow_llm_provider") or "").strip()
+    if workflow_provider:
+        add(workflow_provider, settings.get("workflow_llm_model") or "")
+
+    conv_provider = (
+        (settings.get("conversational_llm_provider") or "").strip()
+        or (settings.get("agent_provider") or "").strip()
+    )
+    conv_model = (
+        (settings.get("conversational_llm_model") or "").strip()
+        or (settings.get("agent_model") or "").strip()
+    )
+    if conv_provider:
+        add(conv_provider, conv_model)
+
+    agent_provider = (settings.get("agent_provider") or "").strip()
+    agent_model = (settings.get("agent_model") or "").strip()
+    if agent_provider:
+        add(agent_provider, agent_model)
+
+    add("ollama", "llama3.2")
+    return candidates
+
+
 def resolve_computer_use_config(settings: Dict[str, Any]) -> Tuple[str, str]:
     """Resolve computer use provider/model. Returns ('', '') if not configured."""
     provider = (settings.get("computer_use_provider") or "").strip()

@@ -137,6 +137,8 @@ class EventHandlerMixin:
         # --- Telegram send ---
         elif event == 'send_to_telegram':
             self._evt_send_to_telegram(data)
+        elif event == 'send_to_remote':
+            self._evt_send_to_remote(data)
         elif event == 'send_file_to_telegram':
             self._evt_send_file_to_telegram(data)
 
@@ -226,7 +228,7 @@ class EventHandlerMixin:
             self._tts_player_generation = 0
         if event == 'tts_started':
             source = data.get("source") if isinstance(data, dict) else None
-            if source != "transport":
+            if source not in ("transport", "direct_desktop"):
                 logger.info(
                     "[EVENT QUEUE] Provider tts_started received before confirmed audio output; "
                     "deferring player open until transport audio starts (source=%s)",
@@ -825,9 +827,25 @@ class EventHandlerMixin:
 
         remote_ctx = None
         if has_telegram_manager and self.telegram_manager:
-            remote_ctx = self._consume_remote_response_context()
+            from distr.core.integrations.telegram.remote_tts_delivery import (
+                resolve_remote_delivery_context,
+            )
+            from distr.core.agent.services.tts.outbound_voice import is_voice_delivery_provider
 
-        if remote_ctx and provider in ('kokoro', 'tool') and has_telegram_manager and telegram_connected:
+            remote_ctx = resolve_remote_delivery_context(
+                self.telegram_manager,
+                data,
+                consume_pending=not bool(data.get("explicit_notification_intent")),
+            )
+
+        force_telegram = bool(data.get("force_telegram_delivery"))
+        if (
+            remote_ctx
+            and is_voice_delivery_provider(provider)
+            and has_telegram_manager
+            and telegram_connected
+            and not force_telegram
+        ):
             app_ref = self
 
             def send_to_remote_thread():
@@ -837,7 +855,10 @@ class EventHandlerMixin:
                     logger.error(f"Error in send_to_remote thread: {e}", exc_info=True)
 
             threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
-        elif (provider == 'kokoro' or provider == 'tool') and has_telegram_manager:
+        elif (
+            (is_voice_delivery_provider(provider) or data.get('input_type') == 'text')
+            and has_telegram_manager
+        ):
             # Capture self reference for thread
             if not telegram_connected:
                 logger.warning("[EVENT QUEUE] Telegram not connected; queuing outbound response for reconnect")
@@ -851,12 +872,64 @@ class EventHandlerMixin:
 
             threading.Thread(target=send_to_telegram_thread, daemon=True, name="SendToTelegram").start()
         else:
-            if provider not in ('kokoro', 'tool'):
-                logger.warning(f"[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (provider={provider}, not Kokoro/tool)")
+            if data.get('input_type') == 'text' and not has_telegram_manager:
+                logger.warning("[EVENT QUEUE] ⚠️ Ignoring plain-text send_to_telegram (Telegram manager not available)")
+            elif not is_voice_delivery_provider(provider) and data.get('input_type') != 'text':
+                logger.warning(f"[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (provider={provider}, not a voice provider)")
             elif not has_telegram_manager:
                 logger.warning("[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (Telegram manager not available)")
             elif not telegram_connected:
                 logger.warning(f"[EVENT QUEUE] ⚠️ Telegram unavailable for send_to_telegram (manager exists: {has_telegram_manager})")
+
+    def _evt_send_to_remote(self, data):
+        """Deliver proactive or routed notifications to the remote web app with Ogg TTS."""
+        from distr.core.agent.services.tts.outbound_voice import (
+            is_voice_delivery_provider,
+            voice_delivery_provider_for_event,
+        )
+
+        text = (data.get("text") or "").strip()
+        provider = (data.get("provider") or voice_delivery_provider_for_event()).strip()
+        if not text:
+            return
+        if not is_voice_delivery_provider(provider):
+            logger.warning("[EVENT QUEUE] Ignoring send_to_remote (provider=%s)", provider)
+            return
+        if not hasattr(self, "telegram_manager") or not self.telegram_manager:
+            logger.warning("[EVENT QUEUE] Ignoring send_to_remote (Telegram manager not available)")
+            return
+        if not self.telegram_manager.is_connected():
+            logger.warning("[EVENT QUEUE] Ignoring send_to_remote (relay not connected)")
+            return
+
+        from distr.core.integrations.telegram.remote_tts_delivery import (
+            is_remote_delivery_available,
+            resolve_remote_delivery_context,
+        )
+
+        if not is_remote_delivery_available(self.telegram_manager):
+            logger.info("[EVENT QUEUE] Remote delivery unavailable; falling back to Telegram worker")
+            self._evt_send_to_telegram({**data, "provider": provider})
+            return
+
+        remote_ctx = resolve_remote_delivery_context(
+            self.telegram_manager,
+            data,
+            consume_pending=False,
+        )
+        if not remote_ctx:
+            self._evt_send_to_telegram({**data, "provider": provider})
+            return
+
+        app_ref = self
+
+        def send_to_remote_thread():
+            try:
+                app_ref._send_to_remote_worker(data, remote_ctx)
+            except Exception as exc:
+                logger.error("Error in send_to_remote thread: %s", exc, exc_info=True)
+
+        threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteProactive").start()
 
     def _consume_remote_response_context(self):
         """Get and clear one pending remote-app response context, if present."""
@@ -893,6 +966,8 @@ class EventHandlerMixin:
 
     def _send_to_remote_worker(self, data, remote_ctx):
         """Build and send a remote-app assistant response payload plus Ogg audio stream."""
+        from distr.core.integrations.telegram.remote_tts_delivery import deliver_remote_tts
+
         text = (data.get('text') or '').strip()
         if not text:
             logger.warning(
@@ -901,97 +976,15 @@ class EventHandlerMixin:
             )
             return
 
-        request_id = remote_ctx.get("request_id")
-
-        def is_cancelled() -> bool:
-            try:
-                cancelled = getattr(self.telegram_manager, "_cancelled_remote_audio_requests", set())
-                return bool(request_id and request_id in cancelled)
-            except Exception:
-                return False
-
-        logger.info(
-            "[REMOTE TTS] Preparing response for remote-app: request_id=%s chars=%d",
-            request_id,
-            len(text),
+        deliver_remote_tts(
+            self.telegram_manager,
+            text,
+            remote_ctx,
+            generate_tts=self._telegram_generate_tts,
+            convert_wav_to_ogg=self._convert_wav_to_ogg,
+            cleanup_files=self._telegram_cleanup_temp_files,
+            send_text_first=True,
         )
-
-        generated_audio_file = None
-        stream_audio_file = None
-        audio_stream_ready = False
-
-        if not is_cancelled():
-            generated_audio_file = self._telegram_generate_tts(text)
-            stream_audio_file = generated_audio_file
-            if stream_audio_file and stream_audio_file.exists() and str(stream_audio_file).endswith('.wav'):
-                stream_audio_file = self._convert_wav_to_ogg(stream_audio_file)
-
-            if stream_audio_file and stream_audio_file.exists() and str(stream_audio_file).endswith(".ogg"):
-                audio_stream_ready = True
-                logger.info(
-                    "[REMOTE TTS] Ogg stream ready: request_id=%s bytes=%d file=%s",
-                    request_id,
-                    stream_audio_file.stat().st_size,
-                    os.path.basename(str(stream_audio_file)),
-                )
-            elif stream_audio_file and stream_audio_file.exists():
-                logger.warning(
-                    "[REMOTE TTS] Skipping non-Ogg remote audio stream: request_id=%s file=%s",
-                    request_id,
-                    stream_audio_file,
-                )
-
-        payload = {
-            "type": "remote_agent_response",
-            "request_id": request_id,
-            "data": {
-                "text": text,
-                "mode": remote_ctx.get("mode") or "command",
-                "source_command": remote_ctx.get("source_command"),
-                "audio": None,
-                "audio_streamed": audio_stream_ready,
-                "audio_mime_type": "audio/ogg; codecs=opus" if audio_stream_ready else None,
-            },
-        }
-
-        try:
-            self.telegram_manager._send_websocket_message(payload)
-            logger.info(
-                "[REMOTE TTS] Sent remote_agent_response: request_id=%s audio_stream_ready=%s",
-                request_id,
-                audio_stream_ready,
-            )
-
-            if audio_stream_ready and stream_audio_file and not is_cancelled():
-                from distr.core.integrations.telegram.remote_audio_stream import (
-                    iter_remote_audio_stream_messages,
-                    remote_audio_stopped_message,
-                )
-
-                for message in iter_remote_audio_stream_messages(
-                    request_id=str(request_id),
-                    audio_path=stream_audio_file,
-                ):
-                    if is_cancelled():
-                        self.telegram_manager._send_websocket_message(
-                            remote_audio_stopped_message(str(request_id), reason="user_stop")
-                        )
-                        logger.info("[REMOTE TTS] Remote audio stream stopped: request_id=%s", request_id)
-                        break
-                    self.telegram_manager._send_websocket_message(message)
-                    if message.get("type") == "remote_agent_audio_chunk":
-                        time.sleep(0.002)
-        except Exception:
-            logger.exception(
-                "[REMOTE TTS] Failed sending remote_agent_response: request_id=%s",
-                request_id,
-            )
-        finally:
-            # Keep the same cleanup timing/behavior as Telegram worker path.
-            time.sleep(2)
-            self._telegram_cleanup_temp_files(stream_audio_file, None, None)
-            if generated_audio_file and generated_audio_file != stream_audio_file:
-                self._telegram_cleanup_temp_files(generated_audio_file, None, None)
 
     def _integration_reply_chat_id(self):
         """Internal chat id for routing connector replies (Discord / Slack)."""
@@ -1015,10 +1008,12 @@ class EventHandlerMixin:
 
     def _try_route_integration_text_reply(self, text_to_send, data: dict) -> bool:
         """If this chat maps to Discord or Slack, enqueue text and skip Telegram."""
+        from distr.core.agent.services.tts.outbound_voice import is_voice_delivery_provider
+
         if not text_to_send or not str(text_to_send).strip():
             return False
         provider = (data.get("provider") or "").strip()
-        if provider not in ("kokoro", "tool"):
+        if not is_voice_delivery_provider(provider):
             return False
         chat_id = self._integration_reply_chat_id()
         if chat_id is None:
@@ -1535,52 +1530,11 @@ class EventHandlerMixin:
             return image_path
 
     def _telegram_resolve_voice_settings(self, settings: dict):
-        """Resolve TTS provider and voice model from the current chat, falling back to global settings.
+        """Resolve TTS provider and voice model from the current chat, falling back to global settings."""
+        from distr.core.agent.services.tts.outbound_voice import resolve_outbound_voice_settings
 
-        Returns (tts_provider, voice_id) where tts_provider is the canonical
-        settings-style string (e.g. 'Kokoro (Offline)') and voice_id is the
-        voice/speaker identifier for that provider.
-        """
-        from distr.core.agent.constants import normalize_voice_provider
-        from distr.core.agent.services.tts.registry import tts_registry
-
-        chat_voice_provider = ""
-        chat_voice_model = ""
-
-        try:
-            from distr.core.db import get_session, Chat
-            chat_id = settings.get('agent_current_chat_id')
-            if chat_id:
-                with get_session() as session:
-                    chat = session.query(Chat).filter(Chat.id == int(chat_id)).first()
-                    if chat:
-                        # Walk to root chat to get the thread-level voice settings
-                        root = chat
-                        while root.parent_id:
-                            parent = session.query(Chat).filter(Chat.id == root.parent_id).first()
-                            if not parent:
-                                break
-                            root = parent
-                        chat_voice_provider = (root.voice_provider or "").strip()
-                        chat_voice_model = (root.voice_model or "").strip()
-        except Exception as e:
-            logger.debug(f"Could not load chat voice settings: {e}")
-
-        # Resolve provider: chat → global settings
-        tts_provider = chat_voice_provider or settings.get('tts_provider', 'Kokoro (Offline)')
-
-        # Resolve voice model: chat → provider-specific global setting
-        if chat_voice_model:
-            voice_id = chat_voice_model
-        else:
-            provider_id = normalize_voice_provider(tts_provider)
-            try:
-                descriptor = tts_registry.get(provider_id)
-                voice_id = descriptor.get_telegram_voice_id(settings)
-            except KeyError:
-                voice_id = ''
-
-        return tts_provider, voice_id
+        provider_id, voice_id, provider_label = resolve_outbound_voice_settings(settings)
+        return provider_label, voice_id
 
     def _telegram_generate_tts(self, text: str):
         """Generate TTS audio file for Telegram voice note."""

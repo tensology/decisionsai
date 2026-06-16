@@ -60,6 +60,24 @@ class TelegramRemoteControlMixin:
                 "data": {},
             })
             return
+
+        if api_method == "POST" and "/send-to-agent" in api_path:
+            body = api_body if isinstance(api_body, dict) else {}
+            speak_val = body.get("speak")
+            speak_on = speak_val not in (False, "false", "False", 0, "0", None)
+            if speak_on:
+                try:
+                    from distr.core.notification_routing import record_surface_activity
+
+                    record_surface_activity("remote")
+                except Exception:
+                    pass
+                self._mark_remote_agent_response_context(
+                    request_id=request_id,
+                    source_command="remote_chat",
+                    mode="chat",
+                )
+
         try:
             import requests as _req
             from distr.gui.web.server import get_unified_server
@@ -201,6 +219,22 @@ class TelegramRemoteControlMixin:
             return
         if command == "screenshot_stream":
             self._dispatch_screenshot_stream(data)
+            return
+        if command == "remote_presence":
+            try:
+                from distr.core.notification_routing import record_surface_activity
+
+                record_surface_activity("remote")
+            except Exception:
+                pass
+            self._send_websocket_message(
+                {
+                    "type": "remote_control_response",
+                    "command": "remote_presence",
+                    "request_id": request_id,
+                    "data": {"success": True},
+                }
+            )
             return
 
         # Serialize mouse/keyboard commands to prevent race conditions.

@@ -773,6 +773,7 @@ def init_db():
     from distr.core.db import proactive as _proactive  # noqa: F401
     from distr.core.db import planner_output as _planner_output  # noqa: F401
     from distr.core.db import schedule_blocks as _schedule_blocks  # noqa: F401
+    from distr.core.db import automation as _automation  # noqa: F401
 
     # Run migrations that need to happen BEFORE create_all (like renaming old tables)
     from distr.core.db.migrations import run_pre_create_migrations

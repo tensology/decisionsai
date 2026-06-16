@@ -35,6 +35,42 @@ def test_build_date_info_morning():
     assert info["local_iso_date"] == "2026-05-31"
 
 
+def test_tts_excerpt_from_markdown_uses_outcome_section_only():
+    md = (
+        "## Outcome for Today\n\n"
+        "- My Board: finish Player1Sport today.\n"
+        "- Taxes: review statements today.\n\n"
+        "## Project Moves\n\n"
+        "- Player1Sport: User instruction: Fix device allocation filter.\n"
+        "## Blockers\n\n"
+        "- Planner LLM fallback was used.\n"
+    )
+    out = planners.tts_excerpt_from_markdown(md, max_len=650)
+    assert "Player1Sport today" in out
+    assert "Project Moves" not in out
+    assert "User instruction" not in out
+    assert "Planner LLM fallback" not in out
+
+
+def test_normalize_ticket_title_strips_user_instruction_prefix():
+    title = planners._normalize_ticket_title(
+        "User instruction: Back end: Device allocation: Fix 'created by' horizontal filter"
+    )
+    assert title.startswith("Back end:")
+    assert "User instruction" not in title
+
+
+def test_finish_outcome_line_avoids_double_finish():
+    line = planners._finish_outcome_line(
+        "My Board",
+        {"title": "Finish Player1Sport today", "description_preview": "Complete the remaining work."},
+        "today",
+    )
+    assert "finish Finish" not in line
+    assert "today today" not in line
+    assert "Finish Player1Sport today" in line
+
+
 def test_tts_excerpt_from_markdown_strips_headers():
     md = "## Focus\n\nDo the **thing** now.\n\nMore text."
     out = planners.tts_excerpt_from_markdown(md, max_len=200)
@@ -42,6 +78,27 @@ def test_tts_excerpt_from_markdown_strips_headers():
     assert "thing" in out
     assert "#" not in out
     assert "**" not in out
+
+
+def test_generate_planner_markdown_prefers_workflow_llm_when_configured():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="## Outcome for Today\n\n- Focus on shipping."))]
+        )
+    )
+    bundle = ContextBundle(current_datetime="2026-06-11T07:00:00Z")
+    settings = {
+        "workflow_llm_provider": "openai",
+        "workflow_llm_model": "gpt-5",
+        "conversational_llm_provider": "openai",
+        "conversational_llm_model": "gpt-5.2",
+    }
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        planners.generate_planner_markdown("day", settings, bundle, "Plan today.")
+    call_kw = fake_litellm.completion.call_args.kwargs
+    assert call_kw["model"] == "gpt-5"
 
 
 def test_generate_planner_markdown_uses_scope_specific_system_prompt():
@@ -330,7 +387,7 @@ def test_fallback_day_plan_pulls_backlog_outcomes_when_current_is_empty():
 
     assert "Send client quote decision" in md
     assert "Clean up project notes" not in md.split("## Outcome for Today", 1)[1].split("##", 1)[0]
-    assert "Current is empty" in md
+    assert "today's focus is" in md
     assert "WhatsApp" in md
 
 
