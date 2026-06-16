@@ -4,65 +4,60 @@
 
 ## [What's to Come]
 
-DecisionsAI is moving from “chat with an assistant” toward **repeatable work you can hand off and get proof back**. You describe work on a ticket board, in WhatsApp, in email, or in Chat; Decisions plans or runs it through **Workflows** and **Automations**; coding agents (Cursor, Codex, Claude Code, Pi) do the implementation; and results come back with tests, screenshots, audit output, and ticket updates you can review.
+DecisionsAI is becoming a place where work starts in conversation—on a ticket board, in WhatsApp, in email, or in Chat—and finishes with something you can trust: updated tickets, test results, screenshots, and a clear record of what the agent actually did.
 
-**Workflows** are named sequences of steps in the web app (under **Workflows**). Each step can send instructions to an agent, run a shell command, open a browser test, call an API, download YouTube metadata, or hand work to your project’s coding CLI. **Loops** are importable workflow templates—for example “ticket → plan → implement → verify”—so you do not have to build every flow from scratch. Import a loop, attach it to a board or project, run it, and steer it mid-run if a step is waiting for you.
+The direction is a single loop: **capture the request → plan or assign it → hand it to the right tool → check the result → update the board.** You should not have to chase the agent across five windows to learn whether a job finished.
 
-Version 2.8 connects the pieces: **Ticket Boards** (including WhatsApp linked to a board), **Automations** (scheduled or on-demand instruction runs), **calendar blocks** and timesheets, **Chat** with compaction and a visible activity trail, and a **harness** that keeps your coding tools equipped with the same skills, rules, and MCP integrations Decisions uses.
+**What we are working on next**
 
-**How to use the new harness tools (after `bin/setup.py`, or automatically on every `bin/start.py`):**
+- **Workflows and Automations you can rely on** — Runs should fail with a plain explanation, recover without losing context, and return evidence you can attach to a ticket. Mid-run steering should feel predictable, not fragile.
+- **WhatsApp on boards** — Inbound messages stay on the right board; outbound replies should be easy to review before they go out.
+- **Coding handoffs that close the loop** — Work sent to Cursor, Codex, or another coding assistant should report back into Decisions so you can follow up in one place.
+- **Less setup friction** — Connections for email, chat apps, and your editor should stay in Settings; you should not need to edit hidden config files.
 
-- **Loops** — Import a preset workflow (e.g. ticket → implementation, or implement + Fallow audit on JS projects) from **Workflows**.
-- **Ponytail** — Keeps coding agents from over-building; prefers stdlib and minimal diffs. Applied automatically on implementation workflows; Cursor projects get a `ponytail.mdc` rule in the repo.
-- **Fallow** — Deterministic JS/TS codebase audit (dead code, duplicates, complexity). Use the loop preset **Engineering: Implement + Fallow Audit (JS)**, or run `npx fallow audit` in the project folder.
-- **Agent Reach** — Research Twitter, Reddit, YouTube, GitHub, and the open web; skills are pushed to the project when a workflow needs research.
-- **Design references** — UI inspiration from Refero, Mobbin, and related sources; available as skills and MCP after recalibrate.
-- **Context7** — Up-to-date library documentation inside Cursor and Codex; MCP is merged on recalibrate.
-- **yt-dlp** — YouTube metadata, subtitles, and search as a **ytdlp** workflow step action.
-- **Composio Connect** — Gmail, Slack, Notion, Jira, and hundreds of other apps. Add your API key under **Preferences → API Keys → Composio** (replaces the old Rube integration).
-- **IDE threads** — List, read, and send follow-ups to Codex or Cursor sessions from Decisions Chat or the agent tools.
-
-API keys for Composio, Refero, Mobbin, and similar services live in **Preferences → API Keys**. Saving there recalibrates MCP config—you should not need to hand-edit `mcp.json`.
-
-Current focus: make **Automations** and **Workflows** dependable end-to-end—clear errors, steady round-trips to coding agents, and WhatsApp replies you can review on the board before send. The goal is reliable orchestration from intake to proof, not more UI chrome.
+The bet is **orchestration from intake to proof**, not more screens. Features will keep shipping in numbered releases; the focus now is making the full path dependable in daily use.
 
 ---
 
 ## [2.8.0] - 2026-06-14
 
-### Workflows, boards, automations, and coding-agent harness
+### Workflows, boards, automations, and coding handoffs
 
-**What a Workflow is:** Under **Workflows** in the web app you build (or import) a list of steps. Each step tells the assistant—or your project’s coding CLI—to do something: write a plan, change code, run tests, capture browser screenshots, call an API, or download YouTube metadata. Steps run in order; some pause until you click Continue. You can **steer** a waiting run, see validation results, and inspect what the executor plans next on the active-run screen.
+**What a Workflow is:** Under **Workflows** in the web app you build (or import) a list of steps. Each step tells the assistant—or your project's coding tool—to do something: write a plan, change code, run tests, capture browser screenshots, call an API, or pull information from YouTube. Steps run in order; some pause until you click Continue. You can **steer** a waiting run, see whether a step passed or failed, and see what the system plans to do next.
 
-**Loops (new in 2.8):** Ready-made workflow templates you can **import** into an existing workflow—replace or append steps. Examples include ideation → board, ticket → implementation, polish → verify → ship, and **Implement + Fallow Audit (JS)** for TypeScript/JavaScript projects. Export your own workflows as loop presets to reuse later.
+**Loops:** Ready-made workflow templates you can **import**—replace or append steps to an existing workflow. Examples include turning a brief into board tickets, taking a ticket through implementation, or polishing and verifying before release.
 
-**Automations:** A separate area for instruction-style runs you create, edit, schedule, and run on demand—with history per automation. Shares a calendar with **time-entry blocks** (live timer, export to boards).
+**Automations:** Recurring or on-demand instruction runs you create, edit, and schedule, with a history for each one. Shares a calendar with **time-entry blocks** (live timer, export to boards).
 
 **Ticket Boards and WhatsApp:** Link one or more WhatsApp numbers to a board so inbound chats and new tickets stay on that board. Send a ticket into a live agent thread with speech and linked project context.
 
-**Chat:** Switch LLM and voice inside a thread; **Compact** conversation history from the header or menu; **system activity** rows show tool runs and workflow events instead of hiding them.
+**Chat:** Switch model and voice inside a thread; **Compact** long conversations; see **system activity** when tools and workflows run so you are not guessing what happened in the background.
 
-**Projects:** Pick the coding backend (Pi, Cursor, Codex, Claude Code, etc.), folder, setup state, and project details on one page.
+**Projects:** Choose how coding work is sent out (Pi, Cursor, Codex, Claude Code, etc.), which folder to use, and whether setup is complete—all on one page.
 
-**Harness stack (coding tools stay in sync):** Running `bin/setup.py` once—and quietly on every `bin/start.py`—projects skills and rules into Codex, Cursor, Claude, and Pi: ECC skills, Ponytail/Fallow discipline, browser and content tools, design-reference skills, Agent Reach (web/social research), community skills (humanizer, last30days, marketing/design), yt-dlp, and Composio Connect. RTK shell hooks install for cheaper command output. A catalog at `~/.decisions/harness/mcp-recommendations.json` documents what gets merged.
+**Navigation and remote:** The same menu across Chat, Projects, Ticket Boards, Automations, and Workflows. IRC chat beside Telegram and WhatsApp. Keyboard shortcuts for dictation and quick-open from the system tray. Remote web UI focused on Snippets, Agent, and Dictate.
 
-**MCP without manual JSON editing:** Recalibrate adds Context7, Exa, Mobbin, Refero, and Composio Connect into `~/.cursor/mcp.json` and `~/.codex/config.toml` (add-only; deprecated Rube entries are removed). Put your **Composio API key** under **Preferences → API Keys**; saving recalibrates headers automatically.
+**Initiative:** Settings grouped by what the agent is allowed to scan, suggest, ask about, or send on each channel.
 
-**IDE threads:** From Chat or the orchestrator, the agent can list, read, and prompt **Codex** and **Cursor** sessions (`ide_thread` tool; `/api/ide/sessions` for integrations). Use this to follow up on IDE work without leaving Decisions.
+**IDE setup repair:** First-time setup (and each app start) checks and repairs Codex and Cursor integrations so project handoffs start from a known-good state.
 
-**YouTube workflow steps:** New action type **ytdlp**—metadata, subtitles, or search via yt-dlp inside the Decisions environment.
+**Other:** Telegram intercom requests; Oracle skin animation fixes; more reliable remote mouse control from the browser.
 
-**Composio Connect** replaces deprecated Rube for Gmail, Slack, Notion, Jira, and other SaaS—via the `decisions-composio` skill and Tool Router after you add an API key in Settings.
+### Connected tools (what 2.8 wires up for you)
 
-**Ponytail + Fallow on real projects:** Implementation workflows auto-apply Ponytail (minimal code) and, on JS/TS repos, Fallow skills. Cursor projects get `.cursor/rules/ponytail.mdc` when a workflow provisions skills. See `audit-docs/ponytail-fallow-reference-assessment.md` for the full integration map.
+After you run Decisions setup once—or each time the app starts—it keeps your coding assistants aligned with the same helpers Decisions uses. You do not need to install these one by one in Cursor or Codex.
 
-**Navigation and remote:** Shared nav across Chat, Projects, Ticket Boards, Automations, and Workflows. IRC chat page and API proxy beside Telegram and WhatsApp. Shortcuts: hold-to-dictate, configurable modifier combos, system tray quick-open. Remote web UI: Snippets, Agent, and Dictate as primary actions; hold PTT, tap for text, explicit stop for streamed audio.
+- **Workflow templates (Loops)** — Ready-made multi-step flows. **Workflows** → import a loop preset.
+- **Minimal code discipline** — Before adding libraries and files, agents are nudged to use what the project already has. Applied automatically on implementation work.
+- **JavaScript/TypeScript health check** — Spots dead code, duplication, and complexity before you merge. Import the **Implement + Fallow Audit (JS)** loop, or let the agent run a check when the ticket calls for it.
+- **Web and social research** — Look up Twitter, Reddit, YouTube, GitHub, and the open web during a workflow when research is part of the job.
+- **UI inspiration** — Reference sites and patterns for design and front-end tickets.
+- **Library documentation in your editor** — Up-to-date docs inside Cursor and Codex after setup, without hunting separately.
+- **YouTube in workflows** — Pull titles, descriptions, subtitles, or search results when a ticket needs video context.
+- **Email and workplace apps** — Connect Gmail, Slack, Notion, Jira, and many others through one service. **Preferences → API Keys → Composio** — paste your key and save.
+- **Follow up in Cursor or Codex** — See and continue open coding sessions from Decisions Chat instead of reopening every IDE window by hand.
 
-**Initiative:** Settings split by what the agent may scan, suggest, ask about, or send on which channels.
-
-**IDE plugin repair:** ECC pack bootstrap; Codex/Cursor plugins verified on setup; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`.
-
-**Other:** Telegram intercom requests; Oracle skin idle/animation and file-drop glow fixes; Sidecar remote click uses the correct mouse-position path. Broad test coverage for compaction, loops, WhatsApp boards, harness packs, MCP merge, and IDE threads.
+API keys for Composio and similar services live under **Preferences → API Keys**. Saving there updates your editor connections automatically—you should not need to edit hidden config files by hand.
 
 ---
 
