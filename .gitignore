@@ -75,6 +75,7 @@ scripts/*
 !scripts/workflow_ticket_loop_e2e.py
 !scripts/deploy_changelog.sh
 !scripts/deploy_changelog_to_site.sh
+!scripts/humanize_changelog.py
 
 # --- Databases ---
 db/*
