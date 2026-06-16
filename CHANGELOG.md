@@ -23,9 +23,9 @@ Ticket in, verified outcome out, without standing over the IDE.
 
 ## [2.8.0] - 2026-06-14
 
-### Automations are no longer workflows in disguise
+### Automations tightened up
 
-Until 2.8, scheduled automations were stored as special workflow rows. That made history hard to read and could schedule the same job twice. Automations are now first-class records with their own tables, APIs, and scheduler. On upgrade, existing automation workflows migrate into the new store; schedules on the leftover workflow copies are disabled so nothing fires in duplicate. Scheduled and on-demand runs execute in background workers so they do not block live chat or the orchestrator.
+The Automations hub was cleaned up around create, edit, schedule, run, and history. A gear menu beside **Add Automation** offers built-in presets: daily plan, WhatsApp-to-tickets intake, morning inbox scan, work pulse, timesheet export, end-of-day wrap, weekly board review, and others. Pick a preset and it goes straight into your list to configure. A calendar shows scheduled runs. Time-entry blocks include a live timer and export to boards. Scheduled and on-demand runs execute in the background so chat stays responsive.
 
 ### Workflows rebuilt around Loops
 
@@ -51,9 +51,9 @@ The desktop sidecar gained screen analysis, arbitrary Python execution, drag, sc
 
 The remote control UI centers on Snippets, Agent chat, and Dictate, with hold-to-talk, tap-to-type, streaming audio playback, and an explicit stop control.
 
-### Boards, WhatsApp, and calendar
+### Boards and WhatsApp
 
-Ticket routes were unified under `/tickets`. A WhatsApp number can be tied to a board so inbound messages create or update tickets on that board. The automations hub gained a calendar for scheduled runs and time-entry blocks with live timers and board export.
+Ticket routes were unified under `/tickets`. A WhatsApp number can be tied to a board so inbound messages create or update tickets on that board.
 
 ### IRC rooms
 
