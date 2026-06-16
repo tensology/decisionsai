@@ -31,9 +31,9 @@ The Automations hub was cleaned up around create, edit, schedule, run, and histo
 
 The Workflows screen is organized around **Loops**: named presets of steps you can import, append, replace, or export. While a step waits on Cursor or Codex, you can steer the run with new instructions and read validation results, steering history, and the next planned step on the active-run view.
 
-Tickets carry **complexity** and **priority**. Execution routing follows complexity: a low-complexity ticket can take a lighter path; medium and high work routes to stronger backends and models. A ticket marked high complexity cannot be shortcut through a shallow run as if it were a typo fix.
+Each ticket has a **complexity** (low, medium, or high) and a **priority**. In workflow settings you map each complexity level to an IDE backend and model. When that ticket runs, Decisions uses the pairing you set for its complexity.
 
-From Workflows or the board, you can send a ticket to the orchestrator first: load it into chat, talk through what the ticket is asking for, what should be done, and what to watch out for, then start the loop when the plan is clear.
+From Workflows or the board, send a ticket to the orchestrator first to talk through the work in chat before you start a loop.
 
 The workflow execution engine was rewritten to call each LLM through that provider's native tool API (OpenAI, Anthropic, Ollama, Groq, OpenRouter, Gemini, and others). Agent steps can invoke real tools instead of only describing what they would do. When an async agent step finishes, the workflow advances to the next step; hung steps fail on timeout instead of running forever.
 
