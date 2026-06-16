@@ -25,43 +25,43 @@ Hand off a ticket, walk away, and get an honest report back. Not babysit the IDE
 
 ### Web UI
 
-- **Navigation** — The main menu across Chat, Projects, Ticket Boards, Automations, and Workflows is cleaner and easier to scan. Same places, less clutter.
-- **Chat** — Change the language model or voice in a conversation you already have open instead of starting over. **Compact** rolls up older messages when the thread is getting long. Tool runs and workflow events show in the transcript so you can see what the agent did, not just the final reply.
-- **Projects** — Pick your coding backend, folder, CLI setup commands, and project details on one page instead of jumping between screens.
-- **Ticket Boards** — Open agent chat from a ticket with voice enabled and the ticket plus its linked project already loaded as context.
+- **Navigation** — One main menu links Chat, Projects, Ticket Boards, Automations, and Workflows.
+- **Chat** — Switch the language model or voice in an open thread. **Compact** summarizes older messages when a conversation runs long. Tool and workflow activity appears in the transcript alongside the agent's replies.
+- **Projects** — One page per project: choose Cursor, Codex, Claude Code, or Pi as the coding backend, point at the folder on disk, copy the CLI setup commands, and edit the project name and notes.
+- **Ticket Boards** — Open agent chat from a ticket with voice on. The ticket and its linked project load as context automatically.
 - **IRC rooms** — A shared community chat inside Decisions: pick a display name, join rooms, see who else is online, and talk. For fun and to see who is connected to Decisions right now.
-- **Remote** — On the phone or browser remote, Snippets, Agent chat, and Dictate are the main actions up front. Hold the button to talk, tap for a text box, and use an explicit stop control when audio is streaming back.
-- **Shortcuts** — Hold a modifier key combo to dictate text. The system tray can open chats, projects, boards, automations, workflows, snippets, or skins without loading the full web app first.
-- **Initiative** — Proactive-agent settings are grouped by channel (email, Telegram, and so on). For each channel you set what the agent may scan, suggest, ask you about, or send without you starting the conversation.
+- **Remote** — The phone or browser remote puts Snippets, Agent chat, and Dictate front and center. Hold the button to talk, tap for a text box, stop streaming audio with an explicit control.
+- **Shortcuts** — Hold a modifier key combo to dictate text anywhere. The system tray opens chats, projects, boards, automations, workflows, snippets, or skins in one click.
+- **Initiative** — Settings for the proactive agent, grouped by channel (email, Telegram, and so on). Per channel you choose what it may scan, suggest, ask you about, or send on its own.
 
 ### Workflows
 
-- **Loop presets** — Save a sequence of workflow steps as a named preset. Import it into a workflow, append it to existing steps, replace steps, or export it to share with someone else.
-- **Steering a run** — While a step is waiting (for example for Cursor or Codex to finish), send new instructions without cancelling the whole run. The active-run screen shows validation results, steering you sent, and what step comes next.
-- **Implement + Fallow Audit preset** — A ready-made loop for JavaScript work: implement the change, then run a Fallow audit pass on the result.
-- **YouTube step** — A new workflow action that can pull video metadata, subtitles, or search results from YouTube.
+- **Loop presets** — Save a sequence of workflow steps under a name. Import that preset into a workflow, add it to the end, swap steps out, or export it for someone else.
+- **Steering a run** — Send new instructions while a step is waiting on Cursor or Codex. The run keeps going. The active-run screen shows validation results, what you steered, and the next step.
+- **Implement + Fallow Audit preset** — A bundled workflow for JavaScript: implement the change, then run a Fallow audit on the result.
+- **YouTube step** — A workflow action that fetches video metadata, subtitles, or search results from YouTube.
 
 ### Automations
 
-- **Calendar** — See scheduled automations on a calendar instead of only in a list.
-- **Time entries** — Log work in time blocks with a live timer, then export a timesheet-style summary onto a ticket board.
+- **Calendar** — Scheduled automations show on a calendar view.
+- **Time entries** — Log work in timed blocks with a live timer, then export a summary onto a ticket board.
 
 ### WhatsApp
 
-- **Board-linked numbers** — Attach a WhatsApp number to a specific ticket board. Inbound messages on that number create or update tickets on that board.
+- **Board-linked numbers** — Tie a WhatsApp number to a ticket board. Messages on that number create or update tickets on that board.
 
 ### Working with your IDE
 
-- **Setup and start** — Running setup or starting Decisions keeps skills, plugins, and helper packs in sync for Codex, Cursor, Claude Code, and Pi. You should not need to hand-edit IDE config files for the basics.
-- **MCP tools in Cursor and Codex** — Useful servers get wired in for you: documentation lookup, web search, design references, and Composio for workplace apps. Add a Composio API key under Settings → API Keys if you want Gmail, Slack, Notion, Jira, and similar.
-- **Ponytail and Fallow** — Workflows can run Ponytail/Fallow review before implementation steps. When skills are provisioned to a Cursor-backed project, the Ponytail rule is copied into that repo.
-- **Continue IDE chats** — From Decisions chat, the agent can list Codex or Cursor conversations you already have open and continue them instead of starting from scratch.
+- **Setup and start** — Running setup or starting Decisions syncs skills, plugins, and helper packs for Codex, Cursor, Claude Code, and Pi.
+- **MCP tools in Cursor and Codex** — Documentation lookup, web search, design references, and Composio for workplace apps get wired into your IDE. Add a Composio API key under Settings → API Keys for Gmail, Slack, Notion, Jira, and similar.
+- **Ponytail and Fallow** — Workflows can run Ponytail/Fallow review before implementation steps. Provisioning skills to a Cursor project copies the Ponytail rule into that repo.
+- **Continue IDE chats** — From Decisions chat, the agent can open or continue a Codex or Cursor conversation that is already running.
 
 ### Fixes
 
-- **Remote sidecar** — Clicks on the floating remote window register in the right place.
-- **Oracle skin** — Idle animation and file-drop glow behave correctly again.
-- **Telegram intercom** — Intercom requests through Telegram work again.
+- **Remote sidecar** — Fixed click positioning on the floating remote window.
+- **Oracle skin** — Fixed idle animation and file-drop glow.
+- **Telegram intercom** — Fixed intercom requests through Telegram.
 
 ### Tests
 
