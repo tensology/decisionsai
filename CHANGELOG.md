@@ -31,7 +31,7 @@ The Automations hub was cleaned up around create, edit, schedule, run, and histo
 
 The Workflows screen is organized around **Loops**: named presets of steps you can import, append, replace, or export. While a step waits on Cursor or Codex, you can steer the run with new instructions and read validation results, steering history, and the next planned step on the active-run view.
 
-Each ticket has a **complexity** (low, medium, or high) and a **priority**. In workflow settings you map each complexity level to an IDE backend and model. When that ticket runs, Decisions uses the pairing you set for its complexity.
+Each ticket has a **complexity** (low, medium, or high) and a **priority**. In workflow settings you map each complexity level to an IDE or CLI backend and model. When that ticket runs, Decisions uses the pairing you set for its complexity.
 
 From Workflows or the board, send a ticket to the orchestrator first to talk through the work in chat before you start a loop.
 
