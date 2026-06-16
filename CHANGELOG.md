@@ -35,6 +35,8 @@ Each ticket has a **complexity** (low, medium, or high) and a **priority**. In w
 
 From Workflows or the board, send a ticket to the orchestrator first to talk through the work in chat before you start a loop.
 
+Each workflow step can name the **skills** and **tools** it is meant to use, so the loop reads clearly step by step. Setup and start still project the full skill library into every harness (Codex, Cursor, Claude Code, and Pi), so the executor has the whole catalog available when a step runs.
+
 The workflow execution engine was rewritten to call each LLM through that provider's native tool API (OpenAI, Anthropic, Ollama, Groq, OpenRouter, Gemini, and others). Agent steps can invoke real tools instead of only describing what they would do. When an async agent step finishes, the workflow advances to the next step; hung steps fail on timeout instead of running forever.
 
 ### Harness stack and IDE integration
