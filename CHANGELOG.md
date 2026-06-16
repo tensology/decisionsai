@@ -23,37 +23,51 @@ Decisions should run the loop and report back. You should not have to watch Curs
 
 ## [2.8.0] - 2026-06-14
 
-### Features
+### Web UI
 
-- Shared navigation across Chat, Projects, Ticket Boards, Automations, and Workflows
-- Loops: importable workflow presets; append or replace steps; export presets; steer a waiting run mid-flight; active-run view with executor, validation, steering history, and planned next steps
-- Loop preset added: Implement + Fallow Audit (JS)
-- Automations: create, edit, run, and history per automation; shared calendar for scheduled runs; time-entry blocks with live timer and timesheet export to boards
-- Chat: switch LLM and voice inside an existing thread; Compact from header, menu, or auto-compaction; system activity row for tool runs and workflow events
-- Projects: backend selection, folder context, CLI setup, and project details on one page
-- Ticket Boards: send a ticket into a live agent thread with speech and linked project context
-- WhatsApp: link one or more numbers to a board so inbound chats and ticket creation stay on that board
-- IRC: local chat page and API proxy beside Telegram, WhatsApp, boards, and Chat
-- Shortcuts: hold-to-dictate, modifier-only combos, dictation as text entry; system tray quick-open for chats, projects, boards, automations, workflows, snippets, skins
-- Initiative: settings split by what the agent may scan, suggest, ask about, or send on which channels
-- Remote: Snippets, Agent, and Dictate as primary actions; hold PTT, tap for text box, explicit stop for streamed audio
-- IDE threads: `ide_thread` agent tool and `GET /api/ide/sessions` to list, read, and prompt Codex/Cursor sessions from Decisions
-- Workflow `ytdlp` step: YouTube metadata, subtitles, and search via yt-dlp in the Decisions venv
-- Composio Connect in Preferences → API Keys (replaces deprecated Rube); Gmail, Slack, Notion, Jira via `decisions-composio` skill and Tool Router
-- Harness stack on `bin/setup.py` and quiet recalibrate on `bin/start.py`: projects skills to Codex, Cursor, Claude, and Pi (ECC, Ponytail/Fallow, browser/content capabilities, design references, Agent Reach, community skills, yt-dlp, Composio Connect); RTK hook init; MCP catalog at `~/.decisions/harness/mcp-recommendations.json`
-- MCP recalibrate: add-only merge into `~/.cursor/mcp.json` and `~/.codex/config.toml` for Context7, Exa, Mobbin, Refero, Composio Connect; prunes deprecated Rube; Composio API key from Settings → API Keys
-- Ponytail/Fallow: auto prepended on workflow pre_chain; project `.cursor/rules/ponytail.mdc` on skill provision for Cursor backends
-- ECC pack bootstrap; Codex/Cursor plugin verify/repair on setup; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`; runtime scratch under gitignored `.artifacts/`
+- Main application menu tightened up across Chat, Projects, Ticket Boards, Automations, and Workflows
+- Chat: switch LLM or voice in an open thread; Compact conversation history; tool and workflow events shown in the transcript
+- Projects page: backend, folder, CLI setup, and project details on one screen
+- Ticket Boards: hand a ticket off to agent chat with voice and linked project context
+- IRC chat page and API proxy added alongside Telegram and WhatsApp
+- Remote: Snippets, Agent, and Dictate brought forward; hold PTT, tap for text input, explicit stop on streamed audio
+- Shortcuts: hold-to-dictate with modifier combos; system tray entries for common pages without opening the browser first
+- Initiative settings grouped by channel (what the agent may scan, suggest, ask, or send)
+
+### Workflows
+
+- Loop presets: import, append, replace, or export workflow steps
+- Steer a run while a step is waiting; active-run view shows validation, steering history, and next step
+- New loop preset: Implement + Fallow Audit (JS)
+- New step action `ytdlp`: YouTube metadata, subtitles, or search
+
+### Automations
+
+- Calendar view for scheduled runs
+- Time-entry blocks with live timer; export timesheet-style summaries to boards
+
+### WhatsApp
+
+- Link a number to a board so inbound chats and ticket creation stay on that board
+
+### Harness and IDE integration
+
+- `bin/setup.py` and quiet recalibrate on `bin/start.py` project skills into Codex, Cursor, Claude, and Pi: ECC, Ponytail/Fallow, browser/content pack, design references, Agent Reach, community skills, yt-dlp, Composio Connect; RTK hooks; catalog at `~/.decisions/harness/mcp-recommendations.json`
+- MCP recalibrate: merge Context7, Exa, Mobbin, Refero, Composio Connect into `~/.cursor/mcp.json` and `~/.codex/config.toml`; remove deprecated Rube; Composio API key from Settings → API Keys
+- Ponytail and Fallow prepended on workflow `pre_chain` where applicable; Ponytail Cursor rule copied into the project on skill provision
+- Codex/Cursor plugin verify and repair on setup; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`; scratch files under `.artifacts/`
+- IDE threads: `ide_thread` tool and `GET /api/ide/sessions` to list, read, and prompt Codex/Cursor sessions from Decisions
+- Composio Connect replaces Rube (Preferences → API Keys → Composio)
 
 ### Fixes
 
-- Remote: pointer routing for sidecar clicks corrected
-- Oracle: skin idle/animation and file-drop glow fixes
+- Remote sidecar: mouse click position routing
+- Oracle skin idle/animation and file-drop glow
 - Telegram intercom requests
 
 ### Tests
 
-- Chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness bootstrap, plugin paths, harness packs (capabilities, competition, design references, agent-reach, community skills, yt-dlp, composio, MCP harness), IDE threads
+- Added or extended: chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backends, harness bootstrap, plugin paths, harness packs, MCP harness, IDE threads
 
 ---
 
