@@ -4,18 +4,21 @@
 
 ## [What's to Come]
 
-DecisionsAI is becoming a place where work starts in conversation—on a ticket board, in WhatsApp, in email, or in Chat—and finishes with something you can trust: updated tickets, test results, screenshots, and a clear record of what the agent actually did.
+DecisionsAI is not betting that the next model will one-shot your product. It is betting that **a disciplined loop**—with the right skills, steps, checks, and memory—can carry real product work from idea to shipped proof even when any single model pass is imperfect.
 
-The direction is a single loop: **capture the request → plan or assign it → hand it to the right tool → check the result → update the board.** You should not have to chase the agent across five windows to learn whether a job finished.
+**What a loop is:** A loop is a workflow that does not stop at the first answer. It ingests a ticket or brief, plans the slice, does the work (in chat, in your project, or in Cursor/Codex), **checks its own output**, corrects when something fails, and closes with evidence on the board. You import loop presets or build your own; each step can hand off to an agent, run a test, capture a screenshot, or ask for your input before continuing. The point is iteration with standards—not “fire and hope.”
 
-**What we are working on next**
+**What is already in place (2.8):** An orchestration layer across boards, WhatsApp, automations, and workflows; importable loop templates; a skills library projected into your coding tools; validation and steering on active runs; IDE session follow-up; and connected research, design, documentation, and workplace-app tooling. The scaffolding for full product development exists. The gap is reliability and judgment—not missing buttons.
 
-- **Workflows and Automations you can rely on** — Runs should fail with a plain explanation, recover without losing context, and return evidence you can attach to a ticket. Mid-run steering should feel predictable, not fragile.
-- **WhatsApp on boards** — Inbound messages stay on the right board; outbound replies should be easy to review before they go out.
-- **Coding handoffs that close the loop** — Work sent to Cursor, Codex, or another coding assistant should report back into Decisions so you can follow up in one place.
-- **Less setup friction** — Connections for email, chat apps, and your editor should stay in Settings; you should not need to edit hidden config files.
+**What we are tightening next**
 
-The bet is **orchestration from intake to proof**, not more screens. Features will keep shipping in numbered releases; the focus now is making the full path dependable in daily use.
+- **Loops that actually finish** — Fewer silent stalls, clearer “what failed and why,” and retries that use prior evidence instead of vague “try again” prompts.
+- **More initiative, less babysitting** — The agent should notice when a step is stuck, when acceptance criteria are not met, or when the IDE went off-scope—and act before you have to watch every cursor blink.
+- **Self-correction as a habit** — Develop → test → compare to the ticket → fix → report back should be default behavior inside a loop, not an optional extra you wire up by hand.
+- **Full product development, not single-file hacks** — Brief to board, ticket to implementation, polish to ship, with memory of what this project cares about (style, risk, lanes, prior corrections) carried across runs.
+- **A steadier feel of awareness** — What is running, what already failed, what the board expects, and what changed since last time should shape the next move without you re-explaining the world each session.
+
+The work ahead is making Decisions feel like a **product partner that owns the loop**—initiative, correction, and proof—so you are directing outcomes, not nursing tools until the model gets smarter.
 
 ---
 
