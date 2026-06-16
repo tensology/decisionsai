@@ -829,9 +829,7 @@ class InitiativeService:
         if settings.get("chat_voice_enabled", True):
             if excerpt:
                 try:
-                    signal_manager.speak_text_directly.emit(
-                        f"Here's your {scope_label}. {excerpt}"
-                    )
+                    signal_manager.speak_text_directly.emit(excerpt)
                 except Exception as e:
                     logger.debug("InitiativeService: planner TTS emit failed: %s", e)
 

@@ -162,6 +162,7 @@ def workflow_patch_stack(factory, tmp_path):
         patch("distr.core.workflow.standards_memory.get_session", get_session),
         patch("distr.core.workflow.steering_memory.get_session", get_session),
         patch("distr.core.workflow.loop_presets.get_session", get_session),
+        patch("distr.core.workflow.run_briefing.get_session", get_session),
         patch("distr.core.settings.load_settings_from_db", lambda: settings),
         patch("distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()),
         patch("distr.core.workflow.dispatcher.increment_kanban_updated", MagicMock()),
@@ -219,6 +220,23 @@ def workflow_patch_stack(factory, tmp_path):
             "distr.core.workflow.step_executor.StepExecutorMixin._run_computer_use",
             lambda self, step_data, config, run_id=None: {
                 "output": "Matrix fake computer-use evidence captured.",
+                "passed": True,
+            },
+        ),
+        patch(
+            "distr.core.workflow.step_executor.StepExecutorMixin._run_playwright",
+            lambda self, step_data, config, run_id=None: {
+                "output": "Matrix fake playwright evidence captured.",
+                "passed": True,
+            },
+        ),
+        patch(
+            "distr.core.workflow.step_executor.StepExecutorMixin._run_agent",
+            lambda self, step_data, run_id=None: {
+                "output": (
+                    "Matrix agent step complete with evidence attached. "
+                    "Ticket contains the final evidence summary, result packet, and closure status."
+                ),
                 "passed": True,
             },
         ),
@@ -314,19 +332,50 @@ def apply_preset_to_workflow(factory, preset_slug: str) -> dict[str, Any]:
         return {"workflow_id": workflow_id, "preset_name": preset_name, "apply_result": result}
 
 
+def cleanup_workflow_run_context(*run_ids: int) -> None:
+    """Stop stray WorkflowAgent loops so matrix tests do not leak global run state."""
+    from distr.core.workflow.dispatcher import _active_runs, _cleanup_run, _runs_lock
+
+    if run_ids:
+        targets = list(run_ids)
+    else:
+        with _runs_lock:
+            targets = list(_active_runs.keys())
+    for run_id in targets:
+        _cleanup_run(int(run_id))
+
+
 def wait_for_terminal_run(
     factory,
     run_id: int,
     *,
     timeout: float = 45.0,
     auto_continue: bool = True,
+    workflow_id: int | None = None,
+    ticket_id: int | None = None,
+    project_id: int | None = None,
 ) -> AutoWorkflowRun:
-    """Poll until run reaches terminal status; optionally resume waiting steps."""
+    """Poll until run reaches terminal status; auto-resume human gates in matrix runs."""
     from distr.core.workflow.dispatcher import continue_waiting_step
+
+    harness_report = (
+        "Status: completed\n"
+        "Summary: Matrix harness completed the workflow step with tests and self-assessment.\n"
+        "Tests run: matrix fake — pass\n"
+        "Drift check: none\n"
+        "Security: none\n"
+        "UI assessment: N/A\n"
+        "Self-corrections: none\n"
+        "Files changed: none\n"
+        "Blockers: none"
+    )
 
     deadline = time.time() + timeout
     last_status = None
+    last_waiting_kind = ""
     while time.time() < deadline:
+        resume_input = None
+        ide_handoff_ctx = None
         session = factory()
         try:
             run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one()
@@ -339,34 +388,57 @@ def wait_for_terminal_run(
                 except Exception:
                     run_data = {}
                 waiting_kind = str(run_data.get("waiting_kind") or "")
-                if waiting_kind == "ide_handoff":
-                    # Simulate IDE bridge completion for matrix runs.
-                    from fastapi import APIRouter, FastAPI
-                    from fastapi.testclient import TestClient
-                    from distr.gui.web.routes.settings.workflows import register_routes
-
-                    app = FastAPI()
-                    router = APIRouter()
-                    register_routes(router, None)
-                    app.include_router(router, prefix="/api")
-                    client = TestClient(app)
-                    client.post(
-                        f"/api/workflows/{run.workflow_id}/runs/{run_id}/codex-events",
-                        json={
-                            "event_type": "codex_completed",
-                            "status": "completed",
-                            "message": "matrix ide handoff complete",
-                            "step_id": run.current_step_id,
-                            "ticket_id": run.ticket_id,
-                            "project_id": run_data.get("project_id"),
-                        },
-                    )
-                else:
-                    continue_waiting_step(run_id, optional_input="matrix auto-continue")
+                last_waiting_kind = waiting_kind
+                if waiting_kind == "run_briefing":
+                    resume_input = "yes, go ahead"
+                elif waiting_kind == "step_review":
+                    resume_input = "looks good, continue"
+                elif waiting_kind == "ide_handoff":
+                    ide_handoff_ctx = {
+                        "workflow_id": workflow_id or int(run.workflow_id),
+                        "ticket_id": ticket_id or run.ticket_id,
+                        "project_id": project_id or run_data.get("project_id"),
+                        "step_id": run.current_step_id,
+                    }
+                elif waiting_kind:
+                    resume_input = "matrix auto-continue"
         finally:
             session.close()
+
+        if ide_handoff_ctx is not None:
+            from fastapi import APIRouter, FastAPI
+            from fastapi.testclient import TestClient
+            from distr.gui.web.routes.settings.workflows import register_routes
+
+            get_session = get_session_factory(factory)
+            app = FastAPI()
+            router = APIRouter()
+            register_routes(router, None)
+            app.include_router(router, prefix="/api")
+            wf_id = ide_handoff_ctx["workflow_id"]
+            with patch("distr.core.db.get_session", get_session), patch(
+                "distr.gui.web.routes.settings.workflows.get_session", get_session
+            ):
+                client = TestClient(app)
+                client.post(
+                    f"/api/workflows/{wf_id}/runs/{run_id}/codex-events",
+                    json={
+                        "event_type": "cursor_completed",
+                        "status": "completed",
+                        "message": "Matrix IDE handoff complete",
+                        "output": harness_report,
+                        "step_id": ide_handoff_ctx["step_id"],
+                        "ticket_id": ide_handoff_ctx["ticket_id"],
+                        "project_id": ide_handoff_ctx["project_id"],
+                    },
+                )
+        elif resume_input is not None:
+            continue_waiting_step(run_id, resume_input)
+
         time.sleep(0.15)
-    raise AssertionError(f"run {run_id} did not finish; last status={last_status}")
+    raise AssertionError(
+        f"run {run_id} did not finish; last status={last_status}, waiting_kind={last_waiting_kind}"
+    )
 
 
 def assert_run_terminal(
@@ -447,7 +519,14 @@ def start_preset_run(
             assert "error" not in result, result
             run_id = result["run_id"]
 
-            wait_for_terminal_run(factory, run_id, timeout=timeout)
+            wait_for_terminal_run(
+                factory,
+                run_id,
+                timeout=timeout,
+                workflow_id=workflow_id,
+                ticket_id=ids["ticket_id"],
+                project_id=ids["project_id"],
+            )
             terminal = assert_run_terminal(
                 factory,
                 run_id,
@@ -471,6 +550,7 @@ def start_preset_run(
             "loop_context_seen": MatrixFakeBackend.last_loop_context,
         }
     finally:
+        cleanup_workflow_run_context(*( [run_id] if run_id is not None else [] ))
         if original_pi is not None:
             backend_registry._BACKENDS["pi"] = original_pi
 

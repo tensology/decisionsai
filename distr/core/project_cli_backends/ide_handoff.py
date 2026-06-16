@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .base import ProjectTask
+
+logger = logging.getLogger(__name__)
+
+WORK_PACKET_GLOB_PATTERNS = ("ticket_*.md", "decisionsai_*.md")
 
 IDE_BACKEND_IDS = frozenset({"cursor_ide", "codex_ide"})
 
@@ -107,44 +113,90 @@ def build_ide_callback_meta(task: ProjectTask, *, backend_id: str, handoff_event
     }
 
 
+def _slugify_ticket_name(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", (value or "").strip().lower()).strip("-")
+    return text[:48] or "work"
+
+
+def _ticket_title_for_task(task: ProjectTask) -> str:
+    title = str(getattr(task, "ticket_title", "") or "").strip()
+    if title:
+        return title
+    ticket_id = getattr(task, "ticket_id", None)
+    if not ticket_id:
+        return ""
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.kanban import KanbanTicket
+
+        with get_session() as db:
+            row = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+            if row and row.title:
+                return str(row.title).strip()
+    except Exception:
+        logger.debug("Could not load ticket title for work packet", exc_info=True)
+    return f"Ticket #{ticket_id}"
+
+
+def work_packet_filename(task: ProjectTask, *, backend_id: str) -> str:
+    """Name work packets after the ticket, not the harness backend."""
+    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    step_part = int(task.step_id or 0)
+    ticket_id = getattr(task, "ticket_id", None)
+    if ticket_id:
+        slug = _slugify_ticket_name(_ticket_title_for_task(task))
+        return f"ticket_{int(ticket_id)}_{slug}_{stamp}_s{step_part}.md"
+    return f"decisionsai_{backend_id}_{stamp}_{step_part}.md"
+
+
 def write_ide_work_packet(
     task: ProjectTask,
     *,
     backend_id: str,
     meta: dict[str, Any],
     loop_context_summary: str = "",
+    step_meta: dict[str, Any] | None = None,
 ) -> str:
-    """Write a DecisionsAI work packet under the project .tickets folder."""
+    """Write a workflow work packet under the project .tickets folder."""
+    from distr.core.workflow.step_iteration import (
+        HARNESS_REPORT_TEMPLATE,
+        build_step_iteration_protocol,
+        load_step_handoff_meta,
+    )
+
     folder = (task.folder or "").strip()
     if not folder:
         raise ValueError("Project folder is required for IDE handoff.")
 
     tickets_dir = os.path.join(folder, ".tickets")
     os.makedirs(tickets_dir, exist_ok=True)
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    step_part = int(task.step_id or 0)
-    filename = f"decisionsai_{backend_id}_{stamp}_{step_part}.md"
+    filename = work_packet_filename(task, backend_id=backend_id)
     path = os.path.join(tickets_dir, filename)
 
-    backend_label = "Codex IDE" if backend_id == "codex_ide" else "Cursor IDE"
+    ticket_title = _ticket_title_for_task(task) or (task.project_name or "Workflow step")
     meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+    handoff_meta = step_meta if isinstance(step_meta, dict) and step_meta else load_step_handoff_meta(
+        getattr(task, "step_id", None)
+    )
+    iteration_protocol = build_step_iteration_protocol(handoff_meta)
     body_parts = [
         f"<!-- decisions-meta: {meta_json} -->",
         f"<!-- decisions-ide-meta: {meta_json} -->",
         "---",
         "mode: append",
-        "auto_continue_on_pickup: false",
+        "auto_continue_on_pickup: true",
         "callback_payload_type: workflow_continue",
         "---",
         "",
-        "# DecisionsAI Work Packet",
+        f"# {ticket_title}",
         "",
         f"Project: {task.project_name} ({task.project_id})",
-        f"Backend: {backend_label}",
+        "",
+        iteration_protocol,
         "",
     ]
     if loop_context_summary.strip():
-        body_parts.extend(["## Loop Context", "", loop_context_summary.strip(), ""])
+        body_parts.extend(["## Loop context (summary)", "", loop_context_summary.strip(), ""])
     body_parts.extend(
         [
             "## Instruction",
@@ -152,20 +204,16 @@ def write_ide_work_packet(
             task.instruction.strip(),
             "",
             _callback_block(backend_id, meta),
-            "## Return Contract",
+            "## Return contract",
             "",
-            "When finished, report back to DecisionsAI with:",
-            "- Status: completed | failed | needs_input",
-            "- Summary",
-            "- Files changed",
-            "- Tests run",
-            "- Blockers or next step",
+            "Report to the orchestrator using this exact shape (one field per line):",
             "",
-            "## Callback",
+            HARNESS_REPORT_TEMPLATE,
             "",
-            "The workflow stays waiting until you report completion.",
-            f"- Reporter: python3 {json.dumps(meta.get('reporter') or _reporter_path(backend_id))} "
-            '--turn-output "Status: completed\\nSummary: ..."',
+            "The workflow records this on the run. The human reviews via the orchestrator, not in-editor micro-management.",
+            "",
+            f"Reporter: python3 {json.dumps(meta.get('reporter') or _reporter_path(backend_id))} "
+            '--turn-output "<paste the Return contract block>"',
         ]
     )
     if meta.get("continue_url"):
@@ -185,7 +233,7 @@ def _ide_open_command() -> str | None:
 
 
 def open_ide_project(folder: str, packet_path: str = "") -> bool:
-    """Open the project folder (and optionally the work packet) in Cursor/VS Code."""
+    """Open the project folder in Cursor/VS Code (harness starts separately)."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return False
     folder = (folder or "").strip()
@@ -194,13 +242,84 @@ def open_ide_project(folder: str, packet_path: str = "") -> bool:
     command = _ide_open_command()
     if not command:
         return False
-    target = packet_path if packet_path and os.path.isfile(packet_path) else folder
     try:
         subprocess.Popen(
-            [command, target],
+            [command, folder],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         return True
     except Exception:
         return False
+
+
+def _cursor_harness_prompt(task: ProjectTask, packet_path: str) -> str:
+    folder = (task.folder or "").strip()
+    rel_packet = os.path.relpath(packet_path, folder) if folder else packet_path
+    steering = str(getattr(task, "run_briefing_steering", "") or "").strip()
+    parts = [
+        f"Open and execute the workflow work packet at `{rel_packet}`.",
+        "Follow the Instruction section exactly for this step.",
+        "Use the decisions-cursor-worker skill and report progress through the reporter in the packet.",
+    ]
+    if steering:
+        parts.append(f"Human steering for this run: {steering}")
+    return " ".join(parts)
+
+
+def start_cursor_harness_agent(task: ProjectTask, packet_path: str) -> dict[str, Any]:
+    """Start cursor-agent in the project folder using the work packet as source of truth."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"started": False, "reason": "test_mode"}
+    from .registry import _cursor_api_key, _cursor_auth_ready, _first_executable
+
+    agent = _first_executable(["cursor-agent"])
+    if not agent:
+        return {"started": False, "reason": "cursor-agent missing"}
+    if not _cursor_auth_ready(agent):
+        return {"started": False, "reason": "cursor-agent not authenticated"}
+
+    folder = (task.folder or "").strip()
+    if not folder or not os.path.isdir(folder):
+        return {"started": False, "reason": "project folder missing"}
+
+    prompt = _cursor_harness_prompt(task, packet_path)
+    env = {**os.environ, "TERM": "dumb"}
+    api_key = _cursor_api_key()
+    if api_key:
+        env["CURSOR_API_KEY"] = api_key
+
+    try:
+        subprocess.Popen(
+            [agent, "--trust", "-p", prompt],
+            cwd=folder,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except Exception as exc:
+        logger.warning("cursor-agent harness failed to start: %s", exc)
+        return {"started": False, "reason": str(exc)}
+
+    reporter = _reporter_path("cursor_ide")
+    try:
+        subprocess.Popen(
+            [
+                "python3",
+                reporter,
+                "--cwd",
+                folder,
+                "--event-type",
+                "cursor_started",
+                "--status",
+                "observed",
+                "--message",
+                "Harness started for workflow work packet.",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        logger.debug("cursor_started reporter failed", exc_info=True)
+
+    return {"started": True, "agent": agent, "prompt": prompt}

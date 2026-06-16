@@ -360,14 +360,8 @@ class StepExecutorMixin:
         if not instruction:
             return {"output": "No instruction provided for Send to Project CLI", "passed": False}
 
-        if run_id is not None:
-            try:
-                instruction = self._build_agent_prompt(step_data, run_id)
-            except Exception as exc:
-                logger.warning(
-                    "_run_send_to_project_cli: enriched handoff prompt failed, using raw instruction: %s",
-                    exc,
-                )
+        # Full agent prompt is built inside _run_task once the execution route (and
+        # IDE vs CLI backend) is known. IDE handoffs stay slim and orchestrator-driven.
 
         step_project_id = step_data.get("linked_project_id")
         project_id = None
@@ -559,11 +553,29 @@ class StepExecutorMixin:
                         except Exception:
                             route = {}
                     route = self._apply_step_harness_overrides(route, config)
+                    backend_id = route.get("backend") or "pi"
+                    from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+                    from distr.core.workflow.step_iteration import build_ide_step_instruction
+
+                    if is_ide_backend(backend_id):
+                        final_instruction = build_ide_step_instruction(
+                            step_data, run_id, config=config
+                        )
+                    elif run_id is not None:
+                        try:
+                            final_instruction = self._build_agent_prompt(step_data, run_id)
+                        except Exception as exc:
+                            logger.warning(
+                                "_run_send_to_project_cli: enriched prompt failed: %s", exc
+                            )
+                            final_instruction = instruction
+                    else:
+                        final_instruction = instruction
                     handle = await dispatch_harness_async(
                         HarnessContext(
                             project=project,
-                            instruction=instruction,
-                            backend_id=route.get("backend") or "pi",
+                            instruction=final_instruction,
+                            backend_id=backend_id,
                             model=route.get("model") or "",
                             ticket_id=int(ticket_id) if ticket_id is not None else None,
                             board_id=getattr(board, "id", None) if board else None,

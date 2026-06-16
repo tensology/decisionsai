@@ -2105,6 +2105,20 @@ def register_routes(router, templates):
 
             increment_workflow_updated()
 
+            if worker_terminal and (event.output or event.message):
+                try:
+                    from distr.core.workflow.step_iteration import record_harness_step_report
+
+                    record_harness_step_report(
+                        run_id=int(run_id),
+                        step_id=int(step_id) if step_id else None,
+                        report_text=(event.output or event.message or "").strip(),
+                        source="cursor" if "cursor" in lower_event_type else "codex",
+                        event_type=event_type,
+                    )
+                except Exception:
+                    logger.debug("Could not record harness step report", exc_info=True)
+
             auto_continue_result = None
             if (
                 bridge_suffix == "completed"

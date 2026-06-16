@@ -1084,7 +1084,8 @@ def _cmd_speak_text_directly(session, params):
     from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
     raw_text = params.get('text', '')
-    text = clean_text_for_tts(raw_text, spoken_prose=True)
+    from distr.core.human_engagement import voice_friendly_text
+    text = voice_friendly_text(clean_text_for_tts(raw_text, spoken_prose=True))
     has_llm = hasattr(session, 'llm_service') and session.llm_service is not None
     has_tts = hasattr(session, 'tts_service') and session.tts_service is not None
     has_loop = hasattr(session, 'runner') and session.runner is not None and hasattr(session.runner, '_loop') and session.runner._loop is not None

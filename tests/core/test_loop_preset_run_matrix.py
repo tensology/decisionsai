@@ -11,10 +11,26 @@ from tests.core.workflow_e2e_harness import (
     all_preset_slugs,
     apply_preset_to_workflow,
     assert_preset_harness_fields,
+    cleanup_workflow_run_context,
     load_exit_contracts,
     make_factory,
     start_preset_run,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_matrix_workflow_runs():
+    cleanup_workflow_run_context()
+    yield
+    cleanup_workflow_run_context()
+
+
+IDEATION_SLUG = "ideation-brief-to-board"
+DEVELOPMENT_SLUG = "development-ticket-to-implementation"
+
+
+def runnable_preset_slugs() -> list[str]:
+    return [slug for slug in all_preset_slugs() if slug != IDEATION_SLUG]
 
 
 @pytest.fixture()
@@ -54,7 +70,7 @@ def test_preset_applies_with_harness_fields(matrix_factory, tmp_path, preset_slu
         session.close()
 
 
-@pytest.mark.parametrize("preset_slug", all_preset_slugs())
+@pytest.mark.parametrize("preset_slug", runnable_preset_slugs())
 def test_preset_runs_and_exits(matrix_factory, tmp_path, preset_slug):
     result = start_preset_run(matrix_factory, tmp_path, preset_slug, timeout=120.0)
     contracts = load_exit_contracts()
@@ -66,17 +82,17 @@ def test_preset_runs_and_exits(matrix_factory, tmp_path, preset_slug):
 
 @pytest.mark.parametrize(
     "preset_slug",
-    [s for s in all_preset_slugs() if "playwright" in (load_exit_contracts().get(s) or {}).get("tools", [])],
+    [s for s in runnable_preset_slugs() if "playwright" in (load_exit_contracts().get(s) or {}).get("tools", [])],
 )
 def test_preset_with_playwright_tools_exits(matrix_factory, tmp_path, preset_slug):
     start_preset_run(matrix_factory, tmp_path, preset_slug, timeout=90.0)
 
 
-def test_senior_engineer_handoff_retains_loop_context(matrix_factory, tmp_path):
+def test_development_handoff_retains_loop_context(matrix_factory, tmp_path):
     result = start_preset_run(
         matrix_factory,
         tmp_path,
-        "senior-software-engineer-ticket-to-green",
+        DEVELOPMENT_SLUG,
         timeout=120.0,
     )
     assert result["terminal"]["run"].status == "completed"

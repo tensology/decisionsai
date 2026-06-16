@@ -65,8 +65,8 @@ def test_workflow_waiting_state_notifies_with_continue_prompt(monkeypatch):
 
     assert len(captured) == 1
     message = captured[0]["body"]
-    assert "paused at step 12" in message
-    assert "continue, retry, skip" in message
+    assert "needs your input" in message
+    assert "adjust direction" in message
     assert captured[0]["requires_response"] is True
 
 

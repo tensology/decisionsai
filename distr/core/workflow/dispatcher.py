@@ -733,6 +733,8 @@ def start_workflow_run(
                 step.result = None
 
         normalized_metadata.setdefault("run_settings", run_settings)
+        if ticket_id is not None:
+            normalized_metadata.setdefault("ticket_id", ticket_id)
         if (board_id is not None or ticket_id is not None) and not normalized_metadata.get("developer_context"):
             try:
                 from distr.core.developer_context import build_developer_context
@@ -924,6 +926,25 @@ def start_workflow_run(
         result["run_id"] = run_id
         return result
 
+    briefing_data = dict(normalized_metadata)
+    if ticket_id is not None:
+        briefing_data["ticket_id"] = ticket_id
+    if ticket_id and not normalized_metadata.get("skip_run_briefing"):
+        try:
+            from distr.core.workflow.run_briefing import enter_run_briefing_wait, human_checkpoint_enabled
+
+            if human_checkpoint_enabled(briefing_data):
+                briefing_message = enter_run_briefing_wait(run_id, first_step_id)
+                if briefing_message:
+                    return {
+                        "run_id": run_id,
+                        "status": "waiting",
+                        "waiting_kind": "run_briefing",
+                        "async": bool(dispatch_async),
+                    }
+        except Exception:
+            logger.debug("start_workflow_run: run briefing gate failed", exc_info=True)
+
     if dispatch_async:
         dispatch_thread = threading.Thread(
             target=_dispatch_first_step,
@@ -998,16 +1019,225 @@ def cancel_step(step_id: int) -> bool:
     return True
 
 
-def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, Any]:
-    """Resume a workflow run that is in 'waiting' status."""
+def _dispatch_workflow_step(run_id: int, step_id: int) -> Dict[str, Any]:
+    os.environ["DECISIONS_WORKFLOW_RUN_ID"] = str(run_id)
+    os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(step_id)
+    _update_workflow_thread_step(step_id)
+    dispatcher = StepDispatcher()
+    return dispatcher.run_in_workflow(int(step_id), int(run_id))
+
+
+def _handle_run_briefing_response(run_id: int, optional_input: str) -> Dict[str, Any]:
+    from distr.core.workflow.run_briefing import (
+        build_run_briefing_message,
+        classify_human_workflow_response,
+        enter_run_briefing_wait,
+        gather_run_briefing_context,
+    )
+
+    action = classify_human_workflow_response(optional_input, waiting_kind="run_briefing")
+    if action == "stop":
+        cancel_run(run_id)
+        return {"success": True, "action": "end_run", "status": "cancelled"}
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        first_step_id = int(run_data.get("pending_first_step_id") or run.current_step_id or 0)
+        workflow_id = int(run.workflow_id)
+
+    if action == "steer" and optional_input.strip():
+        try:
+            from distr.core.workflow.steering_memory import record_run_steering_feedback
+
+            record_run_steering_feedback(
+                run_id=run_id,
+                message=optional_input.strip(),
+                source="workflow",
+                event_type="run_briefing_steering",
+                workflow_id=workflow_id,
+            )
+        except Exception:
+            logger.debug("run briefing steering capture failed", exc_info=True)
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if run and run.run_data:
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                existing = (run_data.get("run_briefing_steering") or "").strip()
+                merged = f"{existing}\n{optional_input.strip()}".strip() if existing else optional_input.strip()
+                run_data["run_briefing_steering"] = merged[:2000]
+                run.run_data = json.dumps(run_data)
+                db.commit()
+        enter_run_briefing_wait(run_id, first_step_id)
+        ctx = gather_run_briefing_context(run_id)
+        message = build_run_briefing_message(ctx) if ctx else ""
+        return {
+            "success": True,
+            "action": "waiting",
+            "waiting_kind": "run_briefing",
+            "message": message or "Updated the plan. Tell me when to begin.",
+        }
+
+    if not first_step_id:
+        return {"error": "No first step configured for this run", "status_code": 409}
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if run:
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            run.status = "running"
+            run_data.pop("waiting_kind", None)
+            run_data.pop("pending_first_step_id", None)
+            run.run_data = json.dumps(run_data)
+            db.commit()
+
+    os.environ["DECISIONS_WORKFLOW_ID"] = str(workflow_id)
+    dispatch_result = _dispatch_workflow_step(run_id, first_step_id)
+    if "error" in dispatch_result:
+        complete_run(run_id, "failed")
+        return dispatch_result
+    record_workflow_chat_event(
+        run_id,
+        "resumed",
+        status="running",
+        step_id=first_step_id,
+        summary="Run confirmed. Starting first step.",
+    )
+    return {
+        "success": True,
+        "action": "next_step",
+        "step_id": first_step_id,
+        "dispatch": dispatch_result,
+    }
+
+
+def _handle_step_review_response(run_id: int, optional_input: str) -> Dict[str, Any]:
+    from distr.core.workflow.run_briefing import classify_human_workflow_response
     from distr.core.workflow.router import StepRouter
 
+    action = classify_human_workflow_response(optional_input, waiting_kind="step_review")
+    if action == "stop":
+        cancel_run(run_id)
+        return {"success": True, "action": "end_run", "status": "cancelled"}
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
+        step = db.query(AutoWorkflowStep).filter(
+            AutoWorkflowStep.id == int(run.current_step_id or 0),
+        ).first()
+        if not step:
+            return {"error": "No waiting step found", "status_code": 409}
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        next_step_id = int(run_data.get("pending_next_step_id") or 0)
+        step_id = int(step.id)
+        stored_result = str(run_data.get("step_review_result") or "")
+        stored_passed = bool(run_data.get("step_review_passed", True))
+
+    if action == "steer" and optional_input.strip():
+        router = StepRouter()
+        decision = router.resume_from_feedback(step_id, run_id, optional_input)
+        action_name = (decision or {}).get("action")
+        if action_name == "next_step" and decision.get("step_id"):
+            try:
+                dispatch_result = _dispatch_workflow_step(run_id, int(decision["step_id"]))
+                return {
+                    "success": True,
+                    "action": "next_step",
+                    "step_id": int(decision["step_id"]),
+                    "dispatch": dispatch_result,
+                }
+            except Exception as exc:
+                logger.error("step review steer dispatch failed: %s", exc, exc_info=True)
+                return {"error": f"Failed to dispatch next step: {exc}", "status_code": 500}
+        if action_name == "end_run":
+            status = decision.get("status", "completed")
+            complete_run(run_id, status)
+            return {"success": True, "action": "end_run", "status": status}
+        return decision
+
+    if not next_step_id:
+        return {"error": "No pending next step found", "status_code": 409}
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if run:
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            run.status = "running"
+            step_row = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+            if step_row and step_row.status == "waiting":
+                step_row.status = "passed" if stored_passed else "failed"
+            run_data.pop("waiting_kind", None)
+            run_data.pop("pending_next_step_id", None)
+            run_data.pop("step_review_text", None)
+            run_data.pop("step_review_result", None)
+            run_data.pop("step_review_passed", None)
+            run.run_data = json.dumps(run_data)
+            db.commit()
+
+    dispatch_result = _dispatch_workflow_step(run_id, next_step_id)
+    if "error" in dispatch_result:
+        complete_run(run_id, "failed")
+        return dispatch_result
+    record_workflow_chat_event(
+        run_id,
+        "resumed",
+        status="running",
+        step_id=next_step_id,
+        summary="Continuing to the next step.",
+    )
+    return {
+        "success": True,
+        "action": "next_step",
+        "step_id": next_step_id,
+        "dispatch": dispatch_result,
+    }
+
+
+def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, Any]:
+    """Resume a workflow run that is in 'waiting' status."""
+    waiting_kind = ""
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         if not run:
             return {"error": "Run not found", "status_code": 404}
         if run.status != "waiting":
             return {"error": f"Run is not waiting (status: {run.status})", "status_code": 409}
+        if run.run_data:
+            try:
+                waiting_kind = (json.loads(run.run_data or "{}") or {}).get("waiting_kind") or ""
+            except Exception:
+                waiting_kind = ""
+
+    if waiting_kind == "run_briefing":
+        return _handle_run_briefing_response(run_id, optional_input)
+    if waiting_kind == "step_review":
+        return _handle_step_review_response(run_id, optional_input)
+
+    from distr.core.workflow.router import StepRouter
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
         step = db.query(AutoWorkflowStep).filter(
             AutoWorkflowStep.id == run.current_step_id,
         ).first()
@@ -1016,15 +1246,6 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         step_id = step.id
 
     router = StepRouter()
-    waiting_kind = ""
-    with get_session() as db:
-        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
-        if run and run.run_data:
-            try:
-                waiting_kind = (json.loads(run.run_data or "{}") or {}).get("waiting_kind") or ""
-            except Exception:
-                waiting_kind = ""
-
     decision = router.resume_from_feedback(step_id, run_id, optional_input)
     record_workflow_chat_event(
         run_id,
@@ -1118,6 +1339,28 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         next_step_id = decision.get("step_id")
         wait_before = int(decision.get("wait_before_next") or 0)
         if next_step_id:
+            try:
+                from distr.core.workflow.run_briefing import maybe_pause_before_next_step
+
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                    run_data = json.loads(run.run_data or "{}") if run and run.run_data else {}
+                stored_result = str(run_data.get("waiting_result") or "")
+                stored_passed = bool(run_data.get("waiting_passed", True))
+                if maybe_pause_before_next_step(
+                    run_id=run_id,
+                    completed_step_id=step_id,
+                    passed=stored_passed,
+                    result_text=stored_result or optional_input,
+                    next_step_id=int(next_step_id),
+                ):
+                    return {
+                        "success": True,
+                        "action": "waiting",
+                        "waiting_kind": "step_review",
+                    }
+            except Exception:
+                logger.debug("step review checkpoint on resume failed", exc_info=True)
             try:
                 if wait_before > 0:
                     import time

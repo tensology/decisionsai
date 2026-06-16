@@ -1425,13 +1425,10 @@ class ContinueWorkflowInput(BaseModel):
 class ContinueWorkflowTool(BaseTool):
     name: str = "continue_workflow"
     description: str = (
-        "Resume a workflow that is waiting for user input. "
-        "When a workflow step has wait_for_continue=True, the workflow pauses "
-        "and waits for the user to respond. Use this tool to pass the user's "
-        "response back and resume execution. "
-        "Use when user says 'continue', 'go ahead', 'looks good, continue', "
-        "'yes proceed', or provides feedback after a workflow pause. "
-        "The user's input is appended to the step result before advancing."
+        "Resume a workflow that is waiting for you. "
+        "Use when the user confirms starting a run, wants to continue after a step, "
+        "steers the work with new direction, or says to stop. "
+        "Pass their exact words as user_input when they steer or refine the plan."
     )
     args_schema: Type[BaseModel] = ContinueWorkflowInput
 

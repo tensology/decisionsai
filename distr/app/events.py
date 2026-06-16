@@ -839,12 +839,14 @@ class EventHandlerMixin:
             )
 
         force_telegram = bool(data.get("force_telegram_delivery"))
+        telegram_chat_voice_reply = str(data.get("input_type") or "").strip().lower() == "voice"
         if (
             remote_ctx
             and is_voice_delivery_provider(provider)
             and has_telegram_manager
             and telegram_connected
             and not force_telegram
+            and not telegram_chat_voice_reply
         ):
             app_ref = self
 

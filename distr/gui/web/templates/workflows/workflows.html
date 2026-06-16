@@ -97,7 +97,6 @@
     line-height: 1.25rem;
 }
 .wf-workflow-ticket-row--running { border-color: rgba(56, 189, 248, 0.45); background: rgba(56, 189, 248, 0.08); }
-.wf-workflow-ticket-row--up-next { border-color: rgba(249, 115, 22, 0.35); }
 .wf-run-preview-tabs { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.1); }
 .wf-run-preview-tab {
     padding: 0.35rem 0;
@@ -443,60 +442,12 @@ body.wf-board-pointer-dragging * {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.wf-workflow-queue-list .kb-ticket-list-content {
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: calc(100% - 10.75rem);
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    overflow: hidden;
-}
-.wf-workflow-queue-list .kb-ticket-list-content--no-desc {
-    justify-content: center;
-}
-.wf-workflow-queue-list .kb-ticket-list-title-wrap {
+.wf-workflow-queue-list .kb-ticket-list-row {
     min-width: 0;
     overflow: hidden;
-    font-size: 13px;
-    font-weight: 600;
-    color: #ffffff;
-    line-height: 1.3;
-    max-height: 1.35em;
 }
-.wf-workflow-queue-list .kb-ticket-list-title-track {
-    display: inline-flex;
-    align-items: center;
-    gap: 2rem;
-    white-space: nowrap;
-}
-.wf-workflow-queue-list .kb-ticket-list-title-wrap--marquee .kb-ticket-list-title-track {
-    animation: wfListDescMarquee var(--kb-marquee-duration, 12s) linear infinite;
-}
-.wf-workflow-queue-list .kb-ticket-list-title-wrap--marquee:hover .kb-ticket-list-title-track,
-.wf-workflow-queue-list .kb-ticket-list-title-wrap--marquee:focus-within .kb-ticket-list-title-track {
-    animation-play-state: paused;
-}
-.wf-workflow-queue-list .kb-ticket-list-desc {
-    min-width: 0;
-    overflow: hidden;
-    font-size: 12px;
-    line-height: 1.3;
-    color: #9ca3af;
-    max-height: 1.35em;
-}
-.wf-workflow-queue-list .kb-ticket-list-desc-track {
-    display: inline-flex;
-    align-items: center;
-    gap: 2rem;
-    white-space: nowrap;
-}
-.wf-workflow-queue-list .kb-ticket-list-desc--marquee .kb-ticket-list-desc-track {
-    animation: wfListDescMarquee var(--kb-marquee-duration, 12s) linear infinite;
-}
-.wf-workflow-queue-list .kb-ticket-list-desc--marquee:hover .kb-ticket-list-desc-track,
-.wf-workflow-queue-list .kb-ticket-list-desc--marquee:focus-within .kb-ticket-list-desc-track {
-    animation-play-state: paused;
+.wf-workflow-queue-list .kb-ticket-list-actions {
+    flex-shrink: 0;
 }
 .wf-workflow-queue-list .wf-ticket-time-display {
     min-width: 4.75rem;
@@ -513,6 +464,62 @@ body.wf-board-pointer-dragging * {
     overflow: hidden;
 }
 .wf-ticket-list-surface .kb-ticket-list-content--no-desc { grid-template-columns: auto; }
+/* Workflow queue: stack title + description (override board list grid) */
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-content {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1px;
+    overflow: hidden;
+    padding-right: 6px;
+    grid-template-columns: none;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-content--no-desc {
+    justify-content: center;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-title-wrap {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    line-height: 1.3;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-desc {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #9ca3af;
+    max-height: 1.35em;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-desc-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 2rem;
+    white-space: nowrap;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-desc--marquee .kb-ticket-list-desc-track {
+    animation: wfListDescMarquee var(--kb-marquee-duration, 12s) linear infinite;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-desc--marquee:hover .kb-ticket-list-desc-track,
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-desc--marquee:focus-within .kb-ticket-list-desc-track {
+    animation-play-state: paused;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .kb-ticket-list-actions {
+    flex: 0 0 auto;
+    flex-shrink: 0;
+    margin-left: 0;
+}
 .wf-ticket-list-surface .kb-ticket-list-title {
     font-size: 13px;
     font-weight: 600;
@@ -596,8 +603,8 @@ body.wf-board-pointer-dragging * {
     cursor: wait;
 }
 .wf-workflow-queue-list .kb-ticket-list-prefix {
-    flex: 0 0 148px;
-    width: 148px;
+    flex: 0 0 118px;
+    width: 118px;
 }
 .wf-workflow-queue-list .wf-workflow-queue-badges {
     gap: 5px;
@@ -647,17 +654,11 @@ body.wf-board-pointer-dragging * {
     font-size: 0.75rem;
     font-weight: 700;
 }
-.wf-workflow-queue-list .kb-ticket-list-content {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-    grid-template-columns: none;
-}
 .wf-workflow-queue-actions {
     flex-wrap: nowrap;
     justify-content: flex-end;
-    max-width: 8.5rem;
+    flex: 0 0 auto;
+    min-width: 9.5rem;
 }
 .wf-workflow-queue-list .wf-workflow-ticket-row {
     cursor: pointer;

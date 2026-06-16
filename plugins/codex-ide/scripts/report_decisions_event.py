@@ -65,8 +65,11 @@ def _discover_packet_meta(cwd: str) -> dict:
             continue
         seen.add(key)
         try:
+            packets: list[Path] = []
+            for pattern in ("ticket_*.md", "decisionsai_*.md"):
+                packets.extend(root.glob(pattern))
             packets = sorted(
-                root.glob("decisionsai_*.md"),
+                packets,
                 key=lambda item: item.stat().st_mtime,
                 reverse=True,
             )

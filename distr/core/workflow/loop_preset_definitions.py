@@ -1,9 +1,10 @@
 """
 Hand-authored loop preset definitions.
 
-Only one built-in preset is active for now: a Senior Software Engineer role loop
-that ingests a ticket, plans it, executes it, validates it, repairs it, and exits
-only when the evidence packet is green.
+Active presets follow workflows-by-intent:
+- Ideation: requirements → brief → board tickets (no Cursor)
+- Development: ticket → plan → harness implementation (Cursor only here)
+- Polish: security, UI drift, regression, release evidence
 """
 
 from __future__ import annotations
@@ -125,232 +126,205 @@ def _step(
     return out
 
 
-_SENIOR_SWE_KICKOFF = _kickoff(
-    "Senior Software Engineer: Ticket to Green",
-    """Goal: linked ticket is implemented, validated, cleaned up, and evidence-backed
-Max iterations: 8
-Between iterations run: project safety nets, secret/security audit, UI/product QA, code-health review, and eval scoring
-Exit when: plan.md is attached to the ticket, implementation matches acceptance criteria, all checks are green, test data is cleaned up, and the result packet explains why the ticket is green
-Step 1: Ingest the ticket, board, lane, project, linked files, acceptance criteria, and prior workflow context before planning.
+_COMBINED_GATE_COMMAND = (
+    _PROJECT_SAFETY_NET_COMMAND
+    + "\necho '--- security audit ---'\n"
+    + _SECRET_AUDIT_COMMAND
+)
+
+
+_IDEATION_KICKOFF = _kickoff(
+    "Ideation: Brief to Board",
+    """Goal: requirements become a product brief, board lanes, and development-ready tickets
+Max iterations: 3
+Exit when: the brief is written, the board exists with tickets and acceptance criteria, and dev-ready tickets are queued
+Step 1: Read the linked requirements document and extract scope, constraints, and delivery slices.
+This workflow never hands off to Cursor or any IDE harness.
 """
     + SELF_PACE_FOOTER
     + "\n\n"
     + GUARDRAILS_FOOTER,
 )
 
+_IDEATION_STEPS = [
+    _step(
+        "Read requirements document",
+        "Read the requirements document path from run metadata. Extract product goal, required views, "
+        "interactions, quality bar, and the delivery slices that should become tickets. Summarize scope, "
+        "non-goals, and risks. Do not write code or open an IDE.",
+        skills=["product-lens", "brainstorming", "doc-coauthoring"],
+        tools=["other"],
+        other_tool="Requirements document",
+        action_type="agent_instruction",
+        guardrail=_guardrail("- Ideation only: no code, no Cursor, no project CLI"),
+        validation_prompt="Requirements scope, slices, constraints, and non-goals are explicit.",
+    ),
+    _step(
+        "Write product brief",
+        "Write a concise product brief with acceptance themes per delivery slice, recommended lane names, "
+        "and ticket titles. Attach the brief to run metadata for downstream workflows.",
+        skills=["writing-plans", "product-lens", "doc-coauthoring"],
+        tools=["other"],
+        other_tool="Product brief artifact",
+        action_type="agent_instruction",
+        guardrail=_guardrail("- Brief must map 1:1 to future board tickets"),
+        validation_prompt="Product brief exists with ticket titles and acceptance themes per slice.",
+    ),
+    _step(
+        "Create board, lanes, and tickets",
+        "Create a Kanban board with lanes Backlog, Ready, In Progress, Validation, and Complete. "
+        "Create one ticket per development slice from the brief with description and acceptance criteria. "
+        "Do not hand off to Cursor.",
+        skills=["product-lens", "executing-plans"],
+        tools=["other"],
+        other_tool="Kanban board + ticket creation",
+        action_type="agent_instruction",
+        guardrail=_guardrail("- Every ticket needs acceptance criteria; no IDE handoff"),
+        validation_prompt="Board exists with lanes and development tickets that match the brief.",
+    ),
+    _step(
+        "Queue tickets for development",
+        "Link the board and tickets to the development workflow. Set queue order, attach the brief, "
+        "and mark tickets ready for the development workflow. End with a handoff summary.",
+        skills=["internal-comms", "product-lens"],
+        tools=["other"],
+        other_tool="Workflow queue + board linkage",
+        action_type="agent_instruction",
+        validation_prompt="Development tickets are queued on the board with workflow linkage and brief attached.",
+        validation_pass_action="end_loop",
+        validation_fail_action="end_loop",
+    ),
+]
 
-_SENIOR_SWE_STEPS = [
+_DEVELOPMENT_KICKOFF = _kickoff(
+    "Development: Ticket to Implementation",
+    """Goal: one linked ticket is implemented on the project with harness iteration
+Max iterations: 6
+Exit when: plan.md is attached, the slice is implemented and self-tested, and development evidence is on the ticket
+Step 1: Ingest the ticket and project context. This is the only workflow allowed to hand off to Cursor.
+"""
+    + SELF_PACE_FOOTER
+    + "\n\n"
+    + GUARDRAILS_FOOTER,
+)
+
+_DEVELOPMENT_STEPS = [
     _step(
         "Ingest ticket and project context",
-        "Read the linked ticket title, description, comments, board, lane, project, todos, linked files, "
-        "acceptance criteria, recommended skills, and any prior result-packet context. Restate the problem, "
-        "constraints, risks, missing information, and the project route that should own the work.",
+        "Read the linked ticket, board, lane, project, acceptance criteria, and brief. Restate the slice, "
+        "constraints, and project route. Report using the harness return contract.",
         skills=["product-lens", "brainstorming", "systematic-debugging"],
         tools=["cli", "other"],
         other_tool="Kanban ticket context + project repository",
         action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- Do not write code before the plan artifact exists"),
-        failure_checklist=[
-            "Ticket acceptance criteria were not restated",
-            "Project route or linked project context was not identified",
-            "Prior result-packet context was ignored",
-        ],
-        validation_prompt="Ticket brief, acceptance criteria, risks, project route, and context handoff are explicit.",
+        guardrail=_guardrail(_SCOPE, "- Do not write code before plan.md exists"),
+        validation_prompt="Ticket brief, acceptance criteria, and project route are explicit.",
     ),
     _step(
         "Write plan.md and attach to ticket",
-        "Create or update a ticket-specific plan.md artifact in the project. Include requirements, implementation "
-        "slices, affected files, tests to write before shipping, security checks, UI checks, rollback plan, data "
-        "cleanup plan, and eval scoring criteria. Attach or link plan.md back to the ticket before implementation.",
-        skills=["writing-plans", "executing-plans", "doc-coauthoring", "product-lens"],
+        "Create ticket-specific plan.md with implementation slices, affected files, tests, and rollback notes. "
+        "Attach plan.md to the ticket before implementation.",
+        skills=["writing-plans", "executing-plans", "doc-coauthoring"],
         tools=["cli", "other"],
-        other_tool="Ticket file attachment / ticket update",
+        other_tool="Ticket file attachment",
         action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- The plan must be tied to this ticket, not a generic checklist"),
-        failure_checklist=[
-            "plan.md missing or not linked to ticket",
-            "Plan lacks tests, rollback, cleanup, security, UI, or eval criteria",
-            "Plan omits context transferred from the ticket",
-        ],
-        validation_prompt="plan.md exists, is linked or attached to the ticket, and includes tests, rollback, cleanup, security, UI, and eval criteria.",
+        guardrail=_guardrail(_SCOPE, "- Plan must match this ticket only"),
+        validation_prompt="plan.md exists, is linked to the ticket, and includes tests and rollback.",
     ),
     _step(
-        "Execute planned slice",
-        "Implement the next planned slice using the project conventions. Write or update tests before shipping the "
-        "behavior. Keep the diff tight, preserve existing patterns, and record what context is handed to validation.",
+        "Implement, test, and self-correct",
+        "Implement the slice. Iterate inside this step: develop → run project lint/test commands → self-assess "
+        "for drift and regressions → correct → report with the harness return contract.",
         skills=["executing-plans", "tdd-workflow", "verification-loop", "systematic-debugging"],
         tools=["cli"],
         action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS, "- Do not bypass tests or weaken acceptance criteria"),
-        failure_checklist=[
-            "No test or eval coverage for changed behavior",
-            "Implementation drifts outside the ticket plan",
-            "Context handoff to later steps is missing",
-        ],
-        validation_prompt="Planned slice is implemented with focused tests or evals and a clear context handoff.",
+        guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
+        validation_prompt="Slice is implemented, tested, and reported with a complete harness return contract.",
         on_fail_goto_position=2,
     ),
     _step(
-        "Run project safety nets",
-        "Run the discovered project lint, test, and build commands. Capture the exact command and output. "
-        "If a command fails, route back to the implementation step with the first concrete failure.",
-        skills=["verification-loop", "ln-622-build-auditor", "systematic-debugging"],
-        tools=["cli"],
-        action_type="run_command",
-        command=_PROJECT_SAFETY_NET_COMMAND,
-        timeout_seconds=600,
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS, "- Do not edit commands, tests, or configs just to force green"),
-        failure_checklist=[
-            "Safety net command was skipped",
-            "A failing command was ignored",
-            "The command did not run in the linked project folder",
-        ],
-        validation_type="exit_code",
-        validation_prompt="Discovered lint/test/build safety nets exit 0 in the linked project folder.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Audit secrets and security",
-        "Run tracked-secret and hard-coded-secret checks, then review the changed code for injection risks, unsafe "
-        "deserialization, authz/authn drift, weak error handling, and rollback hazards.",
-        skills=["ln-621-security-auditor", "pre-flight-review", "systematic-debugging"],
-        tools=["cli"],
-        action_type="run_command",
-        command=_SECRET_AUDIT_COMMAND,
-        timeout_seconds=180,
-        guardrail=_guardrail(
-            _SCOPE,
-            "- Never print secret values into the ticket or activity log",
-            "- Do not commit .env files, API keys, tokens, passwords, private keys, or generated credentials",
-        ),
-        failure_checklist=[
-            "Tracked .env or key material found",
-            "Hard-coded secret candidate found",
-            "SQL injection or unsafe input path not addressed",
-        ],
-        validation_type="exit_code",
-        validation_prompt="Secret/env scan exits 0 and no unresolved security blocker remains.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Verify UI and product behavior",
-        "Use Playwright/browser-use against the affected local or staging UI. Check changed flows, all visible buttons "
-        "introduced or touched, loading states, snackbars/toasts, empty/error states, responsive layout, console errors, "
-        "and whether the UI logically matches the ticket and project patterns.",
-        skills=["webapp-testing", "qa-tester", "browser-qa"],
-        tools=["playwright", "browser_use"],
-        action_type="playwright",
-        guardrail=_guardrail(_SCOPE, "- Do not accept hidden required actions, clipped text, or rogue UI controls"),
-        failure_checklist=[
-            "Changed flow not exercised in browser",
-            "Button, snackbar, spinner, error, or loading state missing",
-            "Console errors, visual drift, or nonsensical UI ignored",
-        ],
-        validation_prompt="Browser evidence proves the changed UI flow makes sense, works, and has no console or visual blockers.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Capture desktop evidence when needed",
-        "Use computer-use for desktop/sidecar evidence when the workflow involves native UI, browser chrome, file pickers, "
-        "screen-level state, or anything Playwright cannot see. Capture screenshot evidence and summarize what was verified.",
-        skills=["qa-tester", "browser-qa"],
-        tools=["computer_use"],
-        action_type="computer_use",
-        guardrail=_guardrail(_SCOPE, "- Use this as evidence capture, not as a substitute for deterministic checks"),
-        failure_checklist=[
-            "Computer-use evidence needed but not captured",
-            "Screenshot does not show the relevant state",
-            "Observed UI state contradicts browser or test evidence",
-        ],
-        validation_prompt="Desktop/screenshot evidence is captured when needed, or the step states why Playwright evidence was sufficient.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Review backend and code health",
-        "Review the changed backend and shared code for dead code, duplicate logic, excessive complexity, files drifting "
-        "toward 1600+ lines, leaky abstractions, inefficient queries, unclear errors, and missing rollback paths. Refactor "
-        "only when it directly supports the ticket and reduces risk.",
-        skills=["requesting-code-review", "ln-511-code-quality-checker", "ln-512-tech-debt-cleaner"],
-        tools=["cli"],
-        action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- No drive-by rewrites; refactor only the code touched or directly implicated"),
-        failure_checklist=[
-            "Dead code or duplicate logic left behind",
-            "Large-file or complexity drift ignored",
-            "Backend errors are vague or unsafe",
-        ],
-        validation_prompt="Code-health review is complete with dead code, duplication, complexity, and backend drift addressed or explicitly deferred.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Run eval and regression criteria",
-        "Create or run evaluation-based tests where assertions alone are insufficient. Score criteria such as accuracy, "
-        "tone, schema compliance, safety, and useful error messaging. Verify regressions called out in plan.md.",
-        skills=["qa-tester", "verification-loop", "product-lens"],
-        tools=["cli", "other"],
-        other_tool="Evaluation harness / orchestrator scoring",
-        action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- Eval scores must reflect the ticket acceptance criteria, not vanity metrics"),
-        failure_checklist=[
-            "Eval criteria missing for model/content/schema behavior",
-            "Accuracy, tone, schema, safety, or error messaging not scored where relevant",
-            "Potential regressions not tested",
-        ],
-        validation_prompt="Relevant evals and regressions are scored with pass/fail rationale tied to plan.md.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Cleanup test data and rollback proof",
-        "Remove temporary test data, generated fixtures, debug artifacts, and workflow noise created by this run. Prove "
-        "rollback steps or migration safety where applicable. Confirm tests and evals leave no persistent data behind.",
-        skills=["verification-loop", "finishing-a-development-branch", "ln-512-tech-debt-cleaner"],
-        tools=["cli"],
-        action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- Do not leave seeded tickets, workflows, temp files, or credentials behind"),
-        failure_checklist=[
-            "Test data or generated artifacts left behind",
-            "Rollback plan untested or missing",
-            "Migration/fixture cleanup not verified",
-        ],
-        validation_prompt="Cleanup is verified, rollback notes exist where needed, and no persistent test data is left behind.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Evaluate green exit",
-        "Decide whether the loop can exit. It can only pass when plan.md is attached, acceptance criteria are met, safety "
-        "nets passed, security is clean, UI/product checks passed or were not applicable with rationale, backend/code "
-        "health is acceptable, evals passed, cleanup is verified, and context handoffs are visible.",
-        skills=["product-lens", "finishing-a-development-branch", "requesting-code-review"],
-        tools=["other"],
-        other_tool="Orchestrator exit judgment",
-        action_type="agent_instruction",
-        guardrail=_guardrail(_SCOPE, "- Do not mark green with unresolved blockers or missing evidence"),
-        failure_checklist=[
-            "Exit declared with missing plan.md attachment",
-            "Exit declared with failing tests, security, UI, eval, or cleanup gate",
-            "Final result packet does not explain why the run is green",
-        ],
-        validation_prompt="All gates are green and the result packet explains the evidence for exit.",
-        on_fail_goto_position=2,
-    ),
-    _step(
-        "Attach evidence and close ticket loop",
-        "Update the ticket with plan.md, changed files, commands run, browser/computer-use evidence, security notes, eval "
-        "scores, cleanup proof, rollback notes, and the final result packet. Mark the workflow completed only after this "
-        "ticket-facing summary is written.",
-        skills=["internal-comms", "learnings-keeper", "finishing-a-development-branch"],
+        "Close development slice with evidence",
+        "Update the ticket with files changed, commands run, and a development summary. Do not run polish or "
+        "release gates here — those belong to the polish workflow.",
+        skills=["internal-comms", "finishing-a-development-branch"],
         tools=["other"],
         other_tool="Ticket update + result packet",
         action_type="agent_instruction",
-        guardrail=_guardrail(_SCOPE, "- The final summary must be useful to the next developer who opens the ticket"),
-        failure_checklist=[
-            "Ticket was not updated with evidence",
-            "Context handoff to future work is missing",
-            "Status changed without a final result packet",
-        ],
-        validation_prompt="Ticket contains the final evidence summary, result packet, and closure status.",
+        validation_prompt="Ticket contains development evidence and a clear slice completion summary.",
         validation_pass_action="end_loop",
         validation_fail_action="end_loop",
+        on_fail_goto_position=2,
+    ),
+]
+
+_POLISH_KICKOFF = _kickoff(
+    "Polish: Verify and Ship",
+    """Goal: security, drift, UI regression, and release evidence are green before ship
+Max iterations: 4
+Exit when: security audit passes, UI evidence is captured, polish tickets are filed if needed, and release notes exist
+Step 1: Review what development delivered on the linked board and project.
+"""
+    + SELF_PACE_FOOTER
+    + "\n\n"
+    + GUARDRAILS_FOOTER,
+)
+
+_POLISH_STEPS = [
+    _step(
+        "Review delivery context",
+        "Read the board, completed development tickets, result packets, and project state. Summarize what shipped, "
+        "what remains risky, and what polish checks are required.",
+        skills=["product-lens", "qa-tester", "verification-loop"],
+        tools=["other"],
+        other_tool="Board + result packet review",
+        action_type="agent_instruction",
+        validation_prompt="Delivery context, risks, and polish checklist are explicit.",
+    ),
+    _step(
+        "Run project and security gates",
+        "Run discovered lint/test/build commands and the secret/security audit. Capture exact commands and output.",
+        skills=["verification-loop", "ln-622-build-auditor", "ln-621-security-auditor"],
+        tools=["cli"],
+        action_type="run_command",
+        command=_COMBINED_GATE_COMMAND,
+        timeout_seconds=720,
+        guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
+        validation_type="exit_code",
+        validation_prompt="Safety nets and secret audit exit 0.",
+        on_fail_goto_position=1,
+    ),
+    _step(
+        "Verify UI, drift, and regression",
+        "Use Playwright against the app. Check primary flows, responsive layout, console errors, scope drift, "
+        "and whether the UI matches the product brief.",
+        skills=["webapp-testing", "qa-tester", "browser-qa"],
+        tools=["playwright", "browser_use"],
+        action_type="playwright",
+        guardrail=_guardrail(_SCOPE, "- Reject drift, dead screens, and console blockers"),
+        validation_prompt="Browser evidence proves flows work with no console or visual blockers.",
+        on_fail_goto_position=1,
+    ),
+    _step(
+        "File polish tickets if needed",
+        "If security, drift, or UI issues remain, create polish tickets on the board with acceptance criteria. "
+        "If everything is green, state that no polish tickets are required.",
+        skills=["internal-comms", "product-lens", "systematic-debugging"],
+        tools=["other"],
+        other_tool="Kanban ticket creation",
+        action_type="agent_instruction",
+        validation_prompt="Polish gaps are either filed as tickets or explicitly marked none.",
+    ),
+    _step(
+        "Close with release evidence",
+        "Write release notes, attach browser and security evidence to the board or lead ticket, and mark polish complete.",
+        skills=["internal-comms", "learnings-keeper"],
+        tools=["other"],
+        other_tool="Release notes + evidence packet",
+        action_type="agent_instruction",
+        validation_prompt="Release evidence explains why the Spotify remake is ready to ship.",
+        validation_pass_action="end_loop",
+        validation_fail_action="end_loop",
+        on_fail_goto_position=1,
     ),
 ]
 
@@ -411,29 +385,59 @@ def _meta(
 
 LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
     _meta(
-        name="Senior Software Engineer: Ticket to Green",
-        slug="senior-software-engineer-ticket-to-green",
+        name="Ideation: Brief to Board",
+        slug="ideation-brief-to-board",
+        role="product_manager",
+        category="Product",
+        archetype="scope_then_ship",
+        description=(
+            "Read a requirements document, write a product brief, create a Kanban board with tickets, "
+            "and queue development-ready work. Never hands off to Cursor."
+        ),
+        kickoff=_IDEATION_KICKOFF,
+        goal="requirements become a brief, board, tickets, and a development queue",
+        exit_when="board exists with ticket acceptance criteria and dev-ready tickets are queued",
+        check_command="brief artifact + board ticket count matches requirements slices",
+        max_iterations=3,
+        steps=_IDEATION_STEPS,
+        tags=["ideation", "board", "tickets", "brief"],
+    ),
+    _meta(
+        name="Development: Ticket to Implementation",
+        slug="development-ticket-to-implementation",
         role="senior_software_engineer",
         category="Engineering",
         archetype="incremental_ship",
         description=(
-            "Ingest a ticket, attach plan.md, implement, run project safety nets, security checks, "
-            "UI/product QA, code-health review, eval scoring, cleanup, and loop until green."
+            "Ingest a ticket, write plan.md, implement with in-step harness iteration, and close the "
+            "development slice. The only workflow that may hand off to Cursor."
         ),
-        kickoff=_SENIOR_SWE_KICKOFF,
-        goal="linked ticket implemented, validated, cleaned up, and evidence-backed",
-        exit_when=(
-            "plan.md is attached to the ticket, acceptance criteria are met, safety nets pass, "
-            "security/UI/backend/eval/cleanup gates are green, and the result packet explains why"
+        kickoff=_DEVELOPMENT_KICKOFF,
+        goal="linked ticket slice implemented with plan.md and harness evidence",
+        exit_when="plan.md is attached, the slice is implemented and self-tested, and the ticket has dev evidence",
+        check_command="project lint/test commands from harness self-assessment",
+        max_iterations=6,
+        steps=_DEVELOPMENT_STEPS,
+        tags=["engineering", "ticket", "plan.md", "cursor"],
+    ),
+    _meta(
+        name="Polish: Verify and Ship",
+        slug="polish-verify-and-ship",
+        role="qa_engineer",
+        category="Quality",
+        archetype="review_cleanup",
+        description=(
+            "Review delivery context, run security and project gates, verify UI and drift with Playwright, "
+            "file polish tickets if needed, and close with release evidence."
         ),
-        check_command=(
-            "project safety net discovery command + secret/security audit + browser/computer-use evidence + "
-            "code-health/eval/cleanup gates"
-        ),
-        max_iterations=8,
-        steps=_SENIOR_SWE_STEPS,
-        tags=["engineering", "ticket", "plan.md", "security", "playwright", "computer-use"],
-    )
+        kickoff=_POLISH_KICKOFF,
+        goal="security, drift, UI regression, and release evidence are green",
+        exit_when="security audit passes, UI evidence exists, and release notes explain ship readiness",
+        check_command="project safety nets + secret audit + browser UI evidence",
+        max_iterations=4,
+        steps=_POLISH_STEPS,
+        tags=["polish", "security", "playwright", "qa"],
+    ),
 ]
 
 

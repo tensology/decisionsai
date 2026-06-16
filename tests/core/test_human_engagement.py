@@ -182,6 +182,19 @@ def test_sanitized_copy_removes_markdown_links_and_raw_provider_errors():
     assert "quota" not in clean.lower()
 
 
+def test_voice_friendly_text_strips_meta_and_chat_instructions():
+    from distr.core.human_engagement import voice_friendly_text
+
+    assert voice_friendly_text(
+        "Daily plan paused at step 12. Needs approval. Reply continue, retry, skip, or add instructions."
+    ) == "Daily plan needs you. Needs approval."
+    assert voice_friendly_text("Here's your morning brief. Focus on Player1Sport today.") == (
+        "Focus on Player1Sport today."
+    )
+    assert voice_friendly_text("Running daily plan in the background. I'll tell you when it's done.") == "On it."
+    assert voice_friendly_text("Daily plan finished. The summary is queued for voice.") == ""
+
+
 def test_remote_control_link_is_preserved_and_sent_as_text():
     from distr.core.human_engagement import (
         EngagementIntent,

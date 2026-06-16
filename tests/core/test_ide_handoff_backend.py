@@ -19,7 +19,7 @@ def test_cursor_ide_and_codex_ide_are_distinct_backends():
     assert normalize_backend_id("vscode") == "cursor_ide"
 
 
-def test_ide_handoff_writes_packet_and_waits(tmp_path):
+def test_ide_handoff_writes_ticket_packet_and_starts_harness(tmp_path):
     from distr.core.project_cli_backends.base import ProjectTask
     from distr.core.project_cli_backends.registry import CursorIdeBackend
 
@@ -33,24 +33,37 @@ def test_ide_handoff_writes_packet_and_waits(tmp_path):
         workflow_id=10,
         run_id=20,
         step_id=30,
+        ticket_id=124,
         execution_session_id=99,
     )
     setattr(task, "handoff_event_id", 123)
+    setattr(task, "ticket_title", "Session Report feedback")
 
     async def run():
-        with patch("distr.core.project_cli_backends.ide_handoff.open_ide_project", return_value=True):
-            return await CursorIdeBackend().send_task(task)
+        with (
+            patch("distr.core.project_cli_backends.ide_handoff.open_ide_project", return_value=True),
+            patch(
+                "distr.core.project_cli_backends.ide_handoff.start_cursor_harness_agent",
+                return_value={"started": True, "agent": "/usr/bin/cursor-agent"},
+            ) as harness,
+        ):
+            result = await CursorIdeBackend().send_task(task)
+        harness.assert_called_once()
+        return result
 
     result = asyncio.run(run())
-    packets = list((project_dir / ".tickets").glob("decisionsai_cursor_ide_*.md"))
+    packets = list((project_dir / ".tickets").glob("ticket_124_*.md"))
     assert result.success is True
     assert result.waits_for_human is True
     assert len(packets) == 1
     body = packets[0].read_text(encoding="utf-8")
-    assert "DecisionsAI Work Packet" in body
-    assert "[DECISIONS CURSOR CALLBACK]" in body
+    assert "Session Report feedback" in body
+    assert "DecisionsAI Work Packet" not in body
+    assert "auto_continue_on_pickup: true" in body
+    assert "Iteration protocol" in body
     assert "Implement the ticket in the IDE." in body
     assert "<!-- decisions-ide-meta:" in body
+    assert "Started the Cursor harness" in (result.output or "")
 
 
 def test_run_project_task_sets_ide_handoff_pending(tmp_path):
@@ -77,7 +90,13 @@ def test_run_project_task_sets_ide_handoff_pending(tmp_path):
         step_id = int(step.id)
 
     async def dispatch():
-        with patch("distr.core.project_cli_backends.ide_handoff.open_ide_project", return_value=True):
+        with (
+            patch("distr.core.project_cli_backends.ide_handoff.open_ide_project", return_value=True),
+            patch(
+                "distr.core.project_cli_backends.ide_handoff.start_cursor_harness_agent",
+                return_value={"started": False, "reason": "test_mode"},
+            ),
+        ):
             return await run_project_task(
                 project,
                 "IDE proof instruction",

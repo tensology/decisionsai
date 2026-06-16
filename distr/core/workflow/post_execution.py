@@ -86,6 +86,19 @@ class PostExecutionMixin:
 
                 if decision.get("action") == "next_step":
                     next_step_id = decision["step_id"]
+                    try:
+                        from distr.core.workflow.run_briefing import maybe_pause_before_next_step
+
+                        if maybe_pause_before_next_step(
+                            run_id=run_id,
+                            completed_step_id=step_id,
+                            passed=passed,
+                            result_text=result_text,
+                            next_step_id=int(next_step_id),
+                        ):
+                            return
+                    except Exception:
+                        logger.debug("step review checkpoint failed", exc_info=True)
                     wait_before = decision.get("wait_before_next", 0)
                     if wait_before > 0:
                         import time
@@ -206,7 +219,6 @@ class PostExecutionMixin:
         run_id: Optional[int] = None,
     ) -> bool:
         """Put step into waiting state if wait_for_continue is set. Returns True if entered."""
-        handoff = self._build_wait_handoff_text(step_name="", result_text=result_text, run_id=run_id)
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
             if not step or not step.wait_for_continue:
@@ -263,40 +275,6 @@ class PostExecutionMixin:
 
     @staticmethod
     def _build_wait_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:
-        """Build curated wait-state text for TTS, history, and agent report."""
-        clean_result = (result_text or "").strip()
-        if not clean_result:
-            clean_result = "Step completed with no detailed output."
-        summary = clean_result[:280]
-        if len(clean_result) > 280:
-            summary += "..."
-        step_label = step_name or "workflow step"
-        prompt = (
-            f"{step_label} is waiting for your decision. "
-            "Reply with what should happen next, for example: continue, retry, skip, or provide extra instructions."
-        )
-        tts = f"{summary}. {prompt}"
-        report = (
-            f"[WORKFLOW_WAIT_HANDOFF]\n"
-            f"step_name: {step_label}\n"
-            f"run_id: __RUN_ID__\n"
-            f"status: waiting_for_user_input\n"
-            f"step_result_summary: {summary}\n"
-            f"step_result_full: {clean_result[:1500]}\n\n"
-            "Orchestrator instructions:\n"
-            "1) Relay the step result faithfully; do not re-style or expand scope.\n"
-            "2) Ask one clear follow-up question for user input.\n"
-            "3) After user reply, call continue_workflow with that reply."
-        )
-        history_entry = (
-            f"{clean_result}\n\n"
-            f"[WAITING FOR INPUT]\n{prompt}"
-        )
-        if run_id is not None:
-            history_entry = f"{history_entry}\nRun ID: {run_id}"
-        return {
-            "prompt": prompt,
-            "tts": tts,
-            "report": report,
-            "history_entry": history_entry,
-        }
+        from distr.core.workflow.wait_handoff import build_wait_handoff_text
+
+        return build_wait_handoff_text(step_name, result_text, run_id)

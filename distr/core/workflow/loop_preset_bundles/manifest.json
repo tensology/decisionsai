@@ -4,12 +4,28 @@
   "description": "Active role-based loop presets. Older presets remain parked as unlisted bundle files.",
   "presets": [
     {
-      "slug": "senior-software-engineer-ticket-to-green",
-      "name": "Senior Software Engineer: Ticket to Green",
+      "slug": "ideation-brief-to-board",
+      "name": "Ideation: Brief to Board",
+      "role": "product_manager",
+      "category": "Product",
+      "archetype": "scope_then_ship",
+      "file": "bundles/ideation-brief-to-board.json"
+    },
+    {
+      "slug": "development-ticket-to-implementation",
+      "name": "Development: Ticket to Implementation",
       "role": "senior_software_engineer",
       "category": "Engineering",
       "archetype": "incremental_ship",
-      "file": "bundles/senior-software-engineer-ticket-to-green.json"
+      "file": "bundles/development-ticket-to-implementation.json"
+    },
+    {
+      "slug": "polish-verify-and-ship",
+      "name": "Polish: Verify and Ship",
+      "role": "qa_engineer",
+      "category": "Quality",
+      "archetype": "review_cleanup",
+      "file": "bundles/polish-verify-and-ship.json"
     }
   ]
 }

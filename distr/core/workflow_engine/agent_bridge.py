@@ -106,11 +106,11 @@ class WorkflowAgentBridge:
         )
 
         if cancelled:
-            status_line = "I stopped that workflow run."
+            status_line = "I stopped that run."
         elif success or (all_steps_ok and saw_green):
-            status_line = "That workflow run finished."
+            status_line = "All done."
         else:
-            status_line = "That workflow run didn't get through."
+            status_line = "That didn't work out."
 
         # Failed steps retain a useful error clue. Completed steps are summarized
         # so chat follow-ups do not receive CLI transcripts or callback payloads.

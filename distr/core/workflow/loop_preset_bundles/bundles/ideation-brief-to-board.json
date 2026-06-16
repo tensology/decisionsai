@@ -1,0 +1,128 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "ideation-brief-to-board",
+  "name": "Ideation: Brief to Board",
+  "role": "product_manager",
+  "category": "Product",
+  "archetype": "scope_then_ship",
+  "description": "Read a requirements document, write a product brief, create a Kanban board with tickets, and queue development-ready work. Never hands off to Cursor.",
+  "kickoff": "Start the \"Ideation: Brief to Board\" loop.\nGoal: requirements become a product brief, board lanes, and development-ready tickets\nMax iterations: 3\nExit when: the brief is written, the board exists with tickets and acceptance criteria, and dev-ready tickets are queued\nStep 1: Read the linked requirements document and extract scope, constraints, and delivery slices.\nThis workflow never hands off to Cursor or any IDE harness.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "loop_contract": {
+    "name": "Ideation: Brief to Board",
+    "goal": "requirements become a brief, board, tickets, and a development queue",
+    "exit_when": "board exists with ticket acceptance criteria and dev-ready tickets are queued",
+    "check_command": "brief artifact + board ticket count matches requirements slices",
+    "max_iterations": 3,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read the requirements document path from run metadata. Extract product goal, required views, interactions, quality bar, and the delivery slices that should become tickets. Summarize scope, non-goals, and risks. Do not write code or open an IDE.",
+    "archetype": "scope_then_ship",
+    "role": "product_manager"
+  },
+  "expected_check_command": "brief artifact + board ticket count matches requirements slices",
+  "tags": [
+    "ideation",
+    "board",
+    "tickets",
+    "brief"
+  ],
+  "steps": [
+    {
+      "name": "Read requirements document",
+      "instruction": "Read the requirements document path from run metadata. Extract product goal, required views, interactions, quality bar, and the delivery slices that should become tickets. Summarize scope, non-goals, and risks. Do not write code or open an IDE.",
+      "skills": [
+        "product-lens",
+        "brainstorming",
+        "doc-coauthoring"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Ideation only: no code, no Cursor, no project CLI",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Requirements scope, slices, constraints, and non-goals are explicit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Requirements document",
+      "action_type": "agent_instruction"
+    },
+    {
+      "name": "Write product brief",
+      "instruction": "Write a concise product brief with acceptance themes per delivery slice, recommended lane names, and ticket titles. Attach the brief to run metadata for downstream workflows.",
+      "skills": [
+        "writing-plans",
+        "product-lens",
+        "doc-coauthoring"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Brief must map 1:1 to future board tickets",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Product brief exists with ticket titles and acceptance themes per slice.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Product brief artifact",
+      "action_type": "agent_instruction"
+    },
+    {
+      "name": "Create board, lanes, and tickets",
+      "instruction": "Create a Kanban board with lanes Backlog, Ready, In Progress, Validation, and Complete. Create one ticket per development slice from the brief with description and acceptance criteria. Do not hand off to Cursor.",
+      "skills": [
+        "product-lens",
+        "executing-plans"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Every ticket needs acceptance criteria; no IDE handoff",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Board exists with lanes and development tickets that match the brief.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban board + ticket creation",
+      "action_type": "agent_instruction"
+    },
+    {
+      "name": "Queue tickets for development",
+      "instruction": "Link the board and tickets to the development workflow. Set queue order, attach the brief, and mark tickets ready for the development workflow. End with a handoff summary.",
+      "skills": [
+        "internal-comms",
+        "product-lens"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Development tickets are queued on the board with workflow linkage and brief attached.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Workflow queue + board linkage",
+      "action_type": "agent_instruction",
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "parked_presets": "Older role presets remain as unlisted JSON bundles under loop_preset_bundles/bundles."
+  }
+}

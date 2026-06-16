@@ -1055,7 +1055,10 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
             elif session_text_to_send and not self.event_queue:
                 logger.warning(f"⚠️ TTS: Has session text but no event_queue! Text: '{session_text_to_send[:100]}...'")
             elif not session_text_to_send:
-                logger.warning(f"⚠️ TTS: No session text to send to Telegram! (_tts_session_active={self._tts_session_active})")
+                if self._tts_session_active:
+                    logger.warning("TTS: response ended with no text to relay to Telegram")
+                else:
+                    logger.debug("TTS: direct desktop playback — no Telegram relay text")
             
             # Session text already cleared above to prevent loops
             

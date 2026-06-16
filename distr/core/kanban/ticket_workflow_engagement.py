@@ -116,8 +116,20 @@ def build_ide_handoff_waiting_message(
     subject = (ticket_title or project_name or "your ticket").strip()
     return (
         f"I opened {backend_label} for {subject}. "
-        "Finish the work there, then report completion from Cursor or reply continue here."
+        "Work there, then let me know when you're ready to continue."
     )
+
+
+def build_ide_handoff_waiting_voice(
+    *,
+    ticket_title: str = "",
+    project_name: str = "",
+    backend_label: str = "Cursor",
+) -> str:
+    subject = (ticket_title or project_name or "").strip()
+    if subject:
+        return f"I opened {backend_label} for {subject}."
+    return f"I opened {backend_label}. Take a look when you're ready."
 
 
 def build_workflow_waiting_message(
@@ -142,9 +154,25 @@ def build_workflow_waiting_message(
         summary = summary[:177].rstrip() + "..."
     label = (ticket_title or "Workflow").strip()
     return (
-        f"{label} paused at step {step_id}. "
-        f"{summary or 'It needs your input.'} "
-        "Reply continue, retry, skip, or add instructions."
+        f"{label} needs your input. "
+        f"{summary or 'It paused for a decision.'} "
+        "Tell me if you want to adjust direction, or I'm ready to continue."
+    )
+
+
+def build_workflow_waiting_voice(
+    *,
+    step_id: int,
+    result_text: str,
+    ticket_title: str = "",
+    step_name: str = "",
+) -> str:
+    from distr.core.workflow.wait_handoff import wait_handoff_voice_text
+
+    return wait_handoff_voice_text(
+        step_name=step_name or ticket_title,
+        result_text=result_text,
+        ticket_title=ticket_title,
     )
 
 
@@ -190,11 +218,13 @@ def notify_ticket_workflow_progress(
     step_id: Optional[int] = None,
     priority: str = "normal",
     requires_response: bool = False,
+    voice_body: Optional[str] = None,
 ) -> None:
     """Deliver a plain-English workflow update via TTS and/or Telegram."""
     text = (body or "").strip()
     if not text:
         return
+    spoken = (voice_body or text).strip()
 
     ctx = _run_context(run_id)
     service = HumanEngagementService(
@@ -211,7 +241,7 @@ def notify_ticket_workflow_progress(
             subject_id=str(ctx.get("ticket_id") or run_id),
             state_fingerprint=state_fingerprint,
             body=text,
-            voice_body=text,
+            voice_body=spoken,
             explicit_notification_intent=True,
             workflow_id=ctx.get("workflow_id"),
             run_id=run_id,

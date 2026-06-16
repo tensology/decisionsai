@@ -907,7 +907,7 @@ class StepRouter:
             summary=result or "Workflow is waiting for input.",
         )
         self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
-        self._notify_main_agent(workflow_id, run_id, handoff)
+        self._notify_main_agent(workflow_id, run_id, handoff, result_text=result)
 
         return {"action": "waiting", "notify_main_agent": True, "run_id": run_id}
 
@@ -994,7 +994,7 @@ class StepRouter:
         except Exception:
             logger.debug("Could not emit approval_requested event", exc_info=True)
         self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
-        self._notify_main_agent(workflow_id, run_id, handoff)
+        self._notify_main_agent(workflow_id, run_id, handoff, result_text=result)
 
         return {"action": "waiting", "notify_main_agent": True, "run_id": run_id, "waiting_kind": "approval"}
 
@@ -1084,14 +1084,19 @@ class StepRouter:
         workflow_id: int,
         run_id: Optional[int],
         handoff: Dict[str, str],
+        *,
+        result_text: str = "",
     ) -> None:
         """Speak result via TTS and queue a report for the main agent."""
-        # TTS notification
-        try:
-            from distr.core.signals import speak_text_directly_event_queue
-            speak_text_directly_event_queue(handoff["tts"])
-        except Exception as e:
-            logger.debug("Could not speak wait notification: %s", e)
+        from distr.core.workflow.wait_handoff import is_ide_handoff_result
+
+        # IDE handoffs also notify via ticket_workflow_engagement — avoid double speech.
+        if not is_ide_handoff_result(result_text):
+            try:
+                from distr.core.signals import speak_text_directly_event_queue
+                speak_text_directly_event_queue(handoff["tts"])
+            except Exception as e:
+                logger.debug("Could not speak wait notification: %s", e)
 
         # Queue report for the main agent
         try:
@@ -1105,39 +1110,6 @@ class StepRouter:
 
     @staticmethod
     def _build_wait_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:
-        """Build curated wait-state text for TTS, history, and agent report."""
-        clean_result = (result_text or "").strip()
-        if not clean_result:
-            clean_result = "Step completed with no detailed output."
-        summary = clean_result[:280]
-        if len(clean_result) > 280:
-            summary += "..."
-        step_label = step_name or "workflow step"
-        prompt = (
-            f"{step_label} is waiting for your decision. "
-            "Reply with what should happen next, for example: continue, retry, skip, or provide extra instructions."
-        )
-        tts = f"{summary}. {prompt}"
-        report = (
-            f"[WORKFLOW_WAIT_HANDOFF]\n"
-            f"step_name: {step_label}\n"
-            f"run_id: __RUN_ID__\n"
-            f"status: waiting_for_user_input\n"
-            f"step_result_summary: {summary}\n"
-            f"step_result_full: {clean_result[:1500]}\n\n"
-            "Orchestrator instructions:\n"
-            "1) Relay the step result faithfully; do not re-style or expand scope.\n"
-            "2) Ask one clear follow-up question for user input.\n"
-            "3) After user reply, call continue_workflow with that reply."
-        )
-        history_entry = (
-            f"{clean_result}\n\n"
-            f"[WAITING FOR INPUT]\n{prompt}\n"
-            f"Run ID: {run_id if run_id is not None else 'unknown'}"
-        )
-        return {
-            "prompt": prompt,
-            "tts": tts,
-            "report": report,
-            "history_entry": history_entry,
-        }
+        from distr.core.workflow.wait_handoff import build_wait_handoff_text
+
+        return build_wait_handoff_text(step_name, result_text, run_id)

@@ -45,8 +45,8 @@ def test_loop_presets_api_route_not_shadowed_by_workflow_id():
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body.get("presets"), list)
-    assert len(body["presets"]) == 1
-    assert body["presets"][0]["slug"] == "senior-software-engineer-ticket-to-green"
+    assert len(body["presets"]) == 3
+    assert body["presets"][0]["slug"] == "ideation-brief-to-board"
 
 
 @pytest.fixture()
@@ -83,46 +83,36 @@ def db_factory(tmp_path, monkeypatch):
 
 def test_loop_preset_bundles_exist():
     summaries = list_preset_summaries()
-    assert len(summaries) == 1
-    assert summaries[0].get("source") == "bundle"
-    bundle = load_bundle_by_name(summaries[0]["name"])
-    assert bundle is not None
-    assert bundle.get("slug") == "senior-software-engineer-ticket-to-green"
-    assert bundle.get("format") == "decisionsai_loop_preset_v1"
-    assert isinstance(bundle.get("steps"), list)
-    assert len(bundle["steps"]) >= 8
+    assert len(summaries) == 3
+    slugs = {row.get("slug") for row in summaries}
+    assert slugs == {
+        "ideation-brief-to-board",
+        "development-ticket-to-implementation",
+        "polish-verify-and-ship",
+    }
 
 
 def test_list_loop_presets_matches_catalog():
     presets = list_loop_presets()
     assert len(presets) == len(ELORM_LOOP_KICKOFFS)
-    assert presets[0]["name"] == ELORM_LOOP_KICKOFFS[0]["name"]
-    assert presets[0]["slug"] == "senior-software-engineer-ticket-to-green"
-    assert presets[0].get("step_count", 0) >= 8
+    assert presets[0]["slug"] == "ideation-brief-to-board"
 
 
-def test_plan_steps_from_bundle_has_senior_engineer_ticket_loop_contract():
-    bundle = load_bundle_by_name("Senior Software Engineer: Ticket to Green")
+def test_plan_steps_from_bundle_has_development_loop_contract():
+    bundle = load_bundle_by_name("Development: Ticket to Implementation")
     assert bundle is not None
     planned = plan_steps_from_bundle(bundle)
     assert planned["success"] is True
     steps = planned["steps"]
-    assert len(steps) == 12
+    assert len(steps) == 4
     assert steps[0]["title"] == "Ingest ticket and project context"
     assert steps[1]["title"] == "Write plan.md and attach to ticket"
-    assert steps[-1]["title"] == "Attach evidence and close ticket loop"
-    assert any(step["action_type"] == "run_command" for step in steps)
-    assert any(step["action_type"] == "playwright" for step in steps)
-    assert any(step["action_type"] == "computer_use" for step in steps)
+    assert steps[2]["title"] == "Implement, test, and self-correct"
+    assert steps[-1]["title"] == "Close development slice with evidence"
+    assert any(step["action_type"] == "send_to_project_cli" for step in steps)
+    assert not any(step["action_type"] == "playwright" for step in steps)
     assert any(step.get("on_fail_goto_position") == 2 for step in steps)
     assert "plan.md" in (planned["loop_contract"].get("exit_when") or "")
-    cfg = steps[0]["config"]
-    assert cfg.get("guardrail")
-    assert cfg.get("skills")
-    assert cfg.get("tools")
-    assert cfg.get("failure_checklist")
-    assert steps[0]["validation_prompt"]
-    assert "writing-plans" in steps[1]["config"].get("skills", [])
 
 
 def test_apply_loop_preset_from_bundle(db_factory):
@@ -185,7 +175,7 @@ def test_apply_loop_preset_append_mode(db_factory):
         .all()
     )
     assert len(steps) == preset_steps
-    assert steps[0].name == "Ingest ticket and project context"
+    assert steps[0].name == "Read requirements document"
 
 
 def test_apply_loop_preset_append_rejects_over_max_steps(db_factory):

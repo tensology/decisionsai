@@ -1,11 +1,29 @@
 {
-  "senior-software-engineer-ticket-to-green": {
+  "ideation-brief-to-board": {
+    "archetype": "scope_then_ship",
+    "step_count": 4,
+    "final_step_name": "Queue tickets for development",
+    "max_iterations": 3,
+    "has_fail_goto": false,
+    "has_end_loop_action": true,
+    "tools": ["other"]
+  },
+  "development-ticket-to-implementation": {
     "archetype": "incremental_ship",
-    "step_count": 12,
-    "final_step_name": "Attach evidence and close ticket loop",
-    "max_iterations": 8,
+    "step_count": 4,
+    "final_step_name": "Close development slice with evidence",
+    "max_iterations": 6,
     "has_fail_goto": true,
     "has_end_loop_action": true,
-    "tools": ["browser_use", "cli", "computer_use", "other", "playwright"]
+    "tools": ["cli", "other"]
+  },
+  "polish-verify-and-ship": {
+    "archetype": "review_cleanup",
+    "step_count": 5,
+    "final_step_name": "Close with release evidence",
+    "max_iterations": 4,
+    "has_fail_goto": true,
+    "has_end_loop_action": true,
+    "tools": ["browser_use", "cli", "other", "playwright"]
   }
 }

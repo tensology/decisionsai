@@ -272,6 +272,7 @@ class WorkflowOrchestrationMixin:
         try:
             from distr.core.kanban.ticket_workflow_engagement import (
                 build_workflow_waiting_message,
+                build_workflow_waiting_voice,
                 notify_ticket_workflow_progress,
             )
 
@@ -295,9 +296,16 @@ class WorkflowOrchestrationMixin:
                 result_text=result_text,
                 ticket_title=str(ctx.get("ticket_title") or ""),
             )
+            voice_message = build_workflow_waiting_voice(
+                step_id=step_id,
+                result_text=result_text,
+                ticket_title=str(ctx.get("ticket_title") or ""),
+                step_name=str(ctx.get("step_name") or ""),
+            )
             notify_ticket_workflow_progress(
                 run_id=run_id,
                 body=message,
+                voice_body=voice_message,
                 state_fingerprint=f"waiting:{step_id}",
                 step_id=step_id,
                 priority="high",

@@ -310,6 +310,52 @@ def sanitize_engagement_text(text: str, *, preserve_links: bool = False) -> str:
     return clean
 
 
+def voice_friendly_text(text: str) -> str:
+    """Shape text for spoken delivery — short, human, no chat-only instructions."""
+    clean = sanitize_engagement_text(text)
+    if not clean:
+        return ""
+    clean = re.sub(
+        r"\s*reply continue, retry, skip, or add instructions\.?",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    clean = re.sub(
+        r"\s*finish the work there, then report completion from cursor or reply continue here\.?",
+        "",
+        clean,
+        flags=re.IGNORECASE,
+    )
+    replacements = [
+        (r"^here's your ([^.]+)\.\s*", ""),
+        (r"^your ([^.]+) is ready in the app\.\s*", ""),
+        (r"^running (.+?) in the background\. i'll tell you when it's done\.?$", "On it."),
+        (r"^(.+?) finished\. the summary is on telegram\.?$", r"\1 done."),
+        (r"^(.+?) finished\. the summary is queued for voice\.?$", ""),
+        (r"^(.+?) finished\. saved in run history\.?$", r"\1 done."),
+        (r"^(.+?) failed\. check run history for details\.?$", r"\1 didn't work."),
+        (r" paused at step \d+\.", " needs you."),
+        (r"^step (\d+): (.+) has started\.?$", r"Starting \2."),
+        (r"^step (\d+): (.+) passed\.?$", r"\2 done."),
+        (r"^step (\d+): (.+) failed\.\s*(.*)$", r"\2 didn't work. \3"),
+        (r"^that workflow run finished\.?$", "All done."),
+        (r"^that workflow run didn't get through\.?$", "That didn't work out."),
+        (r"^automation subagent started\.?$", ""),
+        (r"^automation is already running\.?$", "That one's already running."),
+        (r"^i opened cursor for (.+)\. finish the work there.*$", r"I opened Cursor for \1."),
+        (r"^i opened codex for (.+)\. finish the work there.*$", r"I opened Codex for \1."),
+    ]
+    for pattern, repl in replacements:
+        updated = re.sub(pattern, repl, clean, flags=re.IGNORECASE).strip()
+        if updated != clean:
+            clean = updated
+    clean = re.sub(r"\s{2,}", " ", clean).strip(" .")
+    if clean and not clean.endswith((".", "!", "?")):
+        clean += "."
+    return clean
+
+
 def is_low_value_status_text(text: str) -> bool:
     """Return whether text is a low-value status that should not become a voice nudge."""
     clean = sanitize_engagement_text(text)
@@ -421,7 +467,7 @@ class HumanEngagementService:
             or "/api/remote/" in str(intent.voice_body or "")
         )
         body = sanitize_engagement_text(intent.body, preserve_links=preserve_links)
-        voice_body = sanitize_engagement_text(intent.voice_body or intent.body)
+        voice_body = voice_friendly_text(intent.voice_body or intent.body)
         had_attachment_request = bool(intent.attachments)
         usable_attachments = [a for a in intent.attachments if a.usable()]
         if not intent.explicit_artifact_intent:

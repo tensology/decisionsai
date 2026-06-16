@@ -1664,7 +1664,56 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Exit non-zero after completing the matrix if any backend failed.",
     )
     live.set_defaults(func=_cmd_live_spotify_build)
+
+    simulate = sub.add_parser(
+        "simulate-flow",
+        help="Run offline Senior Engineer preset matrix tests (real loop shape, fake harness)",
+    )
+    simulate.add_argument("extra", nargs=argparse.REMAINDER, help="Extra pytest args after --")
+    simulate.set_defaults(func=_cmd_simulate_flow)
+
+    seed_spotify = sub.add_parser(
+        "seed-spotify-board",
+        help="Seed Spotify-style priority board + tickets on a running server (no run)",
+    )
+    seed_spotify.add_argument("--backend", default="cursor_ide")
+    seed_spotify.add_argument("--stamp", default="")
+    seed_spotify.add_argument("--development-root", default=str(Path.home() / "development"))
+    seed_spotify.set_defaults(func=_cmd_seed_spotify_board)
+
     return parser
+
+
+def _cmd_simulate_flow(args: argparse.Namespace) -> int:
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/core/test_loop_preset_run_matrix.py",
+        "tests/core/test_spotify_workflow_chain_e2e.py",
+        "tests/core/test_loop_presets.py::test_plan_steps_from_bundle_has_development_loop_contract",
+        "-q",
+    ]
+    extra = list(args.extra or [])
+    if extra and extra[0] == "--":
+        extra = extra[1:]
+    if extra:
+        cmd.extend(extra)
+    return subprocess.call(cmd)
+
+
+def _cmd_seed_spotify_board(args: argparse.Namespace) -> int:
+    harness = WorkflowTicketLoopHarness(args.base_url)
+    if not harness.server_reachable():
+        raise SystemExit(f"Web server not reachable at {args.base_url}")
+    stamp = args.stamp or time.strftime("%Y%m%d-%H%M%S")
+    fixture = harness.seed_live_spotify_backend_fixture(
+        backend_id=args.backend,
+        stamp=stamp,
+        development_root=Path(args.development_root).expanduser(),
+    )
+    print(json.dumps(fixture, indent=2, default=str))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

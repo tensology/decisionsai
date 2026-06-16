@@ -170,18 +170,21 @@ def _orchestrator_delivery_ack(
     channel: str,
     channel_detail: str,
 ) -> None:
-    label = (automation_name or "Automation").strip()
-    if not success:
-        _speak_orchestrator(f"{label} failed. {channel_detail or 'Check run history for details.'}")
+    """Brief spoken status — never recap where the summary was routed."""
+    if success:
+        if channel == "desktop_tts":
+            return
+        if channel == "telegram":
+            _speak_orchestrator("Done. I put it on Telegram.")
+            return
+        _speak_orchestrator("Done.")
         return
-    if channel == "telegram":
-        _speak_orchestrator(f"{label} finished. The summary is on Telegram.")
-    elif channel == "desktop_tts":
-        _speak_orchestrator(f"{label} finished. The summary is queued for voice.")
-    elif channel == "none":
-        _speak_orchestrator(f"{label} finished. {channel_detail or 'Saved in run history.'}")
-    else:
-        _speak_orchestrator(f"{label} finished. {channel_detail or 'Done.'}")
+    label = (automation_name or "That").strip()
+    detail = (channel_detail or "").strip()
+    if not detail or "run history" in detail.lower() or "queue" in detail.lower():
+        _speak_orchestrator(f"{label} didn't work.")
+        return
+    _speak_orchestrator(f"{label} didn't work. {detail}")
 
 
 def update_automation_run(
@@ -449,7 +452,7 @@ def _automation_worker(
             summary=summary,
             extra={"execution_mode": "automation_subagent_instruction"},
         )
-        _speak_orchestrator(f"Running {name} in the background. I'll tell you when it's done.")
+        _speak_orchestrator("On it.")
     except Exception as exc:
         logger.error("Automation subagent failed for run %s: %s", run_id, exc, exc_info=True)
         update_automation_run(

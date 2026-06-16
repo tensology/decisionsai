@@ -1,0 +1,155 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "polish-verify-and-ship",
+  "name": "Polish: Verify and Ship",
+  "role": "qa_engineer",
+  "category": "Quality",
+  "archetype": "review_cleanup",
+  "description": "Review delivery context, run security and project gates, verify UI and drift with Playwright, file polish tickets if needed, and close with release evidence.",
+  "kickoff": "Start the \"Polish: Verify and Ship\" loop.\nGoal: security, drift, UI regression, and release evidence are green before ship\nMax iterations: 4\nExit when: security audit passes, UI evidence is captured, polish tickets are filed if needed, and release notes exist\nStep 1: Review what development delivered on the linked board and project.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "loop_contract": {
+    "name": "Polish: Verify and Ship",
+    "goal": "security, drift, UI regression, and release evidence are green",
+    "exit_when": "security audit passes, UI evidence exists, and release notes explain ship readiness",
+    "check_command": "project safety nets + secret audit + browser UI evidence",
+    "max_iterations": 4,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read the board, completed development tickets, result packets, and project state. Summarize what shipped, what remains risky, and what polish checks are required.",
+    "archetype": "review_cleanup",
+    "role": "qa_engineer"
+  },
+  "expected_check_command": "project safety nets + secret audit + browser UI evidence",
+  "tags": [
+    "polish",
+    "security",
+    "playwright",
+    "qa"
+  ],
+  "steps": [
+    {
+      "name": "Review delivery context",
+      "instruction": "Read the board, completed development tickets, result packets, and project state. Summarize what shipped, what remains risky, and what polish checks are required.",
+      "skills": [
+        "product-lens",
+        "qa-tester",
+        "verification-loop"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Delivery context, risks, and polish checklist are explicit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Board + result packet review",
+      "action_type": "agent_instruction"
+    },
+    {
+      "name": "Run project and security gates",
+      "instruction": "Run discovered lint/test/build commands and the secret/security audit. Capture exact commands and output.",
+      "skills": [
+        "verification-loop",
+        "ln-622-build-auditor",
+        "ln-621-security-auditor"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them\n- Do not assume npm, pytest, or make unless the repo proves it",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Safety nets and secret audit exit 0.",
+      "validation_type": "exit_code",
+      "wait_for_continue": false,
+      "action_type": "run_command",
+      "command": "set -eu\nif [ -f package.json ] && command -v node >/dev/null 2>&1; then\n  cmd=$(node -e \"const p=require('./package.json').scripts||{}; const cmds=[]; if(p.lint) cmds.push('npm run lint'); if(p.test) cmds.push('npm test'); if(p.build) cmds.push('npm run build'); console.log(cmds.join(' && '));\")\n  if [ -n \"$cmd\" ]; then\n    echo \"$cmd\"\n    sh -lc \"$cmd\"\n    exit $?\n  fi\nfi\nif [ -f pyproject.toml ] || [ -d tests ]; then\n  if command -v pytest >/dev/null 2>&1; then\n    pytest -q\n  else\n    python3 -m pytest -q\n  fi\n  exit $?\nfi\nif [ -f Makefile ]; then\n  make test\n  exit $?\nfi\necho \"No project safety net command discovered; add lint/test/build command to the ticket plan.\" >&2\nexit 2\necho '--- security audit ---'\nset -eu\nif ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then\n  echo \"Not a git worktree; cannot prove tracked secret safety.\" >&2\n  exit 2\nfi\ntracked_secret_files=$(git ls-files | grep -E '(^|/)(\\.env($|\\.)|.*\\.(pem|key|p12|pfx)$)' || true)\nif [ -n \"$tracked_secret_files\" ]; then\n  echo \"Secret-like files are tracked:\"\n  echo \"$tracked_secret_files\"\n  exit 1\nfi\nhardcoded=$(git grep -n -E '(api[_-]?key|secret|password|token)[[:space:]]*[:=][[:space:]]*\"[^\"]{12,}\"' -- . ':!vendor' ':!node_modules' ':!*.lock' || true)\nif [ -n \"$hardcoded\" ]; then\n  echo \"Hard-coded secret candidates:\"\n  echo \"$hardcoded\"\n  exit 1\nfi\necho 'Secret and environment audit passed.'",
+      "timeout_seconds": 720,
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Verify UI, drift, and regression",
+      "instruction": "Use Playwright against the app. Check primary flows, responsive layout, console errors, scope drift, and whether the UI matches the product brief.",
+      "skills": [
+        "webapp-testing",
+        "qa-tester",
+        "browser-qa"
+      ],
+      "tools": [
+        "playwright",
+        "browser_use"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Reject drift, dead screens, and console blockers",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Browser evidence proves flows work with no console or visual blockers.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "playwright",
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "File polish tickets if needed",
+      "instruction": "If security, drift, or UI issues remain, create polish tickets on the board with acceptance criteria. If everything is green, state that no polish tickets are required.",
+      "skills": [
+        "internal-comms",
+        "product-lens",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Polish gaps are either filed as tickets or explicitly marked none.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket creation",
+      "action_type": "agent_instruction"
+    },
+    {
+      "name": "Close with release evidence",
+      "instruction": "Write release notes, attach browser and security evidence to the board or lead ticket, and mark polish complete.",
+      "skills": [
+        "internal-comms",
+        "learnings-keeper"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Release evidence explains why the Spotify remake is ready to ship.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Release notes + evidence packet",
+      "action_type": "agent_instruction",
+      "on_fail_goto_position": 1,
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "parked_presets": "Older role presets remain as unlisted JSON bundles under loop_preset_bundles/bundles."
+  }
+}

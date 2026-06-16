@@ -1,0 +1,133 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "development-ticket-to-implementation",
+  "name": "Development: Ticket to Implementation",
+  "role": "senior_software_engineer",
+  "category": "Engineering",
+  "archetype": "incremental_ship",
+  "description": "Ingest a ticket, write plan.md, implement with in-step harness iteration, and close the development slice. The only workflow that may hand off to Cursor.",
+  "kickoff": "Start the \"Development: Ticket to Implementation\" loop.\nGoal: one linked ticket is implemented on the project with harness iteration\nMax iterations: 6\nExit when: plan.md is attached, the slice is implemented and self-tested, and development evidence is on the ticket\nStep 1: Ingest the ticket and project context. This is the only workflow allowed to hand off to Cursor.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "loop_contract": {
+    "name": "Development: Ticket to Implementation",
+    "goal": "linked ticket slice implemented with plan.md and harness evidence",
+    "exit_when": "plan.md is attached, the slice is implemented and self-tested, and the ticket has dev evidence",
+    "check_command": "project lint/test commands from harness self-assessment",
+    "max_iterations": 6,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read the linked ticket, board, lane, project, acceptance criteria, and brief. Restate the slice, constraints, and project route. Report using the harness return contract.",
+    "archetype": "incremental_ship",
+    "role": "senior_software_engineer"
+  },
+  "expected_check_command": "project lint/test commands from harness self-assessment",
+  "tags": [
+    "engineering",
+    "ticket",
+    "plan.md",
+    "cursor"
+  ],
+  "steps": [
+    {
+      "name": "Ingest ticket and project context",
+      "instruction": "Read the linked ticket, board, lane, project, acceptance criteria, and brief. Restate the slice, constraints, and project route. Report using the harness return contract.",
+      "skills": [
+        "product-lens",
+        "brainstorming",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not write code before plan.md exists",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Ticket brief, acceptance criteria, and project route are explicit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket context + project repository",
+      "action_type": "send_to_project_cli"
+    },
+    {
+      "name": "Write plan.md and attach to ticket",
+      "instruction": "Create ticket-specific plan.md with implementation slices, affected files, tests, and rollback notes. Attach plan.md to the ticket before implementation.",
+      "skills": [
+        "writing-plans",
+        "executing-plans",
+        "doc-coauthoring"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Plan must match this ticket only",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "plan.md exists, is linked to the ticket, and includes tests and rollback.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Ticket file attachment",
+      "action_type": "send_to_project_cli"
+    },
+    {
+      "name": "Implement, test, and self-correct",
+      "instruction": "Implement the slice. Iterate inside this step: develop → run project lint/test commands → self-assess for drift and regressions → correct → report with the harness return contract.",
+      "skills": [
+        "executing-plans",
+        "tdd-workflow",
+        "verification-loop",
+        "systematic-debugging"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them\n- Do not assume npm, pytest, or make unless the repo proves it",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Slice is implemented, tested, and reported with a complete harness return contract.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 2
+    },
+    {
+      "name": "Close development slice with evidence",
+      "instruction": "Update the ticket with files changed, commands run, and a development summary. Do not run polish or release gates here — those belong to the polish workflow.",
+      "skills": [
+        "internal-comms",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Ticket contains development evidence and a clear slice completion summary.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Ticket update + result packet",
+      "action_type": "agent_instruction",
+      "on_fail_goto_position": 2,
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "decisionsai_role_presets",
+    "parked_presets": "Older role presets remain as unlisted JSON bundles under loop_preset_bundles/bundles."
+  }
+}

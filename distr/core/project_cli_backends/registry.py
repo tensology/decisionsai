@@ -454,7 +454,13 @@ class IdeHandoffBackend(ProjectCliBackend):
         return status
 
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
-        from .ide_handoff import build_ide_callback_meta, open_ide_project, write_ide_work_packet, _reporter_path
+        from .ide_handoff import (
+            build_ide_callback_meta,
+            open_ide_project,
+            start_cursor_harness_agent,
+            write_ide_work_packet,
+            _reporter_path,
+        )
 
         status = self.check_availability()
         if not status.ready:
@@ -488,15 +494,40 @@ class IdeHandoffBackend(ProjectCliBackend):
                 session_id=task.audit_id,
             )
 
+        harness: dict[str, Any] = {}
+        if self.id == "cursor_ide":
+            harness = start_cursor_harness_agent(task, packet_path)
+
         opened = open_ide_project(task.folder, packet_path)
-        _emit(on_event, {"type": "ide_handoff_dispatched", "backend": self.id, "work_packet": packet_path, "opened": opened})
-        output_lines = [
-            f"Opened {self.name} with your work packet.",
-            f"Packet: {packet_path}",
-            "",
-            "Finish in the IDE, then report completion:",
-            f"python3 {json.dumps(_reporter_path(self.id))} --turn-output \"Status: completed\\nSummary: ...\"",
-        ]
+        _emit(
+            on_event,
+            {
+                "type": "ide_handoff_dispatched",
+                "backend": self.id,
+                "work_packet": packet_path,
+                "opened": opened,
+                "harness_started": bool(harness.get("started")),
+            },
+        )
+        output_lines: list[str] = []
+        if self.id == "cursor_ide" and harness.get("started"):
+            output_lines.append("Started the Cursor harness on your work packet.")
+        elif self.id == "cursor_ide":
+            reason = str(harness.get("reason") or "not ready").strip()
+            output_lines.append(f"Opened Cursor; harness did not auto-start ({reason}).")
+        else:
+            output_lines.append(f"Opened {self.name} with your work packet.")
+        if opened:
+            output_lines.append("Project folder is open in the editor.")
+        output_lines.extend(
+            [
+                f"Packet: {packet_path}",
+                "",
+                "The harness reports back when this step is done.",
+                f"Manual reporter: python3 {json.dumps(_reporter_path(self.id))} "
+                '--turn-output "Status: completed\\nSummary: ..."',
+            ]
+        )
         return BackendTaskResult(
             True,
             self.id,
@@ -765,10 +796,14 @@ def _loop_handoff_extra(workflow_id: int | None, run_id: int | None) -> dict[str
             if not loop_contract:
                 return {}
             iteration = int(run_data.get("loop_iteration") or 0)
-            return {
+            extra: dict[str, Any] = {
                 "loop_contract": loop_contract,
                 "loop_context_summary": build_loop_context_summary(loop_contract, iteration),
             }
+            steering = (run_data.get("run_briefing_steering") or "").strip()
+            if steering:
+                extra["run_briefing_steering"] = steering
+            return extra
     except Exception:
         return {}
 
@@ -927,6 +962,7 @@ async def run_project_task(
     )
     task.execution_session_id = execution_session_id
     setattr(task, "loop_context_summary", str(loop_extra.get("loop_context_summary") or ""))
+    setattr(task, "run_briefing_steering", str(loop_extra.get("run_briefing_steering") or ""))
     handoff_packet: dict[str, Any] = {}
     handoff_event_id: int | None = None
     try:

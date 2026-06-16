@@ -4537,20 +4537,6 @@
         })[0] || null;
     }
 
-    function nextQueuedTicketAfterRunning() {
-        var active = currentWorkflowActiveRun();
-        if (!active || !active.ticket_id) return null;
-        var tickets = (workflowQueueTickets || []).slice().sort(function (a, b) {
-            return (a.workflow_queue_position || 0) - (b.workflow_queue_position || 0) || (a.id || 0) - (b.id || 0);
-        });
-        var runningTicket = tickets.filter(function (t) { return String(t.id) === String(active.ticket_id); })[0];
-        if (!runningTicket) return null;
-        var runningPos = runningTicket.workflow_queue_position || 0;
-        return tickets.filter(function (t) {
-            return (t.workflow_queue_position || 0) > runningPos && String(t.id) !== String(active.ticket_id);
-        })[0] || null;
-    }
-
     var lastAutoAdvanceSnackRunId = null;
 
     function renderWorkflowRunBar(activeRuns) {
@@ -5468,18 +5454,16 @@
         var timeClass = timeLive
             ? "bg-sky-500/20 text-sky-200"
             : "bg-white/10 text-gray-300";
-        var nextUp = nextQueuedTicketAfterRunning();
-        var isUpNext = nextUp && String(nextUp.id) === String(ticket.id);
         var title = ticket.title || ("Ticket #" + ticket.id);
         var cleanDesc = stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
         var badgeOpts = { interactive: true, ticketId: ticket.id, locked: locked || loopLocked };
         var descHtml = cleanDesc
-            ? '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + esc(cleanDesc) + "</span></div></div>"
+            ? '<div class="kb-ticket-list-desc" tabindex="0" title="' + esc(cleanDesc) + '"><div class="kb-ticket-list-desc-track"><span>' + esc(cleanDesc) + "</span></div></div>"
             : "";
         var contentClass = "kb-ticket-list-content" + (cleanDesc ? "" : " kb-ticket-list-content--no-desc");
-        var titleHtml = '<div class="kb-ticket-list-title-wrap" tabindex="0"><div class="kb-ticket-list-title-track"><span>' + esc(title) + "</span></div></div>";
+        var titleHtml = '<div class="kb-ticket-list-title-wrap" title="' + esc(title) + '">' + esc(title) + "</div>";
         var row = document.createElement("div");
-        row.className = "kb-ticket-list-row wf-workflow-ticket-row" + (run ? " wf-workflow-ticket-row--running" : "") + (isUpNext ? " wf-workflow-ticket-row--up-next" : "");
+        row.className = "kb-ticket-list-row wf-workflow-ticket-row" + (run ? " wf-workflow-ticket-row--running" : "");
         row.dataset.ticketId = String(ticket.id);
         row.tabIndex = 0;
         row.setAttribute("role", "option");
@@ -5492,7 +5476,6 @@
                 workflowListDragHandleHtml(canReorder, loopLocked ? "Loop is running — reorder locked" : "Drag to reorder queue") +
                 '<span class="kb-ticket-list-badges wf-workflow-queue-badges">' +
                     '<span class="wf-queue-position-label" title="Queue position">' + esc(String(queueId) + ".") + "</span>" +
-                    (isUpNext ? '<span class="text-[10px] px-1 py-0.5 rounded bg-[#f97316]/20 text-[#f97316]">Up next</span>' : "") +
                     workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
                     workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
                 "</span>" +
@@ -5518,51 +5501,35 @@
         return row;
     }
 
-    function initWorkflowQueueTextMarquee(container, trackSelector, marqueeClass) {
-        if (!container || container.dataset.marqueeInit === "done") return;
-        var track = container.querySelector(trackSelector);
-        if (!track) {
-            container.dataset.marqueeInit = "done";
-            return;
-        }
-        var first = track.querySelector("span");
-        if (!first) return;
-        var text = (first.textContent || "").trim();
-        if (!text) {
-            container.dataset.marqueeInit = "done";
-            return;
-        }
-        requestAnimationFrame(function () {
-            if (container.dataset.marqueeInit === "done") return;
-            if (track.scrollWidth <= container.clientWidth + 1) {
+    function initWorkflowQueueDescMarquees(rootEl) {
+        (rootEl || document).querySelectorAll(".wf-workflow-queue-list .kb-ticket-list-desc").forEach(function (container) {
+            if (!container || container.dataset.marqueeInit === "done") return;
+            var track = container.querySelector(".kb-ticket-list-desc-track");
+            if (!track) {
                 container.dataset.marqueeInit = "done";
                 return;
             }
-            container.dataset.marqueeInit = "done";
-            container.classList.add(marqueeClass);
-            var clone = first.cloneNode(true);
-            clone.setAttribute("aria-hidden", "true");
-            track.appendChild(clone);
-            var duration = Math.max(10, Math.round(track.scrollWidth / 40));
-            track.style.setProperty("--kb-marquee-duration", duration + "s");
-        });
-    }
-
-    function initWorkflowQueueRowMarquees(rootEl) {
-        (rootEl || document).querySelectorAll(".wf-workflow-ticket-row").forEach(function (row) {
-            row.querySelectorAll(".kb-ticket-list-desc, .kb-ticket-list-title-wrap").forEach(function (node) {
-                node.dataset.marqueeInit = "";
+            var first = track.querySelector("span");
+            if (!first) return;
+            var text = (first.textContent || "").trim();
+            if (!text) {
+                container.dataset.marqueeInit = "done";
+                return;
+            }
+            requestAnimationFrame(function () {
+                if (container.dataset.marqueeInit === "done") return;
+                if (track.scrollWidth <= container.clientWidth + 1) {
+                    container.dataset.marqueeInit = "done";
+                    return;
+                }
+                container.dataset.marqueeInit = "done";
+                container.classList.add("kb-ticket-list-desc--marquee");
+                var clone = first.cloneNode(true);
+                clone.setAttribute("aria-hidden", "true");
+                track.appendChild(clone);
+                var duration = Math.max(10, Math.round(track.scrollWidth / 40));
+                track.style.setProperty("--kb-marquee-duration", duration + "s");
             });
-            initWorkflowQueueTextMarquee(
-                row.querySelector(".kb-ticket-list-title-wrap"),
-                ".kb-ticket-list-title-track",
-                "kb-ticket-list-title-wrap--marquee"
-            );
-            initWorkflowQueueTextMarquee(
-                row.querySelector(".kb-ticket-list-desc"),
-                ".kb-ticket-list-desc-track",
-                "kb-ticket-list-desc--marquee"
-            );
         });
     }
 
@@ -5611,7 +5578,7 @@
         bindWorkflowTicketDropZone();
         ensureWorkflowQueueSelection(tickets);
         requestAnimationFrame(function () {
-            initWorkflowQueueRowMarquees(listWrap);
+            initWorkflowQueueDescMarquees(listWrap);
             ensureWorkflowTicketTimerTick();
         });
         renderWorkflowBoardTimeTotal();
