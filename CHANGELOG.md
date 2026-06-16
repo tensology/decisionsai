@@ -23,49 +23,45 @@ Ticket in, verified outcome out, without standing over the IDE.
 
 ## [2.8.0] - 2026-06-14
 
-### Web UI
+### Orchestrator replaces Hermes
 
-- **Navigation** — One main menu links Chat, Projects, Ticket Boards, Automations, and Workflows.
-- **Chat** — Switch the language model or voice in an open thread. **Compact** summarizes older messages when a conversation runs long. Tool and workflow activity appears in the transcript alongside the agent's replies.
-- **Projects** — One page per project: choose Cursor, Codex, Claude Code, or Pi as the coding backend, point at the folder on disk, copy the CLI setup commands, and edit the project name and notes.
-- **Ticket Boards** — Open agent chat from a ticket with voice on. The ticket and its linked project load as context automatically.
-- **IRC rooms** — A shared community chat inside Decisions: pick a display name, join rooms, see who else is online, and talk. For fun and to see who is connected to Decisions right now.
-- **Remote** — The phone or browser remote puts Snippets, Agent chat, and Dictate front and center. Hold the button to talk, tap for a text box, stop streaming audio with an explicit control.
-- **Shortcuts** — Hold a modifier key combo to dictate text anywhere. The system tray opens chats, projects, boards, automations, workflows, snippets, or skins in one click.
-- **Initiative** — Settings for the proactive agent, grouped by channel (email, Telegram, and so on). Per channel you choose what it may scan, suggest, ask you about, or send on its own.
+The orchestration layer that ties together chat, boards, workflows, automations, and IDE handoffs was renamed from **Hermes** to **Orchestrator**. Database tables, settings keys, memory export, board policy, and workflow events now use `orchestrator_*` naming. The old Hermes modules, routes, and compatibility shims were removed. The separate **Nous Hermes Agent** backend name is unchanged; that refers to the external worker, not this orchestration layer.
 
-### Workflows
+### Automations are no longer workflows in disguise
 
-- **Loop presets** — Save a sequence of workflow steps under a name. Import that preset into a workflow, add it to the end, swap steps out, or export it for someone else.
-- **Steering a run** — Send new instructions while a step is waiting on Cursor or Codex. The run keeps going. The active-run screen shows validation results, what you steered, and the next step.
-- **Implement + Fallow Audit preset** — A bundled workflow for JavaScript: implement the change, then run a Fallow audit on the result.
-- **YouTube step** — A workflow action that fetches video metadata, subtitles, or search results from YouTube.
+Until 2.8, scheduled automations were stored as special workflow rows. That made history hard to read and could schedule the same job twice. Automations are now first-class records with their own tables, APIs, and scheduler. On upgrade, existing automation workflows migrate into the new store; schedules on the leftover workflow copies are disabled so nothing fires in duplicate. Scheduled and on-demand runs execute in background workers so they do not block live chat or the orchestrator.
 
-### Automations
+### Workflows rebuilt around Loops
 
-- **Calendar** — Scheduled automations show on a calendar view.
-- **Time entries** — Log work in timed blocks with a live timer, then export a summary onto a ticket board.
+The Workflows screen is organized around **Loops**: named presets of steps you can import, append, replace, or export. While a step waits on Cursor or Codex, you can steer the run with new instructions and read validation results, steering history, and the next planned step on the active-run view.
 
-### WhatsApp
+The workflow execution engine was rewritten to call each LLM through that provider's native tool API (OpenAI, Anthropic, Ollama, Groq, OpenRouter, Gemini, and others). Agent steps can invoke real tools instead of only describing what they would do. When an async agent step finishes, the workflow advances to the next step; hung steps fail on timeout instead of running forever.
 
-- **Board-linked numbers** — Tie a WhatsApp number to a ticket board. Messages on that number create or update tickets on that board.
+### Harness stack and IDE integration
 
-### Working with your IDE
+Setup and every start now run a single harness pipeline for Codex, Cursor, Claude Code, and Pi: plugin repair, skill projection, ECC, Ponytail/Fallow, browser and content packs, design references, community skills, yt-dlp, and Composio Connect for workplace apps. Recommended MCP servers are merged into Cursor and Codex configuration during recalibrate; deprecated entries are pruned. Composio API keys are set under Settings → API Keys.
 
-- **Setup and start** — Running setup or starting Decisions syncs skills, plugins, and helper packs for Codex, Cursor, Claude Code, and Pi.
-- **MCP tools in Cursor and Codex** — Documentation lookup, web search, design references, and Composio for workplace apps get wired into your IDE. Add a Composio API key under Settings → API Keys for Gmail, Slack, Notion, Jira, and similar.
-- **Ponytail and Fallow** — Workflows can run Ponytail/Fallow review before implementation steps. Provisioning skills to a Cursor project copies the Ponytail rule into that repo.
-- **Continue IDE chats** — From Decisions chat, the agent can open or continue a Codex or Cursor conversation that is already running.
+IDE plugin sources were consolidated under `plugins/` (`codex-ide`, `cursor-ide`, `ecc`). Committed checkout scratch that used to live in `.tickets` and `.pi` was removed from the repository; local runtime output belongs in gitignored `.artifacts/`.
 
-### Fixes
+From Decisions chat, the agent can list and continue Codex or Cursor sessions that are already open (`ide_thread` tooling and `/api/ide/sessions`).
 
-- **Remote sidecar** — Fixed click positioning on the floating remote window.
-- **Oracle skin** — Fixed idle animation and file-drop glow.
-- **Telegram intercom** — Fixed intercom requests through Telegram.
+### LLM settings on one page
 
-### Tests
+Every model slot now lives on a single settings page: Conversational, Coding, Vision, Image, Computer Use, Step Runner (workflows), and Kanban Agent. All providers are available in each slot; empty optional slots inherit from Conversational. The **Sub-agent** model slot was removed because nothing consumed it.
 
-- More automated coverage for chat compaction and activity, loop presets, schedule blocks, WhatsApp board linking, ticket handoff to the agent, workflow steering, remote audio, IDE sessions, and harness setup.
+### Sidecar, voice, and remote delivery
+
+The desktop sidecar gained screen analysis, arbitrary Python execution, drag, scroll, and wait-for-element tools for computer-use workflows. The TTS pipeline was refactored so follow-up speech after tool calls is delivered correctly, and outbound voice routes to Telegram or the remote web UI according to context rather than always using the same path.
+
+The remote control UI centers on Snippets, Agent chat, and Dictate, with hold-to-talk, tap-to-type, streaming audio playback, and an explicit stop control.
+
+### Boards, WhatsApp, and calendar
+
+Ticket routes were unified under `/tickets`. A WhatsApp number can be tied to a board so inbound messages create or update tickets on that board. The automations hub gained a calendar for scheduled runs and time-entry blocks with live timers and board export.
+
+### IRC rooms
+
+Shared community chat inside Decisions: rooms, display names, a member list, and a live view of who is connected.
 
 ---
 
