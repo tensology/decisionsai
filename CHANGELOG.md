@@ -50,14 +50,13 @@ Decisions should run the loop and report back. You should not have to watch Curs
 
 - Link a number to a board so inbound chats and ticket creation stay on that board
 
-### Harness and IDE integration
+### Working with your IDE
 
-- `bin/setup.py` and quiet recalibrate on `bin/start.py` project skills into Codex, Cursor, Claude, and Pi: ECC, Ponytail/Fallow, browser/content pack, design references, Agent Reach, community skills, yt-dlp, Composio Connect; RTK hooks; catalog at `~/.decisions/harness/mcp-recommendations.json`
-- MCP recalibrate: merge Context7, Exa, Mobbin, Refero, Composio Connect into `~/.cursor/mcp.json` and `~/.codex/config.toml`; remove deprecated Rube; Composio API key from Settings → API Keys
-- Ponytail and Fallow prepended on workflow `pre_chain` where applicable; Ponytail Cursor rule copied into the project on skill provision
-- Codex/Cursor plugin verify and repair on setup; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`; scratch files under `.artifacts/`
-- IDE threads: `ide_thread` tool and `GET /api/ide/sessions` to list, read, and prompt Codex/Cursor sessions from Decisions
-- Composio Connect replaces Rube (Preferences → API Keys → Composio)
+- Setup and start keep Codex, Cursor, Claude Code, and Pi aligned: skills, plugins, and helper packs install and repair without you editing IDE config by hand
+- Cursor and Codex get useful MCP tools added for you (docs lookup, search, design references, Composio). Retired Rube hooks are removed. Add a Composio API key under Settings → API Keys for Gmail, Slack, Notion, Jira, and similar
+- Workflows can run Ponytail/Fallow review before implementation steps; Cursor-backed projects get the Ponytail rule when skills are provisioned to the repo
+- From chat, the agent can list and continue Codex or Cursor conversations you already have open
+- Composio Connect replaces Rube for third-party app connections
 
 ### Fixes
 
