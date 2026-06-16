@@ -8,17 +8,16 @@ In the beginning it was prompt engineering, then skills, then Codex and Cursor h
 
 A loop is a named sequence of steps you import or build yourself. It takes a ticket, a WhatsApp thread, or a brief, plans the slice, hands work to chat or to Cursor/Codex/Pi on the linked project, checks whether the output actually matches the ticket, fixes what failed, and leaves evidence on the board. Not one answer and walk away. Iterate until green, or stop with a clear reason it blocked.
 
-2.8 wired the surfaces together: boards, WhatsApp on boards, automations, calendar blocks, workflow steps, skills infrastructure pushed into your coding tools, validation and steering on active runs, IDE session follow-up, and connected research, design, docs, and workplace tooling. The steps, skills, and tooling for full product development are largely there. What we are tightening now is the agent itself: more initiative, more self-correction, less babysitting an IDE while you hope the next model release saves you.
+2.8 wired the surfaces together: boards, WhatsApp on boards, automations, calendar blocks, workflow steps, skills pushed into your coding tools, validation and steering on runs, IDE follow-up, and hooks for research, design, docs, and workplace apps. Most of the machinery is there. The work now is making the agent use it reliably without you babysitting an IDE.
 
 What we are working on next:
 
-- Loops that actually finish. You see what broke and why, not a silent stall.
-- Less hand-holding. If a step is stuck or off-brief, the agent should notice and move before you do.
-- Self-correction by default. Build, test, compare to the ticket, fix, report back. That should be normal, not a special ask.
-- Real projects, not one random file. Idea to tickets to build to polish to ship, with memory of how your project works carried across runs.
-- Paying attention across sessions. What is running, what failed last time, what the ticket asked for, without you re-explaining the whole story every day.
+- Loops that finish, and say plainly what failed when they do not.
+- The agent noticing when a step is stuck instead of waiting for you to notice.
+- Retries that use what already went wrong, not a blank "try again."
+- Project context that survives between runs so you are not re-briefing every time.
 
-The bet stays the same: orchestration from intake to proof. Decisions should feel like a teammate that owns the loop, not a chat window you stare at while Cursor does whatever it wants.
+Decisions should run the loop and report back. You should not have to watch Cursor and guess whether the ticket is actually done.
 
 ---
 
