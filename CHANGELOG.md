@@ -23,43 +23,37 @@ Decisions should run the loop and report back. You should not have to watch Curs
 
 ## [2.8.0] - 2026-06-14
 
-### Workflows, boards, automations, and coding handoffs
+### Features
 
-Workflows (under Workflows in the app) are lists of steps. Each step tells the assistant or your coding tool to do something: plan, change code, run tests, screenshot the browser, call an API, pull YouTube info. Steps run in order. Some pause until you hit Continue. You can steer a waiting run and see what passed, what failed, and what's next.
+- Shared navigation across Chat, Projects, Ticket Boards, Automations, and Workflows
+- Loops: importable workflow presets; append or replace steps; export presets; steer a waiting run mid-flight; active-run view with executor, validation, steering history, and planned next steps
+- Loop preset added: Implement + Fallow Audit (JS)
+- Automations: create, edit, run, and history per automation; shared calendar for scheduled runs; time-entry blocks with live timer and timesheet export to boards
+- Chat: switch LLM and voice inside an existing thread; Compact from header, menu, or auto-compaction; system activity row for tool runs and workflow events
+- Projects: backend selection, folder context, CLI setup, and project details on one page
+- Ticket Boards: send a ticket into a live agent thread with speech and linked project context
+- WhatsApp: link one or more numbers to a board so inbound chats and ticket creation stay on that board
+- IRC: local chat page and API proxy beside Telegram, WhatsApp, boards, and Chat
+- Shortcuts: hold-to-dictate, modifier-only combos, dictation as text entry; system tray quick-open for chats, projects, boards, automations, workflows, snippets, skins
+- Initiative: settings split by what the agent may scan, suggest, ask about, or send on which channels
+- Remote: Snippets, Agent, and Dictate as primary actions; hold PTT, tap for text box, explicit stop for streamed audio
+- IDE threads: `ide_thread` agent tool and `GET /api/ide/sessions` to list, read, and prompt Codex/Cursor sessions from Decisions
+- Workflow `ytdlp` step: YouTube metadata, subtitles, and search via yt-dlp in the Decisions venv
+- Composio Connect in Preferences → API Keys (replaces deprecated Rube); Gmail, Slack, Notion, Jira via `decisions-composio` skill and Tool Router
+- Harness stack on `bin/setup.py` and quiet recalibrate on `bin/start.py`: projects skills to Codex, Cursor, Claude, and Pi (ECC, Ponytail/Fallow, browser/content capabilities, design references, Agent Reach, community skills, yt-dlp, Composio Connect); RTK hook init; MCP catalog at `~/.decisions/harness/mcp-recommendations.json`
+- MCP recalibrate: add-only merge into `~/.cursor/mcp.json` and `~/.codex/config.toml` for Context7, Exa, Mobbin, Refero, Composio Connect; prunes deprecated Rube; Composio API key from Settings → API Keys
+- Ponytail/Fallow: auto prepended on workflow pre_chain; project `.cursor/rules/ponytail.mdc` on skill provision for Cursor backends
+- ECC pack bootstrap; Codex/Cursor plugin verify/repair on setup; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`; runtime scratch under gitignored `.artifacts/`
 
-Loops are ready-made workflow templates you import. Replace or append steps on a workflow you already have. Examples: brief to board tickets, ticket to implementation, polish and verify before release.
+### Fixes
 
-Automations are instruction runs you create, edit, and schedule, with history per automation. They share a calendar with time-entry blocks (live timer, export to boards).
+- Remote: pointer routing for sidecar clicks corrected
+- Oracle: skin idle/animation and file-drop glow fixes
+- Telegram intercom requests
 
-Link WhatsApp numbers to a board so chats and new tickets stay together. Send a ticket into a live agent chat with voice and project context attached.
+### Tests
 
-Chat: switch model and voice in a thread, compact long conversations, and see system activity when tools and workflows run so you're not guessing.
-
-Projects: pick how coding work goes out (Pi, Cursor, Codex, Claude Code, etc.), which folder, and whether setup is done. One page.
-
-Same menu everywhere (Chat, Projects, Boards, Automations, Workflows). IRC beside Telegram and WhatsApp. Dictation shortcuts and system tray quick-open. Remote web UI centers on Snippets, Agent, and Dictate.
-
-Initiative settings are grouped by what the agent may scan, suggest, ask about, or send on each channel.
-
-Setup (and each app start) checks and repairs Codex and Cursor so handoffs start from a working state.
-
-Also: Telegram intercom requests, Oracle skin animation fixes, better remote mouse control from the browser.
-
-### Connected tools (what 2.8 wires up for you)
-
-Run Decisions setup once (it also runs quietly on each start). Your coding assistants get the same helpers Decisions uses. You don't install these one by one in Cursor or Codex.
-
-- Workflow templates (Loops): import a preset under Workflows.
-- Minimal code discipline: agents are pushed to use what's already in the project before adding libraries. On by default for implementation work.
-- JS/TS health check: dead code, dupes, complexity before merge. Use the Implement + Fallow Audit (JS) loop or let the agent run a check when the ticket needs it.
-- Web and social research: Twitter, Reddit, YouTube, GitHub, open web when a workflow needs research.
-- UI inspiration: reference sites and patterns for design tickets.
-- Library docs in your editor: up-to-date docs in Cursor and Codex after setup.
-- YouTube in workflows: titles, descriptions, subtitles, or search when a ticket needs video context.
-- Email and workplace apps: Gmail, Slack, Notion, Jira, and more via Composio. Preferences → API Keys → Composio, paste your key, save.
-- Follow up in Cursor or Codex: continue open coding sessions from Decisions Chat.
-
-API keys for Composio and similar services live under Preferences → API Keys. Saving updates your editor connections for you.
+- Chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness bootstrap, plugin paths, harness packs (capabilities, competition, design references, agent-reach, community skills, yt-dlp, composio, MCP harness), IDE threads
 
 ---
 
