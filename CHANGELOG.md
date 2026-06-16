@@ -4,21 +4,21 @@
 
 ## [What's to Come]
 
-DecisionsAI is not betting that the next model will one-shot your product. It is betting that **a disciplined loop**—with the right skills, steps, checks, and memory—can carry real product work from idea to shipped proof even when any single model pass is imperfect.
+We're not waiting for AI to magically nail your whole app in one try. That's the vibe a lot of tools sell you—and it's mostly wishful thinking.
 
-**What a loop is:** A loop is a workflow that does not stop at the first answer. It ingests a ticket or brief, plans the slice, does the work (in chat, in your project, or in Cursor/Codex), **checks its own output**, corrects when something fails, and closes with evidence on the board. You import loop presets or build your own; each step can hand off to an agent, run a test, capture a screenshot, or ask for your input before continuing. The point is iteration with standards—not “fire and hope.”
+**What's a loop?** Think of it like this: you give Decisions a job (a ticket, a message, an idea). It makes a plan, does the work, **checks if it actually worked**, fixes what broke, and shows you proof on the board. Not one answer and peace out—a repeat until it's right. You can grab ready-made loops or build your own. Each step might write code, run tests, take screenshots, or ping you if it needs a human.
 
-**What is already in place (2.8):** An orchestration layer across boards, WhatsApp, automations, and workflows; importable loop templates; a skills library projected into your coding tools; validation and steering on active runs; IDE session follow-up; and connected research, design, documentation, and workplace-app tooling. The scaffolding for full product development exists. The gap is reliability and judgment—not missing buttons.
+**What we already built (2.8):** Boards, WhatsApp hooks, automations, workflow steps, a pile of skills that plug into Cursor/Codex, ways to nudge a run mid-flight, and hooks into research, design refs, docs, email, Slack, all that. The bones are there to take something from "idea" to "shipped." What's missing isn't more features—it's making the agent **not flake**.
 
-**What we are tightening next**
+**What we're working on**
 
-- **Loops that actually finish** — Fewer silent stalls, clearer “what failed and why,” and retries that use prior evidence instead of vague “try again” prompts.
-- **More initiative, less babysitting** — The agent should notice when a step is stuck, when acceptance criteria are not met, or when the IDE went off-scope—and act before you have to watch every cursor blink.
-- **Self-correction as a habit** — Develop → test → compare to the ticket → fix → report back should be default behavior inside a loop, not an optional extra you wire up by hand.
-- **Full product development, not single-file hacks** — Brief to board, ticket to implementation, polish to ship, with memory of what this project cares about (style, risk, lanes, prior corrections) carried across runs.
-- **A steadier feel of awareness** — What is running, what already failed, what the board expects, and what changed since last time should shape the next move without you re-explaining the world each session.
+- **Loops that actually finish** — No more "idk it died." You see what broke and why.
+- **Less hand-holding** — You shouldn't have to stare at Cursor hoping it didn't wander off. The agent should notice when it's stuck or off-brief and do something about it.
+- **Fix your own mistakes** — Build it, test it, compare to the ticket, fix it, report back. That should be normal, not something you beg for every time.
+- **Real projects, not one random file** — Idea → tickets → build → polish → ship, with the app remembering how *your* project likes to work.
+- **Actually paying attention** — What's running, what failed last time, what the ticket asked for—without you copy-pasting context every single session.
 
-The work ahead is making Decisions feel like a **product partner that owns the loop**—initiative, correction, and proof—so you are directing outcomes, not nursing tools until the model gets smarter.
+End goal: Decisions feels less like a chatbot you babysit and more like a teammate that **keeps going until the job is done**—and shows you it did.
 
 ---
 
