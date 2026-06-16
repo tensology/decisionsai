@@ -25,47 +25,47 @@ Decisions should run the loop and report back. You should not have to watch Curs
 
 ### Web UI
 
-- Main application menu tightened up across Chat, Projects, Ticket Boards, Automations, and Workflows
-- Chat: switch LLM or voice in an open thread; Compact conversation history; tool and workflow events shown in the transcript
-- Projects page: backend, folder, CLI setup, and project details on one screen
-- Ticket Boards: hand a ticket off to agent chat with voice and linked project context
-- IRC chat page and API proxy added alongside Telegram and WhatsApp
-- Remote: Snippets, Agent, and Dictate brought forward; hold PTT, tap for text input, explicit stop on streamed audio
-- Shortcuts: hold-to-dictate with modifier combos; system tray entries for common pages without opening the browser first
-- Initiative settings grouped by channel (what the agent may scan, suggest, ask, or send)
+- **Navigation** — The main menu across Chat, Projects, Ticket Boards, Automations, and Workflows is cleaner and easier to scan. Same places, less clutter.
+- **Chat** — Change the language model or voice in a conversation you already have open instead of starting over. **Compact** rolls up older messages when the thread is getting long. Tool runs and workflow events show in the transcript so you can see what the agent did, not just the final reply.
+- **Projects** — Pick your coding backend, folder, CLI setup commands, and project details on one page instead of jumping between screens.
+- **Ticket Boards** — Open agent chat from a ticket with voice enabled and the ticket plus its linked project already loaded as context.
+- **IRC rooms** — A shared community chat inside Decisions: pick a display name, join rooms, see who else is online, and talk. This is for fun and visibility into who is connected to Decisions. It is not WhatsApp, Telegram, or any other messaging integration.
+- **Remote** — On the phone or browser remote, Snippets, Agent chat, and Dictate are the main actions up front. Hold the button to talk, tap for a text box, and use an explicit stop control when audio is streaming back.
+- **Shortcuts** — Hold a modifier key combo to dictate text. The system tray can open chats, projects, boards, automations, workflows, snippets, or skins without loading the full web app first.
+- **Initiative** — Proactive-agent settings are grouped by channel (email, Telegram, and so on). For each channel you set what the agent may scan, suggest, ask you about, or send without you starting the conversation.
 
 ### Workflows
 
-- Loop presets: import, append, replace, or export workflow steps
-- Steer a run while a step is waiting; active-run view shows validation, steering history, and next step
-- New loop preset: Implement + Fallow Audit (JS)
-- New step action `ytdlp`: YouTube metadata, subtitles, or search
+- **Loop presets** — Save a sequence of workflow steps as a named preset. Import it into a workflow, append it to existing steps, replace steps, or export it to share with someone else.
+- **Steering a run** — While a step is waiting (for example for Cursor or Codex to finish), send new instructions without cancelling the whole run. The active-run screen shows validation results, steering you sent, and what step comes next.
+- **Implement + Fallow Audit preset** — A ready-made loop for JavaScript work: implement the change, then run a Fallow audit pass on the result.
+- **YouTube step** — A new workflow action that can pull video metadata, subtitles, or search results from YouTube.
 
 ### Automations
 
-- Calendar view for scheduled runs
-- Time-entry blocks with live timer; export timesheet-style summaries to boards
+- **Calendar** — See scheduled automations on a calendar instead of only in a list.
+- **Time entries** — Log work in time blocks with a live timer, then export a timesheet-style summary onto a ticket board.
 
 ### WhatsApp
 
-- Link a number to a board so inbound chats and ticket creation stay on that board
+- **Board-linked numbers** — Attach a WhatsApp number to a specific ticket board. Inbound messages on that number create or update tickets on that board.
 
 ### Working with your IDE
 
-- Setup and start keep Codex, Cursor, Claude Code, and Pi aligned: skills, plugins, and helper packs install and repair without you editing IDE config by hand
-- Cursor and Codex get useful MCP tools added for you (docs lookup, search, design references, Composio). Add a Composio API key under Settings → API Keys for Gmail, Slack, Notion, Jira, and similar
-- Workflows can run Ponytail/Fallow review before implementation steps; Cursor-backed projects get the Ponytail rule when skills are provisioned to the repo
-- From chat, the agent can list and continue Codex or Cursor conversations you already have open
+- **Setup and start** — Running setup or starting Decisions keeps skills, plugins, and helper packs in sync for Codex, Cursor, Claude Code, and Pi. You should not need to hand-edit IDE config files for the basics.
+- **MCP tools in Cursor and Codex** — Useful servers get wired in for you: documentation lookup, web search, design references, and Composio for workplace apps. Add a Composio API key under Settings → API Keys if you want Gmail, Slack, Notion, Jira, and similar.
+- **Ponytail and Fallow** — Workflows can run Ponytail/Fallow review before implementation steps. When skills are provisioned to a Cursor-backed project, the Ponytail rule is copied into that repo.
+- **Continue IDE chats** — From Decisions chat, the agent can list Codex or Cursor conversations you already have open and continue them instead of starting from scratch.
 
 ### Fixes
 
-- Remote sidecar: mouse click position routing
-- Oracle skin idle/animation and file-drop glow
-- Telegram intercom requests
+- **Remote sidecar** — Clicks on the floating remote window register in the right place.
+- **Oracle skin** — Idle animation and file-drop glow behave correctly again.
+- **Telegram intercom** — Intercom requests through Telegram work again.
 
 ### Tests
 
-- Added or extended: chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backends, harness bootstrap, plugin paths, harness packs, MCP harness, IDE threads
+- More automated coverage for chat compaction and activity, loop presets, schedule blocks, WhatsApp board linking, ticket handoff to the agent, workflow steering, remote audio, IDE sessions, and harness setup.
 
 ---
 
