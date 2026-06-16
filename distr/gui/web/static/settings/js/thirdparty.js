@@ -6,6 +6,7 @@ const PROVIDERS = [
     {id: 'openai', name: 'OpenAI', keyField: 'key'},
     {id: 'anthropic', name: 'Anthropic', keyField: 'key'},
     {id: 'cursor', name: 'Cursor', keyField: 'key'},
+    {id: 'composio', name: 'Composio', keyField: 'key', skipValidate: true},
     {id: 'elevenlabs', name: 'ElevenLabs', keyField: 'key'},
     {id: 'openrouter', name: 'OpenRouter', keyField: 'key'},
     {id: 'groq', name: 'Groq', keyField: 'key'},
@@ -68,6 +69,8 @@ async function loadThirdPartySettings() {
 
                 if (enabled && hasStoredKey) {
                     setValidationIndicator(provider.id, 'valid', 'Stored key');
+                } else if (enabled && provider.skipValidate) {
+                    setValidationIndicator(provider.id, 'valid', 'Enable and save — MCP recalibrates on save');
                 } else {
                     clearValidationIndicator(provider.id);
                 }
@@ -100,7 +103,9 @@ async function saveThirdPartySettings() {
             // If enabled and a new key was typed, it must be validated and valid.
             // A blank field with data-has-secret means "keep the saved key".
             if (checkbox && checkbox.checked && input && input.value.trim()) {
-                if (validationState === 'invalid' || !validationState) {
+                if (provider.skipValidate) {
+                    validationStates[provider.id] = 'valid';
+                } else if (validationState === 'invalid' || !validationState) {
                         invalidProviders.push(provider.name);
                 }
             }

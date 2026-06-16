@@ -26,6 +26,15 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "ide_thread",
+        (
+            r"\b(cursor|codex|codecs)\b.*\b(thread|chat|session|response|reply|doing|status|latest)\b",
+            r"\b(read|check|what\s+did|latest)\b.*\b(cursor|codex|codecs)\b",
+            r"\b(send|prompt|continue|amend|resume)\b.*\b(cursor|codex|codecs)\b.*\b(thread|chat|session)\b",
+            r"\bwhat\s+is\s+(cursor|codex|codecs)\b.*\b(doing|working)\b",
+        ),
+    ),
+    (
         "proactive_orchestrator",
         (
             r"\b(proactive|morning|lunch|evening|check\s+work|work\s+coming\s+in|prioriti[sz]e|what\s+is\s+important)\b.*\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?|codex|codecs|cursor|project)\b",

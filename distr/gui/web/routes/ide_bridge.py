@@ -95,4 +95,28 @@ def create_routes() -> APIRouter:
         except Exception as exc:
             return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
 
+    @router.get("/ide/sessions")
+    async def list_ide_sessions_route(
+        source: str = "",
+        cwd: str = "",
+        project_id: Optional[int] = None,
+        limit: int = 12,
+        include_terminal: bool = True,
+    ):
+        try:
+            from distr.core.ide_bridge import list_ide_sessions
+
+            return JSONResponse({
+                "success": True,
+                "sessions": list_ide_sessions(
+                    source=source,
+                    cwd=cwd,
+                    project_id=project_id,
+                    limit=limit,
+                    include_terminal=include_terminal,
+                ),
+            })
+        except Exception as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=404)
+
     return router

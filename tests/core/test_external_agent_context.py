@@ -6,9 +6,11 @@ from distr.core.agent.services.llm.fast_action_detector import ActionType, detec
 from distr.core.external_agent_context import (
     build_agent_visibility_answer,
     build_codex_thread_context,
+    build_cursor_thread_context,
     format_codex_thread_context_for_prompt,
     format_external_agent_context_for_prompt,
     list_codex_threads,
+    list_cursor_threads,
     list_cursor_workspaces,
 )
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
@@ -278,6 +280,58 @@ def test_cursor_workspaces_are_read_from_workspace_storage(tmp_path, monkeypatch
     workspaces = list_cursor_workspaces(limit=1)
 
     assert workspaces[0]["folder"] == "/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI"
+
+
+def test_cursor_threads_are_read_from_local_agent_transcripts(tmp_path, monkeypatch):
+    projects_root = tmp_path / "projects"
+    slug = "repo-app"
+    transcript_id = "chat-thread-1"
+    transcript_dir = projects_root / slug / "agent-transcripts" / transcript_id
+    transcript_dir.mkdir(parents=True)
+    transcript_path = transcript_dir / f"{transcript_id}.jsonl"
+    transcript_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "role": "user",
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "<user_query>\nFix the dictation drop bug\n</user_query>",
+                                }
+                            ]
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "I found the issue in remote routing."},
+                                {"type": "tool_use", "name": "Grep", "input": {}},
+                            ]
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CURSOR_PROJECTS_HOME", str(projects_root))
+
+    threads = list_cursor_threads(folder="/repo/app", limit=5)
+    assert threads[0]["id"] == transcript_id
+    assert "dictation" in threads[0]["title"].lower()
+
+    context = build_cursor_thread_context(folder="/repo/app", query="dictation", limit_messages=5)
+    assert context["found"] is True
+    assert context["messages"][0]["role"] == "user"
+    assert "dictation drop bug" in context["messages"][0]["content"]
+    assert context["messages"][1]["content"].startswith("I found the issue")
+    assert "Grep" in context["tool_calls"]
 
 
 def test_external_agent_context_formats_for_prompt():

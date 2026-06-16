@@ -11,12 +11,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from distr.core.plugins import ecc_vendor_dir
+from distr.core.plugins import ecc_vendor_dir, competition_ponytail_skills_dir, competition_fallow_skills_dir
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
 _ECC_VENDOR_DIR = ecc_vendor_dir()
 _ECC_SKILLS_DIR = _ECC_VENDOR_DIR / "skills"
+_COMPETITION_SKILL_DIRS = [competition_ponytail_skills_dir(), competition_fallow_skills_dir()]
 _ECC_VENDOR_METADATA_FILE = _ECC_VENDOR_DIR / ".decisions-vendor.json"
 _REGISTRY_FILE = _SKILLS_DIR / "skills_registry.json"
 
@@ -41,9 +42,18 @@ _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
     (["operational excellence", "runbook", "incident response"], ["google-cloud-waf-operational-excellence"]),
     (["performance optimization", "latency", "cloud performance"], ["google-cloud-waf-performance-optimization"]),
     (["sustainability", "carbon", "green cloud"], ["google-cloud-waf-sustainability"]),
-    (["frontend", "react", "vue", "css", "tailwind", "playwright"], ["webapp-testing", "frontend-design"]),
+    (["frontend", "react", "vue", "css", "tailwind", "playwright"], ["webapp-testing", "frontend-design", "decisions-design-references"]),
+    (["landing page", "dashboard", "ui design", "mockup", "aceternity", "mobbin", "refero", "godly"], ["decisions-ui-ideation", "decisions-design-references", "frontend-design-direction"]),
     (["debug", "bug", "failing test", "regression"], ["systematic-debugging", "qa-tester"]),
+    (["over-engineer", "bloat", "yagni", "minimal", "ponytail"], ["ponytail", "ponytail-review"]),
+    (["dead code", "unused export", "circular dep", "code health", "fallow", "dupes"], ["fallow"]),
     (["brainstorm", "design feature", "explore idea"], ["brainstorming", "ceo-scope-review"]),
+    (["research", "competitor", "deep dive", "look up", "twitter", "reddit", "youtube", "rss", "podcast"], ["decisions-agent-reach", "agent-reach", "last30days"]),
+    (["humanize", "ai slop", "sounds robotic", "polish copy"], ["humanizer"]),
+    (["marketing", "landing page", "conversion", "cro", "seo audit"], ["decisions-marketing-skills", "product-marketing"]),
+    (["youtube", "yt-dlp", "subtitle", "transcript", "video brief"], ["decisions-yt-dlp", "video-editing"]),
+    (["gmail", "slack", "notion", "linear", "jira", "composio", "send email", "post to slack"], ["decisions-composio"]),
+    (["aesthetic", "design system", "glassmorphism", "bento grid"], ["decisions-design-aesthetics"]),
     (["ship", "merge", "pull request", "pr "], ["finishing-a-development-branch"]),
     (["security audit", "vulnerability", "owasp"], ["ln-621-security-auditor", "safety-guard"]),
     (["docker", "container setup"], ["ln-731-docker-generator"]),
@@ -60,7 +70,7 @@ _GOOGLE_SKILL_PREFIXES = (
     "agent-platform-",
 )
 
-_VENDOR_SOURCES = {"ecc", "ecc_vendor"}
+_VENDOR_SOURCES = {"ecc", "ecc_vendor", "competition", "competition_vendor", "agent_reach_vendor", "community_vendor"}
 
 
 def bundled_skills_directory() -> Path:
@@ -134,7 +144,11 @@ def _local_row_directory(row: dict[str, Any]) -> Path:
 def _registry_scan():
     from distr.core.skills.registry import SkillRegistry
 
-    return SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
+    return SkillRegistry(
+        local_roots=[_SKILLS_DIR],
+        vendor_roots=[_ECC_SKILLS_DIR],
+        competition_roots=_COMPETITION_SKILL_DIRS,
+    ).scan()
 
 
 def _vendor_payload(entry: Any, metadata: dict[str, Any]) -> dict[str, Any]:

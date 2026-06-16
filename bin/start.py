@@ -387,9 +387,9 @@ def kill_existing_decisions_processes():
 # Main execution block
 if __name__ == "__main__":
     try:
-        from distr.core.harness_pack import ensure_harness_pack_setup_quiet
+        from distr.core.harness_stack import ensure_harness_stack_setup_quiet
 
-        ensure_harness_pack_setup_quiet()
+        ensure_harness_stack_setup_quiet()
     except Exception:
         pass
     from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix

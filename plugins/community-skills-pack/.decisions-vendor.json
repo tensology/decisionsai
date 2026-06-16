@@ -1,0 +1,25 @@
+{
+  "vendor": "community-skills-pack",
+  "synced_at": "2026-06-16T21:29:21.106842+00:00",
+  "skill_ids": [
+    "humanizer",
+    "last30days",
+    "product-marketing",
+    "cro",
+    "copywriting",
+    "seo-audit",
+    "ai-seo",
+    "competitors",
+    "minimal",
+    "dashboard",
+    "application",
+    "shadcn",
+    "bento"
+  ],
+  "commits": {
+    "humanizer": "9600f2b7241cb4eed6ad803abee5ea01d67fe8e4",
+    "last30days": "8c11b3a25934a9e279bc3667060f3fa426f7dcb8",
+    "marketingskills": "3bea48edea99dc3ff4fdbdf0ad5768c8965f1401",
+    "awesome_design": "53c9fe6d8be161e48bcdaa0130d9bd542b1ff755"
+  }
+}

@@ -118,6 +118,8 @@ class ThirdPartySettings(BaseModel):
     gemini_key: str = ""
     masko_enabled: bool = False
     masko_key: str = ""
+    composio_enabled: bool = False
+    composio_key: str = ""
 
 
 class ValidateRequest(BaseModel):

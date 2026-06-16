@@ -247,6 +247,17 @@ def record_ide_event(
     resolved_status = _event_status(event_type, status)
     body = _clean(message or output_text or input_text)
 
+    external_thread_id = ""
+    if isinstance(payload, dict):
+        nested = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        external_thread_id = str(
+            payload.get("external_thread_id")
+            or payload.get("thread_id")
+            or nested.get("external_thread_id")
+            or nested.get("thread_id")
+            or ""
+        ).strip()
+
     append_execution_event(
         session_id,
         event_type,
@@ -257,7 +268,8 @@ def record_ide_event(
             "surface": source,
             "subtype": event_type,
             "correlation_id": (payload or {}).get("correlation_id") or f"ide:{source}:{session_id}",
-            "thread_id": str(chat_id or ""),
+            "thread_id": external_thread_id or str(chat_id or ""),
+            "external_thread_id": external_thread_id,
             "is_workflow_attached": bool(
                 session_data.get("workflow_id") or session_data.get("run_id") or session_data.get("step_id")
             ),
@@ -276,8 +288,13 @@ def record_ide_event(
 
     with get_session() as db:
         row = db.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
-        if row and resolved_status in TERMINAL_STATUSES:
-            row.status = resolved_status
+        if row:
+            if external_thread_id:
+                packet = _loads_packet(row.input_packet)
+                packet["external_thread_id"] = external_thread_id
+                row.input_packet = json.dumps(packet, ensure_ascii=False)
+            if resolved_status in TERMINAL_STATUSES:
+                row.status = resolved_status
             db.commit()
             db.refresh(row)
         latest = serialize_execution_session(row, include_events=True) if row else session_data
@@ -305,3 +322,55 @@ def get_ide_progress(*, source: str = "", cwd: str = "", project_id: int | None 
             query = query.filter(ProjectExecutionSession.route_backend == source)
         row = query.order_by(ProjectExecutionSession.updated_at.desc(), ProjectExecutionSession.started_at.desc()).first()
         return {"project": project, "session": serialize_execution_session(row, include_events=True) if row else None}
+
+
+def list_ide_sessions(
+    *,
+    source: str = "",
+    project_id: int | None = None,
+    cwd: str = "",
+    limit: int = 12,
+    include_terminal: bool = True,
+) -> list[dict[str, Any]]:
+    """List Decisions-owned IDE bridge sessions for Codex/Cursor."""
+    from distr.core.db.kanban import ProjectExecutionSession
+    from distr.core.db.projects import Project
+
+    source = (_clean(source) or "").lower()
+    limit = max(1, min(int(limit or 12), 30))
+    project = find_project_for_folder(cwd, project_id=project_id)
+
+    with get_session() as db:
+        query = db.query(ProjectExecutionSession, Project).outerjoin(
+            Project, Project.id == ProjectExecutionSession.project_id
+        ).filter(ProjectExecutionSession.route_type == "ide_bridge")
+        if source:
+            query = query.filter(ProjectExecutionSession.route_backend == source)
+        if project:
+            query = query.filter(ProjectExecutionSession.project_id == int(project["id"]))
+        if not include_terminal:
+            query = query.filter(ProjectExecutionSession.status.notin_(TERMINAL_STATUSES))
+        rows = (
+            query.order_by(ProjectExecutionSession.updated_at.desc(), ProjectExecutionSession.started_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        items: list[dict[str, Any]] = []
+        for row, proj in rows:
+            packet = _loads_packet(row.input_packet)
+            items.append(
+                {
+                    "id": row.id,
+                    "status": row.status or "",
+                    "backend": row.route_backend or "",
+                    "project_id": row.project_id,
+                    "project_name": getattr(proj, "name", "") if proj else "",
+                    "folder": packet.get("folder") or getattr(proj, "folder_location", "") if proj else "",
+                    "external_thread_id": packet.get("external_thread_id") or "",
+                    "title": packet.get("title") or f"{(row.route_backend or 'ide').title()} session #{row.id}",
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+                    "started_at": row.started_at.isoformat() if row.started_at else "",
+                }
+            )
+        return items

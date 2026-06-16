@@ -640,28 +640,55 @@ def setup(skip_model_pull=False, install_optional=False):
     # --- pi CLI Setup ---
     setup_pi_cli(ram_gb, rec)
 
-    # --- ECC Harness Pack Setup ---
+    # --- Harness stack (ECC + Ponytail/Fallow + browser/content + RTK) ---
     print("")
     print("=" * 60)
-    print("ECC Harness Pack Setup")
+    print("Agent Harness Stack Setup")
     print("=" * 60)
     try:
-        from distr.core.harness_pack import ensure_harness_pack_setup
+        from distr.core.harness_stack import ensure_harness_stack_setup
 
-        result = ensure_harness_pack_setup(run_full=True)
-        detected = ", ".join(
-            name for name, present in result.get("detected", {}).items() if present
-        ) or "none"
-        print(f"  Vendor ready: {bool(result.get('vendor_ready'))}")
-        print(f"  Detected harnesses: {detected}")
-        print(f"  Registry cache: {result.get('registry_path')}")
-        written = result.get("written") or []
-        if written:
-            print(f"  Updated projections: {len(written)}")
-        else:
-            print("  Projections already current.")
+        stack = ensure_harness_stack_setup(run_full=True)
+        for pack_name in ("ecc", "competition", "capabilities", "design_references", "agent_reach", "community_skills", "yt_dlp", "mcp"):
+            result = stack.get(pack_name) or {}
+            if not result:
+                continue
+            detected = ", ".join(
+                name for name, present in result.get("detected", {}).items() if present
+            ) or "none"
+            print(f"  [{pack_name}] status={result.get('status')} harnesses={detected}")
+            if pack_name == "competition":
+                fallow_cli = result.get("fallow_cli") or {}
+                print(f"    Fallow CLI: {fallow_cli.get('method') or fallow_cli.get('reason') or 'unknown'}")
+            if pack_name == "agent_reach":
+                cli = result.get("cli") or {}
+                print(f"    agent-reach CLI: {cli.get('method') or cli.get('reason') or cli.get('installed')}")
+                doctor = result.get("doctor") or {}
+                if doctor.get("ok"):
+                    print("    agent-reach doctor: ok")
+            if pack_name == "yt_dlp":
+                pkg = result.get("package") or {}
+                print(f"    yt-dlp: {result.get('version') or pkg.get('method') or pkg.get('installed')}")
+            if pack_name == "mcp":
+                print(f"    MCP catalog: {result.get('catalog_count')} entries")
+                merged = result.get("cursor_merged") or []
+                if merged:
+                    print(f"    Cursor MCP added: {', '.join(merged)}")
+                codex_merged = result.get("codex_merged") or []
+                if codex_merged:
+                    print(f"    Codex MCP added: {', '.join(codex_merged)}")
+            if pack_name == "capabilities":
+                browser_use = result.get("browser_use") or {}
+                playwright = result.get("playwright") or {}
+                print(f"    Playwright: {playwright.get('ok', playwright.get('skipped', 'n/a'))}")
+                print(f"    browser-use: {browser_use.get('method') or browser_use.get('reason') or browser_use.get('installed')}")
+            written = result.get("written") or []
+            if written:
+                print(f"    Updated projections/skills: {len(written)}")
+        print(f"  RTK hooks: {stack.get('rtk_hooks')}")
+        print(f"  Plugins verified: {stack.get('plugins')}")
     except Exception as e:
-        print(f"  Warning: ECC harness pack setup skipped: {e}")
+        print(f"  Warning: Harness stack setup skipped: {e}")
 
     print("All models have been downloaded and set up successfully.")
 

@@ -52,7 +52,7 @@
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
 | 🐍 | **Python executor** | The agent can write and run Python for file ops, image processing, scraping, and other scripted tasks |
 | 🧭 | **[Orchestrator](docs/orchestrator.md)** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
-| 🔧 | **[IDE + coding agents](#ide-integration)** | Work with [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), [Claude-compatible harnessing](plugins/ecc/docs/HERMES-SETUP.md), and coding backends through local plugins and harness reporting so project context does not disappear |
+| 🔧 | **[IDE + coding agents](#ide-integration)** | Unified **harness stack** for [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), [Claude-compatible harnessing](plugins/ecc/docs/HERMES-SETUP.md), and Pi — skills, MCP merge, Agent Reach, design references, Composio Connect, yt-dlp workflow steps, and IDE thread tools |
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
 | 🌐 | **Remote control** | HMAC-encrypted browser UI with Snippets, Agent, and Dictate. Hold to talk or tap for a text box |
 
@@ -217,7 +217,7 @@ cd decisionsai
 
 The launcher handles dependency checks, Python setup, model downloads, and launch automatically.
 
-When [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), or the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md) are available on the machine, setup also verifies the DecisionsAI harness wiring for them. Codex and Cursor receive local DecisionsAI plugin/reporting files so IDE conversations and project work can speak back to [Orchestrator](docs/orchestrator.md); Claude receives the compatible [ECC harness surface](plugins/ecc/docs/HERMES-SETUP.md). If an IDE is not installed or DecisionsAI is not running, those checks fail quietly instead of blocking launch.
+When [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), or the [Claude-compatible harness surface](plugins/ecc/docs/HERMES-SETUP.md) are available on the machine, setup and every `bin/start.py` run recalibrate the **harness stack**: repair IDE plugins, re-project skills (so plugin reinstall does not wipe them), refresh MCP recommendations, and merge safe MCP servers into Cursor/Codex configs. Third-party keys such as Composio and Cursor API tokens are stored in **Preferences → API Keys** and injected at recalibrate time — you should not need to edit `~/.cursor/mcp.json` by hand.
 
 ### Manual installation
 
@@ -308,7 +308,25 @@ Connect via **Preferences → Advanced → Google** (OAuth 2.0).
 
 Setup installs or repairs the local [Codex](plugins/codex-ide/README.md) and [Cursor](plugins/cursor-ide/README.md) plugins when those tools are present. They emit session events into [Orchestrator](docs/orchestrator.md) so the desktop agent can see IDE progress instead of losing it inside the editor.
 
-[Orchestrator](docs/orchestrator.md) holds tickets, boards, automations, workflows, browser runs, project folders, and IDE sessions in one ledger. The vendored [ECC](plugins/ecc/README.md) pack adds skills and harness references without duplicating local skills.
+**Harness stack** (orchestrated from `distr/core/harness_stack.py`, run on `bin/setup.py` and quietly on every `bin/start.py`):
+
+| Pack | What it adds |
+|---|---|
+| ECC | Vendored skills, agents, commands (`plugins/ecc`) |
+| Competition | Ponytail + Fallow skills and Cursor ponytail rule |
+| Capabilities | Browser QA, Playwright, content-engine, fal-ai-media |
+| Design references | Refero, Mobbin, Aceternity, Godly + UI ideation skills |
+| Agent Reach | Public web/social research (Twitter, Reddit, YouTube, Exa, …) |
+| Community skills | humanizer, last30days, curated marketing + design aesthetics |
+| yt-dlp | YouTube metadata/subtitles + workflow `ytdlp` steps |
+| Composio Connect | SaaS tool Router MCP (replaces deprecated Rube) |
+| MCP harness | Catalog + add-only merge into Cursor/Codex; see `~/.decisions/harness/mcp-recommendations.json` |
+
+Workflow runs can push a **pre_chain** of skills into the active project harness (browser, design, agent-reach, composio, yt-dlp, etc.) based on ticket text and project surface.
+
+The Decisions agent exposes **`ide_thread`** to list, read, and prompt Codex/Cursor sessions. **Composio** API keys live under **Preferences → API Keys**; saving recalibrates MCP headers automatically.
+
+[Orchestrator](docs/orchestrator.md) holds tickets, boards, automations, workflows, browser runs, project folders, and IDE sessions in one ledger. Local skills live under `skills/`; vendor packs under `plugins/*-pack/`.
 
 ---
 
@@ -318,7 +336,7 @@ Multi-step workflows run on the **Step Runner**. **Loops** are importable preset
 
 | Concept | How it works |
 |---|---|
-| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, or Playwright scripts |
+| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, Playwright scripts, or **yt-dlp** (metadata/subtitles/search) |
 | **Tool-calling agent** | Each step uses an LLM with native tool calling |
 | **Validation** | Text matching, rule-based checks, LLM judgment, or screenshot comparison |
 | **Static routing** | Pick a "go to" step for pass/fail |
@@ -344,7 +362,8 @@ distr/
 │   ├── dialogs/     # About, preferences windows
 │   ├── oracle/      # Oracle overlay and tray
 │   └── web/         # Local web UI (templates, static, API)
-plugins/             # IDE bridge plugins (codex-ide, cursor-ide) and vendored ECC harness pack
+plugins/             # IDE plugins (codex-ide, cursor-ide), ECC, and vendor harness packs (competition, agent-reach, community-skills, yt-dlp)
+skills/              # Local Decisions skills (harness stack, playwright, composio, design references, …)
 sidecar/             # Go binary: machine control (macOS/Windows)
 assets/
 ├── avatars/         # Skin packs (Clippy, Nugget, Rusty, Masko, etc.)

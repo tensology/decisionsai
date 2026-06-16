@@ -1,0 +1,21 @@
+{
+  "name": "competition-pack",
+  "description": "Ponytail (minimal-code discipline) and Fallow (JS/TS codebase intelligence) vendored for DecisionsAI harness projection.",
+  "components": [
+    {
+      "id": "ponytail",
+      "source": "https://github.com/DietrichGebert/ponytail",
+      "commit": "99139a25d07e3523d3f6871419798dda600db49a",
+      "reference_path": "../reference/ponytail",
+      "license": "MIT"
+    },
+    {
+      "id": "fallow",
+      "source": "https://github.com/fallow-rs/fallow",
+      "commit": "dfaf4dc8d18b0ca7f29d49e3b800492bfe524661",
+      "reference_path": "../reference/fallow",
+      "license": "MIT"
+    }
+  ],
+  "vendored_by": "DecisionsAI"
+}

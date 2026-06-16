@@ -686,6 +686,8 @@ class StepRouter:
             return ["computer_use"]
         if action == "playwright":
             return ["playwright", "browser_use"]
+        if action == "ytdlp":
+            return ["ytdlp", "cli"]
         if action == "send_to_project_cli":
             return ["cli"]
         if action in {"run_command", "execute_code", "agent_instruction"}:

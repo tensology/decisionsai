@@ -10,11 +10,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from distr.core.plugins import ecc_vendor_dir
+from distr.core.plugins import ecc_vendor_dir, competition_ponytail_skills_dir, competition_fallow_skills_dir, agent_reach_skills_root, community_skills_dir
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
 _ECC_SKILLS_DIR = ecc_vendor_dir() / "skills"
+_COMPETITION_SKILL_DIRS = [competition_ponytail_skills_dir(), competition_fallow_skills_dir()]
+_AGENT_REACH_SKILL_DIRS = [agent_reach_skills_root()]
+_COMMUNITY_SKILL_DIRS = [community_skills_dir()]
 
 CLI_TARGETS = {
     "pi": ".pi/skills",
@@ -33,7 +36,11 @@ _SKILL_RESOURCE_DIRS = ("scripts", "references", "reference")
 def _skill_registry():
     from distr.core.skills.registry import SkillRegistry
 
-    return SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
+    return SkillRegistry(
+        local_roots=[_SKILLS_DIR],
+        vendor_roots=[_ECC_SKILLS_DIR],
+        competition_roots=[*_COMPETITION_SKILL_DIRS, *_AGENT_REACH_SKILL_DIRS, *_COMMUNITY_SKILL_DIRS],
+    ).scan()
 
 
 def _resolve_skill_dir(skill_id: str) -> Path | None:
@@ -130,6 +137,10 @@ def provision_workflow_skills(
     """Push workflow pre_chain/post_chain skills to the active harness. Returns skill ids pushed."""
     field_name = "pre_chain" if chain_type == "pre_chain" else "post_chain"
     skill_ids = _parse_skill_chain(getattr(workflow, field_name, None))
+    if chain_type == "pre_chain":
+        from distr.core.capabilities_pack import merge_harness_pre_chain
+
+        skill_ids = merge_harness_pre_chain(skill_ids, project_folder=project_folder)
     if not skill_ids or not project_folder:
         return []
     pushed: list[str] = []

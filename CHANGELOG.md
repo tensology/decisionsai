@@ -6,7 +6,7 @@
 
 In the beginning it was prompt engineering, then skills, then Codex/Cursor harnesses with project reporting, and now **Loops** on top of the Step Runner that was already there. Loops are importable preset step bundles (iterate until green, hand off to an IDE, validate, report back). Same runner, tighter contracts.
 
-2.8 wired the surfaces together: boards, WhatsApp on boards, Automations, calendar blocks, orchestrator ticket handoffs, and IDE plugin repair. The shape we are battle testing in real use is intake from WhatsApp, boards, tickets, Gmail, or ideation in chat, into an Automation or Workflow run, out to project CLI, Codex, or Cursor, and back through validation, tests, steering memory, learned rules, and orchestrator events. The plumbing exists. Not every hop is dependable yet.
+2.8 wired the surfaces together: boards, WhatsApp on boards, Automations, calendar blocks, orchestrator ticket handoffs, IDE plugin repair, and a **unified harness stack** that keeps Codex, Cursor, Claude, and Pi skills, MCP catalogs, and reference packs in sync on every start. The shape we are battle testing in real use is intake from WhatsApp, boards, tickets, Gmail, or ideation in chat, into an Automation or Workflow run, out to project CLI, Codex, or Cursor, and back through validation, tests, steering memory, learned rules, and orchestrator events. Agents can reach the public web (Agent Reach), design references (Refero/Mobbin), library docs (Context7), YouTube metadata (`ytdlp` steps), and connected SaaS (Composio Connect) without hand-editing IDE config files — keys live in Settings and MCP entries merge on recalibrate. The plumbing exists. Not every hop is dependable yet.
 
 Current focus is hardening **Automations** and **Workflows** for that loop: clearer failures, steadier harness round-trips, and WhatsApp compose drafts that already let the agent stage a reply in the board UI for review before send. The bet is reliable orchestration from intake to proof, not more UI.
 
@@ -28,8 +28,13 @@ Current focus is hardening **Automations** and **Workflows** for that loop: clea
 - Initiative: settings split by what the agent may scan, suggest, ask about, or send on which channels
 - Remote: Snippets, Agent, and Dictate as the three primary actions; hold PTT, tap for text box, explicit stop for streamed audio; fixed pointer routing for remote clicks
 - IDE harness: ECC pack bootstrap; Codex/Cursor plugin repair; `plugins/` split into `codex-ide`, `cursor-ide`, `ecc`; runtime scratch moved under gitignored `.artifacts/`
+- **Harness stack** (`bin/setup.py` / `bin/start.py`): projects skills to Codex, Cursor, Claude, and Pi after plugin reinstall — ECC, Ponytail/Fallow competition pack, browser/content capabilities, design references (Refero/Mobbin/Aceternity/Godly), Agent Reach, curated community skills (humanizer, last30days, marketing/design aesthetics), yt-dlp, and Composio Connect; RTK hook init; MCP catalog at `~/.decisions/harness/mcp-recommendations.json`
+- **MCP recalibrate**: add-only merge into `~/.cursor/mcp.json` and `~/.codex/config.toml` for Context7, Exa, Mobbin, Refero, Composio Connect; prunes deprecated Rube; injects Composio API key from **Settings → API Keys** (no manual `mcp.json` editing)
+- **IDE threads**: `ide_thread` agent tool and `/api/ide/sessions` to list, read, and prompt Codex/Cursor sessions from Decisions
+- **Workflow `ytdlp` step**: YouTube metadata, subtitles, and search via yt-dlp in the Decisions venv
+- **Composio Connect** replaces deprecated Rube; Gmail/Slack/Notion/Jira work routes through `decisions-composio` skill and Tool Router meta-tools (`COMPOSIO_SEARCH_TOOLS`, …)
 - Telegram intercom requests; Oracle skin idle/animation and file-drop glow fixes; Sidecar remote click uses the correct mouse-position path
-- Tests added for chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness bootstrap, plugin paths
+- Tests added for chat compaction/activity, loop presets, schedule blocks, WhatsApp board linking, orchestrator ticket handoff, workflow steering, remote audio, IDE backend contracts, harness bootstrap, plugin paths, harness packs (capabilities, competition, design references, agent-reach, community skills, yt-dlp, composio, MCP harness), and IDE threads
 
 ---
 

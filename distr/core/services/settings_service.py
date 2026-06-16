@@ -698,8 +698,23 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
                 settings.get(key_field, ""), incoming_key
             )
 
+    # Composio (stored as rube_* for backward compatibility)
+    settings["rube_enabled"] = data.composio_enabled
+    if not data.composio_enabled and not (data.composio_key or "").strip():
+        settings["rube_token"] = ""
+    else:
+        settings["rube_token"] = resolve_secret_fn(
+            settings.get("rube_token", ""), data.composio_key
+        )
+
     save_settings_to_db(settings)
     _safe_emit(signal_manager.reload_agent, label="reload_agent (third-party save)")
+    try:
+        from distr.core.mcp_harness import recalibrate_mcp_harness_quiet
+
+        recalibrate_mcp_harness_quiet()
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

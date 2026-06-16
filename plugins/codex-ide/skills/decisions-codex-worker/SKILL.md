@@ -40,18 +40,30 @@ Next step: ...
    retry, escalate, continue, or close the workflow step.
 10. When a task is too broad for one pass, complete the safest useful slice and
     set `Next step` to the exact continuation DecisionsAI should queue.
-11. For any normal Codex IDE/chat prompt inside a DecisionsAI project folder,
+11. Apply the DecisionsAI harness prerequisites on every implementation task:
+    - **decisions-harness-stack** — master index (ECC, Ponytail, Fallow, RTK, browser/content).
+    - **Ponytail** (`ponytail` skill) — YAGNI ladder, stdlib-first, minimal diff; mark shortcuts with `ponytail:` comments.
+    - **Fallow** (`fallow` skill) — on JS/TS repos, run `npx fallow audit --format json --quiet || true` before reporting complete and attach the verdict in `Tests:` or `Evidence:`.
+    - **Browser / QA** — `browser-qa`, `decisions-playwright`, `webapp-testing` when touching UI; use Hermes `playwright_browser` when Decisions is running.
+    - **Content / video** — `content-engine`, `article-writing`, `remotion-video-creation`, `fal-ai-media` when the ticket is content work (see `~/.decisions/harness/mcp-recommendations.json` for fal MCP).
+    - **UI ideation** — `decisions-ui-ideation` then `decisions-design-references` before new screens; use Refero/Mobbin MCP when configured (see `~/.decisions/harness/mcp-setup-design.sh`).
+    - **Internet research** — `decisions-agent-reach` + `agent-reach` for URLs, social, video, GitHub, RSS; run `agent-reach doctor --json` first.
+    - **30-day synthesis** — `last30days` when the ticket needs “what people said lately” (heavier than agent-reach; needs `last30days` scripts + optional API keys).
+    - **Publishable copy** — `humanizer` after drafts; `decisions-marketing-skills` + `product-marketing` for GTM work.
+    - **YouTube / subtitles** — `decisions-yt-dlp` or workflow `ytdlp` steps; not for Bilibili (use agent-reach `bili`).
+    - **SaaS apps (Gmail, Slack, Notion, Jira)** — `decisions-composio` (Composio Connect MCP); not Rube (deprecated).
+12. For any normal Codex IDE/chat prompt inside a DecisionsAI project folder,
     even when it did not originate from a workflow packet, report the turn to
     DecisionsAI as a project IDE session. At the start of the prompt, call:
-    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --event-type codex_prompt_submitted --status observed --input "<user prompt>"`
+    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --event-type codex_prompt_submitted --status observed --input "<user prompt>" --thread-id "<codex thread id when known>"`
     Before the final response, call:
-    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --event-type codex_completed --status completed --output "<short result summary>"`
+    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --event-type codex_completed --status completed --output "<short result summary>" --thread-id "<codex thread id when known>"`
     If both sides of a completed turn are only available at the end, call:
-    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --turn-input "<user prompt>" --turn-output "<short result summary>"`
+    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --turn-input "<user prompt>" --turn-output "<short result summary>" --thread-id "<codex thread id when known>"`
     The reporter resolves the DecisionsAI project from the current working
     directory and creates or resumes the Codex IDE session. If DecisionsAI is
     not running, the reporter exits quietly and Codex continues normally.
-12. If the prompt includes a `[DECISIONS CODEX CALLBACK]` block, treat that as
+13. If the prompt includes a `[DECISIONS CODEX CALLBACK]` block, treat that as
     live workflow metadata. Use the callback URL or reporter script in that
     block to report meaningful events back to DecisionsAI:
     - `codex_started` when work begins.
@@ -67,18 +79,18 @@ Next step: ...
     If there is no workflow callback block, still report project chat events
     through the reporter script. It will use the current working directory to
     create or resume a DecisionsAI project IDE session:
-    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --event-type codex_prompt_submitted --status observed --message "<what changed>"`
-13. Do not keep steering only inside the Codex conversation. If the human gives
+    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --event-type codex_prompt_submitted --status observed --message "<what changed>" --thread-id "<codex thread id when known>"`
+14. Do not keep steering only inside the Codex conversation. If the human gives
     new direction while a DecisionsAI workflow is running, report it so Hermes
     can store the event, update workflow memory, and let the orchestrator decide
     whether to continue, validate, retry, or ask a follow-up.
-14. Before reporting an event, assume DecisionsAI may or may not be open. If
+15. Before reporting an event, assume DecisionsAI may or may not be open. If
     DecisionsAI is reachable and the callback or reporter succeeds, continue
     normally. If DecisionsAI is not reachable, keep working without surfacing a
     bridge error to the user unless the task explicitly asks for diagnostics.
-15. If Codex is working in a fresh chat without a DecisionsAI workflow callback,
+16. If Codex is working in a fresh chat without a DecisionsAI workflow callback,
     still report material starts, progress, steering, blockers, and completion.
-    Inside a project folder, use the IDE session reporting in item 11. For
+    Inside a project folder, use the IDE session reporting in item 12. For
     activity that is not attached to a known project workflow, use ambient
     harness reporting with the current project folder:
     `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --source ambient --harness codex --event-type codex_progress --status observed --message "<what changed>"`

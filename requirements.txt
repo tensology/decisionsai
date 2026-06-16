@@ -137,3 +137,4 @@ croniter>=2.0.0
 # Coqui TTS (local, VCTK multi-speaker model) — uses the maintained idiap fork
 coqui-tts>=0.27.0
 playwright
+yt-dlp>=2024.8.0

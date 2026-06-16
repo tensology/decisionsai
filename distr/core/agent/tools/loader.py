@@ -163,6 +163,7 @@ def _get_tool_definitions(
         ("DeveloperContextTool", {}),
         ("BoardNotesTool", {}),
         ("CodexThreadContextTool", {}),
+        ("IdeThreadTool", {}),
         ("ProactiveOrchestratorTool", {}),
         ("MemorySearchTool", {}),
         ("MemoryReadTool", {}),
@@ -490,6 +491,7 @@ TOOL_REGISTRY = {
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
     "BoardNotesTool":          ("system.board_notes", "BoardNotesTool"),
     "CodexThreadContextTool":  ("system.codex_thread_context", "CodexThreadContextTool"),
+    "IdeThreadTool":           ("system.ide_thread", "IdeThreadTool"),
     "ProactiveOrchestratorTool": ("system.proactive_orchestrator", "ProactiveOrchestratorTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
     "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
@@ -625,6 +627,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
     "BoardNotesTool": "Read, create, edit, append to, or delete ticket board scratchpad notes in the kanban board area (not MEMORY.md). Actions: list, create, update, append, delete.",
     "CodexThreadContextTool": "Load a matching local Codex conversation transcript for project context, ticket creation, plans, skill handoffs, or follow-up replies instead of asking the user to paste the thread.",
+    "IdeThreadTool": "List, read, check status, prompt, or amend Codex and Cursor IDE threads (transcripts, bridge sessions, CLI follow-ups).",
     "ProactiveOrchestratorTool": (
         "Scan Gmail, Slack, WhatsApp, Telegram, Trello, Jira, and board-derived work signals, "
         "build daily plans from connected work intelligence, prioritize important items, match them to projects and recent Codex/Cursor context, "

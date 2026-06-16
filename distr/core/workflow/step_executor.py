@@ -77,6 +77,7 @@ class StepExecutorMixin:
         handlers = {
             "execute_code": lambda: self._run_code(step_data, config, run_id=run_id),
             "playwright": lambda: self._run_playwright(step_data, config, run_id=run_id),
+            "ytdlp": lambda: self._run_ytdlp(config, run_id=run_id),
             "run_command": lambda: self._run_command(config, run_id=run_id),
             "http_request": lambda: self._run_http(config),
             "play_recording": lambda: self._run_recording(step_data, config, run_id=run_id),
@@ -205,6 +206,12 @@ class StepExecutorMixin:
                         run_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute Playwright browser automation code."""
         return self._run_code_type(step_data, config, "playwright", run_id=run_id)
+
+    def _run_ytdlp(self, config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
+        """Fetch YouTube/video metadata, subtitles, or search via yt-dlp."""
+        from distr.core.yt_dlp_support import run_ytdlp_step
+
+        return run_ytdlp_step(config)
 
     def _run_code_type(self, step_data: Dict[str, Any], config: dict,
                        action_type: str, run_id: Optional[int] = None) -> Dict[str, Any]:

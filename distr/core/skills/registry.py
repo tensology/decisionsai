@@ -72,16 +72,22 @@ class SkillRegistry:
         *,
         local_roots: Iterable[str | Path] = (),
         vendor_roots: Iterable[str | Path] = (),
+        competition_roots: Iterable[str | Path] = (),
     ) -> None:
         self.local_roots = [Path(p) for p in local_roots]
         self.vendor_roots = [Path(p) for p in vendor_roots]
+        self.competition_roots = [Path(p) for p in competition_roots]
         self.entries: dict[str, SkillEntry] = {}
         self.conflicts: dict[str, list[SkillEntry]] = {}
 
     def scan(self) -> "SkillRegistry":
         self.entries.clear()
         self.conflicts.clear()
-        for source, roots in (("local", self.local_roots), ("ecc_vendor", self.vendor_roots)):
+        for source, roots in (
+            ("local", self.local_roots),
+            ("ecc_vendor", self.vendor_roots),
+            ("competition_vendor", self.competition_roots),
+        ):
             for root in roots:
                 self._scan_root(root, source=source)
         return self
@@ -117,7 +123,7 @@ class SkillRegistry:
 
     @staticmethod
     def _prefer(left: SkillEntry, right: SkillEntry) -> tuple[SkillEntry, SkillEntry]:
-        order = {"local": 0, "ecc_vendor": 1}
+        order = {"local": 0, "ecc_vendor": 1, "competition_vendor": 2}
         left_rank = order.get(left.source, 99)
         right_rank = order.get(right.source, 99)
         if left_rank <= right_rank:

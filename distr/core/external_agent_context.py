@@ -289,6 +289,149 @@ def list_cursor_workspaces(*, limit: int = 8) -> list[dict[str, Any]]:
     return [item[2] for item in items[: max(1, min(int(limit or 8), 30))]]
 
 
+def _cursor_projects_root() -> Path:
+    return Path(os.environ.get("CURSOR_PROJECTS_HOME") or (Path.home() / ".cursor" / "projects")).expanduser()
+
+
+def _folder_to_cursor_project_slug(folder: str) -> str:
+    path = str(folder or "").strip()
+    if not path:
+        return ""
+    return path.lstrip("/").replace("/", "-")
+
+
+def _cursor_project_slug_to_folder(slug: str) -> str:
+    text = str(slug or "").strip()
+    if not text:
+        return ""
+    return "/" + text.replace("-", "/")
+
+
+def _cursor_transcripts_root_for_folder(folder: str) -> Path | None:
+    slug = _folder_to_cursor_project_slug(folder)
+    if not slug:
+        return None
+    root = _cursor_projects_root() / slug / "agent-transcripts"
+    return root if root.is_dir() else None
+
+
+def list_cursor_threads(*, folder: str = "", limit: int = 8) -> list[dict[str, Any]]:
+    """List local Cursor agent chat transcripts from ~/.cursor/projects/.../agent-transcripts."""
+    roots: list[tuple[str, Path]] = []
+    folder_hint = str(folder or "").strip()
+    if folder_hint:
+        transcripts_root = _cursor_transcripts_root_for_folder(folder_hint)
+        if transcripts_root:
+            roots.append((_folder_to_cursor_project_slug(folder_hint), transcripts_root))
+    else:
+        projects_root = _cursor_projects_root()
+        if projects_root.is_dir():
+            try:
+                for project_dir in projects_root.iterdir():
+                    transcripts_root = project_dir / "agent-transcripts"
+                    if transcripts_root.is_dir():
+                        roots.append((project_dir.name, transcripts_root))
+            except Exception:
+                return []
+
+    items: list[tuple[float, dict[str, Any]]] = []
+    for slug, transcripts_root in roots:
+        decoded_folder = _cursor_project_slug_to_folder(slug)
+        try:
+            transcript_dirs = [item for item in transcripts_root.iterdir() if item.is_dir()]
+        except Exception:
+            continue
+        for transcript_dir in transcript_dirs:
+            transcript_path = transcript_dir / f"{transcript_dir.name}.jsonl"
+            if not transcript_path.is_file():
+                continue
+            try:
+                mtime = transcript_path.stat().st_mtime
+            except Exception:
+                mtime = 0.0
+            preview, title = _cursor_transcript_preview(transcript_path)
+            items.append(
+                (
+                    mtime,
+                    {
+                        "id": transcript_dir.name,
+                        "folder": decoded_folder,
+                        "project_slug": slug,
+                        "title": title,
+                        "preview": preview,
+                        "updated_at": _ts_to_iso(mtime),
+                        "transcript_path": str(transcript_path),
+                    },
+                )
+            )
+
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in items[: max(1, min(int(limit or 8), 30))]]
+
+
+def build_cursor_thread_context(
+    *,
+    query: str = "",
+    project: str = "",
+    thread_id: str = "",
+    folder: str = "",
+    limit_messages: int = 12,
+    max_chars: int = 6000,
+) -> dict[str, Any]:
+    """Load a focused local Cursor conversation from agent-transcripts JSONL."""
+    threads = list_cursor_threads(folder=folder, limit=30)
+    if not threads and folder:
+        threads = list_cursor_threads(limit=30)
+
+    if not threads:
+        return {
+            "found": False,
+            "reason": "No local Cursor transcripts were found.",
+            "query": query,
+            "project": project,
+            "folder": folder,
+            "candidates": [],
+        }
+
+    ranked = _rank_cursor_threads(threads, query=query, project=project, thread_id=thread_id, folder=folder)
+    if not ranked:
+        return {
+            "found": False,
+            "reason": "No matching Cursor transcript was found.",
+            "query": query,
+            "project": project,
+            "folder": folder,
+            "candidates": _thread_candidates_for_reference(threads[:6]),
+        }
+
+    selected = ranked[0]
+    transcript_path = str(selected.get("transcript_path") or "")
+    messages: list[dict[str, str]] = []
+    tool_calls: list[str] = []
+    warning = ""
+    if transcript_path:
+        messages, tool_calls = _read_cursor_transcript(
+            Path(transcript_path).expanduser(),
+            limit_messages=max(1, min(int(limit_messages or 12), 30)),
+            max_chars=max(1000, int(max_chars or 6000)),
+        )
+        if not messages:
+            warning = "The matching Cursor transcript exists, but it did not contain readable user or assistant messages."
+    else:
+        warning = "The matching Cursor transcript does not have a readable JSONL path."
+
+    return {
+        "found": True,
+        "thread": selected,
+        "project_name": _project_name_from_path(selected.get("folder") or folder or ""),
+        "activity_hint": _activity_hint(selected.get("title") or selected.get("preview") or ""),
+        "messages": messages,
+        "tool_calls": tool_calls,
+        "warning": warning,
+        "alternatives": _thread_candidates_for_reference(ranked[1:5]),
+    }
+
+
 def format_external_agent_context_for_prompt(context: dict[str, Any] | None, *, max_chars: int = 1400) -> str:
     if not isinstance(context, dict):
         return ""
@@ -368,6 +511,148 @@ def build_agent_visibility_answer(user_request: str = "", *, max_chars: int = 18
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "…"
+
+
+def _cursor_transcript_preview(path: Path) -> tuple[str, str]:
+    preview = ""
+    title = ""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if str(item.get("role") or "").lower() != "user":
+                    continue
+                text = _extract_cursor_message_text((item.get("message") or {}).get("content"))
+                text = _strip_cursor_user_query(text)
+                if not text or _skip_rollout_message(text):
+                    continue
+                preview = _one_line(text, 260)
+                title = _one_line(text, 220)
+                break
+    except Exception:
+        return "", ""
+    return preview, title or preview
+
+
+def _read_cursor_transcript(path: Path, *, limit_messages: int, max_chars: int) -> tuple[list[dict[str, str]], list[str]]:
+    if not path.exists() or not path.is_file():
+        return [], []
+    messages: list[dict[str, str]] = []
+    tool_calls: list[str] = []
+    total_chars = 0
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "").strip().lower()
+                if role not in {"user", "assistant"}:
+                    continue
+                content = (item.get("message") or {}).get("content")
+                text, names = _extract_cursor_message_text(content, include_tools=True)
+                for name in names:
+                    tool_calls.append(name)
+                text = _strip_cursor_user_query(text)
+                if _skip_rollout_message(text):
+                    continue
+                if len(text) > 1500:
+                    text = text[:1497].rstrip() + "..."
+                messages.append({"role": role, "content": text, "text": text})
+                total_chars += len(text)
+                while len(messages) > limit_messages or total_chars > max_chars:
+                    removed = messages.pop(0)
+                    total_chars -= len(removed.get("content") or removed.get("text") or "")
+    except Exception:
+        return [], tool_calls[-12:]
+    return messages[-limit_messages:], _unique(tool_calls[-12:])
+
+
+def _extract_cursor_message_text(content: Any, *, include_tools: bool = False) -> tuple[str, list[str]]:
+    parts: list[str] = []
+    tool_names: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = str(block.get("type") or "").strip().lower()
+            if block_type == "text":
+                text = block.get("text")
+                if isinstance(text, str) and text.strip() and text.strip() != "[REDACTED]":
+                    parts.append(text)
+            elif block_type == "tool_use" and include_tools:
+                name = str(block.get("name") or "").strip()
+                if name:
+                    tool_names.append(name)
+    return _one_line("\n".join(parts), 4000), tool_names
+
+
+def _strip_cursor_user_query(text: str) -> str:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return ""
+    match = re.search(r"<user_query>\s*(.*?)\s*</user_query>", stripped, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return stripped
+
+
+def _rank_cursor_threads(
+    threads: list[dict[str, Any]],
+    *,
+    query: str = "",
+    project: str = "",
+    thread_id: str = "",
+    folder: str = "",
+) -> list[dict[str, Any]]:
+    query_tokens = _search_tokens(query)
+    project_tokens = _search_tokens(project)
+    wanted_id = str(thread_id or "").strip().lower()
+    folder_hint = str(folder or "").strip().lower()
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for index, item in enumerate(threads):
+        haystack = " ".join(
+            str(part or "")
+            for part in (
+                item.get("id"),
+                item.get("title"),
+                item.get("preview"),
+                item.get("folder"),
+                _project_name_from_path(item.get("folder") or ""),
+            )
+        ).lower()
+        score = 0
+        item_folder = str(item.get("folder") or "").lower()
+        if folder_hint and folder_hint in item_folder:
+            score += 120
+        if wanted_id:
+            item_id = str(item.get("id") or "").lower()
+            if item_id == wanted_id:
+                score += 1000
+            elif item_id.startswith(wanted_id):
+                score += 800
+            elif wanted_id in item_id:
+                score += 500
+        for token in project_tokens:
+            if token in haystack:
+                score += 60
+        for token in query_tokens:
+            if token in haystack:
+                score += 20
+        if not wanted_id and not query_tokens and not project_tokens and not folder_hint:
+            score = 1
+        elif not wanted_id and not query_tokens and not project_tokens and folder_hint and score == 0:
+            continue
+        if score > 0:
+            scored.append((score, -index, item))
+    scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
+    return [item for _, _, item in scored]
 
 
 def _rank_codex_threads(

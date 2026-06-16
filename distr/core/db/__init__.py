@@ -212,7 +212,7 @@ class Settings(Base):
     chatterbox_voice = Column(String, default='default')
     replicate_api_token = Column(String, default='')
 
-    # Rube Settings (discontinued — columns kept for migration compatibility)
+    # Composio Connect MCP (Settings → API Keys → Composio; legacy column name rube_token)
     rube_enabled = Column(Boolean, default=False)
     rube_token = Column(String, default='')
     

@@ -57,6 +57,8 @@
       "skills": [
         "seo",
         "writing-plans",
+        "decisions-ui-ideation",
+        "decisions-design-references",
         "frontend-design"
       ],
       "tools": [
@@ -76,6 +78,7 @@
       "instruction": "Build or update the page in the repo. Match project component patterns.",
       "skills": [
         "executing-plans",
+        "decisions-design-references",
         "frontend-design"
       ],
       "tools": [

@@ -27,6 +27,7 @@ SECRET_SETTINGS_FIELDS = {
     "openai_key",
     "anthropic_key",
     "cursor_key",
+    "rube_token",
     "aws_polly_key",
     "elevenlabs_key",
     "openrouter_key",

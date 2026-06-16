@@ -273,14 +273,15 @@ def ensure_harness_pack_setup(
     manifest_path = _surface_manifest_path(base_home)
 
     if not run_full and _state_is_current(base_home, fingerprint, detected):
+        repaired = _write_harness_projections(base_home, detected, registry_path, manifest_path)
         return {
-            "status": "current",
+            "status": "repaired" if repaired else "current",
             "vendor_ready": _vendor_ready(),
             "detected": detected,
             "fingerprint": fingerprint,
             "registry_path": str(registry_path),
             "manifest_path": str(manifest_path),
-            "written": [],
+            "written": repaired,
         }
 
     _write_json(registry_path, rows)

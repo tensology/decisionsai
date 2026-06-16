@@ -19,7 +19,7 @@ from distr.core.human_engagement import EngagementIntent, HumanEngagementService
 logger = logging.getLogger(__name__)
 
 _DIRECT_EXECUTION_TYPES = {
-    "run_command", "http_request", "execute_code", "playwright", "computer_use", "play_recording",
+    "run_command", "http_request", "execute_code", "playwright", "ytdlp", "computer_use", "play_recording",
 }
 
 _orch_lock = threading.Lock()

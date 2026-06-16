@@ -144,6 +144,10 @@ def _ide_event_body(
     output_text: str,
     session_id: int | None = None,
 ) -> dict:
+    payload = _json_arg(args.payload_json)
+    if getattr(args, "thread_id", ""):
+        payload["thread_id"] = args.thread_id
+        payload["external_thread_id"] = args.thread_id
     return {
         "source": args.source,
         "cwd": args.cwd,
@@ -156,7 +160,7 @@ def _ide_event_body(
         "step_id": args.step_id,
         "ticket_id": args.ticket_id,
         "project_id": args.project_id,
-        "payload": _json_arg(args.payload_json),
+        "payload": payload,
         "evidence": _json_arg(args.evidence_json),
     }
 
@@ -251,6 +255,7 @@ def main() -> int:
     parser.add_argument("--project-id", type=int, default=None)
     parser.add_argument("--payload-json", default="")
     parser.add_argument("--evidence-json", default="")
+    parser.add_argument("--thread-id", default="", help="Codex thread id or Cursor chat id for orchestrator linking.")
     parser.add_argument("--strict", action="store_true", help="Return non-zero and print errors when DecisionsAI is offline.")
     args = parser.parse_args()
 
