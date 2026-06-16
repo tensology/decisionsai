@@ -53,10 +53,9 @@ Decisions should run the loop and report back. You should not have to watch Curs
 ### Working with your IDE
 
 - Setup and start keep Codex, Cursor, Claude Code, and Pi aligned: skills, plugins, and helper packs install and repair without you editing IDE config by hand
-- Cursor and Codex get useful MCP tools added for you (docs lookup, search, design references, Composio). Retired Rube hooks are removed. Add a Composio API key under Settings → API Keys for Gmail, Slack, Notion, Jira, and similar
+- Cursor and Codex get useful MCP tools added for you (docs lookup, search, design references, Composio). Add a Composio API key under Settings → API Keys for Gmail, Slack, Notion, Jira, and similar
 - Workflows can run Ponytail/Fallow review before implementation steps; Cursor-backed projects get the Ponytail rule when skills are provisioned to the repo
 - From chat, the agent can list and continue Codex or Cursor conversations you already have open
-- Composio Connect replaces Rube for third-party app connections
 
 ### Fixes
 
