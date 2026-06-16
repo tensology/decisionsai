@@ -4,20 +4,20 @@
 
 ## [What's to Come]
 
-In the beginning it was prompt engineering, then skills, then Codex and Cursor harnesses that could report back from a project, and now Loops: workflows built to keep going until there is proof.
+Decisions started as chat with an AI. Then it gained skills, then it could send work to Cursor or Codex and hear back when coding finished. The direction now is **loops**: multi-step jobs that keep working on a ticket until the work is really done, or stop and tell you exactly why they could not.
 
-A loop is a named sequence of steps you import or build yourself. It takes a ticket, a WhatsApp thread, or a brief, plans the slice, hands work to chat or to Cursor/Codex/Pi on the linked project, checks whether the output actually matches the ticket, fixes what failed, and leaves evidence on the board. Not one answer and walk away. Iterate until green, or stop with a clear reason it blocked.
+A loop is a saved checklist of steps you can reuse. You might start from a ticket on a board, a WhatsApp message, or a short brief. Decisions breaks the work into pieces, handles some steps in chat, sends coding work to your linked project, checks whether the result matches what the ticket asked for, and tries again when something failed. Notes and progress show up on the board so you are not hunting through chat to see what happened.
 
-2.8 wired the surfaces together: boards, WhatsApp on boards, automations, calendar blocks, workflow steps, skills pushed into your coding tools, validation and steering on runs, IDE follow-up, and hooks for research, design, docs, and workplace apps. Most of the machinery is there. The work now is making the agent use it reliably without you babysitting an IDE.
+Version 2.8 connected the main pieces: ticket boards, WhatsApp tied to boards, scheduled automations, calendars, workflow steps, and skills in your coding tools. Most of that is in place. What is left is making it reliable so you are not watching an IDE window to learn whether the ticket is actually finished.
 
-What we are working on next:
+**What we are working on next:**
 
-- Loops that finish, and say plainly what failed when they do not.
-- The agent noticing when a step is stuck instead of waiting for you to notice.
-- Retries that use what already went wrong, not a blank "try again."
-- Project context that survives between runs so you are not re-briefing every time.
+- **Clear endings** — When a multi-step job finishes, you get a straight answer: it is done, or here is what broke and which step stopped. No guessing.
+- **Stuck steps** — If a step is waiting on Cursor or Codex and nothing moves for too long, Decisions should say so. You should not have to notice it yourself.
+- **Smarter retries** — When a step fails and runs again, the next attempt should use the error, test output, or diff from the failure. Not a blank "try again" as if the first attempt never happened.
+- **Memory between runs** — What Decisions learns about a project during one run should carry into the next. You should not paste the same repo context and ticket background every time you start.
 
-Decisions should run the loop and report back. You should not have to watch Cursor and guess whether the ticket is actually done.
+Hand off a ticket, walk away, and get an honest report back. Not babysit the IDE and wonder whether anything actually finished.
 
 ---
 
