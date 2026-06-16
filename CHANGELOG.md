@@ -29,7 +29,7 @@ Hand off a ticket, walk away, and get an honest report back. Not babysit the IDE
 - **Chat** — Change the language model or voice in a conversation you already have open instead of starting over. **Compact** rolls up older messages when the thread is getting long. Tool runs and workflow events show in the transcript so you can see what the agent did, not just the final reply.
 - **Projects** — Pick your coding backend, folder, CLI setup commands, and project details on one page instead of jumping between screens.
 - **Ticket Boards** — Open agent chat from a ticket with voice enabled and the ticket plus its linked project already loaded as context.
-- **IRC rooms** — A shared community chat inside Decisions: pick a display name, join rooms, see who else is online, and talk. This is for fun and visibility into who is connected to Decisions. It is not WhatsApp, Telegram, or any other messaging integration.
+- **IRC rooms** — A shared community chat inside Decisions: pick a display name, join rooms, see who else is online, and talk. For fun and to see who is connected to Decisions right now.
 - **Remote** — On the phone or browser remote, Snippets, Agent chat, and Dictate are the main actions up front. Hold the button to talk, tap for a text box, and use an explicit stop control when audio is streaming back.
 - **Shortcuts** — Hold a modifier key combo to dictate text. The system tray can open chats, projects, boards, automations, workflows, snippets, or skins without loading the full web app first.
 - **Initiative** — Proactive-agent settings are grouped by channel (email, Telegram, and so on). For each channel you set what the agent may scan, suggest, ask you about, or send without you starting the conversation.
