@@ -73,6 +73,8 @@ scripts/*
 !scripts/harness_live_proof.py
 !scripts/run_workflow_ticket_loop_e2e.sh
 !scripts/workflow_ticket_loop_e2e.py
+!scripts/deploy_changelog.sh
+!scripts/deploy_changelog_to_site.sh
 
 # --- Databases ---
 db/*
