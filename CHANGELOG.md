@@ -4,21 +4,21 @@
 
 ## [What's to Come]
 
-We're not betting that the next ChatGPT drop will one-shot your whole app. Most tools sell that fantasy. We're building something else.
+In the beginning it was prompt engineering, then skills, then Codex and Cursor harnesses that could report back from a project, and now Loops: workflows built to keep going until there is proof.
 
-A loop is a job that keeps going until there's proof it's done. You hand Decisions a ticket, a WhatsApp thread, or an idea. It plans, does the work (in chat, in your repo, or in Cursor/Codex), checks the result, fixes what broke, and leaves evidence on the board. Not one reply and done. You can use a preset loop or build your own. Steps can write code, run tests, grab screenshots, or ask you when they're stuck.
+A loop is a named sequence of steps you import or build yourself. It takes a ticket, a WhatsApp thread, or a brief, plans the slice, hands work to chat or to Cursor/Codex/Pi on the linked project, checks whether the output actually matches the ticket, fixes what failed, and leaves evidence on the board. Not one answer and walk away. Iterate until green, or stop with a clear reason it blocked.
 
-2.8 already gave us the pieces: boards, WhatsApp, automations, workflow steps, skills that plug into your editor, ways to nudge a run mid-flight, research, design refs, docs, email, Slack, the lot. The skeleton for taking an idea to something shipped is there. What we're tightening is the agent not flaking halfway through.
+2.8 wired the surfaces together: boards, WhatsApp on boards, automations, calendar blocks, workflow steps, skills infrastructure pushed into your coding tools, validation and steering on active runs, IDE session follow-up, and connected research, design, docs, and workplace tooling. The steps, skills, and tooling for full product development are largely there. What we are tightening now is the agent itself: more initiative, more self-correction, less babysitting an IDE while you hope the next model release saves you.
 
-What we're working on next:
+What we are working on next:
 
-- Loops that actually finish. You see what broke and why, not a silent death.
-- Less babysitting Cursor. If the agent is stuck or off-brief, it should notice and move before you do.
-- Self-correction by default. Build, test, compare to the ticket, fix, report back. Normal behavior, not a special ask.
-- Real projects, not one random file. Idea to tickets to build to polish to ship, with the app remembering how your project works.
-- Paying attention across sessions. What's running, what failed last time, what the ticket asked for, without you pasting the same context every day.
+- Loops that actually finish. You see what broke and why, not a silent stall.
+- Less hand-holding. If a step is stuck or off-brief, the agent should notice and move before you do.
+- Self-correction by default. Build, test, compare to the ticket, fix, report back. That should be normal, not a special ask.
+- Real projects, not one random file. Idea to tickets to build to polish to ship, with memory of how your project works carried across runs.
+- Paying attention across sessions. What is running, what failed last time, what the ticket asked for, without you re-explaining the whole story every day.
 
-We want Decisions to feel like a teammate that keeps going until the job is done and shows you it did, not a chatbot you stare at while hoping the model got smarter.
+The bet stays the same: orchestration from intake to proof. Decisions should feel like a teammate that owns the loop, not a chat window you stare at while Cursor does whatever it wants.
 
 ---
 
