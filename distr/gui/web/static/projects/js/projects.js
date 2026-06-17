@@ -11,6 +11,11 @@
         return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    function escapeHtml(s) {
+        if (!s) return "";
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
     function setError(el, msg) {
         el.innerHTML = "<p class=\"text-sm text-amber-400\">" + msg + "</p>";
     }
@@ -2695,7 +2700,7 @@
         }
         var TermCtor = typeof window.Terminal === "function" ? window.Terminal : (typeof window.XTerm === "function" ? window.XTerm : null);
         if (!TermCtor) {
-            showSnackbar("xterm.js failed to load � refresh the page", "error");
+            showSnackbar("xterm.js failed to load - refresh the page", "error");
             return;
         }
         var startupText = document.getElementById("detail-startup")?.value || "";
