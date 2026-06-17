@@ -19,11 +19,11 @@ One Decisions install enhances every CLI/IDE you already use. Run `bin/setup.py`
 | **Community** (`decisions-community-skills-harness`) | humanizer, last30days, curated marketing + design aesthetics |
 | **yt-dlp** (`decisions-yt-dlp-harness`) | YouTube metadata, subtitles, search — workflow `ytdlp` steps |
 | **Composio** (`decisions-composio-harness`) | Composio Connect MCP (Tool Router) — Gmail, Slack, Notion, Jira, 1000+ apps |
-| **Local** | decisions-playwright, decisions-browser-stack (this file) |
+| **Local** | decisions-playwright, decisions-browser-stack, decisions-mermaid-diagrams (this file) |
 
 ## CLIs
 
-- **codex**, **cursor-agent**, **claude**, **pi** — worker skills in `plugins/*-ide/skills/decisions-*-worker`
+- **codex**, **cursor-agent**, **claude**, **pi**, **cline** — worker skills in `plugins/*-ide/skills/decisions-*-worker`
 - **rtk** — `scripts/setup_project_clis.sh` + hook init on setup/start
 - **fallow** — `npx fallow` or global npm install from setup
 

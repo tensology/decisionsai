@@ -33,6 +33,14 @@ def test_suggest_step_harness_hermes_backend_when_named():
     assert suggestion["backend_id"] == "hermes_agent"
 
 
+def test_suggest_step_harness_cline_backend_when_named():
+    suggestion = suggest_step_harness(
+        instruction="Use Cline to fix the auth middleware regression",
+        action_type="send_to_project_cli",
+    )
+    assert suggestion["backend_id"] == "cline"
+
+
 def test_merge_step_harness_config_preserves_user_values():
     existing = {"backend_id": "cursor_ide", "model": "gpt-5"}
     suggestion = suggest_step_harness(instruction="Fix lint errors in the auth module")

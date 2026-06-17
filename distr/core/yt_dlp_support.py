@@ -168,10 +168,38 @@ def run_ytdlp_step(config: dict[str, Any]) -> dict[str, Any]:
         if not url:
             return {"output": "ytdlp subtitles requires url", "passed": False}
         payload = fetch_subtitles(url, lang=lang)
+    elif mode in {"download", "video"}:
+        if not url and not query:
+            urls = config.get("urls") or []
+            if isinstance(urls, str):
+                urls = [u.strip() for u in urls.splitlines() if u.strip()]
+        else:
+            urls = [url] if url else [query]
+        if not urls:
+            return {"output": "ytdlp download requires url or urls", "passed": False}
+        from distr.core import download_jobs
+
+        job_id = download_jobs.create_job(
+            urls,
+            title=str(config.get("title") or ""),
+            output_dir=str(config.get("output_dir") or "") or None,
+        )
+        download_jobs.start_ytdlp_job(job_id)
+        payload = {
+            "ok": True,
+            "job_id": job_id,
+            "manager_path": "/downloads/",
+            "message": "Download started — open Download Manager for progress.",
+        }
     else:
         if not url:
             return {"output": "ytdlp metadata requires url", "passed": False}
         payload = fetch_metadata(url)
+
+    if mode not in {"download", "video"}:
+        if not payload.get("ok"):
+            return {"output": str(payload.get("error") or "yt-dlp failed"), "passed": False}
+        return {"output": json.dumps(payload, indent=2)[:2000], "passed": True}
 
     if not payload.get("ok"):
         return {"output": str(payload.get("error") or "yt-dlp failed"), "passed": False}

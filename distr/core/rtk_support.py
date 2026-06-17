@@ -126,4 +126,6 @@ def init_rtk_agent_hooks(*, quiet: bool = True) -> bool:
         _init(["--agent", "pi", *auto_flags])
     if shutil.which("hermes") or os.path.isdir(os.path.join(home, ".hermes")):
         _init(["--agent", "hermes", *auto_flags])
+    if shutil.which("cline") or os.path.isdir(os.path.join(home, ".cline")):
+        _init(["--agent", "cline", *auto_flags])
     return True

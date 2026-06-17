@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="decisionsai-internal-api-token" content="{{ internal_api_token or '' }}">
+    <link rel="icon" href="/assets/icons/favicon.png" type="image/png">
+    <title>{% if diagram_title %}{{ diagram_title }}{% else %}Diagram{% endif %} - Decisions AI</title>
+    <link href="/static/vendor/quicksand.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css">
+</head>
+<body>
+    <div id="mermaid-viewer-root"></div>
+    <script>
+    (function() {
+      var meta = document.querySelector('meta[name="decisionsai-internal-api-token"]');
+      var token = meta ? (meta.getAttribute('content') || '') : '';
+      window.DECISIONSAI_INTERNAL_API_TOKEN = token;
+      var originalFetch = window.fetch.bind(window);
+      window.fetch = function(input, init) {
+        var nextInit = init ? Object.assign({}, init) : {};
+        var headers = new Headers(nextInit.headers || {});
+        var requestUrl = typeof input === 'string' ? input : ((input && input.url) ? input.url : '');
+        var sameOrigin = true;
+        try {
+          sameOrigin = new URL(requestUrl, window.location.origin).origin === window.location.origin;
+        } catch (_) {}
+        if (token && sameOrigin) headers.set('X-DecisionsAI-Internal-Token', token);
+        nextInit.headers = headers;
+        return originalFetch(input, nextInit);
+      };
+    })();
+    </script>
+    <script src="/static/shared/js/api.js"></script>
+    <script src="/static/shared/js/mermaid_viewer.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.DecisionsMermaid) window.DecisionsMermaid.initPage();
+    });
+    </script>
+</body>
+</html>

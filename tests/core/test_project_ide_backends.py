@@ -8,8 +8,10 @@ def test_ide_backends_are_registered_separately_from_cli():
 
     assert "cursor_ide" in backend_ids
     assert "codex_ide" in backend_ids
+    assert "cline" in backend_ids
     assert normalize_backend_id("cursor extension") == "cursor"
     assert normalize_backend_id("vscode") == "cursor_ide"
+    assert normalize_backend_id("cline_cli") == "cline"
 
 
 def test_cli_output_compaction_keeps_head_and_tail():

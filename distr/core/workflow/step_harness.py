@@ -151,6 +151,8 @@ def suggest_step_harness(
             backend_id = "claude_code"
         elif "hermes agent" in lower or "hermes operator" in lower:
             backend_id = "hermes_agent"
+        elif "cline" in lower:
+            backend_id = "cline"
 
     guardrail = ""
     contract_guardrails = loop_contract.get("guardrails") or []

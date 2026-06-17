@@ -659,6 +659,49 @@ class HermesAgentBackend(OneShotCliBackend):
         return cmd + [task.instruction]
 
 
+class ClineBackend(OneShotCliBackend):
+    """Cline terminal CLI (shared agent core with the VS Code extension)."""
+
+    id = "cline"
+    name = "Cline"
+    description = "Cline CLI backend (~/.cline). Uses act mode with yolo for workflow tasks."
+    executable_candidates = ["cline"]
+    command_args = ["--yolo", "--act"]
+    setup_instructions = (
+        "Install Cline CLI: NONINTERACTIVE=1 bash scripts/setup_project_clis.sh cline "
+        "then run cline auth to configure your model provider."
+    )
+
+    def check_availability(self) -> BackendStatus:
+        path = _first_executable(self.executable_candidates)
+        installed = bool(path)
+        return BackendStatus(
+            id=self.id,
+            name=self.name,
+            installed=installed,
+            ready=installed,
+            state="ready" if installed else "missing",
+            message=f"{self.name} is installed and ready." if installed else f"{self.name} command was not found.",
+            path=path,
+            version=_version_for(path, ["version"]),
+            setup_required=not installed,
+            setup_instructions=self.setup_instructions,
+            supports_rpc=False,
+            supports_install=False,
+        )
+
+    def _subprocess_env(self) -> dict[str, str]:
+        env = super()._subprocess_env()
+        env["FALLOW_AGENT_SOURCE"] = "cline"
+        return env
+
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable] + self.command_args
+        if task.model and task.model not in ("auto", "default", ""):
+            cmd += ["--model", task.model]
+        return cmd + [task.instruction]
+
+
 _BACKENDS: dict[str, ProjectCliBackend] = {
     "pi": PiBackend(),
     "cursor": CursorBackend(),
@@ -667,6 +710,7 @@ _BACKENDS: dict[str, ProjectCliBackend] = {
     "codex": CodexBackend(),
     "codex_ide": CodexIdeBackend(),
     "hermes_agent": HermesAgentBackend(),
+    "cline": ClineBackend(),
 }
 
 
@@ -692,6 +736,7 @@ def normalize_backend_id(value: str | None) -> str:
         "hermes-agent": "hermes_agent",
         "hermes_agent": "hermes_agent",
         "nous_hermes": "hermes_agent",
+        "cline_cli": "cline",
     }
     backend_id = aliases.get(backend_id, backend_id)
     return backend_id if backend_id in _BACKENDS else DEFAULT_BACKEND_ID

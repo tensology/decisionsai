@@ -1,0 +1,236 @@
+/* Mermaid diagram viewer — freestanding popup window */
+
+.mermaid-viewer-body {
+    margin: 0;
+    min-height: 100vh;
+    background: #0d1642;
+    color: #ececf1;
+    font-family: 'Quicksand', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+}
+
+.mermaid-viewer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: #1a237e;
+    flex-shrink: 0;
+}
+
+.mermaid-viewer-title {
+    flex: 1;
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.mermaid-viewer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.mermaid-viewer-btn {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.06);
+    color: #ececf1;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.mermaid-viewer-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.mermaid-viewer-btn-primary {
+    border-color: rgba(249, 115, 22, 0.55);
+    background: rgba(249, 115, 22, 0.18);
+}
+
+.mermaid-viewer-btn-primary:hover {
+    background: rgba(249, 115, 22, 0.3);
+}
+
+.mermaid-viewer-main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    min-height: 0;
+}
+
+.mermaid-viewer-history {
+    max-height: 160px;
+    overflow-y: auto;
+    margin: 0 12px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    background: rgba(13, 22, 66, 0.5);
+}
+
+.mermaid-viewer-history-empty {
+    padding: 10px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.mermaid-viewer-history-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: transparent;
+    color: #ececf1;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.mermaid-viewer-history-item:hover {
+    background: rgba(249, 115, 22, 0.12);
+}
+
+.mermaid-viewer-history-title {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.mermaid-viewer-history-time {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.45);
+    margin-top: 2px;
+}
+
+@media (max-width: 900px) {
+    .mermaid-viewer-main {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto;
+    }
+}
+
+.mermaid-viewer-canvas-wrap {
+    overflow: auto;
+    padding: 20px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    min-height: 240px;
+}
+
+.mermaid-viewer-canvas {
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    max-width: 100%;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.mermaid-viewer-canvas svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.mermaid-viewer-side {
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.mermaid-viewer-side-label {
+    padding: 10px 12px 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.mermaid-viewer-code {
+    flex: 1;
+    margin: 0 12px 12px;
+    min-height: 140px;
+    resize: vertical;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    background: #152054;
+    color: #ececf1;
+    font-family: 'Courier New', ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 10px;
+}
+
+.mermaid-viewer-status {
+    padding: 0 14px 10px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    min-height: 1.2em;
+}
+
+.mermaid-viewer-status-error {
+    color: #fca5a5;
+}
+
+.mermaid-viewer-status-ok {
+    color: #86efac;
+}
+
+/* Inline chat affordance for mermaid blocks */
+.mermaid-inline-block {
+    margin: 10px 0;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    overflow: hidden;
+    background: rgba(21, 32, 84, 0.55);
+}
+
+.mermaid-inline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.mermaid-inline-open {
+    border: 1px solid rgba(249, 115, 22, 0.45);
+    background: rgba(249, 115, 22, 0.15);
+    color: #fdba74;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.mermaid-inline-open:hover {
+    background: rgba(249, 115, 22, 0.28);
+}
+
+.mermaid-inline-preview {
+    padding: 10px;
+    overflow-x: auto;
+}
+
+.mermaid-inline-preview pre {
+    margin: 0;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.75);
+}

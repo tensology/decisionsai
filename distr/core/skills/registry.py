@@ -16,6 +16,7 @@ TARGET_PATHS = {
     "claude": ".claude/commands",
     "codex": ".codex/commands",
     "gemini": ".gemini/commands",
+    "cline": ".cline/skills",
 }
 
 
@@ -28,7 +29,7 @@ class SkillEntry:
     source: str
     content_hash: str
     aliases: tuple[str, ...] = ()
-    target_surfaces: tuple[str, ...] = ("codex", "cursor", "claude", "pi")
+    target_surfaces: tuple[str, ...] = ("codex", "cursor", "claude", "pi", "cline")
 
 
 def _canonical_id(value: str) -> str:

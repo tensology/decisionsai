@@ -285,6 +285,22 @@ def create_app() -> FastAPI:
     async def chat_page_with_slash(request: Request):
         return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
 
+    @app.get("/diagram", response_class=HTMLResponse)
+    async def diagram_page_no_slash(request: Request):
+        return page_templates.TemplateResponse(request, "diagram/diagram.html", _template_context(request, "/diagram"))
+
+    @app.get("/diagram/", response_class=HTMLResponse)
+    async def diagram_page_with_slash(request: Request):
+        return page_templates.TemplateResponse(request, "diagram/diagram.html", _template_context(request, "/diagram"))
+
+    @app.get("/downloads", response_class=HTMLResponse)
+    async def downloads_page_no_slash(request: Request):
+        return page_templates.TemplateResponse(request, "downloads/downloads.html", _template_context(request, "/downloads"))
+
+    @app.get("/downloads/", response_class=HTMLResponse)
+    async def downloads_page_with_slash(request: Request):
+        return page_templates.TemplateResponse(request, "downloads/downloads.html", _template_context(request, "/downloads"))
+
     @app.get("/irc", response_class=HTMLResponse)
     async def irc_page_no_slash(request: Request):
         return page_templates.TemplateResponse(request, "irc/irc.html", _template_context(request, "/irc"))
@@ -308,6 +324,22 @@ def create_app() -> FastAPI:
         logger.info("Chat API routes mounted at /api")
     except Exception as e:
         logger.error("Failed to load Chat routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.diagrams import create_routes as create_diagram_routes
+        diagram_router = create_diagram_routes(templates_dir, base_path="/diagram")
+        app.include_router(diagram_router, prefix="/api", tags=["diagrams"])
+        logger.info("Diagram API routes mounted at /api/diagrams")
+    except Exception as e:
+        logger.error("Failed to load Diagram routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.downloads import create_routes as create_download_routes
+        download_router = create_download_routes(templates_dir, base_path="/downloads")
+        app.include_router(download_router, prefix="/api", tags=["downloads"])
+        logger.info("Download API routes mounted at /api/downloads")
+    except Exception as e:
+        logger.error("Failed to load Download routes: %s", e, exc_info=True)
 
     try:
         from distr.gui.web.routes.irc import create_routes as create_irc_routes

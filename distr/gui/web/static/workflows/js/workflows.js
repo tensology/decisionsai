@@ -1721,6 +1721,7 @@
         { id: "codex", label: "Codex CLI" },
         { id: "codex_ide", label: "Codex IDE" },
         { id: "claude_code", label: "Claude Code" },
+        { id: "cline", label: "Cline" },
         { id: "hermes_agent", label: "Hermes Agent (optional)" }
     ];
     var WORKFLOW_EXEC_IDE_BACKEND_IDS = { cursor_ide: true, codex_ide: true };
@@ -5827,6 +5828,7 @@
         if (b === "claude_code") return "Claude Code CLI";
         if (b === "pi") return "Pi CLI";
         if (b === "hermes_agent") return "Hermes";
+        if (b === "cline") return "Cline CLI";
         if (!b || b === "auto") return "Auto";
         return backend;
     }

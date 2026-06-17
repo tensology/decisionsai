@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Download Manager{% endblock %}
+
+{% block head_styles %}
+<link rel="stylesheet" href="/static/shared/css/downloads.css">
+{% endblock %}
+
+{% block content %}
+<div class="downloads-page">
+    <div class="downloads-header">
+        <div>
+            <h1 class="downloads-title">Download Manager</h1>
+            <p class="downloads-subtitle">Track yt-dlp and agent-started downloads with live progress.</p>
+        </div>
+        <button type="button" id="downloadsRefreshBtn" class="downloads-btn">Refresh</button>
+    </div>
+
+    <div id="downloadsActiveSection" class="downloads-section">
+        <h2 class="downloads-section-title">Active</h2>
+        <div id="downloadsActiveList" class="downloads-list"></div>
+        <p id="downloadsActiveEmpty" class="downloads-empty">No active downloads.</p>
+    </div>
+
+    <div class="downloads-section">
+        <h2 class="downloads-section-title">History</h2>
+        <div id="downloadsHistoryList" class="downloads-list"></div>
+        <p id="downloadsHistoryEmpty" class="downloads-empty">No completed downloads yet.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block body_scripts %}
+<script src="/static/shared/js/downloads.js"></script>
+{% endblock %}

@@ -56,6 +56,7 @@ def _detected_harnesses() -> dict[str, bool]:
         "claude": bool(shutil.which("claude")),
         "cursor": bool(shutil.which("cursor") or shutil.which("cursor-agent")),
         "pi": bool(shutil.which("pi")),
+        "cline": bool(shutil.which("cline")),
     }
 
 

@@ -28,6 +28,7 @@ CLI_TARGETS = {
     "claude": ".claude/commands",
     "codex": ".codex/commands",
     "gemini": ".gemini/commands",
+    "cline": ".cline/skills",
 }
 
 _SKILL_RESOURCE_DIRS = ("scripts", "references", "reference")

@@ -43,6 +43,7 @@ _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
     (["performance optimization", "latency", "cloud performance"], ["google-cloud-waf-performance-optimization"]),
     (["sustainability", "carbon", "green cloud"], ["google-cloud-waf-sustainability"]),
     (["frontend", "react", "vue", "css", "tailwind", "playwright"], ["webapp-testing", "frontend-design", "decisions-design-references"]),
+    (["architecture", "sequence diagram", "flowchart", "mermaid", "system design", "data model"], ["decisions-mermaid-diagrams"]),
     (["landing page", "dashboard", "ui design", "mockup", "aceternity", "mobbin", "refero", "godly"], ["decisions-ui-ideation", "decisions-design-references", "frontend-design-direction"]),
     (["debug", "bug", "failing test", "regression"], ["systematic-debugging", "qa-tester"]),
     (["over-engineer", "bloat", "yagni", "minimal", "ponytail"], ["ponytail", "ponytail-review"]),

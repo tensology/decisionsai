@@ -1658,6 +1658,7 @@ class InitiativeService:
             "codex": "Codex",
             "claude": "Claude",
             "claude_code": "Claude",
+            "cline": "Cline",
             "claude-code": "Claude",
         }
         for candidate in candidates:

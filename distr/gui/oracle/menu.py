@@ -550,6 +550,7 @@ class MenuTrayMixin:
                 ("Advanced", "/settings#advanced"),
                 ("MCP Servers", "/settings#mcp"),
                 ("Activity Logs", "/settings#logs"),
+                ("Download Manager", "/downloads/"),
             ],
         ]
         self._preferences_section_actions: list[QAction] = []

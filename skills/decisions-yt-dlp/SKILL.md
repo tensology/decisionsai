@@ -24,7 +24,10 @@ description: Use yt-dlp for YouTube (and supported sites) metadata, subtitles, a
 {"mode": "metadata", "url": "https://www.youtube.com/watch?v=VIDEO_ID"}
 {"mode": "subtitles", "url": "...", "sub_lang": "en"}
 {"mode": "search", "query": "LLM agents 2026", "limit": 5}
+{"mode": "download", "urls": ["https://www.youtube.com/watch?v=VIDEO_ID"], "title": "My clips"}
 ```
+
+For downloads, use agent tool **`ytdlp_download`** or workflow `download` mode — opens **Download Manager** (`/downloads/`) with live progress.
 
 Output is JSON in the step result (truncated to 2k chars). Attach full subtitle files from `/tmp` in agent steps when needed.
 

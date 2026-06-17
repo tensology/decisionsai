@@ -758,6 +758,56 @@ class GoogleWorkspaceConnector:
         except Exception as e:
             logger.error(f"Failed to upload file: {e}", exc_info=True)
             return None
+
+    def upload_image_as_google_drawing(
+        self,
+        file_path: str,
+        folder_id: str = "root",
+        name: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload SVG/PNG and convert to a native Google Drawing when possible."""
+        if not self._ensure_valid_token():
+            return None
+
+        path = Path(file_path)
+        if not path.exists():
+            logger.error("Drawing export file not found: %s", file_path)
+            return None
+
+        file_name = (name or path.stem or "Diagram").strip() or "Diagram"
+        suffix = path.suffix.lower()
+        mime_type_map = {
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+        }
+        source_mime = mime_type_map.get(suffix, "image/svg+xml")
+
+        try:
+            file_metadata = {
+                "name": file_name,
+                "parents": [folder_id or "root"],
+                "mimeType": "application/vnd.google-apps.drawing",
+            }
+            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&convert=true"
+            with open(file_path, "rb") as f:
+                files = {
+                    "metadata": (None, json.dumps(file_metadata), "application/json"),
+                    "file": (path.name, f, source_mime),
+                }
+                headers = {"Authorization": f"Bearer {self.access_token}"}
+                response = requests.post(url, headers=headers, files=files, timeout=60)
+                response.raise_for_status()
+                file_id = response.json().get("id")
+                logger.info("Uploaded Google Drawing: %s", file_id)
+                return file_id
+        except Exception as exc:
+            logger.error("Google Drawing upload failed: %s", exc, exc_info=True)
+            # ponytail: fallback uploads raster to Drive if Drawing convert fails
+            if suffix in {".png", ".jpg", ".jpeg"}:
+                return self.upload_to_drive(file_path, folder_id=folder_id, name=file_name)
+            return None
     
     def convert_docx_to_google_doc(self, docx_file_id: str) -> Optional[str]:
         """Convert an uploaded DOCX file to a native Google Doc

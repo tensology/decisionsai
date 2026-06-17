@@ -47,6 +47,7 @@ REGISTERED_BACKEND_IDS = (
     "codex",
     "codex_ide",
     "hermes_agent",
+    "cline",
 )
 SPOTIFY_PROJECT_PREFIX = "decisionsai-e2e-spotify-remake-"
 SPOTIFY_LANES = ("Backlog", "Ready", "In Progress", "Validation", "Improve", "Complete")

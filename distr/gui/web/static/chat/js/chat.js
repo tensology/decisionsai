@@ -413,6 +413,18 @@ function setupEventListeners() {
                 showChatContextMenu(e, currentChatId);
             }
         });
+        chatMessages.addEventListener('click', (e) => {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-mermaid-open]') : null;
+            if (!btn) return;
+            const block = btn.closest('[data-mermaid-code]');
+            if (!block || !window.DecisionsMermaid) return;
+            const raw = block.getAttribute('data-mermaid-code') || '';
+            let code = '';
+            try { code = decodeURIComponent(raw); } catch (_) { code = raw; }
+            const labelEl = block.querySelector('.mermaid-inline-header span');
+            const title = labelEl ? labelEl.textContent : 'Diagram';
+            window.DecisionsMermaid.open({ code, title });
+        });
         bindActivityToggleHandlers();
     }
     if (chatConfigClose) chatConfigClose.addEventListener('click', hideChatConfigModal);
@@ -3436,7 +3448,22 @@ function formatMessage(text) {
     // Escape HTML
     let html = escapeHtml(text);
     
-    // Format code blocks
+    // Mermaid diagrams — preview + open in freestanding viewer
+    html = html.replace(/```mermaid\s*\n([\s\S]*?)```/g, (match, code) => {
+        const trimmed = code.trim();
+        const encoded = encodeURIComponent(trimmed);
+        return (
+            '<div class="mermaid-inline-block" data-mermaid-code="' + encoded + '">' +
+            '<div class="mermaid-inline-header">' +
+            '<span>Mermaid diagram</span>' +
+            '<button type="button" class="mermaid-inline-open" data-mermaid-open>Open diagram</button>' +
+            '</div>' +
+            '<div class="mermaid-inline-preview"><pre><code>' + escapeHtml(trimmed) + '</code></pre></div>' +
+            '</div>'
+        );
+    });
+    
+    // Format code blocks (non-mermaid)
     html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
         return `<pre><code>${escapeHtml(code.trim())}</code></pre>`;
     });

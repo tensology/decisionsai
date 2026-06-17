@@ -130,6 +130,10 @@ def _get_tool_definitions(
         ("NewChatTool", dict(chat_manager=chat_manager)),
         # Open Page (web UI navigation)
         ("OpenPageTool", dict(chat_manager=chat_manager)),
+        # Mermaid diagram viewer
+        ("ShowMermaidDiagramTool", dict(chat_manager=chat_manager)),
+        # yt-dlp downloads with progress UI
+        ("YtdlpDownloadTool", dict(chat_manager=chat_manager)),
         # Clear Chat
         ("ClearChatTool", dict(chat_manager=chat_manager)),
         # Web Search
@@ -486,6 +490,8 @@ TOOL_REGISTRY = {
     "ClearChatTool":           ("chat.clear_chat", "ClearChatTool"),
     "OracleGlobeTool":         ("chat.oracle_globe", "OracleGlobeTool"),
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
+    "ShowMermaidDiagramTool":  ("chat.show_mermaid_diagram", "ShowMermaidDiagramTool"),
+    "YtdlpDownloadTool":       ("integrations.ytdlp_download", "YtdlpDownloadTool"),
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
@@ -622,6 +628,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
     "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
+    "ShowMermaidDiagramTool": "Open a Mermaid diagram in the freestanding diagram viewer. Use when explaining architecture, flows, sequences, state machines, ER models, or any technical structure that benefits from a visual chart. User can export PNG/JPEG or copy the image.",
+    "YtdlpDownloadTool": "Download YouTube or video URLs with yt-dlp and open Download Manager for live progress, speed, and ETA. Use when user asks to download videos or save YouTube links.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",

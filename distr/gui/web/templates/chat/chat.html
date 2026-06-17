@@ -5,6 +5,7 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ base_path }}/static/css/chat.css">
+<link rel="stylesheet" href="/static/shared/css/mermaid_viewer.css">
 {% endblock %}
 
 {% block content %}
@@ -401,6 +402,7 @@
 {% endblock %}
 
 {% block body_scripts %}
+<script src="/static/shared/js/mermaid_viewer.js"></script>
 <script src="{{ base_path }}/static/js/chat.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 {% endblock %}

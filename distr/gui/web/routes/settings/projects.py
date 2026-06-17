@@ -630,6 +630,12 @@ def register_routes(router, templates):
         if model_backend == "codex":
             models, source, message = _codex_models(settings)
             return {"models": models, "source": source, "message": message}
+        if model_backend == "cline":
+            return {
+                "models": [{"id": "auto", "name": "Auto", "provider": "cline"}],
+                "source": "cline-config",
+                "message": "Default model comes from cline auth; override per task with -m.",
+            }
         return {"models": _pi_cli_models(), "source": "pi-models", "message": ""}
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
@@ -686,7 +692,7 @@ def register_routes(router, templates):
             current_model = ""
             current_provider = backend_id
         elif not current_model:
-            current_model = "auto" if backend_id in ("cursor", "codex") else ("default" if backend_id == "claude_code" else "")
+            current_model = "auto" if backend_id in ("cursor", "codex", "cline") else ("default" if backend_id == "claude_code" else "")
             current_provider = backend_id
 
         return JSONResponse({

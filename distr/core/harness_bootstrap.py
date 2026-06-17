@@ -15,6 +15,7 @@ def detected_harnesses() -> dict[str, bool]:
         "claude": bool(shutil.which("claude")),
         "cursor": bool(shutil.which("cursor") or shutil.which("cursor-agent")),
         "pi": bool(shutil.which("pi")),
+        "cline": bool(shutil.which("cline")),
     }
 
 
@@ -29,6 +30,8 @@ def harness_skill_bases(home: Path, detected: dict[str, bool]) -> dict[str, Path
         bases["pi"] = home / ".pi" / "skills"
     if detected.get("cursor"):
         bases["cursor"] = home / ".cursor" / "skills"
+    if detected.get("cline"):
+        bases["cline"] = home / ".cline" / "skills"
     return bases
 
 
@@ -116,5 +119,6 @@ def projection_paths(home: Path, detected: dict[str, bool], skill_name: str) -> 
         "claude": home / ".claude" / "skills" / skill_name / "SKILL.md",
         "cursor": home / ".cursor" / f"decisions-{skill_name}.md",
         "pi": home / ".pi" / "skills" / skill_name / "SKILL.md",
+        "cline": home / ".cline" / "skills" / skill_name / "SKILL.md",
     }
     return {key: path for key, path in mapping.items() if detected.get(key)}
