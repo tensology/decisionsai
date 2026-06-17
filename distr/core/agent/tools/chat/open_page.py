@@ -75,6 +75,17 @@ _PAGE_MAP = {
     # About
     "about":          "/settings#about",
     "about us":       "/settings#about",
+    # Mermaid / diagram viewer
+    "diagram":        "/diagram/",
+    "diagrams":       "/diagram/",
+    "diagram viewer": "/diagram/",
+    "mermaid":        "/diagram/",
+    "mermaid viewer": "/diagram/",
+    "mermaid editor": "/diagram/",
+    "mermaid diagram": "/diagram/",
+    # Download manager
+    "downloads":      "/downloads/",
+    "download manager": "/downloads/",
 }
 
 # Build a nice list for the tool description
@@ -83,7 +94,7 @@ _KNOWN_PAGES = ", ".join(sorted({
     "third party/providers/api keys", "llms/models", "skins/avatar",
     "advanced", "actions", "skills", "projects",
     "workflows", "ticket board", "docs/api docs",
-    "activity log", "about",
+    "activity log", "about", "diagram/mermaid viewer", "download manager",
 }))
 
 
@@ -105,6 +116,10 @@ def _confirmation_for_path(path: str) -> str:
         return "I've opened Skills in your browser."
     if "/docs" in path:
         return "I've opened the API documentation in your browser."
+    if "/diagram" in path:
+        return "I've opened the Mermaid diagram viewer in your browser."
+    if "/downloads" in path:
+        return "I've opened the Download Manager in your browser."
     if "/settings" in path:
         frag = ""
         if "#" in path:

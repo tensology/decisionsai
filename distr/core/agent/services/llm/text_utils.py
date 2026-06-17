@@ -131,6 +131,11 @@ def clean_text_for_tts(
     if not text:
         return ""
 
+    from distr.core.llm_errors import is_formatted_model_error_message
+
+    if is_formatted_model_error_message(text):
+        return ""
+
     # Voice-first tools append a technical block after REFERENCE: — never speak that tail.
     _ref = "\n\nREFERENCE:\n"
     if _ref in text:

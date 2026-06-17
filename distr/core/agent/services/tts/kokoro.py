@@ -361,17 +361,11 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                                     self._tts_started_emitted = True
                                     if self.event_queue:
                                         try:
-                                            _, force_desktop_tts = self._route_telegram_flags()
-                                            started_payload = (
-                                                {"source": "direct_desktop"}
-                                                if force_desktop_tts
-                                                else {}
-                                            )
                                             self.event_queue.put(
-                                                ('tts_started', started_payload),
+                                                ('tts_started', {"source": "direct_desktop"}),
                                                 block=False,
                                             )
-                                            logger.debug("TTS: tts_started emitted")
+                                            logger.debug("TTS: tts_started emitted (direct_desktop)")
                                         except Exception:
                                             pass
                                 else:

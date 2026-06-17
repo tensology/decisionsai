@@ -27,6 +27,7 @@ def _get_keyboard_controller():
             return None
     return _keyboard_controller
 
+
 def type_text(text: str, delay: float = 0.01):
     """
     Type text as if from keyboard using pynput.

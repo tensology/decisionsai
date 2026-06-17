@@ -1005,6 +1005,26 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             else:
                 return  # Still in old response, drop
             
+        if is_audio_frame and self._state in (AudioPlaybackState.IDLE, AudioPlaybackState.COMPLETED):
+            # TTS can push EndFrame before queued audio frames are processed (pipecat
+            # ordering). Audio still plays but the player never opened because we
+            # already marked the response COMPLETED with zero bytes.
+            logger.debug(
+                "Transport: First audio in %s — starting playback session",
+                self._state.name,
+            )
+            self._pipeline_cut = False
+            self._force_silence = False
+            self._tts_started_event_emitted = False
+            if self._state == AudioPlaybackState.COMPLETED:
+                self._total_output_bytes = 0
+                self._total_audio_duration = 0.0
+                self._playback_watermark = 0.0
+                self._tts_session_start_time = time.time()
+                self._software_audio_start_time = None
+                self._stream_start_time = None
+            await self._transition_to(AudioPlaybackState.SYNTHESIZING)
+            
         if is_audio_frame:
             try:
                 # If a sentence boundary passed (TTSStoppedFrame), reset the

@@ -555,6 +555,13 @@ class FastActionDetector:
             (re.compile(r'\bwhat\s+am\s+i\s+looking\s+at\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             
+            # === MERMAID / DIAGRAM VIEWER ===
+            (re.compile(
+                r'\b(?:open|show|launch)\b(?:\s+(?:the|a))?\s+'
+                r'(?:mermaid(?:\s*js)?\s*(?:diagram\s*)?viewer|diagram\s*viewer|mermaid\s*editor)\b',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "open_page", {"page": "diagram viewer"}, False, "done"),
+
             # === CHAT MANAGEMENT ===
             (re.compile(r'\b(clear|reset|wipe)\b.*\b(chat|history|conversation)\b', re.IGNORECASE), 
              ActionType.CLEAR_CHAT, "clear_chat", {"confirm": True}, False, "done"),

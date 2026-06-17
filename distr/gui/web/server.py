@@ -906,9 +906,10 @@ def create_app() -> FastAPI:
         """Expose the uvicorn asyncio loop for in-process terminal spawns."""
         import asyncio
 
-        server = get_unified_server()
+        server = getattr(app.state, "unified_gui_server", None) or get_unified_server()
         if server is not None:
             server.asyncio_loop = asyncio.get_running_loop()
+            logger.info("Unified GUI server asyncio loop bound for in-process terminals")
 
     # Check model recommendations staleness on startup
     @app.on_event("startup")
@@ -946,6 +947,7 @@ class UnifiedGuiServer:
         try:
             logger.info("Creating unified GUI app...")
             self.app = create_app()
+            self.app.state.unified_gui_server = self
             logger.info("App created, starting uvicorn on %s:%s", self.host, self.port)
 
             config = uvicorn.Config(
@@ -1001,6 +1003,10 @@ class UnifiedGuiServer:
                     self.is_running = False
                     return
             
+            # Register singleton before the server thread starts so startup hooks can find it.
+            global _unified_server
+            _unified_server = self
+
             # Start server in a separate thread
             self.server_thread = threading.Thread(
                 target=self._run_server_thread,
@@ -1008,7 +1014,6 @@ class UnifiedGuiServer:
             )
             self.server_thread.start()
             self.is_running = True
-            _unified_server = self
             os.environ["DECISIONS_WEB_PORT"] = str(self.port)
             os.environ["DECISIONS_API_BASE"] = f"http://{self.host}:{self.port}"
             

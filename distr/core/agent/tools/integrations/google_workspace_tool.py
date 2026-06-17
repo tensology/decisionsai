@@ -40,6 +40,71 @@ def _normalize_calendar_events_raw(params: Dict[str, Any]) -> Any:
     return raw
 
 
+def _resolve_google_workspace_action(
+    action: Optional[str],
+    params: Dict[str, Any],
+    kwargs: Dict[str, Any],
+    events: Optional[Any] = None,
+) -> Optional[str]:
+    """Infer action when models omit it or flatten params at the top level."""
+    for candidate in (
+        action,
+        kwargs.get("action"),
+        kwargs.get("operation"),
+        params.get("action"),
+        params.get("operation"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    merged = dict(params or {})
+    for key, value in (kwargs or {}).items():
+        if key not in ("action", "params", "last_user_message", "is_telegram_request", "events"):
+            merged.setdefault(key, value)
+
+    batch_events = _normalize_calendar_events_raw({**merged, "events": events})
+    if batch_events:
+        return "create_calendar_events_batch"
+
+    if merged.get("summary") and merged.get("start_time") and merged.get("end_time"):
+        return "create_calendar_event"
+
+    if merged.get("message_id"):
+        if merged.get("attachment_id") or merged.get("filename"):
+            return "download_email_attachment"
+        if merged.get("destination_dir") and not merged.get("attachment_id") and not merged.get("filename"):
+            return "download_email_attachments"
+        return "read_email"
+
+    if merged.get("to") and merged.get("body"):
+        return "send_email"
+
+    if merged.get("draft_id"):
+        return "get_draft"
+
+    if merged.get("email_type"):
+        return "list_emails_by_type"
+
+    if merged.get("file_path"):
+        return "upload_to_drive"
+
+    if merged.get("file_id"):
+        if (merged.get("mime_type") or "").lower() == "application/pdf":
+            return "read_pdf"
+        return "read_drive_file"
+
+    if merged.get("title") and merged.get("markdown_content"):
+        return "create_doc_from_markdown"
+
+    if merged.get("time_min") or merged.get("time_max"):
+        return "get_calendar_events"
+
+    if merged.get("query") is not None or merged.get("max_results") is not None:
+        return "check_inbox"
+
+    return None
+
+
 class GoogleWorkspaceInput(BaseModel):
     """Input schema for Google Workspace tool."""
 
@@ -226,7 +291,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
     
     def _run(
         self,
-        action: str,
+        action: Optional[str] = None,
         params: Optional[Dict[str, Any]] = None,
         events: Optional[Any] = None,
         **kwargs,
@@ -288,6 +353,22 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
             pe = params.get("events")
             if pe in (None, [], ""):
                 params["events"] = events
+
+        resolved_action = _resolve_google_workspace_action(action, params, kwargs, events)
+        if not resolved_action:
+            logger.warning(
+                "GoogleWorkspaceTool: missing action (params_keys=%s kwargs_keys=%s)",
+                list(params.keys()),
+                list(kwargs.keys()),
+            )
+            return (
+                "Error: action is required. For a single calendar entry use "
+                "action='create_calendar_event' with summary, start_time, and end_time "
+                "(ISO 8601). Example: "
+                '{"action":"create_calendar_event","params":{"summary":"Visit Louis",'
+                '"start_time":"2026-06-20T13:00:00","end_time":"2026-06-20T14:00:00"}}'
+            )
+        action = resolved_action
 
         try:
             # Gmail actions
@@ -753,7 +834,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
     
     async def _arun(
         self,
-        action: str,
+        action: Optional[str] = None,
         params: Optional[Dict[str, Any]] = None,
         events: Optional[Any] = None,
         **kwargs,

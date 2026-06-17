@@ -101,6 +101,44 @@ def format_model_error(
     )
 
 
+_TTS_ERROR_MESSAGES = {
+    "authentication": "That model API key is not working. Check settings.",
+    "quota": "That model is out of quota. Check billing or switch models in settings.",
+    "rate_limit": "I hit a rate limit on that model. Wait a moment, or switch models in settings.",
+    "model_unavailable": "That model is not available right now. Try another one in settings.",
+    "unsupported_model": "That model does not support this request. Try a different model.",
+    "timeout": "The model took too long to respond. Try again or switch models.",
+    "connection": "I could not reach the model provider. Check the connection or switch provider.",
+    "model_error": "Something went wrong with the model. Try again or switch models in settings.",
+}
+
+
+def format_model_error_for_tts(
+    exc: BaseException | str,
+    *,
+    provider: str = "",
+    model: str = "",
+    operation: str = "generate a response",
+) -> str:
+    """Short spoken line for voice mode — not the full technical chat message."""
+    kind = classify_model_error(exc)
+    return _TTS_ERROR_MESSAGES.get(kind, _TTS_ERROR_MESSAGES["model_error"])
+
+
+def is_formatted_model_error_message(text: str) -> bool:
+    """True when text matches ``format_model_error`` chat output (not for TTS)."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return (
+        "Provider:" in t
+        and "Model:" in t
+        and "Error:" in t
+        and "Settings -> LLMs" in t
+        and " while trying to " in t
+    )
+
+
 class LLMModelError(RuntimeError):
     """Exception wrapper that preserves provider/model context for callers."""
 

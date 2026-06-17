@@ -21,6 +21,7 @@ def test_set_ptt_active_without_queue_interruption_does_not_arm_pending_interrup
 
     assert stt._ptt_active is True
     assert stt._pending_interruption is False
+    assert stt._stt_cancelled is False
 
 
 def test_set_ptt_active_with_queue_interruption_arms_pending_interrupt():
@@ -33,3 +34,4 @@ def test_set_ptt_active_with_queue_interruption_arms_pending_interrupt():
 
     assert stt._ptt_active is True
     assert stt._pending_interruption is True
+    assert stt._stt_cancelled is True

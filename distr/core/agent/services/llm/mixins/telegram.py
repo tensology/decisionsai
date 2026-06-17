@@ -27,6 +27,34 @@ class TelegramMixin:
     - _uploaded_image_path
     """
 
+    def _arm_desktop_tts(self):
+        """Keep web/desktop chat audio on local speakers when Telegram is connected."""
+        import threading
+
+        if getattr(self, "_is_telegram_request", False):
+            return
+        cur = threading.current_thread()
+        cur.force_desktop_tts = True
+        tts = getattr(self, "_tts_service", None)
+        if tts is not None:
+            tts._force_desktop_tts = True
+            if getattr(tts, "_current_telegram_request", False):
+                tts._current_telegram_request = False
+        for t in threading.enumerate():
+            if getattr(t, "telegram_request", False):
+                t.telegram_request = False
+
+    def _disarm_desktop_tts(self):
+        """Clear desktop-only TTS routing after a chat turn completes."""
+        import threading
+
+        cur = threading.current_thread()
+        if getattr(cur, "force_desktop_tts", False):
+            cur.force_desktop_tts = False
+        tts = getattr(self, "_tts_service", None)
+        if tts is not None and getattr(tts, "_force_desktop_tts", False):
+            tts._force_desktop_tts = False
+
     def _propagate_telegram_flags(self):
         """Propagate telegram flags from instance vars to the current asyncio thread.
 
@@ -169,6 +197,7 @@ class TelegramMixin:
         self._is_telegram_request = False
         self._uploaded_image_path = None
         self._telegram_input_type = None
+        self._disarm_desktop_tts()
 
     def _extract_action_required_path(self):
         """Scan recent tool messages for [ACTION REQUIRED] and extract the file path."""

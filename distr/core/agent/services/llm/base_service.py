@@ -312,9 +312,10 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         return self.SERVICE_NAME.replace("LLMService", "")
 
     async def _surface_model_error(self, exc, operation: str = "generate a response") -> str:
-        """Show model/provider failures in chat/TTS instead of hiding them in logs."""
+        """Show model/provider failures in chat; speak a short human line only."""
         from distr.core.agent.libs import ErrorFrame, TextFrame
-        from distr.core.llm_errors import format_model_error
+        from distr.core.llm_errors import format_model_error, format_model_error_for_tts
+        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
         msg = format_model_error(
             exc,
@@ -322,8 +323,20 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             model=getattr(self, "_model_name", ""),
             operation=operation,
         )
+        spoken = ""
+        if getattr(self, "_speaker_enabled", False) and not getattr(self, "_is_telegram_request", False):
+            spoken = clean_text_for_tts(
+                format_model_error_for_tts(
+                    exc,
+                    provider=self._get_provider_name(),
+                    model=getattr(self, "_model_name", ""),
+                    operation=operation,
+                ),
+                spoken_prose=True,
+            )
         try:
-            await self.push_frame(TextFrame(text=msg), getattr(self, "_pipeline_direction", None))
+            if spoken:
+                await self.push_frame(TextFrame(text=spoken), getattr(self, "_pipeline_direction", None))
         except Exception:
             pass
         try:

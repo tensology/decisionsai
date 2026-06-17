@@ -154,6 +154,15 @@ def collect_mcp_catalog() -> dict[str, Any]:
         "note": "YouTube-focused; use bili-cli for Bilibili (agent-reach)",
     }
 
+    catalog["open_design"] = {
+        "description": "Open Design local MCP — UI prototypes, decks, motion, hand-drawn diagrams",
+        "auto_merge": False,
+        "skill": "decisions-open-design",
+        "setup": "Install Open Design app; from ../reference/open-design run: od mcp install cursor",
+        "note": "Requires Open Design daemon running; complements Decisions Mermaid viewer for technical charts",
+        "reference_path": "../reference/open-design",
+    }
+
     try:
         from distr.core.composio_pack import composio_mcp_recommendations
 

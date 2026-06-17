@@ -57,3 +57,17 @@ def test_summarize_regex_clipboard_and_read_variants() -> None:
         assert result.response_type == expected_type, (
             f"{text!r}: expected response_type {expected_type!r}, got {result.response_type!r}"
         )
+
+
+def test_open_mermaid_viewer_fast_action() -> None:
+    cases = [
+        "open the mermaid viewer",
+        "open mermaid viewer",
+        "open diagram viewer",
+        "you open the mermaid JS viewer",
+    ]
+    for text in cases:
+        result = detect_fast_action(text)
+        assert result.action_type == ActionType.OPEN_WINDOW, text
+        assert result.tool_name == "open_page", text
+        assert result.tool_args.get("page") == "diagram viewer", text

@@ -205,7 +205,7 @@ class SupertonicTTSService(TTSPipelineMixin, TTSService):
                         self._tts_started_emitted = True
                         if self.event_queue:
                             try:
-                                self.event_queue.put(("tts_started", {}), block=False)
+                                self.event_queue.put(("tts_started", {"source": "direct_desktop"}), block=False)
                             except Exception:
                                 pass
 

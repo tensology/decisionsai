@@ -1,0 +1,34 @@
+{
+  "pack_version": 1,
+  "description": "BuilderIO Agent-Native skills — visual plans, visual recaps, quick status blocks.",
+  "reference_roots": {
+    "builderio_skills": "../reference/builderio-skills/skills"
+  },
+  "project_full": [
+    {
+      "id": "visual-plan",
+      "source": "builderio_skills/visual-plan",
+      "include_references": true,
+      "overwrite": true,
+      "note": "Rich interactive plans with inline diagrams; pairs with Decisions Mermaid viewer for architecture blocks."
+    },
+    {
+      "id": "visual-recap",
+      "source": "builderio_skills/visual-recap",
+      "include_references": true,
+      "overwrite": true,
+      "note": "Branch/PR visual recap with diagrams and file maps."
+    },
+    {
+      "id": "quick-recap",
+      "source": "builderio_skills/quick-recap",
+      "overwrite": true,
+      "note": "Green/yellow/red status block convention for agent completions."
+    }
+  ],
+  "index_only": [
+    "decisions-visual-plan",
+    "decisions-open-design",
+    "decisions-mermaid-diagrams"
+  ]
+}

@@ -550,7 +550,10 @@ class MenuTrayMixin:
                 ("Advanced", "/settings#advanced"),
                 ("MCP Servers", "/settings#mcp"),
                 ("Activity Logs", "/settings#logs"),
+            ],
+            [
                 ("Download Manager", "/downloads/"),
+                ("Mermaid JS Viewer", "/diagram/"),
             ],
         ]
         self._preferences_section_actions: list[QAction] = []
@@ -868,7 +871,12 @@ class MenuTrayMixin:
 
         try:
             if project_startup_terminals_running(project_id):
-                stop_project_startup_terminals(project_id, announce=True)
+                result = stop_project_startup_terminals(project_id, announce=True)
+                logger.info(
+                    "Oracle menu: stopped project %s terminals stopped=%s",
+                    project_id,
+                    result.stopped,
+                )
                 return
 
             with get_session() as session:
@@ -879,7 +887,15 @@ class MenuTrayMixin:
                 commands = parse_startup_command_lines(project.startup_instructions or "")
 
             if commands:
-                start_project_startup_terminals(project_id, announce=True)
+                result = start_project_startup_terminals(project_id, announce=True)
+                logger.info(
+                    "Oracle menu: project %s startup result action=%s started=%s failed=%s",
+                    project_id,
+                    result.action,
+                    result.started,
+                    result.failed,
+                )
+                self._open_web_url(f"/projects/?project_id={project_id}&tab=startup")
                 return
 
             self._open_web_url(f"/projects/?project_id={project_id}")

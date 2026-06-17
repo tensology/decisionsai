@@ -897,8 +897,7 @@
 }
 
 .message-content {
-    flex: 0 1 auto;
-    max-width: calc(100% - 48px);
+    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;

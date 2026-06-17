@@ -14,6 +14,7 @@ ECC_VENDOR_DIR = PLUGINS_ROOT / "ecc"
 COMPETITION_PACK_DIR = PLUGINS_ROOT / "competition-pack"
 AGENT_REACH_PACK_DIR = PLUGINS_ROOT / "agent-reach-pack"
 COMMUNITY_SKILLS_PACK_DIR = PLUGINS_ROOT / "community-skills-pack"
+VISUAL_PLAN_PACK_DIR = PLUGINS_ROOT / "visual-plan-pack"
 
 # Installed plugin folder names (under the user's home directory).
 CODEX_PLUGIN_NAME = "decisions-codex"
@@ -75,3 +76,15 @@ def yt_dlp_reference_dir() -> Path:
 
 def community_skills_dir() -> Path:
     return COMMUNITY_SKILLS_PACK_DIR / "skills"
+
+
+def visual_plan_skills_dir() -> Path:
+    return VISUAL_PLAN_PACK_DIR / "skills"
+
+
+def builderio_skills_reference_dir() -> Path:
+    return _PROJECT_ROOT.parent / "reference" / "builderio-skills"
+
+
+def open_design_reference_dir() -> Path:
+    return _PROJECT_ROOT.parent / "reference" / "open-design"

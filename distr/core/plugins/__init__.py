@@ -6,6 +6,7 @@ from distr.core.plugins.paths import (
     COMPETITION_PACK_DIR,
     AGENT_REACH_PACK_DIR,
     COMMUNITY_SKILLS_PACK_DIR,
+    VISUAL_PLAN_PACK_DIR,
     CURSOR_IDE_DIR,
     CURSOR_PLUGIN_NAME,
     ECC_VENDOR_DIR,
@@ -23,6 +24,9 @@ from distr.core.plugins.paths import (
     agent_reach_reference_dir,
     yt_dlp_reference_dir,
     community_skills_dir,
+    visual_plan_skills_dir,
+    builderio_skills_reference_dir,
+    open_design_reference_dir,
 )
 
 __all__ = [
@@ -33,6 +37,7 @@ __all__ = [
     "COMPETITION_PACK_DIR",
     "AGENT_REACH_PACK_DIR",
     "COMMUNITY_SKILLS_PACK_DIR",
+    "VISUAL_PLAN_PACK_DIR",
     "CODEX_PLUGIN_NAME",
     "CURSOR_PLUGIN_NAME",
     "project_root",
@@ -48,4 +53,7 @@ __all__ = [
     "agent_reach_reference_dir",
     "yt_dlp_reference_dir",
     "community_skills_dir",
+    "visual_plan_skills_dir",
+    "builderio_skills_reference_dir",
+    "open_design_reference_dir",
 ]

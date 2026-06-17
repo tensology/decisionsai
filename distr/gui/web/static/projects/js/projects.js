@@ -161,7 +161,10 @@
                 var params = new URLSearchParams(window.location.search);
                 var requestedId = parseInt(params.get("project_id"), 10);
                 if (requestedId && data.some(function(p) { return p.id === requestedId; })) {
-                    selectProject(requestedId);
+                    var requestedTab = (params.get("tab") || "").trim().toLowerCase();
+                    selectProject(requestedId).then(function() {
+                        if (requestedTab) switchTab(requestedTab);
+                    });
                     return;
                 }
                 var inUse = (data || []).filter(function(p) { return p.in_use; })[0];
@@ -2640,8 +2643,8 @@
 
     function refreshStartupSessionsUntilVisible(projectId, commands) {
         var attempts = 0;
-        var maxAttempts = 10;
-        var delay = 450;
+        var maxAttempts = 24;
+        var delay = 500;
 
         function poll() {
             if (!projectId || currentProjectId !== projectId) return;
@@ -2661,7 +2664,7 @@
                     if (attempts < maxAttempts) {
                         setTimeout(poll, delay);
                     } else if (commands && commands.length) {
-                        showSnackbar("Startup terminals are queued. Panels will attach when the web runtime starts them.", "info");
+                        showSnackbar("Startup terminals did not attach. Check folder path and startup commands, then try again.", "error");
                     }
                 })
                 .catch(function() {
@@ -2735,6 +2738,11 @@
             }
             showSnackbar(formatStartupStartSnackbar(response, commands), response.failed ? "error" : "success");
             var sessions = Array.isArray(response.sessions) ? response.sessions : [];
+            if (!sessions.length && !(response && response.started > 0)) {
+                clearStartupTerminalPlaceholders();
+                showSnackbar((response && response.message) || "No startup terminals started", "error");
+                return;
+            }
             if (response.action === "already_running" && sessions.length) {
                 clearStartupTerminalPlaceholders();
             }
@@ -3248,7 +3256,12 @@
                     _startupTerminals = {};
                     delete _projectTerminalState[currentProjectId];
                     restoreStartupTerminalChrome();
-                    showSnackbar((response && response.message) || "All terminals terminated", "success");
+                    var stopped = Number(response && response.stopped) || 0;
+                    if (stopped > 0) {
+                        showSnackbar("Stopped " + stopped + " startup terminal" + (stopped === 1 ? "" : "s") + ".", "success");
+                    } else {
+                        showSnackbar("No startup terminals were running.", "info");
+                    }
                 }).catch(function(err) {
                     showSnackbar("Failed to stop startup terminals: " + (err && err.message ? err.message : ""), "error");
                 });

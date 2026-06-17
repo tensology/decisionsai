@@ -20,9 +20,28 @@ Use a diagram when the user would benefit from seeing structure or flow:
 
 Skip diagrams for trivial one-line answers, pure opinion, or non-structural content.
 
+## Related surfaces (not Mermaid)
+
+| Need | Skill |
+|------|-------|
+| Rich implementation plan with wireframes + approval gate | `visual-plan` (BuilderIO) via `decisions-visual-plan` |
+| PR/branch visual recap | `visual-recap` |
+| UI prototype, deck, motion, hand-drawn whiteboard | `decisions-open-design` |
+
+Use Mermaid for **text-native** technical graphs the agent can store in diagram History. Use Open Design for **pixel/CSS artifacts** and branded deliverables.
+
 ## How to show diagrams
 
 ### In DecisionsAI chat (server agent)
+
+**Open the viewer only** (user says "open the mermaid viewer", no diagram yet):
+
+- Call **`open_page`** with `page="diagram viewer"`, or
+- Call **`show_mermaid_diagram`** with empty `mermaid_code` (reopens the last diagram from History, or a blank editor).
+
+Do not ask what diagram to show — open the viewer immediately.
+
+**Show a specific diagram:**
 
 Call **`show_mermaid_diagram`** with:
 

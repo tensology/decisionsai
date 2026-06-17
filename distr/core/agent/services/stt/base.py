@@ -206,7 +206,8 @@ class BaseSTTService(STTService):
             self._ptt_buffer_accumulator = []
             self._ptt_flush_scheduled = False
             self._pending_ptt_process = False
-            self._stt_cancelled = True
+            # Dictation must keep capturing; only agent PTT clears in-flight STT.
+            self._stt_cancelled = bool(queue_interruption)
             self._audio_buffer = []
             self._pending_interruption = bool(queue_interruption)
 

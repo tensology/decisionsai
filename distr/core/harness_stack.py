@@ -121,6 +121,16 @@ def ensure_harness_stack_setup(
     except Exception:
         results["composio"] = {"status": "skipped"}
 
+    try:
+        from distr.core.visual_plan_pack import ensure_visual_plan_pack_setup
+
+        results["visual_plan"] = ensure_visual_plan_pack_setup(
+            home=base_home,
+            run_full=run_full,
+        )
+    except Exception:
+        results["visual_plan"] = {"status": "skipped"}
+
     if init_rtk_hooks:
         try:
             from distr.core.rtk_hooks import init_rtk_agent_hooks

@@ -168,8 +168,8 @@ def _start_inapp_terminals(project_id: int, folder: str, commands: list[str]) ->
             d["reason"] = "queued for web runtime fallback"
             remaining_queued -= 1
 
-    total_started = started + queued
-    total_failed = max(0, len(commands) - total_started)
+    total_started = started
+    total_failed = max(0, len(commands) - started - queued) + queue_failed
     return total_started, total_failed, diagnostics
 
 

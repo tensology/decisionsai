@@ -19,6 +19,7 @@ One Decisions install enhances every CLI/IDE you already use. Run `bin/setup.py`
 | **Community** (`decisions-community-skills-harness`) | humanizer, last30days, curated marketing + design aesthetics |
 | **yt-dlp** (`decisions-yt-dlp-harness`) | YouTube metadata, subtitles, search — workflow `ytdlp` steps |
 | **Composio** (`decisions-composio-harness`) | Composio Connect MCP (Tool Router) — Gmail, Slack, Notion, Jira, 1000+ apps |
+| **Visual plan** (`decisions-visual-plan-harness`) | BuilderIO visual-plan/recap + Mermaid + Open Design routing |
 | **Local** | decisions-playwright, decisions-browser-stack, decisions-mermaid-diagrams (this file) |
 
 ## CLIs

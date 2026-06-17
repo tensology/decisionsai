@@ -628,7 +628,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
     "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
-    "ShowMermaidDiagramTool": "Open a Mermaid diagram in the freestanding diagram viewer. Use when explaining architecture, flows, sequences, state machines, ER models, or any technical structure that benefits from a visual chart. User can export PNG/JPEG or copy the image.",
+    "ShowMermaidDiagramTool": "Open the Mermaid diagram viewer. With mermaid_code: render that diagram. With empty mermaid_code: open the viewer (last diagram or blank editor). Use open_page page='diagram viewer' when the user only asks to open the viewer.",
     "YtdlpDownloadTool": "Download YouTube or video URLs with yt-dlp and open Download Manager for live progress, speed, and ETA. Use when user asks to download videos or save YouTube links.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",

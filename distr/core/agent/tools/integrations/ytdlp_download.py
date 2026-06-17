@@ -14,6 +14,9 @@ from typing import Any, List, Optional, Union
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from distr.core.web_runtime import internal_api_headers, resolve_local_web_base_url
+from distr.gui.web.security import INTERNAL_AUTH_HEADER
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,9 +83,13 @@ class YtdlpDownloadTool(BaseTool):
         if not clean:
             return "Error: No URLs provided."
 
-        base_url = self._resolve_web_base_url()
+        base_url = resolve_local_web_base_url()
         if not base_url:
             return "Error: Web server is not ready. Try again in a moment."
+
+        headers = internal_api_headers()
+        if not headers.get(INTERNAL_AUTH_HEADER):
+            return "Error: Could not authenticate with the local web server."
 
         payload = {"urls": clean, "title": title or ""}
         if (output_dir or "").strip():
@@ -93,7 +100,7 @@ class YtdlpDownloadTool(BaseTool):
             req = urllib.request.Request(
                 f"{base_url}/api/downloads",
                 data=body,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -115,25 +122,3 @@ class YtdlpDownloadTool(BaseTool):
             f"Started downloading {count} video{'s' if count != 1 else ''}. "
             "Opened Download Manager — you can watch progress, speed, and ETA there."
         )
-
-    def _resolve_web_base_url(self) -> Optional[str]:
-        try:
-            from distr.gui.web.server import get_unified_server
-
-            server = get_unified_server()
-            if server and server.is_ready():
-                return server.get_url()
-        except Exception:
-            pass
-
-        hosts = ("127.0.0.1", "localhost")
-        for host in hosts:
-            for port in range(8765, 8781):
-                base = f"http://{host}:{port}"
-                try:
-                    with urllib.request.urlopen(f"{base}/health", timeout=0.25) as resp:
-                        if resp.status == 200:
-                            return base
-                except Exception:
-                    continue
-        return None

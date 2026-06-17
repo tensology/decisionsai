@@ -254,17 +254,16 @@ def start_project_startup_terminals(
     )
     from distr.core.terminal import materialize_queued_startup_terminals_sync
 
-    if failed > 0 or started < len(resolved_commands):
-        mat_started, mat_failed = materialize_queued_startup_terminals_sync(project_id)
-        if mat_started:
-            started += mat_started
-            failed = max(0, failed - mat_started)
-            logger.info(
-                "Project startup terminals materialized from queue: project_id=%s started=%s failed=%s",
-                project_id,
-                mat_started,
-                mat_failed,
-            )
+    mat_started, mat_failed = materialize_queued_startup_terminals_sync(project_id)
+    if mat_started or mat_failed:
+        started += mat_started
+        failed = max(0, failed - mat_started) + mat_failed
+        logger.info(
+            "Project startup terminals materialized from queue: project_id=%s started=%s failed=%s",
+            project_id,
+            mat_started,
+            mat_failed,
+        )
     if started > 0 and project.get("start_time_tracker", True):
         try:
             from distr.core.db import get_session
@@ -282,7 +281,7 @@ def start_project_startup_terminals(
     if diagnostics:
         message = f"{speak}\n\n{_format_startup_diagnostics(diagnostics)}"
     result = ProjectTerminalActionResult(
-        success=started > 0 or failed == 0,
+        success=started > 0,
         project_id=project_id,
         project_name=project["name"],
         action="started",

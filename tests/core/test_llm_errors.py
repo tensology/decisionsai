@@ -2,6 +2,8 @@ from distr.core.llm_errors import (
     LLMModelError,
     extract_provider_error_message,
     format_model_error,
+    format_model_error_for_tts,
+    is_formatted_model_error_message,
 )
 
 
@@ -38,4 +40,25 @@ def test_llm_model_error_wraps_original_exception_message():
     assert "quota or billing" in str(wrapped)
     assert wrapped.provider == "OpenAI"
     assert wrapped.model == "gpt-test"
+
+
+def test_rate_limit_tts_message_is_human_not_technical():
+    spoken = format_model_error_for_tts(
+        "Error code: 429 - {'status': 429, 'title': 'Too Many Requests'}",
+        provider="NVIDIA",
+        model="deepseek-ai/deepseek-v4-flash",
+    )
+    assert "429" not in spoken
+    assert "Provider:" not in spoken
+    assert "rate limit" in spoken.lower()
+
+
+def test_formatted_model_error_detector():
+    chat = format_model_error(
+        "Error code: 429 - {'status': 429}",
+        provider="NVIDIA",
+        model="deepseek-ai/deepseek-v4-flash",
+    )
+    assert is_formatted_model_error_message(chat)
+    assert not is_formatted_model_error_message("Try again in a minute.")
 

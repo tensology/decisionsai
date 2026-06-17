@@ -649,7 +649,7 @@ def setup(skip_model_pull=False, install_optional=False):
         from distr.core.harness_stack import ensure_harness_stack_setup
 
         stack = ensure_harness_stack_setup(run_full=True)
-        for pack_name in ("ecc", "competition", "capabilities", "design_references", "agent_reach", "community_skills", "yt_dlp", "mcp"):
+        for pack_name in ("ecc", "competition", "capabilities", "design_references", "agent_reach", "community_skills", "visual_plan", "yt_dlp", "mcp"):
             result = stack.get(pack_name) or {}
             if not result:
                 continue

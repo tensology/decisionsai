@@ -258,7 +258,10 @@ def merge_harness_pre_chain(skill_ids: list[str], *, project_folder: str = "") -
     chain = merge_ytdlp_pre_chain(chain, project_folder=project_folder)
     from distr.core.composio_pack import merge_composio_pre_chain
 
-    return merge_composio_pre_chain(chain, project_folder=project_folder)
+    chain = merge_composio_pre_chain(chain, project_folder=project_folder)
+    from distr.core.visual_plan_pack import merge_visual_plan_pre_chain
+
+    return merge_visual_plan_pre_chain(chain)
 
 
 def ensure_capabilities_pack_setup(

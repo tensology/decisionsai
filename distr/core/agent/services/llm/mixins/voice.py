@@ -115,7 +115,9 @@ class VoiceDictationMixin:
             except Exception as e:
                 logger.debug("Dictation: Ticket rewrite failed; typing raw transcript: %s", e)
 
-        return text
+        from distr.core.audio.dictation_text import trim_short_dictation_period
+
+        return trim_short_dictation_period(text)
 
     def _should_rewrite_dictation_as_ticket(self) -> bool:
         return (

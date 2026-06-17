@@ -100,6 +100,11 @@ def run_on_unified_server_loop(coro, *, timeout: float = STARTUP_TERMINAL_HTTP_T
         server = get_unified_server()
         loop = getattr(server, "asyncio_loop", None) if server else None
         if loop is None or not loop.is_running():
+            logger.warning(
+                "run_on_unified_server_loop: web server loop unavailable (server=%s loop=%s)",
+                bool(server),
+                loop is not None,
+            )
             return None
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=timeout)
