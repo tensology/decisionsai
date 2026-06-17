@@ -38,13 +38,49 @@ def _get_internal_api_token_for_web() -> str:
         return ""
 
 
+def _start_via_inprocess_runtime(
+    project_id: int,
+    folder: str,
+    commands: list[str],
+) -> tuple[int, int, list[dict[str, str]]] | None:
+    """Spawn startup PTYs on the local web-server loop (no HTTP round-trip)."""
+    from distr.core.terminal import create_startup_shell_session
+    from distr.core.web_runtime import run_on_unified_server_loop
+
+    if not commands:
+        return 0, 0, []
+
+    async def _spawn_all() -> tuple[int, int, list[dict[str, str]]]:
+        started = 0
+        failed = 0
+        diagnostics: list[dict[str, str]] = []
+        for cmd in commands:
+            try:
+                await create_startup_shell_session(project_id, folder, cmd)
+                started += 1
+                diagnostics.append(
+                    {"command": cmd, "status": "started", "reason": "spawned in-process"},
+                )
+            except Exception as exc:
+                logger.warning("In-process startup-terminal failed for '%s': %s", cmd, exc)
+                failed += 1
+                diagnostics.append(
+                    {"command": cmd, "status": "failed", "reason": str(exc)},
+                )
+        return started, failed, diagnostics
+
+    timeout = max(90.0, 30.0 * len(commands))
+    result = run_on_unified_server_loop(_spawn_all(), timeout=timeout)
+    return result
+
+
 def _start_via_web_runtime(project_id: int, folder: str, commands: list[str]) -> tuple[int, int, list[dict[str, str]]]:
     token = _get_internal_api_token_for_web()
     if not token:
         diagnostics = [{"command": c, "status": "failed", "reason": "Missing internal API token"} for c in commands]
         return 0, len(commands), diagnostics
 
-    from distr.core.web_runtime import get_local_web_base_url
+    from distr.core.web_runtime import STARTUP_TERMINAL_HTTP_TIMEOUT_SEC, get_local_web_base_url
 
     started = 0
     failed = 0
@@ -66,7 +102,7 @@ def _start_via_web_runtime(project_id: int, folder: str, commands: list[str]) ->
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
+            with urllib.request.urlopen(req, timeout=STARTUP_TERMINAL_HTTP_TIMEOUT_SEC) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
             if payload.get("success"):
                 started += 1
@@ -90,14 +126,37 @@ def _start_via_web_runtime(project_id: int, folder: str, commands: list[str]) ->
 
 
 def _start_inapp_terminals(project_id: int, folder: str, commands: list[str]) -> tuple[int, int, list[dict[str, str]]]:
-    """Start terminals in web runtime; fallback to queue if needed."""
-    started, failed, diagnostics = _start_via_web_runtime(project_id=project_id, folder=folder, commands=commands)
-    if started > 0 and failed == 0:
-        return started, failed, diagnostics
+    """Start terminals in the local web runtime; queue only when spawn fails."""
+    started = 0
+    failed = 0
+    diagnostics: list[dict[str, str]] = []
+    remaining = list(commands)
+
+    inprocess = _start_via_inprocess_runtime(project_id=project_id, folder=folder, commands=remaining)
+    if inprocess is not None:
+        started, failed, diagnostics = inprocess
+        if failed == 0:
+            return started, failed, diagnostics
+        remaining = [d["command"] for d in diagnostics if d.get("status") == "failed" and d.get("command")]
+
+    if remaining:
+        web_started, web_failed, web_diagnostics = _start_via_web_runtime(
+            project_id=project_id,
+            folder=folder,
+            commands=remaining,
+        )
+        started += web_started
+        failed = max(0, failed - web_started) + web_failed
+        diagnostics.extend(web_diagnostics)
+        if web_failed == 0:
+            return started, failed, diagnostics
+        remaining = [d["command"] for d in web_diagnostics if d.get("status") == "failed" and d.get("command")]
 
     from distr.core.terminal import queue_startup_terminal_launch
 
-    queue_candidates = [d["command"] for d in diagnostics if d.get("status") == "failed" and d.get("command")]
+    queue_candidates = remaining or [
+        d["command"] for d in diagnostics if d.get("status") == "failed" and d.get("command")
+    ]
     queued = queue_startup_terminal_launch(project_id=project_id, cwd=folder, commands=queue_candidates)
     queue_failed = max(0, len(queue_candidates) - queued)
     if queued or queue_failed:

@@ -901,6 +901,15 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.debug("Orchestrator machine activity compaction skipped: %s", e)
 
+    @app.on_event("startup")
+    async def _bind_unified_server_loop():
+        """Expose the uvicorn asyncio loop for in-process terminal spawns."""
+        import asyncio
+
+        server = get_unified_server()
+        if server is not None:
+            server.asyncio_loop = asyncio.get_running_loop()
+
     # Check model recommendations staleness on startup
     @app.on_event("startup")
     async def _check_model_recommendations():
@@ -930,6 +939,7 @@ class UnifiedGuiServer:
         self.server: Optional[uvicorn.Server] = None
         self.server_thread: Optional[threading.Thread] = None
         self.is_running = False
+        self.asyncio_loop = None
     
     def _run_server_thread(self):
         """Run the server in a thread"""

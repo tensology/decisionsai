@@ -163,6 +163,21 @@ async def materialize_queued_startup_terminals(project_id: int) -> tuple[int, in
     return started, failed
 
 
+def materialize_queued_startup_terminals_sync(
+    project_id: int,
+    *,
+    timeout: float = 120.0,
+) -> tuple[int, int]:
+    """Materialize queued startup terminals from a sync caller (tray menu, tools)."""
+    from distr.core.web_runtime import run_on_unified_server_loop
+
+    result = run_on_unified_server_loop(
+        materialize_queued_startup_terminals(project_id),
+        timeout=timeout,
+    )
+    return result if result is not None else (0, 0)
+
+
 class TerminalSession:
     """A single PTY terminal session bound to a project."""
 

@@ -37,11 +37,19 @@ def parse_startup_command_lines(startup_instructions: str) -> list[str]:
 
 def announce_project_terminal_feedback(message: str) -> None:
     """Speak a short confirmation through desktop TTS / remote audio paths."""
+    text = (message or "").strip()
+    if not text:
+        return
+    try:
+        from distr.core.signals import signal_manager
+
+        signal_manager.speak_text_directly.emit(text)
+        return
+    except Exception:
+        pass
     from distr.core.signals import speak_text_directly_event_queue
 
-    text = (message or "").strip()
-    if text:
-        speak_text_directly_event_queue(text)
+    speak_text_directly_event_queue(text)
 
 
 def project_startup_terminals_running(project_id: int) -> bool:
@@ -244,6 +252,19 @@ def start_project_startup_terminals(
         canonical,
         resolved_commands,
     )
+    from distr.core.terminal import materialize_queued_startup_terminals_sync
+
+    if failed > 0 or started < len(resolved_commands):
+        mat_started, mat_failed = materialize_queued_startup_terminals_sync(project_id)
+        if mat_started:
+            started += mat_started
+            failed = max(0, failed - mat_started)
+            logger.info(
+                "Project startup terminals materialized from queue: project_id=%s started=%s failed=%s",
+                project_id,
+                mat_started,
+                mat_failed,
+            )
     if started > 0 and project.get("start_time_tracker", True):
         try:
             from distr.core.db import get_session

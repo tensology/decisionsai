@@ -904,7 +904,15 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                     # Check if this request came from Telegram and if there's an analyzed image
                     # ALWAYS include screenshot for Telegram requests (whether it's analysis or direct send)
                     analyzed_image_path = None
-                    has_telegram_request = hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
+                    force_desktop_tts = bool(
+                        getattr(threading.current_thread(), "force_desktop_tts", False)
+                        or getattr(self, "_force_desktop_tts", False)
+                    )
+                    has_telegram_request = (
+                        not force_desktop_tts
+                        and hasattr(threading.current_thread(), "telegram_request")
+                        and threading.current_thread().telegram_request
+                    )
                     
                     # Use instance variable if available (persists across the TTS session)
                     if hasattr(self, '_current_telegram_request') and self._current_telegram_request:
@@ -912,7 +920,7 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                         logger.debug(f"TTS: Using stored _current_telegram_request=True for Telegram sending check")
                     
                     # If not found on current thread or instance, check all threads (for thread pool scenarios)
-                    if not has_telegram_request:
+                    if not has_telegram_request and not force_desktop_tts:
                         import threading as threading_module
                         for thread in threading_module.enumerate():
                             if hasattr(thread, 'telegram_request') and thread.telegram_request:
@@ -952,7 +960,11 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                     # 2. This is a welcome message (system-initiated greeting when Telegram is connected)
                     # Desktop-initiated user responses should NOT be sent to Telegram
                     # BUT: Skip Telegram send if file was already sent (file is the response, but we still want TTS audio)
-                    should_send_to_telegram = (has_telegram_request or is_welcome_message) and not file_already_sent
+                    should_send_to_telegram = (
+                        (has_telegram_request or is_welcome_message)
+                        and not file_already_sent
+                        and not force_desktop_tts
+                    )
                     
                     logger.info(f"[Telegram TTS] Decision: send={should_send_to_telegram} (telegram_req={has_telegram_request}, welcome={is_welcome_message}, file_sent={file_already_sent}, text='{session_text_normalized[:80]}...')")
                     
