@@ -143,6 +143,36 @@ def provision_workflow_skills(
         skill_ids = merge_harness_pre_chain(skill_ids, project_folder=project_folder)
     if not skill_ids or not project_folder:
         return []
+    if chain_type == "pre_chain" and "ponytail" in skill_ids:
+        from distr.core.competition_pack import push_ponytail_cursor_rule_to_project
+
+        rule_dest = push_ponytail_cursor_rule_to_project(
+            project_folder=project_folder,
+            backend_id=backend_id,
+        )
+        if rule_dest:
+            try:
+                from distr.core.orchestrator import emit_event
+
+                emit_event(
+                    source="orchestrator",
+                    event_type="skill_provisioned",
+                    status="ok",
+                    workflow_id=workflow_id or getattr(workflow, "id", None),
+                    run_id=run_id,
+                    ticket_id=ticket_id,
+                    board_id=board_id,
+                    project_id=project_id,
+                    summary=f"Provisioned Ponytail Cursor rule for {backend_id}",
+                    payload={
+                        "skill_id": "ponytail-rule",
+                        "chain": chain_type,
+                        "dest": rule_dest,
+                        "backend_id": backend_id,
+                    },
+                )
+            except Exception:
+                logger.debug("Could not emit ponytail rule provision event", exc_info=True)
     pushed: list[str] = []
     for skill_id in skill_ids:
         dest = push_skill_to_project(skill_id=skill_id, project_folder=project_folder, backend_id=backend_id)

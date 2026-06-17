@@ -152,6 +152,8 @@ def _litellm_model(provider: str, model: str, settings: dict) -> str:
         return model or "kilocode/kilocode"
     if p == "gemini":
         return f"gemini/{model}" if model else "gemini/gemini-2.5-flash"
+    if p == "nvidia":
+        return f"nvidia/{model}" if model else "nvidia/meta/llama-3.3-70b-instruct"
     # Fallback
     return f"ollama/{model}" if model else "ollama/llama3.2"
 

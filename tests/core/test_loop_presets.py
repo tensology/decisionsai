@@ -45,7 +45,7 @@ def test_loop_presets_api_route_not_shadowed_by_workflow_id():
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body.get("presets"), list)
-    assert len(body["presets"]) == 3
+    assert len(body["presets"]) == 4
     assert body["presets"][0]["slug"] == "ideation-brief-to-board"
 
 
@@ -83,18 +83,22 @@ def db_factory(tmp_path, monkeypatch):
 
 def test_loop_preset_bundles_exist():
     summaries = list_preset_summaries()
-    assert len(summaries) == 3
+    assert len(summaries) == 4
     slugs = {row.get("slug") for row in summaries}
     assert slugs == {
         "ideation-brief-to-board",
         "development-ticket-to-implementation",
         "polish-verify-and-ship",
+        "implement-js-fallow-audit",
     }
 
 
 def test_list_loop_presets_matches_catalog():
+    from distr.core.workflow.loop_preset_loader import list_preset_catalog_entries
+
     presets = list_loop_presets()
-    assert len(presets) == len(ELORM_LOOP_KICKOFFS)
+    catalog = list_preset_catalog_entries()
+    assert len(presets) == len(catalog)
     assert presets[0]["slug"] == "ideation-brief-to-board"
 
 
@@ -150,6 +154,24 @@ def test_apply_loop_preset_from_bundle(db_factory):
     assert merged.get("preset_name") == preset_name
     assert merged.get("preset_source") == "bundle"
     assert merged.get("loop_contract")
+
+
+def test_apply_fallow_preset_sets_post_chain(db_factory):
+    session = db_factory()
+    wf = AutoWorkflow(name="Fallow Gate", description="", workflow_input="{}")
+    session.add(wf)
+    session.commit()
+    session.refresh(wf)
+
+    result = apply_loop_preset(wf.id, "implement-js-fallow-audit")
+
+    assert result["success"] is True
+    assert result.get("preset_slug") == "implement-js-fallow-audit"
+    assert result["step_count"] == 4
+
+    session = db_factory()
+    wf_row = session.query(AutoWorkflow).filter(AutoWorkflow.id == wf.id).first()
+    assert json.loads(wf_row.post_chain or "[]") == ["fallow"]
 
 
 def test_apply_loop_preset_append_mode(db_factory):

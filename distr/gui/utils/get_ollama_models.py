@@ -371,6 +371,95 @@ def get_groq_models(api_key: str):
         return []
 
 
+def _format_nvidia_model_name(model_id: str) -> str:
+    """Human-readable label from NVIDIA catalog id (e.g. meta/llama-3.3-70b-instruct)."""
+    tail = model_id.split("/")[-1] if "/" in model_id else model_id
+    return tail.replace("-", " ").replace("_", " ").title()
+
+
+def get_nvidia_models(api_key: str):
+    """
+    Fetch available NVIDIA NIM chat models from build.nvidia.com (OpenAI-compatible API).
+    Hosted endpoints are free tier; tagged (free) in the UI.
+    """
+    if not api_key or not api_key.strip():
+        logger.warning("No NVIDIA API key provided")
+        return []
+
+    try:
+        response = requests.get(
+            "https://integrate.api.nvidia.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+
+        if response.status_code != 200:
+            logger.warning(
+                "NVIDIA API returned status %s: %s",
+                response.status_code,
+                response.text[:200],
+            )
+            return []
+
+        data = response.json()
+        all_models = data.get("data", [])
+
+        skip_patterns = [
+            "embed", "embedding", "rerank", "whisper", "tts",
+            "moderation", "guard", "sdxl", "flux", "stable-diffusion",
+        ]
+
+        chat_models = []
+        for model in all_models:
+            model_id = model.get("id", "")
+            if not model_id:
+                continue
+            m_lower = model_id.lower()
+            if any(x in m_lower for x in skip_patterns):
+                continue
+            chat_models.append(model_id)
+
+        def sort_key(m):
+            ml = m.lower()
+            if "nemotron" in ml:
+                return (0, m)
+            if "llama-3.3" in ml or "llama3.3" in ml:
+                return (1, m)
+            if "deepseek" in ml:
+                return (2, m)
+            if "kimi" in ml:
+                return (3, m)
+            if "glm" in ml:
+                return (4, m)
+            if "llama" in ml:
+                return (5, m)
+            return (6, m)
+
+        chat_models.sort(key=sort_key)
+
+        models = []
+        for model_id in chat_models:
+            models.append({
+                "id": model_id,
+                "name": f"{_format_nvidia_model_name(model_id)} (free)",
+                "is_free": True,
+            })
+
+        logger.info(
+            "Found %s NVIDIA chat models (filtered from %s total)",
+            len(models),
+            len(all_models),
+        )
+        return models
+
+    except requests.Timeout:
+        logger.warning("Timeout fetching NVIDIA models")
+        return []
+    except Exception as e:
+        logger.error(f"Error fetching NVIDIA models: {e}")
+        return []
+
+
 def get_kilo_models(api_key: str):
     """
     Fetch available models from Kilo Gateway (OpenRouter-compatible API).

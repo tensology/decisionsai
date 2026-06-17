@@ -152,6 +152,7 @@ DEFAULT_MODELS = {
     "groq": "llama-3.3-70b-versatile",
     "kilocode": "anthropic/claude-opus-4.5",
     "gemini": "gemini-2.5-flash",
+    "nvidia": "meta/llama-3.3-70b-instruct",
 }
 
 # --- Default Models Per LLM Type (Ollama, memory-aware) ---
@@ -172,6 +173,7 @@ PROVIDER_TO_ENGINE = {
     "OpenRouter": "openrouter",
     "KiloCode": "kilocode",
     "Google Gemini": "gemini",
+    "NVIDIA": "nvidia",
 }
 ENGINE_TO_PROVIDER = {v: k for k, v in PROVIDER_TO_ENGINE.items()}
 
@@ -183,6 +185,7 @@ API_KEY_NAMES = {
     "openrouter": "openrouter_key",
     "kilocode": "kilo_key",
     "gemini": "gemini_key",
+    "nvidia": "nvidia_key",
 }
 
 # --- Kokoro TTS Files ---

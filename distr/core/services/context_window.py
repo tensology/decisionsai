@@ -139,6 +139,8 @@ def _provider_default(provider: Optional[str]) -> int:
         return 1_048_576
     if key == "groq":
         return 128_000
+    if key == "nvidia":
+        return 128_000
     if key == "ollama":
         return 128_000
     return 32_000

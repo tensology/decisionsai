@@ -82,6 +82,12 @@ except ImportError as e:
     logger.warning(f"Error importing GeminiLLMService: {e}")
     GeminiLLMService = None
 
+try:
+    from .llm.providers.nvidia import NvidiaLLMService
+except ImportError as e:
+    logger.warning(f"Error importing NvidiaLLMService: {e}")
+    NvidiaLLMService = None
+
 __all__ = ["WhisperSTTService", "OllamaLLMService", "KokoroTTSService", "ElevenLabsTTSService"]
 if OpenAITTSService:
     __all__.append("OpenAITTSService")
@@ -99,6 +105,10 @@ if GroqLLMService:
     __all__.append("GroqLLMService")
 if KiloCodeLLMService:
     __all__.append("KiloCodeLLMService")
+if GeminiLLMService:
+    __all__.append("GeminiLLMService")
+if NvidiaLLMService:
+    __all__.append("NvidiaLLMService")
 if VoskSTTService:
     __all__.append("VoskSTTService")
 if OpenAIWhisperSTTService:

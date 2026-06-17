@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_competition_pack_bootstrap_projects_skills(tmp_path, monkeypatch):
     from distr.core.competition_pack import ensure_competition_pack_setup
@@ -52,3 +54,27 @@ def test_merge_competition_pre_chain_python_project_skips_fallow(tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
     chain = merge_competition_pre_chain([], project_folder=str(tmp_path))
     assert chain == ["ponytail"]
+
+
+def test_push_ponytail_cursor_rule_to_project(tmp_path, monkeypatch):
+    from distr.core.competition_pack import push_ponytail_cursor_rule_to_project
+    from distr.core.plugins import COMPETITION_PACK_DIR
+
+    src = COMPETITION_PACK_DIR / "ponytail" / "rules" / "cursor-ponytail.mdc"
+    if not src.is_file():
+        pytest.skip("competition pack ponytail rule missing")
+
+    dest = push_ponytail_cursor_rule_to_project(
+        project_folder=str(tmp_path),
+        backend_id="cursor_ide",
+    )
+    assert dest is not None
+    rule = tmp_path / ".cursor" / "rules" / "ponytail.mdc"
+    assert rule.is_file()
+    assert rule.read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
+
+    skipped = push_ponytail_cursor_rule_to_project(
+        project_folder=str(tmp_path),
+        backend_id="pi",
+    )
+    assert skipped is None

@@ -12,6 +12,7 @@ const PROVIDERS = [
     {id: 'groq', name: 'Groq', keyField: 'key'},
     {id: 'kilocode', name: 'KiloCode', keyField: 'key', settingsKey: 'kilo'},
     {id: 'gemini', name: 'Google Gemini', keyField: 'key'},
+    {id: 'nvidia', name: 'NVIDIA', keyField: 'key'},
     {id: 'masko', name: 'Masko AI', keyField: 'key'}
 ];
 
@@ -89,8 +90,9 @@ async function loadThirdPartySettings() {
     }
 }
 
-// Save settings to backend
-async function saveThirdPartySettings() {
+// Save settings to backend. Returns true when persisted.
+async function saveThirdPartySettings(options = {}) {
+    const silent = options.silent === true;
     try {
         // Check for invalid keys before saving
         const invalidProviders = [];
@@ -114,8 +116,10 @@ async function saveThirdPartySettings() {
         // Prevent saving if there are invalid keys
         if (invalidProviders.length > 0) {
             const providerList = invalidProviders.join(', ');
-            showNotification(`Cannot save: Invalid API keys for ${providerList}. Please validate all enabled providers before saving.`, 'error');
-            return;
+            if (!silent) {
+                showNotification(`Cannot save: Invalid API keys for ${providerList}. Please validate all enabled providers before saving.`, 'error');
+            }
+            return false;
         }
 
         const settings = {
@@ -146,7 +150,9 @@ async function saveThirdPartySettings() {
         }
 
         const result = await response.json();
-        showNotification('Settings saved successfully', 'success');
+        if (!silent) {
+            showNotification('Settings saved successfully', 'success');
+        }
         console.log('Settings saved:', result);
 
         // Notify same-page tabs (LLMs, Ticket Board) to refresh provider dropdowns
@@ -158,9 +164,25 @@ async function saveThirdPartySettings() {
             bc.postMessage({ type: 'thirdparty-providers-changed' });
             bc.close();
         } catch (_) { /* BroadcastChannel not supported — no-op */ }
+
+        // After save, reflect stored-key UI (secrets are not echoed back from the API).
+        PROVIDERS.forEach(provider => {
+            const checkbox = document.getElementById(`${provider.id}_enabled`);
+            const input = document.getElementById(`${provider.id}_${provider.keyField}`);
+            if (!checkbox || !input || !checkbox.checked) return;
+            if (input.value.trim() || input.getAttribute('data-has-secret') === 'true') {
+                setStoredKeyState(input, true);
+                setValidationIndicator(provider.id, 'valid', 'Stored key');
+            }
+        });
+
+        return true;
     } catch (error) {
         console.error('Error saving settings:', error);
-        showNotification('Failed to save settings: ' + error.message, 'error');
+        if (!silent) {
+            showNotification('Failed to save settings: ' + error.message, 'error');
+        }
+        return false;
     }
 }
 
@@ -221,6 +243,18 @@ async function validateProvider(providerId) {
 
         if (result.valid) {
             setValidationIndicator(providerId, 'valid', 'Valid');
+            const saved = await saveThirdPartySettings({ silent: true });
+            if (saved) {
+                showNotification(
+                    `${provider.name} key saved — available in Chat and LLMs`,
+                    'success'
+                );
+            } else {
+                showNotification(
+                    `${provider.name} key is valid. Click Save (or fix other providers) to store it.`,
+                    'warning'
+                );
+            }
         } else {
             setValidationIndicator(providerId, 'invalid', result.error || 'Invalid API key');
         }

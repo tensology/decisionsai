@@ -20,6 +20,7 @@ _PROVIDER_NORMALIZE = {
     "kilocode": "KiloCode",
     "gemini": "Google Gemini",
     "google gemini": "Google Gemini",
+    "nvidia": "NVIDIA",
 }
 
 
@@ -240,6 +241,12 @@ def create_stream(
                 model, messages, settings,
                 key_name="gemini_key",
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            )
+        elif prov == "nvidia":
+            yield from _stream_openai_compat(
+                model, messages, settings,
+                key_name="nvidia_key",
+                base_url="https://integrate.api.nvidia.com/v1",
             )
         else:
             raise ValueError(f"Unknown or unsupported LLM provider: {provider}")

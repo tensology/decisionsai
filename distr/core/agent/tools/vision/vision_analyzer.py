@@ -481,8 +481,8 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                 except Exception as e:
                     logger.error(f"Error calling Anthropic vision API: {e}")
                     return f"Error calling Anthropic vision API: {str(e)}"
-            elif vision_provider_key in ("kilocode", "groq", "gemini"):
-                # KiloCode / Groq / Gemini — OpenAI-compatible API
+            elif vision_provider_key in ("kilocode", "groq", "gemini", "nvidia"):
+                # KiloCode / Groq / Gemini / NVIDIA — OpenAI-compatible API
                 try:
                     import requests
                     from distr.core.settings import load_settings_from_db
@@ -493,6 +493,9 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     elif vision_provider_key == "gemini":
                         api_key = settings.get('gemini_key', '')
                         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                    elif vision_provider_key == "nvidia":
+                        api_key = settings.get('nvidia_key', '')
+                        base_url = "https://integrate.api.nvidia.com/v1/chat/completions"
                     else:
                         api_key = settings.get('groq_key', '')
                         base_url = "https://api.groq.com/openai/v1/chat/completions"

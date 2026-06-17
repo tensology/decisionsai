@@ -295,6 +295,34 @@ def _install_fallow_cli_if_requested(*, enabled: bool) -> dict[str, Any]:
         return {"installed": False, "reason": str(exc)}
 
 
+_CURSOR_BACKENDS = frozenset({"cursor", "cursor_ide", "vscode_ide"})
+
+
+def ponytail_cursor_rule_source() -> Path | None:
+    path = COMPETITION_PACK_DIR / "ponytail" / "rules" / "cursor-ponytail.mdc"
+    return path if path.is_file() else None
+
+
+def push_ponytail_cursor_rule_to_project(*, project_folder: str, backend_id: str = "") -> str | None:
+    """Copy Ponytail always-on rule into the active project for Cursor backends."""
+    from distr.core.project_cli_backends import normalize_backend_id
+
+    bid = normalize_backend_id(backend_id or "")
+    if bid not in _CURSOR_BACKENDS:
+        return None
+    src = ponytail_cursor_rule_source()
+    if not src:
+        return None
+    project_path = Path(project_folder).expanduser().resolve()
+    if not project_path.is_dir():
+        return None
+    rules_dir = project_path / ".cursor" / "rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    dest = rules_dir / "ponytail.mdc"
+    shutil.copy2(src, dest)
+    return str(dest)
+
+
 def project_has_js_ts_surface(folder: str) -> bool:
     root = Path(folder or "").expanduser()
     if not root.is_dir():

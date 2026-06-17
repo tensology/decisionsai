@@ -267,6 +267,30 @@ def validate_gemini(api_key: str) -> tuple[bool, str]:
 
 
 
+def validate_nvidia(api_key: str) -> tuple[bool, str]:
+    """Validate NVIDIA NIM API key (build.nvidia.com)."""
+    try:
+        req = urllib.request.Request(
+            "https://integrate.api.nvidia.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            if response.status == 200:
+                return True, ""
+        return False, "Invalid API key"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Invalid API key"
+        if e.code == 403:
+            return False, (
+                "Forbidden (403): generate a new key at build.nvidia.com with "
+                "the Public API Endpoints scope"
+            )
+        return False, f"HTTP Error: {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def validate_masko(api_key: str) -> tuple[bool, str]:
     """Validate Masko API key by checking credits."""
     try:
@@ -307,6 +331,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "groq": validate_groq,
         "kilocode": validate_kilocode,
         "gemini": validate_gemini,
+        "nvidia": validate_nvidia,
         "masko": validate_masko,
     }
 

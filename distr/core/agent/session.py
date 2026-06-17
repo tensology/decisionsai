@@ -831,8 +831,9 @@ class AgentSession:
         Kept for the main-process path (settings UI model change) where Qt signals work.
         Delegates to command_handler._cmd_hot_swap_llm logic to avoid duplication.
         """
-        provider_names = ["Ollama", "OpenAI", "Anthropic", "OpenRouter", "Groq", "KiloCode", "Google Gemini"]
-        if model_name in provider_names:
+        from distr.core.chat import valid_llm_providers
+
+        if model_name in valid_llm_providers():
             self.logger.warning("AgentSession: Rejecting provider name as model: %s", model_name)
             return
 

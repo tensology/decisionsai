@@ -96,6 +96,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "groq_key",
         "kilo_key",
         "gemini_key",
+        "nvidia_key",
         "masko_key",
         "rube_token",
     ]
@@ -110,6 +111,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "groq_enabled": settings.get("groq_enabled", False),
         "kilo_enabled": settings.get("kilo_enabled", False),
         "gemini_enabled": settings.get("gemini_enabled", False),
+        "nvidia_enabled": settings.get("nvidia_enabled", False),
         "masko_enabled": settings.get("masko_enabled", False),
         "composio_enabled": settings.get("rube_enabled", False),
     }

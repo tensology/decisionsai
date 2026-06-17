@@ -50,7 +50,7 @@ def create_routes(base_path: str = "") -> APIRouter:
   -d '{{"provider": "ollama", "model_name": "qwen3:8b", "title": "My Chat", "starting_question": "Hello!"}}'""",
                         "body": {
                             "title": {"type": "string", "required": False, "description": "Chat title (auto-generated from question if omitted)"},
-                            "provider": {"type": "string", "required": False, "description": "LLM provider: ollama, openai, anthropic, groq, openrouter, kilocode, gemini"},
+                            "provider": {"type": "string", "required": False, "description": "LLM provider: ollama, openai, anthropic, groq, openrouter, kilocode, gemini, nvidia"},
                             "model_name": {"type": "string", "required": False, "description": "Model name (e.g. qwen3:8b, gpt-4o)"},
                             "voice_provider": {"type": "string", "required": False, "description": "TTS provider: kokoro, openai, elevenlabs, f5tts"},
                             "voice_model": {"type": "string", "required": False, "description": "Voice model (e.g. af_heart, alloy)"},

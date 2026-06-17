@@ -5,7 +5,11 @@ Vendored harness skills and rules from the sibling reference clones (same layout
 - **Ponytail** — lazy senior dev discipline (YAGNI, stdlib-first, minimal diffs)
 - **Fallow** — deterministic JS/TS codebase intelligence (`fallow audit`, dead code, dupes, health)
 
-DecisionsAI projects this pack into Codex, Cursor, Claude, and Pi the same way as the ECC harness pack. Refresh from upstream checkouts with:
+DecisionsAI projects this pack into Codex, Cursor, Claude, and Pi the same way as the ECC harness pack.
+
+**Assessment:** [audit-docs/ponytail-fallow-reference-assessment.md](../../audit-docs/ponytail-fallow-reference-assessment.md) — integration fit, gaps, and loop preset `implement-js-fallow-audit`.
+
+Refresh from upstream checkouts with:
 
 ```bash
 cd ../reference/ponytail && git pull

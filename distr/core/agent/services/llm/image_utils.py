@@ -251,7 +251,7 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
     prompt_text = f"Please analyze this image. The user asked: {user_text}"
 
     # --- OpenAI-compatible providers ---
-    if provider_key in ('openai', 'openrouter', 'groq', 'kilocode', 'gemini'):
+    if provider_key in ('openai', 'openrouter', 'groq', 'kilocode', 'gemini', 'nvidia'):
         try:
             from openai import AsyncOpenAI
 
@@ -269,6 +269,9 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
             elif provider_key == 'gemini':
                 api_key = settings.get('gemini_key', api_key)
                 base_url = 'https://generativelanguage.googleapis.com/v1beta/openai/'
+            elif provider_key == 'nvidia':
+                api_key = settings.get('nvidia_key', api_key)
+                base_url = 'https://integrate.api.nvidia.com/v1'
 
             client_kwargs = {"api_key": api_key}
             if base_url:

@@ -12,7 +12,7 @@ One Decisions install enhances every CLI/IDE you already use. Run `bin/setup.py`
 | Pack | Purpose |
 |------|---------|
 | **ECC** (`decisions-ecc-harness`) | Full vendored skill/agent/command surface under `plugins/ecc` |
-| **Competition** (`decisions-competition-harness`) | Ponytail + Fallow skills and Cursor ponytail rule |
+| **Competition** (`decisions-competition-harness`) | Ponytail + Fallow skills and Cursor ponytail rule; project `ponytail.mdc` on workflow provision |
 | **Capabilities** (`decisions-browser-content-harness`) | Browser QA, video/Remotion, content-engine, fal-ai-media |
 | **Design references** (`decisions-design-reference-harness`) | Refero, Mobbin, Aceternity, Godly + UI ideation |
 | **Agent Reach** (`decisions-agent-reach-harness`) | Internet research — Twitter, Reddit, YouTube, GitHub, web, RSS, Exa |
@@ -31,7 +31,12 @@ One Decisions install enhances every CLI/IDE you already use. Run `bin/setup.py`
 
 - `ide_thread` — list/read/prompt Codex and Cursor sessions
 - `playwright_browser` — browser automation
-- Workflow skill provision — pushes pre_chain skills into the active project harness
+- Workflow skill provision — pushes pre_chain skills into the active project harness; copies Ponytail rule to project `.cursor/rules/` for Cursor backends
+- Loop preset **Engineering: Implement + Fallow Audit (JS)** (`implement-js-fallow-audit`) — explicit fallow audit gate
+
+## Reference
+
+- Ponytail/Fallow assessment: `audit-docs/ponytail-fallow-reference-assessment.md`
 
 ## State files
 

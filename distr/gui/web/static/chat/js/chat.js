@@ -640,6 +640,7 @@ function startChatWebSocket(force) {
                                         </div>
                                     </div>
                                 `;
+                                _lastStreamFinalizedPlain = _normalizeMsgPlain(content);
                             }
                             streamingChatId = null;
                             removeTypingIndicator();
@@ -1274,7 +1275,12 @@ function handleChatEventStreamFinished(msg) {
         const chatId = currentChatId;
         fetch(`${API_BASE}/chats/${chatId}`).then(r => r.json()).then(data => {
             if (currentChatId === chatId) {
-                renderMessages(data.messages || [], false);
+                const messages = data.messages || [];
+                const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
+                const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
+                if (!lastPlain || !hasRenderedMessagePlain('assistant', lastPlain)) {
+                    renderMessages(messages, false);
+                }
                 syncRenderedMessageCountFromDom();
                 _suppressChatUpdatedFetchUntil = Date.now() + 2500;
                 updateChatSettingsDisplay({
@@ -2512,12 +2518,16 @@ let _suppressChatUpdatedFetchUntil = 0;
 const _pendingAssistantToolMessages = new Map();
 const MAX_ACTIVITY_STEPS_PER_GROUP = 3;
 
+/** Persisted rows only — excludes live streaming/typing placeholders. */
+function countPersistedDomMessages() {
+    if (!chatMessages) return 0;
+    return [...chatMessages.querySelectorAll('.message, .chat-divider')].filter(isLiveChatMessageNode).length;
+}
+
 /** Keep _renderedMessageCount aligned when WebSocket finalizes #streamingAssistantMessage (no renderMessages() call). */
 function syncRenderedMessageCountFromDom() {
     if (!chatMessages) return;
-    _renderedMessageCount = [...chatMessages.querySelectorAll('.message, .chat-divider')].filter(
-        el => el.id !== 'transcriptionStatus'
-    ).length;
+    _renderedMessageCount = countPersistedDomMessages();
 }
 
 function isTraceMessage(message) {
@@ -2743,10 +2753,12 @@ function renderMessages(messages, preserveOnEmpty) {
         return;
     }
     // Incremental render: only append new messages instead of wiping the whole DOM.
-    // When messages.length < _renderedMessageCount, the chat was reloaded (e.g. switching chats),
-    // so we do a full rebuild. Also rebuild if the list is out of chronological order.
+    // When switching chats, loadChat resets _renderedMessageCount but old rows may still
+    // be in the DOM — compare against live DOM count, not only _renderedMessageCount.
+    const domMessageCount = countPersistedDomMessages();
+    const switchingChat = messages.length < domMessageCount || messages.length < _renderedMessageCount;
     const orderRegressed = !messagesAreChronological(messages);
-    if (messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10 && !orderRegressed) {
+    if (!switchingChat && messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10 && !orderRegressed) {
         // Fast path: append only new messages, skipping ones already rendered optimistically
         for (let i = _renderedMessageCount; i < messages.length; i++) {
             const msg = messages[i];
@@ -2765,6 +2777,12 @@ function renderMessages(messages, preserveOnEmpty) {
                 const a = _normalizeMsgPlain(messages[i - 1].content);
                 const b = _normalizeMsgPlain(msg.content);
                 if (a && a === b) {
+                    continue;
+                }
+            }
+            if (msg.role === 'assistant' && msg.content) {
+                const assistantPlain = _normalizeMsgPlain(msg.content);
+                if (assistantPlain && hasRenderedMessagePlain('assistant', assistantPlain)) {
                     continue;
                 }
             }
@@ -3693,8 +3711,10 @@ async function pollUntilAgentResponse(abortSignal) {
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
             if (has_new && last_is_assistant) {
                 // WebSocket stream_finished may have finalized the assistant row already; don't append again.
-                const domN = chatMessages ? chatMessages.querySelectorAll('.message').length : 0;
-                if (domN >= messages.length) {
+                const domN = countPersistedDomMessages();
+                const lastPlain = _normalizeMsgPlain(messages[messages.length - 1].content || '');
+                const assistantRendered = !lastPlain || hasRenderedMessagePlain('assistant', lastPlain);
+                if (domN >= messages.length && assistantRendered) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
@@ -3705,7 +3725,11 @@ async function pollUntilAgentResponse(abortSignal) {
                 }
                 finish();
                 if (currentChatId === myChatId) {
-                    renderMessages(messages, false);
+                    if (!assistantRendered) {
+                        renderMessages(messages, false);
+                    } else {
+                        syncRenderedMessageCountFromDom();
+                    }
                     updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                     scrollToBottom();
                 }
@@ -3724,7 +3748,9 @@ async function pollUntilAgentResponse(abortSignal) {
             if (r && r.ok) {
                 const d = await r.json();
                 const msgs = (d.messages || []);
-                if (msgs.some(m => m.role === 'assistant')) {
+                const lastAssistant = msgs.filter(m => m.role === 'assistant').pop();
+                const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
+                if (lastPlain && !hasRenderedMessagePlain('assistant', lastPlain)) {
                     renderMessages(msgs, false);
                     updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
                     scrollToBottom();
@@ -3786,8 +3812,10 @@ async function sendToAgentAndPoll(message, abortSignal) {
             const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
             if (has_new && last_is_assistant) {
-                const domN = chatMessages ? chatMessages.querySelectorAll('.message').length : 0;
-                if (domN >= messages.length) {
+                const domN = countPersistedDomMessages();
+                const lastPlain = _normalizeMsgPlain(messages[messages.length - 1].content || '');
+                const assistantRendered = !lastPlain || hasRenderedMessagePlain('assistant', lastPlain);
+                if (domN >= messages.length && assistantRendered) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
@@ -3798,7 +3826,11 @@ async function sendToAgentAndPoll(message, abortSignal) {
                 }
                 finish();
                 if (currentChatId === myChatId) {
-                    renderMessages(messages, false);
+                    if (!assistantRendered) {
+                        renderMessages(messages, false);
+                    } else {
+                        syncRenderedMessageCountFromDom();
+                    }
                     updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                     scrollToBottom();
                 }
@@ -3817,7 +3849,9 @@ async function sendToAgentAndPoll(message, abortSignal) {
             if (r && r.ok) {
                 const d = await r.json();
                 const msgs = (d.messages || []);
-                if (msgs.some(m => m.role === 'assistant')) {
+                const lastAssistant = msgs.filter(m => m.role === 'assistant').pop();
+                const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
+                if (lastPlain && !hasRenderedMessagePlain('assistant', lastPlain)) {
                     renderMessages(msgs, false);
                     updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
                     scrollToBottom();
@@ -4469,7 +4503,8 @@ function providerIdFromDisplay(value) {
         'kilocode': 'kilocode',
         'kilo': 'kilocode',
         'google gemini': 'gemini',
-        'gemini': 'gemini'
+        'gemini': 'gemini',
+        'nvidia': 'nvidia'
     };
     return map[lower] || lower;
 }

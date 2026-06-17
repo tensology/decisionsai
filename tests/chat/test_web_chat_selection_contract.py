@@ -361,8 +361,30 @@ def test_waiting_indicator_preserved_during_in_flight_send():
     )[0]
 
     assert "preserveLiveUi" in render_block
+    assert "switchingChat" in render_block
+    assert "countPersistedDomMessages()" in render_block
     assert "message-waiting" in typing_block
     assert "isStreaming && streamingChatId !== currentChatId" in src
+
+
+def test_poll_and_render_skip_duplicate_assistant_rows():
+    src = _chat_js_source()
+    poll_block = src.split("async function pollUntilAgentResponse(abortSignal) {", 1)[1].split(
+        "// Send message to the agent",
+        1,
+    )[0]
+    render_block = src.split("function renderMessages(messages, preserveOnEmpty) {", 1)[1].split(
+        "function formatTime(seconds)",
+        1,
+    )[0]
+
+    assert "countPersistedDomMessages()" in poll_block
+    assert "hasRenderedMessagePlain('assistant', lastPlain)" in poll_block
+    assert "hasRenderedMessagePlain('assistant', assistantPlain)" in render_block
+    assert "function countPersistedDomMessages()" in src
+    assert ".filter(isLiveChatMessageNode)" in src.split("function countPersistedDomMessages()", 1)[1].split(
+        "function syncRenderedMessageCountFromDom", 1
+    )[0]
 
 
 def test_live_tool_activity_uses_same_visibility_contract_as_reload():

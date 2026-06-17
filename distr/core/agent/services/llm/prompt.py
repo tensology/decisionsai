@@ -36,7 +36,7 @@ def _resolve_prompt_profile(model_name: Optional[str], provider_name: Optional[s
     except Exception:
         pass
 
-    if provider in {"openai", "anthropic", "groq", "openrouter", "google gemini", "gemini"}:
+    if provider in {"openai", "anthropic", "groq", "openrouter", "google gemini", "gemini", "nvidia"}:
         return "full"
     return "standard"
 

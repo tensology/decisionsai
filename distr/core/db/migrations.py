@@ -459,6 +459,32 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add gemini_key column: {e}")
 
+    # Handle database migration for nvidia_enabled column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT nvidia_enabled FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN nvidia_enabled BOOLEAN DEFAULT 0"))
+                conn.commit()
+                logger.info("Added nvidia_enabled column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add nvidia_enabled column: {e}")
+
+    # Handle database migration for nvidia_key column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT nvidia_key FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN nvidia_key VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added nvidia_key column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add nvidia_key column: {e}")
+
     # Handle database migration for cursor_enabled column
     try:
         with Session() as session:

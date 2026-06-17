@@ -823,8 +823,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         """Get a specific chat with all its messages"""
         try:
             with get_session() as session:
-                # Get root chat
-                root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
+                from distr.core.chat import _thread_root_chat_id
+
+                root_id = _thread_root_chat_id(session, chat_id)
+                root_chat = session.get(Chat, root_id)
                 if not root_chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
 
@@ -844,7 +846,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
                     SELECT * FROM chat_thread ORDER BY created_date ASC
                 """)
-                rows = session.execute(thread_query, {"root_id": chat_id}).fetchall()
+                rows = session.execute(thread_query, {"root_id": root_id}).fetchall()
 
                 messages = _merge_thread_rows_with_tool_and_workflow_events(rows, root_chat)
 
@@ -955,20 +957,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             )
 
             # Normalize provider for validation
-            from distr.core.chat import _normalize_provider
+            from distr.core.chat import _normalize_provider, valid_llm_providers
 
             provider = _normalize_provider(raw_provider)
 
             # Validate provider
-            valid_providers = [
-                "Ollama",
-                "OpenAI",
-                "Anthropic",
-                "Groq",
-                "OpenRouter",
-                "KiloCode",
-                "Google Gemini",
-            ]
+            valid_providers = valid_llm_providers()
             if provider not in valid_providers:
                 raise HTTPException(
                     status_code=400,
@@ -1180,7 +1174,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 _sett = load_settings_from_db()
                 _changed = False
                 if request_data.provider and request_data.provider.strip():
-                    from distr.core.chat import _normalize_provider
+                    from distr.core.chat import _normalize_provider, valid_llm_providers
                     _sett["conversational_llm_provider"] = _normalize_provider(request_data.provider)
                     _sett["llm_provider"] = _normalize_provider(request_data.provider)
                     _sett["agent_provider"] = _normalize_provider(request_data.provider)
@@ -1683,18 +1677,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
             # Validate provider if provided
             if provider is not None and provider.strip():
-                from distr.core.chat import _normalize_provider
+                from distr.core.chat import _normalize_provider, valid_llm_providers
 
                 norm_provider = _normalize_provider(provider)
-                valid_providers = [
-                    "Ollama",
-                    "OpenAI",
-                    "Anthropic",
-                    "Groq",
-                    "OpenRouter",
-                    "KiloCode",
-                    "Google Gemini",
-                ]
+                valid_providers = valid_llm_providers()
                 if norm_provider not in valid_providers:
                     raise HTTPException(
                         status_code=400,

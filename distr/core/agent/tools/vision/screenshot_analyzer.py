@@ -1185,7 +1185,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 return f"Error calling Ollama vision API: {e}"
 
         # --- OpenRouter / KiloCode / Groq (OpenAI-compatible) ---
-        if vision_provider_key in ("openrouter", "kilocode", "groq", "gemini"):
+        if vision_provider_key in ("openrouter", "kilocode", "groq", "gemini", "nvidia"):
             try:
                 import requests as _requests
                 if vision_provider_key == "openrouter":
@@ -1197,6 +1197,9 @@ class ScreenshotAnalyzerTool(BaseTool):
                 elif vision_provider_key == "gemini":
                     api_key = settings.get('gemini_key', '')
                     base_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                elif vision_provider_key == "nvidia":
+                    api_key = settings.get('nvidia_key', '')
+                    base_url = "https://integrate.api.nvidia.com/v1/chat/completions"
                 else:  # groq
                     api_key = settings.get('groq_key', '')
                     base_url = "https://api.groq.com/openai/v1/chat/completions"

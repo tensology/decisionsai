@@ -26,6 +26,14 @@
       "category": "Quality",
       "archetype": "review_cleanup",
       "file": "bundles/polish-verify-and-ship.json"
+    },
+    {
+      "slug": "implement-js-fallow-audit",
+      "name": "Engineering: Implement + Fallow Audit (JS)",
+      "role": "senior_software_engineer",
+      "category": "Engineering",
+      "archetype": "incremental_ship",
+      "file": "bundles/implement-js-fallow-audit.json"
     }
   ]
 }

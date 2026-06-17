@@ -471,6 +471,7 @@ class WorkflowAgent:
             "kilocode":     (s.get("kilo_key", ""),         "https://api.kilo.ai/api/gateway"),
             "gemini":       (s.get("gemini_key", ""),       "https://generativelanguage.googleapis.com/v1beta/openai/"),
             "google gemini":(s.get("gemini_key", ""),       "https://generativelanguage.googleapis.com/v1beta/openai/"),
+            "nvidia":       (s.get("nvidia_key", ""),       "https://integrate.api.nvidia.com/v1"),
         }
         key, url = creds.get(prov, ("", None))
         return (key or "").strip(), url

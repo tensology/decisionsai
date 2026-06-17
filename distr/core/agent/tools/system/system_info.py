@@ -42,6 +42,7 @@ def _provider_spoken(provider_id: Any) -> str:
         "openrouter": "OpenRouter in the cloud",
         "kilocode": "KiloCode in the cloud",
         "gemini": "Google Gemini in the cloud",
+        "nvidia": "NVIDIA in the cloud",
     }.get(p, p.replace("_", " ") if p else "your saved provider")
 
 

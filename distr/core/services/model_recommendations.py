@@ -29,6 +29,7 @@ PROVIDERS = [
     ("openrouter", "OpenRouter"),
     ("kilocode", "KiloCode"),
     ("gemini", "Google Gemini"),
+    ("nvidia", "NVIDIA"),
 ]
 
 _EMPTY = {"providers": {}, "last_updated": None, "generated_by": None}

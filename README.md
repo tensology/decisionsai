@@ -313,7 +313,7 @@ Setup installs or repairs the local [Codex](plugins/codex-ide/README.md) and [Cu
 | Pack | What it adds |
 |---|---|
 | ECC | Vendored skills, agents, commands (`plugins/ecc`) |
-| Competition | Ponytail + Fallow skills and Cursor ponytail rule |
+| Competition | Ponytail + Fallow skills and Cursor ponytail rule — see [ponytail/fallow assessment](audit-docs/ponytail-fallow-reference-assessment.md) |
 | Capabilities | Browser QA, Playwright, content-engine, fal-ai-media |
 | Design references | Refero, Mobbin, Aceternity, Godly + UI ideation skills |
 | Agent Reach | Public web/social research (Twitter, Reddit, YouTube, Exa, …) |

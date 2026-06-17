@@ -671,6 +671,18 @@ def update_oracle_size(sphere_size: int) -> int:
 # Third-party keys
 # ---------------------------------------------------------------------------
 
+def thirdparty_llm_provider_ready(
+    settings: dict,
+    enabled_key: str,
+    key_key: str,
+) -> bool:
+    """True when a cloud LLM provider is enabled and has a non-empty API key."""
+    enabled = settings.get(enabled_key)
+    if enabled in (False, 0, None, ""):
+        return False
+    return bool((settings.get(key_key) or "").strip())
+
+
 def save_thirdparty_settings(data, resolve_secret_fn) -> None:
     """Persist third-party API keys (with masking) and reload agent."""
     settings = load_settings_from_db()
@@ -686,6 +698,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("groq_enabled", "groq_key"),
         ("kilo_enabled", "kilo_key"),
         ("gemini_enabled", "gemini_key"),
+        ("nvidia_enabled", "nvidia_key"),
         ("masko_enabled", "masko_key"),
     ]:
         enabled_field, key_field = field_pair

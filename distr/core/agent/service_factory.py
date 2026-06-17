@@ -17,7 +17,7 @@ try:
     from .services import (
         OpenAILLMService, OpenRouterLLMService,
         AnthropicLLMService, GroqLLMService, KiloCodeLLMService,
-        GeminiLLMService,
+        GeminiLLMService, NvidiaLLMService,
     )
 except ImportError:
     OpenAILLMService = None
@@ -26,6 +26,7 @@ except ImportError:
     GroqLLMService = None
     KiloCodeLLMService = None
     GeminiLLMService = None
+    NvidiaLLMService = None
 
 from .libs import ElevenLabs
 
@@ -41,6 +42,7 @@ _LLM_ENGINE_MAP = {
     'groq':       (GroqLLMService,        "GroqLLMService"),
     'kilocode':   (KiloCodeLLMService,    "KiloCodeLLMService"),
     'gemini':     (GeminiLLMService,      "GeminiLLMService"),
+    'nvidia':     (NvidiaLLMService,      "NvidiaLLMService"),
 }
 
 

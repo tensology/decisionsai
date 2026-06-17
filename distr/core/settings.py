@@ -51,6 +51,8 @@ DEFAULT_SETTINGS = {
     'kilo_key': '',
     'gemini_enabled': False,
     'gemini_key': '',
+    'nvidia_enabled': False,
+    'nvidia_key': '',
     'ollama_enabled': True,
     'ollama_url': 'http://localhost:11434/',
     'accepted_eula': False,

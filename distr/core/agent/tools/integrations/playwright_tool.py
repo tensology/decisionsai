@@ -430,13 +430,17 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 return None
 
         # --- OpenRouter / Groq / KiloCode (OpenAI-compatible) ---
-        if provider in ("openrouter", "groq", "kilocode", "gemini"):
-            key_map = {"openrouter": "openrouter_key", "groq": "groq_key", "kilocode": "kilo_key", "gemini": "gemini_key"}
+        if provider in ("openrouter", "groq", "kilocode", "gemini", "nvidia"):
+            key_map = {
+                "openrouter": "openrouter_key", "groq": "groq_key",
+                "kilocode": "kilo_key", "gemini": "gemini_key", "nvidia": "nvidia_key",
+            }
             url_map = {
                 "openrouter": "https://openrouter.ai/api/v1/chat/completions",
                 "groq": "https://api.groq.com/openai/v1/chat/completions",
                 "kilocode": (settings.get("kilocode_url") or "https://api.kilo.ai/api/gateway").rstrip("/") + "/chat/completions",
                 "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                "nvidia": "https://integrate.api.nvidia.com/v1/chat/completions",
             }
             api_key = settings.get(key_map[provider], "")
             if not api_key:

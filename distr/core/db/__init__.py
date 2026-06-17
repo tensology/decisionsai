@@ -141,6 +141,7 @@ class Settings(Base):
     groq_enabled = Column(Boolean, default=False)
     kilo_enabled = Column(Boolean, default=False)
     gemini_enabled = Column(Boolean, default=False)
+    nvidia_enabled = Column(Boolean, default=False)
 
     # Provider Keys/URLs
     assemblyai_key = Column(String, default='')
@@ -154,6 +155,7 @@ class Settings(Base):
     groq_key = Column(String, default='')
     kilo_key = Column(String, default='')
     gemini_key = Column(String, default='')
+    nvidia_key = Column(String, default='')
 
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=True)
@@ -576,6 +578,8 @@ try:
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),
+                ("nvidia_enabled", "BOOLEAN DEFAULT 0"),
+                ("nvidia_key", "VARCHAR DEFAULT ''"),
                 # Cursor project CLI provider
                 ("cursor_enabled", "BOOLEAN DEFAULT 0"),
                 ("cursor_key", "VARCHAR DEFAULT ''"),

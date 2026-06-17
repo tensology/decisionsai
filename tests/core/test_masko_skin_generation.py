@@ -298,6 +298,14 @@ def test_masko_validation_registered():
         assert "Unknown provider" not in str(e)
 
 
+def test_nvidia_validation_registered():
+    """NVIDIA validator is registered in validate_provider."""
+    from distr.core.api_validation import validate_provider
+
+    is_valid, err = validate_provider("nvidia", "test_key")
+    assert "Unknown provider" not in err
+
+
 # ---------------------------------------------------------------------------
 # Unit tests: MaskoClient error handling
 # ---------------------------------------------------------------------------

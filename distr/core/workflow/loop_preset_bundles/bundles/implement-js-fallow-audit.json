@@ -1,0 +1,134 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "implement-js-fallow-audit",
+  "name": "Engineering: Implement + Fallow Audit (JS)",
+  "role": "senior_software_engineer",
+  "category": "Engineering",
+  "archetype": "incremental_ship",
+  "description": "Implement a linked ticket slice with Ponytail discipline, then run a deterministic Fallow audit gate on JS/TS projects before closing.",
+  "post_chain": ["fallow"],
+  "kickoff": "Start the \"Engineering: Implement + Fallow Audit (JS)\" loop.\nGoal: linked ticket slice is implemented with minimal diffs and passes fallow audit on JS/TS surfaces\nMax iterations: 6\nExit when: the slice is implemented, project safety nets pass, fallow audit verdict is not fail, and evidence is on the ticket\nStep 1: Ingest the ticket and restate the slice before writing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "loop_contract": {
+    "name": "Engineering: Implement + Fallow Audit (JS)",
+    "goal": "linked ticket slice implemented with Ponytail discipline and fallow audit gate",
+    "exit_when": "slice is implemented, safety nets pass, fallow audit is not fail, and the ticket has evidence",
+    "check_command": "project lint/test commands + fallow audit --format json",
+    "max_iterations": 6,
+    "guardrails": [
+      "Do not modify the check command or exit criteria to force success",
+      "Do not skip, disable, or bypass checks to pass the exit condition",
+      "If stuck after several iterations, stop and report blockers instead of gaming metrics"
+    ],
+    "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
+    "step_1": "Read the linked ticket, board, lane, project, acceptance criteria, and brief. Restate the slice, constraints, and project route.",
+    "archetype": "incremental_ship",
+    "role": "senior_software_engineer"
+  },
+  "expected_check_command": "project lint/test commands + fallow audit --format json",
+  "tags": [
+    "engineering",
+    "ponytail",
+    "fallow",
+    "javascript",
+    "typescript"
+  ],
+  "steps": [
+    {
+      "name": "Ingest ticket and restate slice",
+      "instruction": "Read the linked ticket, board, lane, project, acceptance criteria, and brief. Restate the slice, constraints, and project route before implementation.",
+      "skills": [
+        "product-lens",
+        "brainstorming"
+      ],
+      "tools": [
+        "cli",
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "Acceptance criteria were not restated",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Ticket brief, acceptance criteria, and project route are explicit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Kanban ticket context + project repository",
+      "action_type": "send_to_project_cli"
+    },
+    {
+      "name": "Implement with Ponytail discipline",
+      "instruction": "Implement the slice with minimum code: stdlib and existing deps first, no speculative abstractions. Iterate: develop → run project lint/test → self-assess → correct → report with the harness return contract.",
+      "skills": [
+        "ponytail",
+        "executing-plans",
+        "tdd-workflow",
+        "verification-loop"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Step skipped or hand-waved without proof"
+      ],
+      "validation_prompt": "Slice is implemented, tested, and reported with a complete harness return contract.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Fallow audit gate",
+      "instruction": "Run fallow audit on the linked JS/TS project. Attach the JSON verdict to the step evidence. Fail the step when verdict is fail; warn or pass on warn/pass. Skip only when the project has no JS/TS surface.",
+      "skills": [
+        "fallow"
+      ],
+      "tools": [
+        "cli"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Do not edit commands or baselines just to force green\n- Use fallow init or --save-baseline when false positives are legitimate",
+      "failure_checklist": [
+        "Fallow audit was skipped on a JS/TS project",
+        "Verdict fail was ignored",
+        "No audit JSON attached to evidence"
+      ],
+      "validation_prompt": "Fallow audit exits 0 or was legitimately skipped on a non-JS project; verdict JSON is in evidence.",
+      "validation_type": "exit_code",
+      "wait_for_continue": false,
+      "action_type": "run_command",
+      "command": "set -eu\nif [ ! -f package.json ] && [ ! -f tsconfig.json ]; then\n  echo 'No JS/TS surface; skipping fallow audit.'\n  exit 0\nfi\nif command -v fallow >/dev/null 2>&1; then\n  fallow audit --format json --quiet\n  exit $?\nfi\nnpx --yes fallow audit --format json --quiet",
+      "timeout_seconds": 600,
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Close slice with audit evidence",
+      "instruction": "Update the ticket with files changed, commands run, fallow verdict summary, and a completion note.",
+      "skills": [
+        "internal-comms",
+        "finishing-a-development-branch"
+      ],
+      "tools": [
+        "other"
+      ],
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
+      "failure_checklist": [
+        "No concrete evidence attached",
+        "Fallow verdict missing from ticket summary"
+      ],
+      "validation_prompt": "Ticket contains implementation evidence and fallow audit summary.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "other_tool": "Ticket update + result packet",
+      "action_type": "agent_instruction",
+      "on_fail_goto_position": 2,
+      "validation_pass_action": "end_loop",
+      "validation_fail_action": "end_loop"
+    }
+  ],
+  "references": {
+    "source": "audit-docs/ponytail-fallow-reference-assessment.md",
+    "assessment": "Workflow template for JS PR gate with post_chain fallow + run_command audit step."
+  }
+}

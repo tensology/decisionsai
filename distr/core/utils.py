@@ -34,6 +34,7 @@ SECRET_SETTINGS_FIELDS = {
     "groq_key",
     "kilo_key",
     "gemini_key",
+    "nvidia_key",
 }
 CONNECTED_ACCOUNT_SECRET_FIELDS = {
     "api_token",

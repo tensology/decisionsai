@@ -130,6 +130,12 @@ def apply_loop_bundle(
         if apply_mode == "replace" and kickoff:
             wf.description = kickoff
             wf.context_rules = loop_contract_to_context_rules(loop_contract)
+        if apply_mode == "replace":
+            for chain_field in ("pre_chain", "post_chain"):
+                chain_value = validated.get(chain_field)
+                if isinstance(chain_value, list):
+                    cleaned = [str(item).strip() for item in chain_value if str(item).strip()]
+                    setattr(wf, chain_field, json.dumps(cleaned) if cleaned else None)
         merged_input["preset_apply_mode"] = apply_mode
         wf.workflow_input = json.dumps(merged_input)
         db.commit()

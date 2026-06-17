@@ -275,9 +275,11 @@ def register_routes(router, templates):
             ("openrouter", "OpenRouter", "openrouter_enabled", "openrouter_key"),
             ("kilocode", "KiloCode", "kilo_enabled", "kilo_key"),
             ("gemini", "Google Gemini", "gemini_enabled", "gemini_key"),
+            ("nvidia", "NVIDIA", "nvidia_enabled", "nvidia_key"),
         ]
         for pid, pname, enabled_key, key_key in _provider_checks:
-            if settings.get(enabled_key) and (settings.get(key_key) or "").strip():
+            from distr.core.services.settings_service import thirdparty_llm_provider_ready
+            if thirdparty_llm_provider_ready(settings, enabled_key, key_key):
                 providers.append({"id": pid, "name": pname})
         return JSONResponse({"providers": providers})
 
@@ -294,6 +296,7 @@ def register_routes(router, templates):
             get_groq_models,
             get_kilo_models,
             get_gemini_models,
+            get_nvidia_models,
         )
         from distr.gui.utils.get_openrouter_models import get_openrouter_models
 
@@ -315,6 +318,8 @@ def register_routes(router, templates):
                 if settings.get("kilo_enabled") and (settings.get("kilo_key") or "").strip() else [],
             "gemini": lambda: get_gemini_models((settings.get("gemini_key") or "").strip())
                 if settings.get("gemini_enabled") and (settings.get("gemini_key") or "").strip() else [],
+            "nvidia": lambda: get_nvidia_models((settings.get("nvidia_key") or "").strip())
+                if settings.get("nvidia_enabled") and (settings.get("nvidia_key") or "").strip() else [],
         }
         fetcher = _fetchers.get(provider_key)
         if fetcher:

@@ -24,9 +24,17 @@ _PROVIDER_NORMALIZE = {
     "kilocode": "KiloCode",
     "gemini": "Google Gemini",
     "google gemini": "Google Gemini",
+    "nvidia": "NVIDIA",
     "kokoro": "Kokoro",
     "elevenlabs": "ElevenLabs",
 }
+
+
+def valid_llm_providers() -> list[str]:
+    """Canonical display names for chat LLM provider fields."""
+    from distr.core.agent.constants import PROVIDER_TO_ENGINE
+
+    return sorted(PROVIDER_TO_ENGINE.keys())
 
 
 def _normalize_provider(provider: Optional[str]) -> str:
