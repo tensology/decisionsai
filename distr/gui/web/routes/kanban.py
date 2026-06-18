@@ -33,6 +33,7 @@ from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
     normalize_source_provider,
     normalize_ticket_complexity,
+    resolve_ticket_complexity,
 )
 from distr.core.db import get_session
 from distr.core.db.orm_compat import orm_get_by_id
@@ -1449,7 +1450,7 @@ def _emit_ticket_channel_intake(
     channel: str = "",
     extra_payload: dict | None = None,
 ) -> None:
-    """Emit a Hermes channel intake event when a ticket enters from a channel."""
+    """Emit an orchestrator channel intake event when a ticket enters from a channel."""
     provider = normalize_source_provider(channel or ticket.source_provider or "")
     if not provider:
         return
@@ -1480,7 +1481,7 @@ def _emit_ticket_channel_intake(
             },
         )
     except Exception:
-        logger.debug("Could not emit channel intake Hermes event", exc_info=True)
+        logger.debug("Could not emit channel intake orchestrator event", exc_info=True)
 
 
 class BoardCreate(BaseModel):
@@ -1810,7 +1811,7 @@ def _copy_external_ticket_into_lane(
         title=title,
         description=description or "",
         priority=priority or "medium",
-        complexity=normalize_ticket_complexity(complexity) if complexity else infer_ticket_complexity(title, description or ""),
+        complexity=resolve_ticket_complexity(title, description or "", requested=complexity),
         time_estimate=time_estimate or "",
         time_spent=time_spent or "",
         position=position,
@@ -2676,9 +2677,10 @@ def create_routes():
             # Get board defaults for new tickets
             board = orm_get_by_id(s, KanbanBoard,lane.board_id)
             max_pos = max([t.position for t in lane.tickets], default=-1)
-            complexity = normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(
+            complexity = resolve_ticket_complexity(
                 payload.title,
                 payload.description or "",
+                requested=payload.complexity,
             )
             ticket = KanbanTicket(
                 lane_id=payload.lane_id, title=payload.title,
@@ -3106,7 +3108,11 @@ def create_routes():
             if payload.priority is not None:
                 t.priority = payload.priority
             if payload.complexity is not None:
-                t.complexity = normalize_ticket_complexity(payload.complexity)
+                t.complexity = resolve_ticket_complexity(
+                    t.title or "",
+                    t.description or "",
+                    requested=payload.complexity,
+                )
             if "linked_workflow_id" in fields_set or "linked_project_id" in fields_set:
                 lane = orm_get_by_id(s, KanbanLane,t.lane_id) if t.lane_id else None
                 board = orm_get_by_id(s, KanbanBoard,lane.board_id) if lane else None
@@ -3455,7 +3461,7 @@ def create_routes():
             ticket = KanbanTicket(
                 lane_id=dest_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
-                complexity=normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(payload.title, payload.description or ""),
+                complexity=resolve_ticket_complexity(payload.title, payload.description or "", requested=payload.complexity),
                 time_estimate=(payload.time_estimate or ""),
                 time_spent=(payload.time_spent or ""),
                 position=max_pos + 1,
@@ -5264,7 +5270,12 @@ source: kanban_ticket_{t.id}
             title = (payload.get("title") or draft.get("title") or "WhatsApp request").strip()
             description = (payload.get("description") or draft.get("description") or "").strip()
             priority = (payload.get("priority") or draft.get("priority") or _infer_whatsapp_ticket_priority(title, description)).strip()
-            complexity = payload.get("complexity") or draft.get("complexity") or infer_ticket_complexity(title, description, file_count=media_count)
+            complexity = resolve_ticket_complexity(
+                title,
+                description,
+                requested=payload.get("complexity") or draft.get("complexity"),
+                file_count=media_count,
+            )
             quality = _validate_whatsapp_ticket_quality(title, description, messages, enrichment)
             if not quality["passed"]:
                 return JSONResponse({
@@ -5287,7 +5298,7 @@ source: kanban_ticket_{t.id}
                 title=title,
                 description=description,
                 priority=priority,
-                complexity=normalize_ticket_complexity(complexity),
+                complexity=complexity,
                 position=max_pos + 1,
                 linked_workflow_id=board.default_workflow_id,
                 linked_project_id=board.default_project_id,

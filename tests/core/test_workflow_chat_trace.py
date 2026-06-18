@@ -105,3 +105,46 @@ def test_record_chat_workflow_event_persists_explicit_chat(monkeypatch):
         params = json.loads(chat.params)
 
     assert params["workflow_events"][0]["run_id"] == 99
+
+
+def test_record_chat_workflow_event_preserves_agent_activity(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def patched_get_session():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr("distr.core.db.get_session", patched_get_session)
+
+    with patched_get_session() as session:
+        chat = Chat(title="Agent activity")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    event = record_chat_workflow_event(
+        chat_id,
+        "agent_activity_step",
+        status="running",
+        summary="Checked WhatsApp.",
+        agent_activity={
+            "run_key": "chat:1",
+            "thread_key": "main",
+            "step_key": "whatsapp",
+            "title": "Checked WhatsApp",
+        },
+    )
+
+    assert event["agent_activity"]["run_key"] == "chat:1"
+
+    with patched_get_session() as session:
+        chat = session.get(Chat, chat_id)
+        params = json.loads(chat.params)
+
+    assert params["workflow_events"][0]["agent_activity"]["title"] == "Checked WhatsApp"

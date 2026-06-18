@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 VALID_WORKFLOW_TYPES = {"manual", "instruction", "scheduled", "audit"}
 USER_VISIBLE_WORKFLOW_TYPES = {"manual", "instruction", "scheduled"}
+WORKFLOW_LIFECYCLE_ORDER = {
+    "ideation": 0,
+    "development": 1,
+    "polish": 2,
+    "deploy": 3,
+}
 
 
 def validate_workflow_type(workflow_type: str) -> bool:
@@ -38,6 +44,37 @@ def _safe_json_loads(text: Optional[str]) -> Any:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+def _workflow_lifecycle_rank(workflow: AutoWorkflow) -> int:
+    """Prefer the standard lifecycle tabs before arbitrary workflow rows."""
+    name = str(getattr(workflow, "name", "") or "").strip().lower()
+    for prefix, rank in WORKFLOW_LIFECYCLE_ORDER.items():
+        if name == prefix or name.startswith(f"{prefix}:"):
+            return rank
+    workflow_input = _safe_json_loads(getattr(workflow, "workflow_input", None))
+    if isinstance(workflow_input, dict):
+        preset_slug = str(workflow_input.get("preset_slug") or "").strip().lower()
+        preset_rank = {
+            "ideation-brief-to-board": 0,
+            "development-ticket-to-implementation": 1,
+            "polish-verify-and-ship": 2,
+            "ship-pr-until-green": 3,
+        }.get(preset_slug)
+        if preset_rank is not None:
+            return preset_rank
+    return 100
+
+
+def _workflow_display_order(workflow: AutoWorkflow) -> int | None:
+    workflow_input = _safe_json_loads(getattr(workflow, "workflow_input", None))
+    if not isinstance(workflow_input, dict):
+        return None
+    value = workflow_input.get("display_order")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _run_loop_visibility(run_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -64,16 +101,9 @@ def _run_loop_visibility(run_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _step_tools_for_action(action_type: str) -> List[str]:
-    action = (action_type or "").strip()
-    if action == "computer_use":
-        return ["computer_use"]
-    if action == "playwright":
-        return ["playwright", "browser_use"]
-    if action == "send_to_project_cli":
-        return ["cli"]
-    if action in {"run_command", "execute_code", "agent_instruction"}:
-        return ["other"]
-    return []
+    from distr.core.workflow.tools import tools_for_action
+
+    return tools_for_action(action_type)
 
 
 def _workflow_step_visibility_context(step: Optional[AutoWorkflowStep]) -> Dict[str, Any]:
@@ -89,7 +119,9 @@ def _workflow_step_visibility_context(step: Optional[AutoWorkflowStep]) -> Dict[
         config = {}
     tools = config.get("tools") if isinstance(config.get("tools"), list) else []
     skills = config.get("skills") if isinstance(config.get("skills"), list) else []
-    clean_tools = [str(item).strip() for item in tools if str(item or "").strip()]
+    from distr.core.workflow.tools import normalize_tool_list
+
+    clean_tools = normalize_tool_list(tools)
     clean_skills = [str(item).strip() for item in skills if str(item or "").strip()]
     return {
         "current_step_action_type": step.action_type or step.step_type or "",
@@ -454,7 +486,17 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
             q = q.filter(AutoWorkflow.name.ilike(f"%{search.strip()}%"))
         fetch_limit = max(int(limit or 50) * 4, int(limit or 50) + 20)
         rows = q.order_by(AutoWorkflow.modified_date.desc()).limit(fetch_limit).all()
-        visible = [w for w in rows if not is_automation_workflow(w)][: int(limit or 50)]
+        visible = [w for w in rows if not is_automation_workflow(w)]
+        visible.sort(
+            key=lambda w: (
+                0 if _workflow_display_order(w) is not None else 1,
+                _workflow_display_order(w) if _workflow_display_order(w) is not None else 0,
+                _workflow_lifecycle_rank(w),
+                -int(w.modified_date.timestamp()) if w.modified_date else 0,
+                -(w.id or 0),
+            )
+        )
+        visible = visible[: int(limit or 50)]
         return [
             {
                 "id": w.id, "name": w.name,
@@ -501,6 +543,26 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
         hook_ensure_workspace("workflows", workflow_id, reason="update_workflow")
     except Exception:
         pass
+    return True
+
+
+def update_workflow_order(workflow_ids: List[int]) -> bool:
+    ids = [int(wid) for wid in (workflow_ids or []) if wid is not None]
+    if not ids:
+        return False
+    with get_session() as db:
+        rows = db.query(AutoWorkflow).filter(AutoWorkflow.id.in_(ids)).all()
+        by_id = {int(row.id): row for row in rows}
+        if len(by_id) != len(set(ids)):
+            return False
+        for index, workflow_id in enumerate(ids):
+            row = by_id[int(workflow_id)]
+            payload = _safe_json_loads(row.workflow_input)
+            if not isinstance(payload, dict):
+                payload = {}
+            payload["display_order"] = index
+            row.workflow_input = json.dumps(payload)
+        db.commit()
     return True
 
 
@@ -1005,7 +1067,7 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
 
 
 def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
-    """Approve or reject a pending Hermes route override for an active run."""
+    """Approve or reject a pending orchestrator route override for an active run."""
     from distr.core.project_cli_backends import normalize_backend_id
 
     with get_session() as db:

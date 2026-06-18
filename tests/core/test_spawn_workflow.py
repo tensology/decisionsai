@@ -50,15 +50,18 @@ def db_factory(tmp_path, monkeypatch):
     return factory
 
 
-def test_infer_preset_slug_dogfood():
-    assert infer_preset_slug_for_ticket(title="Dogfood catalog page", description="") == "decisionsai-dogfood-ticket"
-    assert (
-        infer_preset_slug_for_ticket(
-            title="Home page",
-            description="",
-            project_folder="/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI",
-        )
-        == "decisionsai-dogfood-ticket"
+def test_infer_preset_slug_uses_only_active_principle_presets():
+    assert infer_preset_slug_for_ticket(title="Dogfood catalog page", description="") == (
+        "development-ticket-to-implementation"
+    )
+    assert infer_preset_slug_for_ticket(title="Prepare release", description="Ship PR once CI checks pass") == (
+        "ship-pr-until-green"
+    )
+    assert infer_preset_slug_for_ticket(title="Polish UI", description="Verify and ship with screenshots") == (
+        "polish-verify-and-ship"
+    )
+    assert infer_preset_slug_for_ticket(title="Scope brief", description="Ideation brief to board") == (
+        "ideation-brief-to-board"
     )
 
 

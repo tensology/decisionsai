@@ -79,6 +79,12 @@
     88%, 100% { transform: translateX(calc(-1 * var(--marquee-distance, 0px))); }
 }
 .wf-workflow-tab:hover { color: #fff; background: rgba(255,255,255,0.04); }
+.wf-workflow-tab-drop-target {
+    color: #fdba74 !important;
+    background: rgba(249,115,22,0.16) !important;
+    border-bottom-color: #f97316;
+    box-shadow: inset 0 0 0 1px rgba(249,115,22,0.45);
+}
 .wf-workflow-tab.active {
     color: #fff;
     border-bottom-color: #f97316;
@@ -187,9 +193,91 @@
     display: flex;
 }
 .kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 680px; max-width: 95vw; max-height: 86vh; overflow: hidden; display: flex; flex-direction: column; }
+.kb-ticket-meta-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
+    align-items: flex-start;
+}
+
+.kb-ticket-meta-grid--two-col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 20px;
+}
+
+.kb-ticket-meta-grid--three-col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px 20px;
+}
+
+.kb-ticket-meta-grid--four-col {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px 20px;
+}
+
+.kb-ticket-meta-grid--two-col .kb-ticket-meta-field {
+    flex: none;
+    width: 100%;
+}
+
+@media (max-width: 820px) {
+    .kb-ticket-meta-grid--two-col,
+    .kb-ticket-meta-grid--three-col,
+    .kb-ticket-meta-grid--four-col {
+        grid-template-columns: 1fr;
+    }
+}
+.kb-ticket-meta-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1 1 130px;
+    max-width: 100%;
+}
+.kb-ticket-meta-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #9ca3af;
+    line-height: 1.2;
+}
+.kb-ticket-meta-value {
+    font-size: 12px;
+    color: #e5e7eb;
+    line-height: 1.4;
+    min-width: 0;
+}
+.kb-ticket-meta-value--truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kb-ticket-meta-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
 .kb-tm-tab { cursor: pointer; }
 .kb-tm-tab.active { color: #fff; border-color: #f97316; }
-.kb-ticket-modal-body { min-height: 260px; max-height: calc(86vh - 128px); overflow-y: auto; }
+.kb-ticket-modal-body {
+    flex: 1;
+    min-height: 320px;
+    overflow: hidden;
+}
+#kb-ticket-modal > .kb-modal {
+    overflow: hidden;
+}
+.kb-ticket-modal-body .kb-tm-pane {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
 .kb-modal-action-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.375rem; }
 .kb-modal-action-btn:hover { background: rgba(255,255,255,0.08); }
 .wf-wa-media-preview-btn { cursor: pointer; }
@@ -1834,7 +1922,10 @@ body.wf-split-dragging * {
         </div>
         <div class="kb-ticket-modal-body">
             <div id="kb-tm-tab-details" class="kb-tm-pane p-5 space-y-3">
-                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30"></div>
+                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30 kb-ticket-meta-grid kb-ticket-meta-grid--four-col"></div>
+                <div id="kb-modal-source-meta" class="hidden mb-3 p-3 bg-[#152054] border border-white/10 rounded">
+                    <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid kb-ticket-meta-grid--four-col"></div>
+                </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Title</label>
                     <textarea id="kb-modal-ticket-title" rows="2" class="w-full min-h-[3.25rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
@@ -1908,6 +1999,7 @@ body.wf-split-dragging * {
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Complexity</label>
                         <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="auto" selected>Auto - Orchestrator assesses</option>
                             <option value="low">I - Low</option>
                             <option value="medium">II - Medium</option>
                             <option value="high">III - High</option>
@@ -1993,12 +2085,8 @@ body.wf-split-dragging * {
                             </div>
                         </div>
                         <div class="wf-loop-step-side-panel">
-                            <p class="wf-loop-step-side-panel-label">Additional tools</p>
+                            <p class="wf-loop-step-side-panel-label">Required tools</p>
                             <div id="wf-loop-step-tools-list" class="wf-loop-step-picker"></div>
-                            <div id="wf-loop-step-other-tool-wrap" class="hidden mt-2">
-                                <label for="wf-loop-step-other-tool" class="block text-xs text-gray-500 mb-1">Other tool</label>
-                                <input type="text" id="wf-loop-step-other-tool" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" placeholder="e.g. MCP server, custom script runner, Jira CLI">
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -2219,7 +2307,7 @@ body.wf-split-dragging * {
         '<p class="wf-config-section-label">Executors</p>',
         '<p class="wf-config-section-hint">Green badges are ready. Click an orange badge for install help.</p>',
         '<div id="wf-global-exec-backend-pills" class="flex flex-wrap gap-1"></div>',
-        '<p class="wf-config-section-label mt-1">Complexity routing</p>',
+        '<p class="wf-config-section-label mt-1">Ticket complexity routing</p>',
         '<p class="wf-config-section-hint">Low / medium / high routes for every workflow run. IDE executors can set a CLI fallback below.</p>',
         '<div id="wf-global-exec-routes" class="space-y-3"></div>',
         '</div>',

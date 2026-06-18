@@ -1,7 +1,7 @@
-"""Hermes daily triage orchestration.
+"""Orchestrator daily triage.
 
 This module turns source scans into decision candidates. It is intentionally
-deterministic: Hermes can use an LLM later to improve wording, but the product
+deterministic: the orchestrator can use an LLM later to improve wording, but the product
 must still produce useful triage when providers are down.
 """
 
@@ -51,7 +51,7 @@ def build_daily_triage(
     recent_events: list[dict[str, Any]] | None = None,
     max_candidates: int = 12,
 ) -> dict[str, Any]:
-    """Build a Hermes triage packet from available source scans."""
+    """Build an orchestrator triage packet from available source scans."""
     scan = work_scan if isinstance(work_scan, dict) else {}
     source_health = _source_health(scan)
     candidates: list[dict[str, Any]] = []
@@ -97,7 +97,7 @@ def enqueue_triage_candidates(
     *,
     limit: int = 6,
 ) -> int:
-    """Add top Hermes triage candidates to Initiative approvals without duplicates."""
+    """Add top orchestrator triage candidates to Initiative approvals without duplicates."""
     existing_ids = {
         (((entry.execute_payload or {}).get("candidate") or {}).get("id"))
         for entry in queue.get_all()

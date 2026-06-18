@@ -1,4 +1,4 @@
-"""Canonical orchestration event contract over the Hermes ledger."""
+"""Canonical orchestration event contract over the orchestrator ledger."""
 
 from __future__ import annotations
 
@@ -201,7 +201,7 @@ def emit_orchestration_event(
     evidence: dict[str, Any] | None = None,
     notify_channels: list[str] | None = None,
 ) -> int | None:
-    """Emit one canonical event into the Hermes ledger."""
+    """Emit one canonical event into the orchestrator ledger."""
     legacy_event_type = (event_type or "worker_progress").strip() or "worker_progress"
     standard_event_type = normalize_orchestration_event_type(
         legacy_event_type,
@@ -334,7 +334,7 @@ def list_orchestration_timeline(
     execution_session_id: int | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """Return a chronological conversation timeline from Hermes events."""
+    """Return a chronological conversation timeline from orchestrator events."""
     from distr.core.orchestrator import list_events
 
     events = list_events(

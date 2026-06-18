@@ -54,6 +54,30 @@ def infer_ticket_complexity(
     return "medium"
 
 
+def resolve_ticket_complexity(
+    title: str = "",
+    description: str = "",
+    *,
+    requested: str | None = None,
+    file_count: int = 0,
+    todo_count: int = 0,
+) -> str:
+    """Resolve user-requested complexity into the stored routing level.
+
+    `auto` means the orchestrator/system should assess the ticket. Explicit
+    low/medium/high values are treated as manual overrides.
+    """
+    raw = (requested or "").strip().lower()
+    if raw in VALID_COMPLEXITIES:
+        return raw
+    return infer_ticket_complexity(
+        title,
+        description,
+        file_count=file_count,
+        todo_count=todo_count,
+    )
+
+
 def normalize_source_provider(value: str | None) -> str:
     raw = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {

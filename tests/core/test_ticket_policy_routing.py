@@ -2,6 +2,7 @@ from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
     normalize_source_provider,
     normalize_ticket_complexity,
+    resolve_ticket_complexity,
     resolve_ticket_cli_route,
 )
 
@@ -13,6 +14,19 @@ def test_ticket_complexity_defaults_to_medium_and_detects_high():
         "Migrate workflow orchestration",
         "Add database schema migration, regression tests, server deployment, and websocket integration.",
     ) == "high"
+
+
+def test_auto_ticket_complexity_resolves_by_assessment_not_literal_auto():
+    assert resolve_ticket_complexity(
+        "Migrate workflow orchestration",
+        "Add database schema migration, regression tests, server deployment, and websocket integration.",
+        requested="auto",
+    ) == "high"
+    assert resolve_ticket_complexity(
+        "Rename button",
+        "simple copy change",
+        requested="low",
+    ) == "low"
 
 
 def test_source_provider_normalization():

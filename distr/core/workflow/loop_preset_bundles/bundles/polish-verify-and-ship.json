@@ -138,7 +138,7 @@
         "No concrete evidence attached",
         "Step skipped or hand-waved without proof"
       ],
-      "validation_prompt": "Release evidence explains why the Spotify remake is ready to ship.",
+      "validation_prompt": "Release evidence explains why the project is ready to ship.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Release notes + evidence packet",

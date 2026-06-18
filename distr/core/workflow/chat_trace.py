@@ -58,6 +58,7 @@ def record_chat_workflow_event(
     step_name: Optional[str] = None,
     summary: Optional[str] = None,
     phase: Optional[str] = None,
+    agent_activity: Optional[Dict[str, Any]] = None,
     limit: int = 300,
 ) -> Optional[Dict[str, Any]]:
     """Append a workflow-style action card to Chat.params and emit a live UI signal."""
@@ -91,6 +92,8 @@ def record_chat_workflow_event(
                 payload["step_id"] = int(step_id)
             if step_name:
                 payload["step_name"] = _preview(step_name, 160)
+            if isinstance(agent_activity, dict) and agent_activity:
+                payload["agent_activity"] = agent_activity
 
             params = _load_params(chat.params)
             events = params.get("workflow_events")
@@ -123,6 +126,7 @@ def record_workflow_chat_event(
     step_name: Optional[str] = None,
     summary: Optional[str] = None,
     phase: Optional[str] = None,
+    agent_activity: Optional[Dict[str, Any]] = None,
     limit: int = 300,
 ) -> Optional[Dict[str, Any]]:
     """Append a workflow event to the owning chat timeline."""
@@ -150,6 +154,7 @@ def record_workflow_chat_event(
             step_name=step_name,
             summary=summary,
             phase=phase,
+            agent_activity=agent_activity,
             limit=limit,
         )
     except Exception:

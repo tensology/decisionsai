@@ -1564,6 +1564,7 @@ function handleChatEventWorkflow(msg) {
         step_id: msg.step_id,
         step_name: msg.step_name || '',
         id: msg.id || null,
+        agent_activity: msg.agent_activity || {},
         chat_suppressed: msg.chat_suppressed,
         chat_visible: msg.chat_visible
     };

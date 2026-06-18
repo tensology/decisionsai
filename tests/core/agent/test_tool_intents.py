@@ -68,6 +68,9 @@ def test_forces_ticket_tool_for_whatsapp_agent_requests(monkeypatch):
     assert "create_ticket" in forced_tool_names_for_text("list WhatsApp messages from the client")
     assert "create_ticket" in forced_tool_names_for_text("create a ticket from those WhatsApp messages")
     assert "create_ticket" in forced_tool_names_for_text("show WhatsApp context for this thread")
+    assert "create_ticket" in forced_tool_names_for_text(
+        "No, the MP Web Dev Group, there is a message from Carmen and has a screenshot on it."
+    )
 
 
 def test_forces_file_operations_for_ticket_file_destinations(monkeypatch):

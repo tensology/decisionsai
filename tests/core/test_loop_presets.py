@@ -89,7 +89,7 @@ def test_loop_preset_bundles_exist():
         "ideation-brief-to-board",
         "development-ticket-to-implementation",
         "polish-verify-and-ship",
-        "implement-js-fallow-audit",
+        "ship-pr-until-green",
     }
 
 
@@ -156,22 +156,24 @@ def test_apply_loop_preset_from_bundle(db_factory):
     assert merged.get("loop_contract")
 
 
-def test_apply_fallow_preset_sets_post_chain(db_factory):
+def test_apply_deploy_preset_uses_ship_with_ci_contract(db_factory):
     session = db_factory()
-    wf = AutoWorkflow(name="Fallow Gate", description="", workflow_input="{}")
+    wf = AutoWorkflow(name="Deploy Gate", description="", workflow_input="{}")
     session.add(wf)
     session.commit()
     session.refresh(wf)
 
-    result = apply_loop_preset(wf.id, "implement-js-fallow-audit")
+    result = apply_loop_preset(wf.id, "ship-pr-until-green")
 
     assert result["success"] is True
-    assert result.get("preset_slug") == "implement-js-fallow-audit"
-    assert result["step_count"] == 4
+    assert result.get("preset_slug") == "ship-pr-until-green"
+    assert result["step_count"] >= 4
 
     session = db_factory()
     wf_row = session.query(AutoWorkflow).filter(AutoWorkflow.id == wf.id).first()
-    assert json.loads(wf_row.post_chain or "[]") == ["fallow"]
+    merged = json.loads(wf_row.workflow_input or "{}")
+    assert merged.get("loop_contract", {}).get("archetype") == "ship_with_ci"
+    assert "required release checks" in merged.get("loop_contract", {}).get("exit_when", "")
 
 
 def test_apply_loop_preset_append_mode(db_factory):

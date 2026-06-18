@@ -850,7 +850,7 @@ class StepExecutorMixin:
 
         Recorded actions replay through the desktop playback service. Instruction
         actions are executed through the workflow agent with the saved instruction
-        text, keeping both kinds reusable in Hermes-driven workflows.
+        text, keeping both kinds reusable in orchestrator-driven workflows.
         """
         action_id = config.get("action_id") or config.get("recording_id") or step_data.get("action_id")
         if not action_id:
@@ -961,7 +961,7 @@ class StepExecutorMixin:
                 payload=payload or {},
             )
         except Exception:
-            logger.debug("Could not emit Decisions Action Hermes event", exc_info=True)
+            logger.debug("Could not emit Decisions Action orchestrator event", exc_info=True)
 
     # ── Keywords that signal a step wants computer/screen control ──────
     _CU_KEYWORDS = (

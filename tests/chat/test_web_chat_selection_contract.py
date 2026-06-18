@@ -140,6 +140,16 @@ def test_view_only_visual_state_is_on_header_and_input_band():
     assert ".chat-shell .chat-settings-header.view-only" in css
 
 
+def test_input_band_stacks_above_llama_click_target():
+    css = _chat_css_source()
+    input_block = css.split(".input-container {", 1)[1].split("}", 1)[0]
+    llama_block = css.split(".llama-click-target {", 1)[1].split("}", 1)[0]
+
+    assert "position: relative;" in input_block
+    assert "z-index: 10;" in input_block
+    assert "z-index: 5;" in llama_block
+
+
 def test_chat_loading_copy_is_chat_focused_not_agent_setup():
     html = _chat_html_source()
     js = _chat_js_source()
@@ -151,6 +161,17 @@ def test_chat_loading_copy_is_chat_focused_not_agent_setup():
     assert "Setup your Agent" not in combined
     assert "Agent is Loading" not in combined
     assert "Agent is loading" not in combined
+
+
+def test_chat_sidebar_orders_by_latest_activity_not_creation_time():
+    routes = _chat_routes_source()
+    chats_block = routes.split('@router.get("/chats")', 1)[1].split(
+        'settings = load_settings_from_db()',
+        1,
+    )[0]
+
+    assert ".order_by(Chat.modified_date.desc(), Chat.id.desc())" in chats_block
+    assert ".order_by(Chat.created_date.desc(), Chat.id.desc())" not in chats_block
 
 
 def test_header_icon_buttons_have_visible_tooltip_contract():
@@ -220,6 +241,26 @@ def test_automation_run_workflow_cards_hidden_in_chat():
     assert "if (isHiddenWorkflowEvent(workflowEvent)) return;" in js
     assert "def _is_visible_workflow_event" in routes
     assert '== "automation_run"' in routes
+
+
+def test_chat_workflow_events_preserve_agent_activity_payload():
+    routes = _chat_routes_source()
+    workflow_block = routes.split('"workflow_event": {', 1)[1].split(
+        "_message_sort_key",
+        1,
+    )[0]
+
+    assert '"agent_activity": event.get("agent_activity") or {}' in workflow_block
+
+
+def test_live_workflow_events_preserve_agent_activity_payload():
+    src = _chat_js_source()
+    handler_block = src.split("function handleChatEventWorkflow(msg) {", 1)[1].split(
+        "if (isHiddenWorkflowEvent(workflowEvent)) return;",
+        1,
+    )[0]
+
+    assert "agent_activity: msg.agent_activity || {}" in handler_block
 
 
 def test_committed_voice_transcription_promotes_preview_without_waiting_for_database():

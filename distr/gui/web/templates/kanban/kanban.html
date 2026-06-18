@@ -158,11 +158,43 @@
 .kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; }
 .kb-modal-overlay:not(.hidden) { display: flex; }
 .kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 700px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+.kb-ticket-modal-body {
+    min-height: 0;
+    overflow: hidden;
+}
+#kb-ticket-modal .kb-ticket-modal-body .kb-tm-pane {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+#kb-ticket-modal > .kb-modal {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
 .kb-ticket-meta-grid {
     display: flex;
     flex-wrap: wrap;
     gap: 12px 20px;
     align-items: flex-start;
+}
+
+.kb-ticket-meta-grid--two-col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 20px;
+}
+
+.kb-ticket-meta-grid--two-col .kb-ticket-meta-field {
+    flex: none;
+    width: 100%;
+}
+
+@media (max-width: 820px) {
+    .kb-ticket-meta-grid--two-col {
+        grid-template-columns: 1fr;
+    }
 }
 .kb-ticket-meta-field {
     display: flex;
@@ -1015,10 +1047,10 @@
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="advanced">Advanced</button>
         </div>
         <!-- Tab content area with fixed min-height -->
-        <div style="min-height: 320px;">
+        <div class="kb-ticket-modal-body">
             <!-- Details tab -->
             <div id="kb-tm-tab-details" class="kb-tm-pane p-6 space-y-4">
-                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30 kb-ticket-meta-grid">
+                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30 kb-ticket-meta-grid kb-ticket-meta-grid--two-col">
                     <!-- Populated dynamically for external tickets -->
                 </div>
                 <div>
@@ -1041,7 +1073,7 @@
                 </div>
                 <p class="text-xs text-gray-500">Format: Jira-style duration values like <code>30m</code>, <code>2h</code>, <code>1d 3h</code>, or <code>1w 2d 4h 30m</code>.</p>
                 <div id="kb-modal-source-meta" class="hidden mb-3 p-3 bg-[#152054] border border-white/10 rounded">
-                    <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid"></div>
+                    <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid kb-ticket-meta-grid--two-col"></div>
                 </div>
             </div>
             <!-- Notes tab (orchestrator context — read-only) -->
@@ -1106,6 +1138,7 @@
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">Complexity</label>
                         <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="auto" selected>Auto - Orchestrator assesses</option>
                             <option value="low">I - Low</option>
                             <option value="medium">II - Medium</option>
                             <option value="high">III - High</option>
@@ -1290,7 +1323,7 @@
                     <button type="button" data-cet-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
                 </div>
                 <input type="hidden" id="kb-cet-priority" value="medium">
-                <input type="hidden" id="kb-cet-complexity" value="">
+                <input type="hidden" id="kb-cet-complexity" value="auto">
             </div>
         </div>
         <!-- Attachments Tab (hidden by default) -->

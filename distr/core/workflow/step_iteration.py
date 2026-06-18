@@ -7,6 +7,8 @@ import logging
 import re
 from typing import Any
 
+from distr.core.workflow.tools import normalize_tool_list, tools_for_action
+
 logger = logging.getLogger(__name__)
 
 HARNESS_REPORT_FIELDS = (
@@ -65,6 +67,16 @@ def build_step_iteration_protocol(step_meta: dict[str, Any] | None) -> str:
     skills = [str(s).strip() for s in (meta.get("skills") or []) if str(s).strip()]
     if skills:
         parts.extend(["### Use these skills when relevant", "", ", ".join(skills), ""])
+    tools = normalize_tool_list(meta.get("tools") or [])
+    if tools:
+        parts.extend([
+            "### Use these tools explicitly",
+            "",
+            ", ".join(tools),
+            "",
+            "Treat these as required step capabilities. If a required tool is unavailable, report `needs_input` with the missing tool and the current project/workflow/step context.",
+            "",
+        ])
     validation = str(meta.get("validation_prompt") or "").strip()
     if validation:
         parts.extend(["### Pass when", "", validation, ""])
@@ -101,11 +113,16 @@ def load_step_handoff_meta(step_id: int | None) -> dict[str, Any]:
                     cfg = json.loads(step.config) or {}
                 except Exception:
                     cfg = {}
+            action_type = (step.action_type or step.step_type or "").strip()
+            tools = normalize_tool_list(cfg.get("tools") or [])
+            if not tools:
+                tools = tools_for_action(action_type)
             return {
                 "step_name": (step.name or "").strip(),
-                "action_type": (step.action_type or step.step_type or "").strip(),
+                "action_type": action_type,
                 "validation_prompt": (step.validation_prompt or cfg.get("validation_prompt") or "").strip(),
                 "validation_type": (step.validation_type or cfg.get("validation_type") or "").strip(),
+                "tools": tools,
                 "skills": list(cfg.get("skills") or []),
                 "failure_checklist": list(cfg.get("failure_checklist") or []),
                 "guardrail": str(cfg.get("guardrail") or "").strip(),

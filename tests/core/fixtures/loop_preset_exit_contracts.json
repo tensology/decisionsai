@@ -26,22 +26,13 @@
     "has_end_loop_action": true,
     "tools": ["browser_use", "cli", "other", "playwright"]
   },
-  "implement-js-fallow-audit": {
-    "archetype": "incremental_ship",
-    "step_count": 4,
-    "final_step_name": "Close slice with audit evidence",
-    "max_iterations": 6,
+  "ship-pr-until-green": {
+    "archetype": "ship_with_ci",
+    "step_count": 6,
+    "final_step_name": "Report",
+    "max_iterations": 10,
     "has_fail_goto": true,
     "has_end_loop_action": true,
     "tools": ["cli", "other"]
-  },
-  "decisionsai-dogfood-ticket": {
-    "archetype": "incremental_ship",
-    "step_count": 5,
-    "final_step_name": "Self-assessment and return contract",
-    "max_iterations": 5,
-    "has_fail_goto": true,
-    "has_end_loop_action": false,
-    "tools": ["browser_use", "cli", "other", "playwright"]
   }
 }

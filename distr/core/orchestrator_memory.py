@@ -1,4 +1,4 @@
-"""Durable Hermes memory and quiet machine activity helpers."""
+"""Durable orchestrator memory and quiet machine activity helpers."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ _SECRET_VALUE_RE = re.compile(
 
 
 def ensure_orchestrator_memory_tables() -> None:
-    """Create Hermes memory tables if the application has not bootstrapped them yet."""
+    """Create orchestrator memory tables if the application has not bootstrapped them yet."""
     try:
         Base.metadata.create_all(
             engine,
@@ -174,7 +174,7 @@ def record_user_memory(
     manually_added: bool = False,
     payload: dict[str, Any] | None = None,
 ) -> str | None:
-    """Create or update a durable user memory and emit one non-notifying Hermes event."""
+    """Create or update a durable user memory and emit one non-notifying orchestrator event."""
     clean = _one_line(content, 1000)
     normalized = _normalize_text(clean)
     if not normalized:

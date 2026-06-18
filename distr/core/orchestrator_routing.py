@@ -227,7 +227,7 @@ def _call_orchestrator_llm(
         parsed = json.loads(content)
         return parsed if isinstance(parsed, dict) else None
     except Exception as exc:
-        logger.debug("Hermes orchestrator LLM advisory skipped: %s", exc)
+        logger.debug("Orchestrator LLM advisory skipped: %s", exc)
         return None
 
 
@@ -265,7 +265,7 @@ def resolve_execution_route(
     allow_orchestrator_override: bool = True,
     emit_event: bool = True,
 ) -> RouteDecision:
-    """Resolve the execution harness for a ticket using hybrid Hermes routing."""
+    """Resolve the execution harness for a ticket using hybrid orchestrator routing."""
     from distr.core.kanban.ticket_policy import normalize_ticket_complexity, resolve_ticket_cli_route
     from distr.core.harness.intake import classify_intake
     from distr.core.project_cli_backends import get_backend, normalize_backend_id

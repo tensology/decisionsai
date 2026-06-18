@@ -8,6 +8,7 @@ from typing import Any
 
 from distr.core.workflow.loop_catalog import LOOP_ARCHETYPES, infer_loop_archetype
 from distr.core.workflow.planning import parse_loop_contract
+from distr.core.workflow.tools import WORKFLOW_TOOL_IDS, normalize_tool_id, normalize_tool_list, tools_for_action
 
 # ECC skill bundles keyed by loop archetype (ids under plugins/ecc/skills or skills/).
 ARCHETYPE_SKILL_BUNDLES: dict[str, list[str]] = {
@@ -29,7 +30,7 @@ ACTION_TYPES = (
     "http_request",
 )
 
-UI_TOOL_IDS = ("playwright", "computer_use", "browser_use", "cli", "other")
+UI_TOOL_IDS = WORKFLOW_TOOL_IDS
 
 BACKEND_BY_ACTION: dict[str, str] = {
     "send_to_project_cli": "codex",
@@ -42,48 +43,30 @@ BACKEND_BY_ACTION: dict[str, str] = {
 
 def _ui_tools_from_harness(action_type: str, tools: list[str] | None = None) -> list[str]:
     """Map harness/internal tool ids to workflow step editor checkboxes."""
-    ui: list[str] = []
-    for raw in tools or []:
-        token = str(raw or "").strip().lower()
-        if token in UI_TOOL_IDS:
-            if token not in ui:
-                ui.append(token)
-        elif token in {"browser", "playwright"}:
-            for item in ("playwright", "browser_use"):
-                if item not in ui:
-                    ui.append(item)
-        elif token in {"sidecar", "vision", "computer_use"}:
-            if "computer_use" not in ui:
-                ui.append("computer_use")
-        elif token in {"project_cli", "cli", "ide"}:
-            if "cli" not in ui:
-                ui.append("cli")
-        elif token in {"shell", "orchestrator", "workflow_agent"}:
-            if "other" not in ui:
-                ui.append("other")
+    ui = normalize_tool_list(tools or [])
     if ui:
         return ui
-    action = (action_type or "").strip().lower()
-    if action == "computer_use":
-        return ["computer_use"]
-    if action == "playwright":
-        return ["playwright", "browser_use"]
-    if action == "send_to_project_cli":
-        return ["cli"]
-    if action in {"run_command", "agent_instruction"}:
-        return ["other"]
-    return []
+    return tools_for_action((action_type or "").strip().lower())
 
 
 def derive_action_type_from_ui_tools(tools: list[str] | None) -> str:
-    selected = [str(t or "").strip().lower() for t in (tools or []) if str(t or "").strip()]
+    selected = [normalize_tool_id(str(t or "")) for t in (tools or [])]
+    selected = [tool for tool in selected if tool]
     if "computer_use" in selected:
         return "computer_use"
     if "playwright" in selected or "browser_use" in selected:
         return "playwright"
     if "cli" in selected:
         return "send_to_project_cli"
-    if "other" in selected:
+    if "python" in selected:
+        return "execute_code"
+    if "shell" in selected:
+        return "run_command"
+    if "http" in selected:
+        return "http_request"
+    if "macro" in selected:
+        return "play_recording"
+    if "agent" in selected:
         return "agent_instruction"
     return "send_to_project_cli"
 
@@ -174,7 +157,7 @@ def suggest_step_harness(
         clarify_questions = [
             "What project or repo should this step target?",
             "What does done look like for this step?",
-            "Which executor should run it (CLI, IDE, browser, or Hermes Agent)?",
+            "Which executor should run it (CLI, IDE, browser, or external agent)?",
         ]
 
     tools: list[str] = []
@@ -231,6 +214,7 @@ def suggest_step_harness_llm(
     )
     fallback = {
         **baseline,
+        "refined_instruction": (instruction or "").strip(),
         "skills": list(baseline.get("skills") or []),
         "ui_tools": _ui_tools_from_harness(
             str(baseline.get("action_type") or ""),
@@ -255,8 +239,10 @@ def suggest_step_harness_llm(
         allowed_ids = {str(row.get("id") or "") for row in catalog if row.get("id")}
         prompt = {
             "task": (
-                "Choose bundled skills and additional tools for one workflow loop step. "
-                "Use only skill ids from available_skills."
+                "Improve one workflow loop step for agent execution. Refine the instruction, "
+                "build guardrails, define validation, and choose the smallest useful bundled "
+                "skills and required tools. Use only skill ids from available_skills and tool ids "
+                "from allowed_tools."
             ),
             "instruction": (instruction or "").strip()[:4000],
             "guardrail": (guardrail or "").strip()[:2000],
@@ -265,9 +251,13 @@ def suggest_step_harness_llm(
             "available_skills": catalog,
             "allowed_tools": list(UI_TOOL_IDS),
             "response_schema": {
+                "refined_instruction": "clear executable step instruction, preserving user intent",
+                "guardrail": "short markdown bullet list of scope and safety constraints",
+                "validation_prompt": "plain English pass/fail criteria",
                 "skills": ["skill_id"],
                 "tools": list(UI_TOOL_IDS),
                 "wait_for_continue": "boolean",
+                "clarify_questions": ["question to ask only if the step is unsafe or ambiguous"],
                 "rationale": "string",
             },
         }
@@ -278,7 +268,10 @@ def suggest_step_harness_llm(
                     "role": "system",
                     "content": (
                         "You are the workflow orchestrator. "
-                        "Pick the smallest useful skill set and tool checkboxes for this step. "
+                        "Rewrite vague implementation chatter into a crisp executable step. "
+                        "Create guardrails that keep the executor scoped to the current project/workflow/step. "
+                        "Create validation that lets the executor self-assess completion. "
+                        "Pick the smallest useful skill set and required tool checkboxes for this step. "
                         "Set wait_for_continue true only when the step text is too vague to run safely "
                         "without human clarification. Respond with valid JSON only."
                     ),
@@ -300,11 +293,7 @@ def suggest_step_harness_llm(
             for item in (parsed.get("skills") or [])
             if str(item).strip() in allowed_ids
         ]
-        ui_tools = [
-            str(item).strip().lower()
-            for item in (parsed.get("tools") or [])
-            if str(item).strip().lower() in UI_TOOL_IDS
-        ]
+        ui_tools = normalize_tool_list(list(parsed.get("tools") or []))
         ui_tools = list(dict.fromkeys(ui_tools))
         if not skills:
             skills = list(baseline.get("skills") or [])
@@ -314,12 +303,24 @@ def suggest_step_harness_llm(
                 list(baseline.get("tools") or []),
             )
         action_type = derive_action_type_from_ui_tools(ui_tools)
+        refined_instruction = str(parsed.get("refined_instruction") or "").strip()
+        suggested_guardrail = str(parsed.get("guardrail") or "").strip()
+        suggested_validation = str(parsed.get("validation_prompt") or parsed.get("validation") or "").strip()
+        clarify_questions = [
+            str(item).strip()
+            for item in (parsed.get("clarify_questions") or [])
+            if str(item).strip()
+        ][:5]
         return {
             "action_type": action_type,
+            "refined_instruction": refined_instruction or (instruction or "").strip(),
             "skills": skills,
             "ui_tools": ui_tools,
             "tools": ui_tools,
             "wait_for_continue": bool(parsed.get("wait_for_continue")),
+            "clarify_questions": clarify_questions,
+            "guardrail": suggested_guardrail or str(baseline.get("guardrail") or "").strip(),
+            "validation_prompt": suggested_validation or str(baseline.get("validation_prompt") or "").strip(),
             "rationale": str(parsed.get("rationale") or "").strip(),
             "source": "orchestrator_llm",
         }

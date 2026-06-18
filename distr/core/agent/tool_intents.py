@@ -64,6 +64,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(ticket|card|issue)\b.+\b(move|transfer|relocate)\b.+\bboard\b",
             r"\bwhats\s*app\b.+\b(sync|latest|activity|overview|contacts?|chats?|messages?|thread|context|snapshot|ticket|reply|send)\b",
             r"\b(sync|latest|activity|overview|list|show|read|open|snapshot|create|make|draft|reply|send)\b.+\bwhats\s*app\b",
+            r"\b(groups?|chats?|threads?)\b.+\b(messages?|photos?|screenshots?|voice\s+notes?)\b",
+            r"\b(messages?|photos?|screenshots?|voice\s+notes?)\b.+\b(groups?|chats?|threads?)\b",
         ),
     ),
     (

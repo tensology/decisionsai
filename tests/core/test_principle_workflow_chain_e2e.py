@@ -1,4 +1,4 @@
-"""Chained Spotify E2E: ideation builds the board, development runs tickets, polish verifies."""
+"""Principle workflow chain E2E: ideation builds a board, development runs tickets, polish verifies."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def test_ideation_reads_requirements_and_builds_board(chain_factory, tmp_path):
         session.close()
 
 
-def test_spotify_workflow_chain_ideation_development_polish(chain_factory, tmp_path):
+def test_principle_workflow_chain_ideation_development_polish(chain_factory, tmp_path):
     summary = run_spotify_workflow_chain(chain_factory, tmp_path)
 
     assert summary["ideation"]["terminal"]["run"].status == "completed"

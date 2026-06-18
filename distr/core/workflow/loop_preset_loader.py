@@ -16,6 +16,7 @@ from distr.core.workflow.step_harness import (
     ARCHETYPE_SKILL_BUNDLES,
     derive_action_type_from_ui_tools,
 )
+from distr.core.workflow.tools import normalize_tool_list
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def _check_tools(check_cmd: str) -> tuple[list[str], str]:
     browserish = any(token in lower for token in ("playwright", "e2e", "browser", "cypress", "http://", "https://"))
     if browserish:
         return ["playwright", "browser_use"], ""
-    return ["other"], f"Shell check: {check_cmd}"
+    return ["shell"], f"Shell check: {check_cmd}"
 
 
 def _resolve_routing_action(
@@ -161,7 +162,7 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     for i, raw in enumerate(raw_steps):
         if not isinstance(raw, dict):
             continue
-        tools = [str(t).strip().lower() for t in (raw.get("tools") or []) if str(t).strip()]
+        tools = normalize_tool_list(list(raw.get("tools") or []))
         skills = list(raw.get("skills") or default_skills)
         guardrail = str(raw.get("guardrail") or "").strip()
         if not guardrail:
@@ -428,7 +429,7 @@ def workflow_export_to_loop_bundle(
             "validation_prompt": str(step.get("validation_prompt") or step.get("verification") or "").strip(),
             "validation_type": str(step.get("validation_type") or "llm_judgment"),
             "skills": list(cfg.get("skills") or []),
-            "tools": list(cfg.get("tools") or []),
+            "tools": normalize_tool_list(list(cfg.get("tools") or [])),
             "other_tool": str(cfg.get("other_tool") or "").strip(),
             "action_type": str(step.get("action_type") or derive_action_type_from_ui_tools(cfg.get("tools"))),
             "wait_for_continue": bool(step.get("wait_for_continue", False)),

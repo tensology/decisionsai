@@ -1,4 +1,4 @@
-"""Hermes validator LLM — second-pass and primary LLM judgment for workflow steps."""
+"""Orchestrator validator LLM — second-pass and primary LLM judgment for workflow steps."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def run_orchestrator_validator_judgment(
     mode: str = "primary",
 ) -> dict[str, Any] | None:
     """
-    Ask the Hermes validator model to judge step output.
+    Ask the orchestrator validator model to judge step output.
 
     Returns None when validator model is not configured or the call fails.
     """
@@ -104,7 +104,7 @@ def run_orchestrator_validator_judgment(
             "model": model,
         }
     except Exception as exc:
-        logger.debug("Hermes validator judgment skipped: %s", exc)
+        logger.debug("Orchestrator validator judgment skipped: %s", exc)
         return None
 
 
@@ -118,7 +118,7 @@ def apply_orchestrator_validator_overlay(
     ticket_context: str = "",
 ) -> dict[str, Any] | None:
     """
-    Optional Hermes second pass after mechanical verification.
+    Optional orchestrator second pass after mechanical verification.
 
     Runs when mechanical verification passed but we want an LLM sanity check
     (playwright/text_match/rule_based/none paths).

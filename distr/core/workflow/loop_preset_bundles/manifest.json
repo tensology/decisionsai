@@ -28,20 +28,12 @@
       "file": "bundles/polish-verify-and-ship.json"
     },
     {
-      "slug": "implement-js-fallow-audit",
-      "name": "Engineering: Implement + Fallow Audit (JS)",
-      "role": "senior_software_engineer",
-      "category": "Engineering",
-      "archetype": "incremental_ship",
-      "file": "bundles/implement-js-fallow-audit.json"
-    },
-    {
-      "slug": "decisionsai-dogfood-ticket",
-      "name": "DecisionsAI Dogfood Ticket",
-      "role": "senior_software_engineer",
-      "category": "Engineering",
-      "archetype": "incremental_ship",
-      "file": "bundles/decisionsai-dogfood-ticket.json"
+      "slug": "ship-pr-until-green",
+      "name": "Deploy: Ship PR Until Green",
+      "role": "release_engineer",
+      "category": "Release",
+      "archetype": "ship_with_ci",
+      "file": "bundles/ship-pr-until-green.json"
     }
   ]
 }

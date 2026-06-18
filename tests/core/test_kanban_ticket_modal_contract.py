@@ -34,3 +34,20 @@ def test_ticket_modal_meta_uses_label_value_flex_fields():
     assert "ticketMetaField" in js
     assert 'id="kb-modal-external-meta"' in html
     assert "kb-modal-external-meta" in ticket_js
+
+
+def test_ticket_complexity_defaults_to_auto_in_create_modal():
+    html = KANBAN_HTML.read_text(encoding="utf-8")
+    js = KANBAN_JS.read_text(encoding="utf-8")
+
+    select_block = html[
+        html.index('id="kb-modal-ticket-complexity"') :
+        html.index("</select>", html.index('id="kb-modal-ticket-complexity"'))
+    ]
+
+    assert '<option value="auto" selected>Auto' in select_block
+    assert '<option value="low">I - Low</option>' in select_block
+    assert 'id="kb-cet-complexity" value="auto"' in html
+    assert 'complexitySelect.value = "auto"' in js
+    assert '["auto", "low", "medium", "high"]' in js
+    assert 'return select && select.value ? select.value : "auto"' in js

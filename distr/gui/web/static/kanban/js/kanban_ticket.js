@@ -1338,7 +1338,7 @@
             descEl.disabled = false;
             setCetPriority("medium");
             var complexityEl = document.getElementById("kb-cet-complexity");
-            if (complexityEl) complexityEl.value = "medium";
+            if (complexityEl) complexityEl.value = "auto";
             var submitBtn = document.getElementById("kb-cet-submit");
             if (submitBtn) {
                 submitBtn.disabled = false;
@@ -1394,7 +1394,7 @@
                 titleEl.dataset.composeBaseTitle = titleEl.value;
                 descEl.dataset.composeBaseDesc = descEl.value;
                 setCetPriority(data.priority || "medium");
-                if (complexityEl) complexityEl.value = data.complexity || "medium";
+                if (complexityEl) complexityEl.value = data.complexity || "auto";
                 renderCetWaMedia(data.media || []);
                 setCetLoadingOverlay(true, "Reading messages, attaching media, and transcribing voice notes where needed.", "Preparing media", 42);
                 if (!data.message_ids || !data.message_ids.length) {
@@ -1439,7 +1439,7 @@
                 if (r.description && (!descEl.value.trim() || descEl.value === baseDesc)) descEl.value = r.description;
                 if (r.priority) setCetPriority(r.priority);
                 var complexityEl = document.getElementById("kb-cet-complexity");
-                if (complexityEl) complexityEl.value = r.complexity || "";
+                if (complexityEl) complexityEl.value = r.complexity || "auto";
                 renderCetWaMedia(r.media || []);
                 if (r.fallback) {
                     var err = summarizeComposeError(r.compose_error || r.error);
@@ -1545,7 +1545,7 @@
             descEl.placeholder = "Describe the ticket...";
             setCetPriority("medium");
             var complexityEl = document.getElementById("kb-cet-complexity");
-            if (complexityEl) complexityEl.value = "";
+            if (complexityEl) complexityEl.value = "auto";
             var statusEl = document.getElementById("kb-cet-distill-status");
             resetCetComposeStatus(statusEl, "Draft ready; loading WhatsApp context...", "text-[#f97316]");
             modal.dataset.whatsappPhone = phone;
@@ -1651,7 +1651,7 @@
             }
             setCetPriority("medium");
             var complexityEl = document.getElementById("kb-cet-complexity");
-            if (complexityEl) complexityEl.value = "";
+            if (complexityEl) complexityEl.value = "auto";
             document.getElementById("kb-cet-files-list").innerHTML = "";
             document.getElementById("kb-cet-file-input").value = "";
             document.getElementById("kb-cet-heading").textContent = currentBoard.source === "database"
@@ -1709,7 +1709,7 @@
             var complexityEl = document.getElementById("kb-cet-complexity");
             if (titleEl) { titleEl.disabled = false; titleEl.placeholder = "Ticket title"; delete titleEl.dataset.composeBaseTitle; }
             if (descEl) { descEl.disabled = false; descEl.placeholder = "Describe the ticket..."; delete descEl.dataset.composeBaseDesc; }
-            if (complexityEl) complexityEl.value = "";
+            if (complexityEl) complexityEl.value = "auto";
             if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove("opacity-50", "cursor-not-allowed"); }
         }
 
@@ -1732,7 +1732,7 @@
             var laneId = document.getElementById("kb-cet-lane").value;
             var priority = document.getElementById("kb-cet-priority").value;
             var complexityEl = document.getElementById("kb-cet-complexity");
-            var complexity = complexityEl ? complexityEl.value : "";
+            var complexity = complexityEl ? (complexityEl.value || "auto") : "auto";
             var boardSelect = document.getElementById("kb-cet-board");
             var selectedValue = boardSelect ? boardSelect.value : "";
             var parts = selectedValue.split(":");
@@ -1756,7 +1756,7 @@
                             title: title,
                             description: desc,
                             priority: priority || "medium",
-                            complexity: complexity || undefined
+                            complexity: complexity
                         })
                     }).then(function(r) {
                         if (!r || !r.success) { deps.showSnackbar("Failed to create WhatsApp ticket", "error"); return; }
@@ -1772,8 +1772,7 @@
                     });
                     return;
                 }
-                var cetPayload = { title: title, description: desc, lane_id: parseInt(laneId, 10), priority: priority || "medium", board_id: boardId };
-                if (complexity) cetPayload.complexity = complexity;
+                var cetPayload = { title: title, description: desc, lane_id: parseInt(laneId, 10), priority: priority || "medium", complexity: complexity, board_id: boardId };
                 if (typeof deps.mergeSourceChatIntoPayload === "function") {
                     deps.mergeSourceChatIntoPayload(cetPayload);
                 }

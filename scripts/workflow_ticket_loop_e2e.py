@@ -2411,7 +2411,7 @@ def _cmd_simulate_flow(args: argparse.Namespace) -> int:
         "-m",
         "pytest",
         "tests/core/test_loop_preset_run_matrix.py",
-        "tests/core/test_spotify_workflow_chain_e2e.py",
+        "tests/core/test_principle_workflow_chain_e2e.py",
         "tests/core/test_loop_presets.py::test_plan_steps_from_bundle_has_development_loop_contract",
         "-q",
     ]

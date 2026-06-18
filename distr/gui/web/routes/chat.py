@@ -150,6 +150,7 @@ def _chat_workflow_event_messages(chat: Chat) -> List[Dict[str, Any]]:
                     "phase": event.get("phase") or "",
                     "step_id": event.get("step_id"),
                     "step_name": event.get("step_name") or "",
+                    "agent_activity": event.get("agent_activity") or {},
                 },
             }
         )
@@ -548,7 +549,7 @@ class UpdateChatRequest(ChatRequestModel):
 
 
 class CompactChatRequest(ChatRequestModel):
-    """Request to compact a chat into a Hermes-backed checkpoint."""
+    """Request to compact a chat into an orchestrator-backed checkpoint."""
 
     provider: Optional[str] = None
     model_name: Optional[str] = None
@@ -731,7 +732,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         Chat.is_archived == False,
                         Chat.is_hidden == False,
                     )
-                    .order_by(Chat.created_date.desc(), Chat.id.desc())
+                    .order_by(Chat.modified_date.desc(), Chat.id.desc())
                     .all()
                 )
 
@@ -1322,7 +1323,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
     @router.post("/chats/{chat_id}/compact")
     async def compact_chat(chat_id: int, request_data: CompactChatRequest):
-        """Create a visible, Hermes-backed compact checkpoint for this chat."""
+        """Create a visible, orchestrator-backed compact checkpoint for this chat."""
         try:
             settings = load_settings_from_db()
             with get_session() as session:
@@ -1429,7 +1430,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     evidence={"summary": summary},
                 )
             except Exception:
-                logger.debug("Hermes compact event failed", exc_info=True)
+                logger.debug("Orchestrator compact event failed", exc_info=True)
             try:
                 from distr.core.signals import signal_manager
 
@@ -1539,7 +1540,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     },
                 )
             except Exception:
-                logger.debug("Hermes fork event failed", exc_info=True)
+                logger.debug("Orchestrator fork event failed", exc_info=True)
             try:
                 from distr.core.settings import load_settings_from_db, save_settings_to_db
 

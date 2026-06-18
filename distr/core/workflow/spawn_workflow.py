@@ -25,14 +25,12 @@ def infer_preset_slug_for_ticket(
     """Pick a loop preset from ticket + project context. ponytail: keyword heuristic; upgrade to archetype classifier."""
     blob = f"{title}\n{description}\n{project_folder}".lower()
     folder = (project_folder or "").lower()
-    if "dogfood" in blob or ("decisionsai" in folder and "decisions" in folder):
-        return "decisionsai-dogfood-ticket"
     if any(token in blob for token in ("polish", "verify and ship", "ui drift", "screenshot review")):
         return "polish-verify-and-ship"
     if any(token in blob for token in ("ideation", "brief to board", "scope brief")):
         return "ideation-brief-to-board"
-    if "fallow" in blob or "js audit" in blob:
-        return "implement-js-fallow-audit"
+    if any(token in blob for token in ("deploy", "release", "ship pr", "ci checks", "pull request", "merge")):
+        return "ship-pr-until-green"
     return _DEFAULT_PRESET
 
 

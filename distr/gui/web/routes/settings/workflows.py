@@ -117,6 +117,65 @@ def _workflow_error_payload(error: str, action: str = "workflow") -> dict:
     }
 
 
+def _step_tool_list(step) -> List[str]:
+    from distr.core.workflow.tools import normalize_tool_list, tools_for_action
+
+    try:
+        config = json.loads(getattr(step, "config", None) or "{}") or {}
+    except Exception:
+        config = {}
+    tools = config.get("tools") if isinstance(config, dict) else []
+    clean = normalize_tool_list(tools or [])
+    if clean:
+        return clean
+    action = str(getattr(step, "action_type", None) or getattr(step, "step_type", None) or "").strip()
+    return tools_for_action(action)
+
+
+def _needs_input_context_and_spoken(
+    db,
+    *,
+    workflow_id: int,
+    run,
+    step_id: int | None,
+    project_id: int | None,
+    message: str,
+    payload: dict,
+) -> tuple[dict, str]:
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+
+    workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+    step = None
+    if step_id:
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+    try:
+        run_data = json.loads(getattr(run, "run_data", None) or "{}") or {}
+    except Exception:
+        run_data = {}
+    project = (
+        str(payload.get("project") or payload.get("project_name") or run_data.get("project_name") or "").strip()
+        or (f"project #{project_id}" if project_id else "this project")
+    )
+    workflow_name = str(getattr(workflow, "name", None) or f"workflow #{workflow_id}").strip()
+    step_name = str(getattr(step, "name", None) or (f"step #{step_id}" if step_id else "the current step")).strip()
+    situation = str(payload.get("situation") or payload.get("summary") or message or "").strip()
+    tools = _step_tool_list(step) if step else []
+    context = {
+        "project": project,
+        "workflow": workflow_name,
+        "run": f"Run #{getattr(run, 'id', '')}".strip(),
+        "step": step_name,
+        "situation": situation,
+        "tools": tools,
+    }
+    spoken = (
+        f"I'm working on {project} in {workflow_name}, at {step_name}. "
+        f"{situation + ' ' if situation else ''}"
+        f"{message}"
+    ).strip()
+    return context, spoken
+
+
 # ---- Pydantic models (only used in this module) ----
 
 class WorkflowCreateRequest(BaseModel):
@@ -141,6 +200,10 @@ class WorkflowUpdateRequest(BaseModel):
     run_settings: Optional[dict] = None
     pre_chain: Optional[List[str]] = None
     post_chain: Optional[List[str]] = None
+
+
+class WorkflowOrderRequest(BaseModel):
+    workflow_ids: List[int]
 
 
 class CodexBridgeEventRequest(BaseModel):
@@ -433,7 +496,7 @@ def register_routes(router, templates):
 
     @router.get("/workflows/skills")
     async def workflow_skills_catalog(source: Optional[str] = None, limit: int = 200):
-        """Bundled skills registry for workflow skill chains and Hermes transfer."""
+        """Bundled skills registry for workflow skill chains and orchestrator transfer."""
         try:
             from distr.core.skills.catalog import load_registry
 
@@ -465,11 +528,27 @@ def register_routes(router, templates):
             if data.workflow_type is not None:
                 kwargs["workflow_type"] = data.workflow_type
             wf_id = create_workflow(**kwargs)
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            increment_workflow_updated()
             return JSONResponse(get_workflow(wf_id))
         except ValueError as e:
             return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
             logger.error("Workflow create failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.patch("/workflows/order")
+    async def workflow_order_update(data: WorkflowOrderRequest):
+        try:
+            from distr.core.workflow.service import update_workflow_order
+
+            ok = update_workflow_order(data.workflow_ids)
+            if not ok:
+                return JSONResponse({"detail": "Workflow order update failed."}, status_code=400)
+            return JSONResponse({"success": True, "workflow_ids": data.workflow_ids})
+        except Exception as e:
+            logger.error("Workflow order update failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows/visual-baselines")
@@ -1160,7 +1239,7 @@ def register_routes(router, templates):
                     settings.pop(f"project_cli_{level}_codex_intelligence", None)
                     settings.pop(f"project_cli_{level}_codex_speed", None)
 
-        # Keep the existing workflow LLM fallback aligned with Hermes orchestration
+        # Keep the existing workflow LLM fallback aligned with orchestrator routing
         # so older code paths still resolve to the same brain.
         orchestrator = models.get("orchestrator") or {}
         if "models" in data and (orchestrator.get("provider") or orchestrator.get("model")):
@@ -1172,7 +1251,7 @@ def register_routes(router, templates):
 
     @router.get("/workflows/actions/catalog")
     async def get_workflow_actions_catalog():
-        """Return saved Decisions Actions usable by workflow/Hermes steps."""
+        """Return saved Decisions Actions usable by workflow/orchestrator steps."""
         from distr.core.db import get_session, Action
         from sqlalchemy import desc, nulls_last
         with get_session() as session:
@@ -1420,6 +1499,9 @@ def register_routes(router, templates):
             from distr.core.workflow.service import delete_workflow
             if not delete_workflow(workflow_id):
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            increment_workflow_updated()
             return JSONResponse({"success": True})
         except Exception as e:
             logger.error("Workflow delete failed: %s", e, exc_info=True)
@@ -1501,7 +1583,7 @@ def register_routes(router, templates):
                 limit=limit,
             ))
         except Exception as e:
-            logger.error("Workflow Hermes events failed: %s", e, exc_info=True)
+            logger.error("Workflow orchestrator events failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.get("/workflows/{workflow_id}/validations")
@@ -1552,6 +1634,109 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Workflow clear runs failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "clear_audit"), status_code=500)
+
+    @router.delete("/workflows/{workflow_id}/runs/{run_id}")
+    async def workflow_delete_run(workflow_id: int, run_id: int):
+        """Delete one inactive workflow run and the logs scoped to that run."""
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.db import get_session
+            from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+            from distr.core.db.orchestrator import (
+                OrchestratorCorrectionAttempt,
+                OrchestratorEvent,
+                OrchestratorValidationRecord,
+            )
+            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStepResult
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            with get_session() as db:
+                run = (
+                    db.query(AutoWorkflowRun)
+                    .filter(AutoWorkflowRun.workflow_id == int(workflow_id))
+                    .filter(AutoWorkflowRun.id == int(run_id))
+                    .first()
+                )
+                if not run:
+                    return JSONResponse(_workflow_error_payload("Run not found", "delete_run"), status_code=404)
+                status = str(run.status or "").strip().lower()
+                if status in {"queued", "running", "waiting"}:
+                    return JSONResponse(
+                        {
+                            "detail": "Active workflow runs cannot be deleted.",
+                            "action": "delete_run",
+                            "next_action": "Cancel or complete the run before deleting its history.",
+                            "workflow_id": workflow_id,
+                            "run_id": run_id,
+                            "status": status,
+                        },
+                        status_code=409,
+                    )
+
+                session_rows = (
+                    db.query(ProjectExecutionSession.id)
+                    .filter(ProjectExecutionSession.workflow_id == int(workflow_id))
+                    .filter(ProjectExecutionSession.run_id == int(run_id))
+                    .all()
+                )
+                session_ids = [int(row[0]) for row in session_rows]
+                deleted_executor_events = 0
+                deleted_executor_sessions = 0
+                if session_ids:
+                    deleted_executor_events = (
+                        db.query(ProjectExecutionEvent)
+                        .filter(ProjectExecutionEvent.session_id.in_(session_ids))
+                        .delete(synchronize_session=False)
+                    )
+                    deleted_executor_sessions = (
+                        db.query(ProjectExecutionSession)
+                        .filter(ProjectExecutionSession.id.in_(session_ids))
+                        .delete(synchronize_session=False)
+                    )
+                deleted_corrections = (
+                    db.query(OrchestratorCorrectionAttempt)
+                    .filter(OrchestratorCorrectionAttempt.workflow_id == int(workflow_id))
+                    .filter(OrchestratorCorrectionAttempt.run_id == int(run_id))
+                    .delete(synchronize_session=False)
+                )
+                deleted_validations = (
+                    db.query(OrchestratorValidationRecord)
+                    .filter(OrchestratorValidationRecord.workflow_id == int(workflow_id))
+                    .filter(OrchestratorValidationRecord.run_id == int(run_id))
+                    .delete(synchronize_session=False)
+                )
+                deleted_orchestrator_events = (
+                    db.query(OrchestratorEvent)
+                    .filter(OrchestratorEvent.workflow_id == int(workflow_id))
+                    .filter(OrchestratorEvent.run_id == int(run_id))
+                    .delete(synchronize_session=False)
+                )
+                deleted_step_results = (
+                    db.query(AutoWorkflowStepResult)
+                    .filter(AutoWorkflowStepResult.run_id == int(run_id))
+                    .delete(synchronize_session=False)
+                )
+                db.delete(run)
+                db.commit()
+
+            increment_workflow_updated()
+            return JSONResponse({
+                "success": True,
+                "workflow_id": workflow_id,
+                "deleted_run": run_id,
+                "deleted_executor_sessions": deleted_executor_sessions,
+                "deleted_executor_events": deleted_executor_events,
+                "deleted_orchestrator_events": deleted_orchestrator_events,
+                "deleted_validations": deleted_validations,
+                "deleted_corrections": deleted_corrections,
+                "deleted_step_results": deleted_step_results,
+                "message": "Workflow run history deleted.",
+                "next_action": "Open Active Runs or run history to continue with remaining runs.",
+            })
+        except Exception as e:
+            logger.error("Workflow delete run failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "delete_run"), status_code=500)
 
     @router.delete("/workflows/{workflow_id}/events")
     async def workflow_clear_events(workflow_id: int):
@@ -1693,7 +1878,7 @@ def register_routes(router, templates):
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/route-approval")
     async def workflow_route_approval(workflow_id: int, run_id: int, request: Request):
-        """Approve or reject a pending Hermes route override for a waiting run."""
+        """Approve or reject a pending orchestrator route override for a waiting run."""
         try:
             body = await request.json()
         except Exception:
@@ -1846,7 +2031,7 @@ def register_routes(router, templates):
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/codex-events")
     async def workflow_codex_bridge_event(workflow_id: int, run_id: int, event: CodexBridgeEventRequest):
-        """Record Codex IDE/plugin steering and execution events into Decisions/Hermes.
+        """Record Codex IDE/plugin steering and execution events into Decisions/orchestrator.
 
         This endpoint is intentionally not limited to waiting runs. Codex may report
         mid-run steering, interruption, progress, or completion while the workflow is
@@ -1936,6 +2121,18 @@ def register_routes(router, templates):
                     "codex_failed",
                     "cursor_failed",
                 }
+                needs_input_context = {}
+                worker_question_spoken = ""
+                if needs_human:
+                    needs_input_context, worker_question_spoken = _needs_input_context_and_spoken(
+                        db,
+                        workflow_id=workflow_id,
+                        run=run,
+                        step_id=int(step_id) if step_id else None,
+                        project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                        message=message,
+                        payload=payload,
+                    )
 
                 history = run_data.get("codex_bridge_events") or []
                 history.append({
@@ -1989,6 +2186,8 @@ def register_routes(router, templates):
                     run_data["human_intervention_state"] = "needs_human_input"
                     run_data["next_action"] = "needs_human_input"
                     run_data["worker_question"] = message
+                    run_data["worker_question_spoken"] = worker_question_spoken or message
+                    run_data["needs_input_context"] = needs_input_context
                     if latest_handoff:
                         latest_handoff["human_intervention"] = {
                             **(
@@ -2113,6 +2312,39 @@ def register_routes(router, templates):
                 payload=payload,
                 evidence=event.evidence or {},
             )
+            try:
+                from distr.core.agent_activity import emit_agent_activity_step
+
+                activity_result = emit_agent_activity_step(
+                    source="codex",
+                    surface="workflow",
+                    status="waiting" if needs_human else (status or ("completed" if worker_terminal else "running")),
+                    title=(
+                        "Needs input"
+                        if needs_human
+                        else ("Worker completed" if worker_terminal else "Worker progress")
+                    ),
+                    summary=worker_question_spoken if needs_human and worker_question_spoken else (message or f"Codex bridge event: {event_type}"),
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    step_id=int(step_id) if step_id else None,
+                    ticket_id=int(ticket_id) if ticket_id else None,
+                    board_id=int(board_id) if board_id else None,
+                    project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                    execution_session_id=int(execution_session_id) if execution_session_id else None,
+                    parent_event_id=orchestrator_event_id,
+                    thread_key="codex",
+                    step_key=event_type,
+                    step_type="needs_input" if needs_human else "cli_bridge",
+                    context=needs_input_context if needs_human else {},
+                    question=message if needs_human else "",
+                    spoken_text=worker_question_spoken if needs_human else "",
+                    payload={"bridge_event_type": event_type},
+                    evidence=event.evidence or {},
+                )
+                orchestrator_event_id = activity_result.get("event_id") or orchestrator_event_id
+            except Exception:
+                logger.debug("Could not emit codex bridge agent activity", exc_info=True)
 
             increment_workflow_updated()
 

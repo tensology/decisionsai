@@ -260,3 +260,199 @@ def test_project_whatsapp_feed_resolves_project_board_and_asks_for_snapshot(monk
     assert "Would you like me to create one backlog ticket" in result
     assert "message_ids=[92]" in result
     assert "whatsapp_project_snapshot_to_ticket" in result
+
+
+def test_project_whatsapp_feed_resolves_spoken_merit_pack_alias(monkeypatch):
+    message = _DetachedAfterCloseRow(
+        id=101,
+        jid="120363339060471282@g.us",
+        jid_phone="120363339060471282",
+        sender_push_name="Caleb Tobiansky",
+        sender_phone="18309512736942",
+        sender_jid="18309512736942@lid",
+        from_me=False,
+        chat_type="group",
+        text="The address change is failing.",
+        caption="",
+        media_type="",
+        processed=False,
+        snapshot_group="",
+        created_date=datetime(2026, 6, 18, 12, 7, 17),
+    )
+    link = _DetachedAfterCloseRow(
+        id=6,
+        board_id=2,
+        phone_jid="120363339060471282@g.us",
+        phone_number="120363339060471282",
+        contact_name="MP_WebDev",
+        auto_snapshot=True,
+    )
+    board = _DetachedAfterCloseRow(
+        id=2,
+        name="Merrypak",
+        description="",
+        default_project_id=2,
+        default_workflow_id=None,
+        default_action_id=None,
+        send_to_cli=False,
+        agent_source_lane="Backlog",
+        agent_done_lane="Done",
+        archived=False,
+        source="database",
+        position=0,
+    )
+    session = _DetachOnExitSession(messages=[message], links=[link], boards=[board], detach_on_exit=False)
+
+    tool = KanbanTicketTool()
+    monkeypatch.setattr(tool, "_get_session", lambda: session)
+
+    result = tool._action_whatsapp_project_feed(
+        text="Create a ticket from the last couple Merit Pack WhatsApp messages.",
+        limit=10,
+    )
+
+    assert "WhatsApp feed preview for Merrypak" in result
+    assert "message_ids=[101]" in result
+
+
+def test_project_whatsapp_feed_anchors_recent_slice_on_styled_carmen_sender(monkeypatch):
+    messages = [
+        _DetachedAfterCloseRow(
+            id=201,
+            jid="120363339060471282@g.us",
+            jid_phone="120363339060471282",
+            sender_push_name="Paul Hoft",
+            sender_phone="27947486437533",
+            sender_jid="27947486437533@lid",
+            from_me=False,
+            chat_type="group",
+            text="currently checking what is happening",
+            caption="",
+            media_type="",
+            processed=False,
+            snapshot_group="",
+            created_date=datetime(2026, 6, 18, 11, 50, 11),
+        ),
+        _DetachedAfterCloseRow(
+            id=202,
+            jid="120363339060471282@g.us",
+            jid_phone="120363339060471282",
+            sender_push_name="🪷𝓒𝓪𝓻𝓶𝓮𝓷🪷",
+            sender_phone="190958574559296",
+            sender_jid="190958574559296@lid",
+            from_me=False,
+            chat_type="group",
+            text="",
+            caption="",
+            media_type="photo",
+            processed=False,
+            snapshot_group="",
+            created_date=datetime(2026, 6, 18, 12, 1, 11),
+        ),
+        _DetachedAfterCloseRow(
+            id=203,
+            jid="120363339060471282@g.us",
+            jid_phone="120363339060471282",
+            sender_push_name="Caleb Tobiansky",
+            sender_phone="18309512736942",
+            sender_jid="18309512736942@lid",
+            from_me=False,
+            chat_type="group",
+            text="It has a problem when trying to change the address",
+            caption="",
+            media_type="",
+            processed=False,
+            snapshot_group="",
+            created_date=datetime(2026, 6, 18, 12, 5, 24),
+        ),
+    ]
+    link = _DetachedAfterCloseRow(
+        id=6,
+        board_id=2,
+        phone_jid="120363339060471282@g.us",
+        phone_number="120363339060471282",
+        contact_name="MP_WebDev",
+        auto_snapshot=True,
+    )
+    board = _DetachedAfterCloseRow(
+        id=2,
+        name="Merrypak",
+        description="",
+        default_project_id=2,
+        default_workflow_id=None,
+        default_action_id=None,
+        send_to_cli=False,
+        agent_source_lane="Backlog",
+        agent_done_lane="Done",
+        archived=False,
+        source="database",
+        position=0,
+    )
+    session = _DetachOnExitSession(messages=messages, links=[link], boards=[board], detach_on_exit=False)
+
+    tool = KanbanTicketTool()
+    monkeypatch.setattr(tool, "_get_session", lambda: session)
+
+    result = tool._action_whatsapp_project_feed(
+        text="Snapshot the recent Merit Pack messages from Carmen.",
+        limit=10,
+    )
+
+    assert "message_ids=[201, 202, 203]" in result
+    assert "Carmen" in result
+    assert "change the address" in result
+
+
+def test_default_create_ticket_routes_mp_web_dev_correction_to_whatsapp_feed(monkeypatch):
+    message = _DetachedAfterCloseRow(
+        id=301,
+        jid="120363339060471282@g.us",
+        jid_phone="120363339060471282",
+        sender_push_name="🪷𝓒𝓪𝓻𝓶𝓮𝓷🪷",
+        sender_phone="190958574559296",
+        sender_jid="190958574559296@lid",
+        from_me=False,
+        chat_type="group",
+        text="",
+        caption="",
+        media_type="photo",
+        processed=False,
+        snapshot_group="",
+        created_date=datetime(2026, 6, 18, 12, 1, 11),
+    )
+    link = _DetachedAfterCloseRow(
+        id=6,
+        board_id=2,
+        phone_jid="120363339060471282@g.us",
+        phone_number="120363339060471282",
+        contact_name="MP_WebDev",
+        auto_snapshot=True,
+    )
+    board = _DetachedAfterCloseRow(
+        id=2,
+        name="Merrypak",
+        description="",
+        default_project_id=2,
+        default_workflow_id=None,
+        default_action_id=None,
+        send_to_cli=False,
+        agent_source_lane="Backlog",
+        agent_done_lane="Done",
+        archived=False,
+        source="database",
+        position=0,
+    )
+    session = _DetachOnExitSession(messages=[message], links=[link], boards=[board], detach_on_exit=False)
+
+    tool = KanbanTicketTool()
+    monkeypatch.setattr(tool, "_get_session", lambda: session)
+
+    result = tool._run(
+        text="No, the MP Web Dev Group, there is a message from Carmen and has a screenshot on it. Can you see that?",
+        action="create_ticket",
+        message_limit=10,
+    )
+
+    assert "WhatsApp feed preview for Merrypak" in result
+    assert "message_ids=[301]" in result
+    assert "Anchored on sender: Carmen" in result

@@ -8,6 +8,7 @@ import time
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
 from distr.core.workflow.service import get_active_run, get_active_runs
+from distr.core.workflow.router import StepRouter
 
 
 def _seed_active_loop_run() -> tuple[int, int]:
@@ -91,3 +92,16 @@ def test_active_runs_list_payload_exposes_same_developer_visibility_contract():
     assert run["current_step_action_type"] == "playwright"
     assert run["current_step_tools"] == ["playwright", "browser_use"]
     assert run["current_step_skills"] == ["webapp-testing", "verification-loop"]
+
+
+def test_browser_use_action_is_an_explicit_step_tool():
+    assert StepRouter._step_tools_for_action("browser_use") == ["browser_use"]
+
+
+def test_active_run_tool_fallbacks_are_specific_capabilities():
+    assert StepRouter._step_tools_for_action("agent_instruction") == ["agent"]
+    assert StepRouter._step_tools_for_action("execute_code") == ["python"]
+    assert StepRouter._step_tools_for_action("run_command") == ["shell"]
+    assert StepRouter._step_tools_for_action("http_request") == ["http"]
+    assert StepRouter._step_tools_for_action("play_recording") == ["macro"]
+    assert StepRouter._step_tools_for_action("send_to_project_cli") == ["cli"]

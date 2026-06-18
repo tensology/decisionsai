@@ -108,7 +108,7 @@ def build_backend_handoff_packet(
     callback: dict[str, Any] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the durable Decisions-to-worker handoff packet stored by Hermes."""
+    """Build the durable Decisions-to-worker handoff packet stored by the orchestrator."""
     raw = {
         "backend_id": backend_id,
         "model": model or "auto",
@@ -150,7 +150,7 @@ def record_backend_handoff(
     summary: str = "",
     evidence: dict[str, Any] | None = None,
 ) -> int | None:
-    """Record a backend/IDE handoff as a first-class Hermes event."""
+    """Record a backend/IDE handoff as a first-class orchestrator event."""
     data = dict(packet or {})
     backend_id = str(data.get("backend_id") or "worker")
     message = summary or f"Backend handoff {status}: {backend_id}."
@@ -304,7 +304,7 @@ def _coalesce_board_id(
 
 
 def is_orchestrator_enabled() -> bool:
-    """Return whether Hermes event emission is enabled."""
+    """Return whether orchestrator event emission is enabled."""
     try:
         from distr.core.settings import load_settings_from_db
 
@@ -1156,7 +1156,7 @@ def record_ui_feedback_label(
     execution_session_id: int | None = None,
     screenshot_paths: list[str] | None = None,
 ) -> int | None:
-    """Record the user's UI approval/rejection label as Hermes event and memory."""
+    """Record the user's UI approval/rejection label as orchestrator event and memory."""
     from distr.core.harness.ui_quality import build_feedback_summary, normalize_feedback_label
 
     normalized = normalize_feedback_label(label)
@@ -1407,7 +1407,7 @@ def create_visual_baseline_set(
     copy_screenshots: bool = False,
     storage_dir: str | Path | None = None,
 ) -> int:
-    """Create a named Hermes visual baseline set with reference screenshots."""
+    """Create a named orchestrator visual baseline set with reference screenshots."""
     clean_name = (name or "").strip()
     if not clean_name:
         raise ValueError("baseline name is required")
@@ -1912,7 +1912,7 @@ def parse_board_orchestrator_policy(raw: str | None) -> dict[str, Any]:
 
 
 def normalize_board_orchestrator_policy(raw: str | dict | None) -> dict[str, Any]:
-    """Return a normalized board Hermes policy with known keys and defaults."""
+    """Return a normalized board orchestrator policy with known keys and defaults."""
     parsed = raw if isinstance(raw, dict) else parse_board_orchestrator_policy(raw if isinstance(raw, str) else None)
     routing_mode = str(parsed.get("routing_mode") or "hybrid").strip().lower()
     if routing_mode not in {"hybrid", "policy", "llm"}:

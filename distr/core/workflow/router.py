@@ -21,6 +21,7 @@ from distr.core.db.workflow import (
     AutoWorkflowStep,
     AutoWorkflowStepResult,
 )
+from distr.core.workflow.tools import normalize_tool_list, tools_for_action
 from distr.core.workflow.verification import _run_verification, build_validation_snapshot
 from distr.core.kanban.result_packet import append_workflow_step_to_packet
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
@@ -155,7 +156,7 @@ class StepRouter:
                 if orchestrator_overlay is not None:
                     verified_passed = bool(orchestrator_overlay.get("passed"))
             except Exception:
-                logger.debug("Hermes validator overlay skipped", exc_info=True)
+                logger.debug("Orchestrator validator overlay skipped", exc_info=True)
 
             validation_snapshot = build_validation_snapshot(
                 step, result, passed, verified_passed, project_id=verify_project_id
@@ -221,9 +222,9 @@ class StepRouter:
             )
             run_data["result_packet"] = packet
             run.run_data = json.dumps(run_data)
-            # Hermes is the cross-cutting ledger and writes through its own
+            # The orchestrator is the cross-cutting ledger and writes through its own
             # session. Persist the canonical step result/run packet first so
-            # Hermes validation and event rows cannot be blocked by this write
+            # Orchestrator validation and event rows cannot be blocked by this write
             # transaction, especially on SQLite-backed local installs.
             db.commit()
             validation_record_id = None
@@ -326,7 +327,7 @@ class StepRouter:
                     if correction_attempt_id:
                         validation_snapshot["correction_attempt_id"] = correction_attempt_id
             except Exception:
-                logger.debug("Could not record Hermes validation record", exc_info=True)
+                logger.debug("Could not record orchestrator validation record", exc_info=True)
 
             if getattr(run, "ticket_id", None):
                 append_ticket_audit_entry(
@@ -379,7 +380,7 @@ class StepRouter:
                     },
                 )
             except Exception:
-                logger.debug("Could not emit Hermes workflow_step_completed event", exc_info=True)
+                logger.debug("Could not emit orchestrator workflow_step_completed event", exc_info=True)
 
             try:
                 from distr.core.workspace_memory.lifecycle import handoff_workflow_step
@@ -492,7 +493,7 @@ class StepRouter:
                     payload={"feedback": feedback.strip()},
                 )
             except Exception:
-                logger.debug("Could not emit Hermes feedback event", exc_info=True)
+                logger.debug("Could not emit orchestrator feedback event", exc_info=True)
             if getattr(run, "ticket_id", None):
                 append_ticket_audit_entry(
                     db,
@@ -695,18 +696,7 @@ class StepRouter:
 
     @staticmethod
     def _step_tools_for_action(action_type: str) -> List[str]:
-        action = (action_type or "").strip()
-        if action == "computer_use":
-            return ["computer_use"]
-        if action == "playwright":
-            return ["playwright", "browser_use"]
-        if action == "ytdlp":
-            return ["ytdlp", "cli"]
-        if action == "send_to_project_cli":
-            return ["cli"]
-        if action in {"run_command", "execute_code", "agent_instruction"}:
-            return ["other"]
-        return []
+        return tools_for_action(action_type)
 
     @classmethod
     def _step_visibility_payload(
@@ -719,7 +709,7 @@ class StepRouter:
         tools = config.get("tools") if isinstance(config.get("tools"), list) else []
         skills = config.get("skills") if isinstance(config.get("skills"), list) else []
         context = config.get("context") if isinstance(config.get("context"), list) else []
-        clean_tools = [str(item).strip() for item in tools if str(item or "").strip()]
+        clean_tools = normalize_tool_list(tools)
         clean_skills = [str(item).strip() for item in skills if str(item or "").strip()]
         clean_context = [str(item).strip() for item in context if str(item or "").strip()]
         for label in extra_context or []:

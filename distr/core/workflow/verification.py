@@ -181,7 +181,7 @@ def _verify_rule_based(result: str, rules: str) -> bool:
 
 
 def _verify_llm_judgment(result: str, validation_prompt: str, *, standards_context: str = "", ticket_context: str = "") -> bool:
-    """Send the result + validation prompt to the Hermes validator model."""
+    """Send the result + validation prompt to the orchestrator validator model."""
     try:
         from distr.core.orchestrator_validator import run_orchestrator_validator_judgment
 

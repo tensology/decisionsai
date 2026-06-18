@@ -8,7 +8,7 @@ filter returns only workflows matching that type.
 """
 
 import contextlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from hypothesis import given, settings
@@ -25,6 +25,7 @@ from distr.core.db.workflow import (  # noqa: F401 — ensure models registered
     AutoWorkflowVariable,
 )
 from distr.core.workflow.service import list_workflows
+from distr.core.workflow.service import update_workflow_order
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +76,60 @@ _workflow_set_strategy = st.lists(
 
 class TestDefaultListExcludesAudit:
     """Property 10: Default workflow list excludes audit type."""
+
+    def test_default_list_orders_lifecycle_workflows_before_recency(self):
+        """Lifecycle workflow tabs keep the human execution order."""
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        now = datetime.utcnow().replace(microsecond=0)
+        rows = [
+            AutoWorkflow(name="Deploy: Ship PR Until Green", workflow_type="manual", modified_date=now),
+            AutoWorkflow(name="Polish: Verify and Ship", workflow_type="manual", modified_date=now + timedelta(minutes=1)),
+            AutoWorkflow(name="Development: Ticket to Implementation", workflow_type="manual", modified_date=now + timedelta(minutes=2)),
+            AutoWorkflow(name="Ideation: Brief to Board", workflow_type="manual", modified_date=now + timedelta(minutes=3)),
+        ]
+        session = factory()
+        session.add_all(rows)
+        session.commit()
+        session.close()
+
+        with patch("distr.core.workflow.service.get_session", patched_get_session):
+            result = list_workflows(limit=10)
+
+        assert [row["name"].split(":", 1)[0] for row in result[:4]] == [
+            "Ideation",
+            "Development",
+            "Polish",
+            "Deploy",
+        ]
+
+    def test_saved_workflow_order_overrides_default_lifecycle_order(self):
+        """Dragged workflow tabs persist their custom order."""
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        session = factory()
+        rows = [
+            AutoWorkflow(name="Ideation: Brief to Board", workflow_type="manual"),
+            AutoWorkflow(name="Development: Ticket to Implementation", workflow_type="manual"),
+            AutoWorkflow(name="Polish: Verify and Ship", workflow_type="manual"),
+            AutoWorkflow(name="Deploy: Ship PR Until Green", workflow_type="manual"),
+        ]
+        session.add_all(rows)
+        session.commit()
+        ids = [int(row.id) for row in rows]
+        session.close()
+
+        with patch("distr.core.workflow.service.get_session", patched_get_session):
+            assert update_workflow_order([ids[3], ids[2], ids[1], ids[0]]) is True
+            result = list_workflows(limit=10)
+
+        assert [row["id"] for row in result[:4]] == [ids[3], ids[2], ids[1], ids[0]]
 
     def test_default_list_excludes_internal_execution_workflows(self):
         """Internal project execution ledgers are not user workflow definitions."""

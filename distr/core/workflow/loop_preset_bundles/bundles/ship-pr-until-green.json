@@ -2,17 +2,17 @@
   "format_version": "1.0",
   "format": "decisionsai_loop_preset_v1",
   "slug": "ship-pr-until-green",
-  "name": "Ship PR Until Green",
-  "role": "developer",
-  "category": "Developer",
+  "name": "Deploy: Ship PR Until Green",
+  "role": "release_engineer",
+  "category": "Release",
   "archetype": "ship_with_ci",
-  "description": "Push, open PR, read CI with gh, fix blockers, until checks green.",
-  "kickoff": "Start the \"Ship PR Until Green\" loop.\nGoal: PR open with all CI checks passing\nMax iterations: 10\nBetween iterations run: gh pr checks\nExit when: all PR checks success\nOrientation: read the linked ticket to confirm branch scope and acceptance criteria.\nStep 1: Confirm branch and open or update PR.",
+  "description": "Prepare the delivery branch or PR, read CI, fix blockers, and keep looping until release checks are green.",
+  "kickoff": "Start the \"Deploy: Ship PR Until Green\" loop.\nGoal: delivery branch or PR has all required checks passing\nMax iterations: 10\nBetween iterations run: gh pr checks or the project release check command\nExit when: all required release checks succeed\nOrientation: read the linked ticket to confirm branch scope and acceptance criteria.\nStep 1: Confirm branch and release readiness.",
   "loop_contract": {
-    "name": "Ship PR Until Green",
-    "goal": "PR open with all CI checks passing",
-    "exit_when": "all PR checks are success",
-    "check_command": "gh pr checks",
+    "name": "Deploy: Ship PR Until Green",
+    "goal": "delivery branch or PR has all required checks passing",
+    "exit_when": "all required release checks succeed",
+    "check_command": "gh pr checks or project release check command",
     "max_iterations": 10,
     "guardrails": [
       "Do not modify the check command or exit criteria to force success",
@@ -20,19 +20,19 @@
       "If stuck after several iterations, stop and report blockers instead of gaming metrics"
     ],
     "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
-    "step_1": "Verify branch, commits, and diff against target branch. Ensure local checks pass before push.",
+    "step_1": "Verify branch, commits, and diff against target branch. Ensure local checks pass before release.",
     "archetype": "ship_with_ci",
-    "role": "developer"
+    "role": "release_engineer"
   },
-  "expected_check_command": "gh pr checks",
+  "expected_check_command": "gh pr checks or project release check command",
   "tags": [
     "pr",
     "ci"
   ],
   "steps": [
     {
-      "name": "Confirm branch state",
-      "instruction": "Verify branch, commits, and diff against target branch. Ensure local checks pass before push.",
+      "name": "Confirm release branch state",
+      "instruction": "Verify branch, commits, and diff against target branch. Ensure local checks pass before release.",
       "skills": [
         "finishing-a-development-branch",
         "ln-622-build-auditor"
@@ -45,13 +45,13 @@
         "No concrete evidence attached",
         "Step skipped or hand-waved without proof"
       ],
-      "validation_prompt": "Step 'Confirm branch state' completed with evidence.",
+      "validation_prompt": "Release branch state is clear and backed by evidence.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false
     },
     {
       "name": "Push and open PR",
-      "instruction": "Push branch. Open or update PR with summary, test plan, and linked ticket. Use gh CLI if available.",
+      "instruction": "Push branch. Open or update the delivery PR with summary, test plan, and linked ticket. Use gh CLI if available.",
       "skills": [
         "finishing-a-development-branch",
         "internal-comms"
@@ -65,14 +65,14 @@
         "No concrete evidence attached",
         "Step skipped or hand-waved without proof"
       ],
-      "validation_prompt": "Step 'Push and open PR' completed with evidence.",
+      "validation_prompt": "Delivery PR or equivalent release handoff is prepared with evidence.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "GitHub CLI (gh pr create / gh pr view)"
     },
     {
       "name": "Read CI status",
-      "instruction": "Run gh pr checks (or equivalent). List failing checks with logs.",
+      "instruction": "Run gh pr checks or the project release check command. List failing checks with logs.",
       "skills": [
         "systematic-debugging",
         "ln-732-cicd-generator"
@@ -86,7 +86,7 @@
         "No concrete evidence attached",
         "Step skipped or hand-waved without proof"
       ],
-      "validation_prompt": "Step 'Read CI status' completed with evidence.",
+      "validation_prompt": "Release check status is captured with evidence.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "gh pr checks / CI logs",
@@ -114,8 +114,8 @@
       "on_fail_goto_position": 2
     },
     {
-      "name": "Evaluate PR green",
-      "instruction": "All required PR checks success and PR is merge-ready.",
+      "name": "Evaluate release green",
+      "instruction": "All required release checks succeed and the branch or PR is ready to ship.",
       "skills": [
         "finishing-a-development-branch",
         "qa-tester"
@@ -128,7 +128,7 @@
         "No concrete evidence attached",
         "Step skipped or hand-waved without proof"
       ],
-      "validation_prompt": "Step 'Evaluate PR green' completed with evidence.",
+      "validation_prompt": "All required release checks are green and readiness evidence is attached.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "gh pr checks",
@@ -136,7 +136,7 @@
     },
     {
       "name": "Report",
-      "instruction": "PR link, check status, merge recommendation.",
+      "instruction": "Release link, check status, and ship recommendation.",
       "skills": [
         "internal-comms"
       ],

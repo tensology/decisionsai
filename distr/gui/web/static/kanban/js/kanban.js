@@ -9,6 +9,7 @@
     var modalTicketId = null;
     /** Loaded ticket's source_chat_id (null = unset); used to avoid overwriting on save. */
     var modalTicketSourceChatId = null;
+    var kanbanTicketModalDetailsHeight = 0;
     var sendWorkflowContext = null;
     var copyModalState = null;     // { mode: 'single'|'lane', ... } for copy modal
     var ctxMenuBoardId = null;     // board id for context menu
@@ -2379,6 +2380,7 @@
     function openTicketModal(ticketId) {
         modalTicketId = ticketId;
         modalTicketSourceChatId = null;
+        kanbanTicketModalDetailsHeight = 0;
         window._extTicketData = null;
         window._extTicketSource = null;
         switchTicketTab("details");
@@ -2403,6 +2405,7 @@
             var extMeta = document.getElementById("kb-modal-external-meta");
             if (extMeta) extMeta.classList.add("hidden");
             document.getElementById("kb-ticket-modal").classList.remove("hidden");
+            requestAnimationFrame(function () { syncKanbanTicketModalHeights(); });
         }).catch(function(e) { showSnackbar("Failed to load ticket: " + e.message, "error"); });
     }
 
@@ -2574,7 +2577,7 @@
             durationInput.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
         }
         if (complexitySelect) {
-            complexitySelect.value = "medium";
+            complexitySelect.value = "auto";
             complexitySelect.disabled = false;
             complexitySelect.classList.remove("opacity-50", "cursor-not-allowed");
         }
@@ -2613,13 +2616,13 @@
     function setTicketComplexity(value) {
         var select = document.getElementById("kb-modal-ticket-complexity");
         if (!select) return;
-        var normalized = ["low", "medium", "high"].indexOf((value || "").toLowerCase()) >= 0 ? value.toLowerCase() : "medium";
+        var normalized = ["auto", "low", "medium", "high"].indexOf((value || "").toLowerCase()) >= 0 ? value.toLowerCase() : "auto";
         select.value = normalized;
     }
 
     function getTicketComplexity() {
         var select = document.getElementById("kb-modal-ticket-complexity");
-        return select && select.value ? select.value : "medium";
+        return select && select.value ? select.value : "auto";
     }
 
     function renderTicketSourceMeta(ticket) {
@@ -2995,6 +2998,34 @@
         document.querySelectorAll(".kb-tm-pane").forEach(function(pane) { pane.classList.add("hidden"); });
         var pane = document.getElementById("kb-tm-tab-" + tab);
         if (pane) pane.classList.remove("hidden");
+        requestAnimationFrame(function () { syncKanbanTicketModalHeights(); });
+    }
+
+    function syncKanbanTicketModalHeights() {
+        var modal = document.getElementById("kb-ticket-modal");
+        if (!modal) return;
+        var body = modal.querySelector(".kb-ticket-modal-body");
+        if (!body) return;
+        var details = modal.querySelector("#kb-tm-tab-details");
+        if (!details) return;
+        var wasHidden = details.classList.contains("hidden");
+        if (wasHidden) details.classList.remove("hidden");
+        var height = details.scrollHeight;
+        if (wasHidden) details.classList.add("hidden");
+        if (!height && kanbanTicketModalDetailsHeight) {
+            height = kanbanTicketModalDetailsHeight;
+        }
+        if (!height) return;
+        kanbanTicketModalDetailsHeight = height;
+        body.style.height = height + "px";
+        body.style.minHeight = height + "px";
+        body.style.maxHeight = height + "px";
+        modal.querySelectorAll(".kb-tm-pane").forEach(function (pane) {
+            pane.style.height = height + "px";
+            pane.style.minHeight = height + "px";
+            pane.style.maxHeight = height + "px";
+            pane.style.overflowY = "auto";
+        });
     }
 
     // ── Add ticket ──

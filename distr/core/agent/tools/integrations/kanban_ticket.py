@@ -12,6 +12,8 @@ import logging
 import os
 import re
 import shutil
+import unicodedata
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +24,7 @@ from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
     normalize_source_provider,
     normalize_ticket_complexity,
+    resolve_ticket_complexity,
 )
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -178,7 +181,7 @@ class KanbanTicketInput(BaseModel):
     title: str = Field(default="", description="Ticket title")
     description: str = Field(default="", description="Ticket description")
     priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
-    complexity: str = Field(default="", description="Ticket complexity: low, medium, high. Leave blank to infer automatically; medium is the default.")
+    complexity: str = Field(default="auto", description="Ticket complexity: auto, low, medium, high. Auto lets the orchestrator assess complexity; low/medium/high are manual overrides.")
     ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete/discuss actions")
     external_issue_key: str = Field(
         default="",
@@ -1288,6 +1291,15 @@ class KanbanTicketTool(BaseTool):
 
             if action == "create_ticket" and any(
                 phrase in text_norm
+                for phrase in ("mp web dev", "mary pack", "merit pack", "merrypak")
+            ) and any(
+                phrase in text_norm
+                for phrase in ("group", "chat", "message", "photo", "screenshot", "screen shot")
+            ):
+                action = "whatsapp_project_feed"
+
+            if action == "create_ticket" and any(
+                phrase in text_norm
                 for phrase in (
                     "let's talk about this ticket",
                     "lets talk about this ticket",
@@ -1948,7 +1960,7 @@ class KanbanTicketTool(BaseTool):
                 title=title,
                 description=description,
                 priority=priority or "medium",
-                complexity=normalize_ticket_complexity(complexity) if complexity else infer_ticket_complexity(title, description, file_count=len(conv_files)),
+                complexity=resolve_ticket_complexity(title, description, requested=complexity, file_count=len(conv_files)),
                 position=max_pos + 1,
                 linked_project_id=effective_project_id,
                 linked_workflow_id=effective_workflow_id,
@@ -3428,13 +3440,36 @@ class KanbanTicketTool(BaseTool):
 
     @staticmethod
     def _name_key(value: str) -> str:
-        return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+        normalized = unicodedata.normalize("NFKD", value or "")
+        ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+        return re.sub(r"[^a-z0-9]", "", ascii_value.lower())
+
+    def _name_matches(self, candidate: str, hint: str, *, fuzzy: bool = True) -> bool:
+        candidate_key = self._name_key(candidate)
+        hint_key = self._name_key(hint)
+        if not candidate_key or not hint_key:
+            return False
+        if candidate_key == hint_key or candidate_key in hint_key or hint_key in candidate_key:
+            return True
+        return fuzzy and min(len(candidate_key), len(hint_key)) >= 5 and SequenceMatcher(
+            None,
+            candidate_key,
+            hint_key,
+        ).ratio() >= 0.70
 
     def _extract_project_or_board_hint(self, text: str) -> str:
         cleaned = (text or "").strip()
         if not cleaned:
             return ""
         lowered = cleaned.lower()
+        sender_hint = self._extract_whatsapp_sender_hint(cleaned)
+        if sender_hint:
+            lowered = re.sub(
+                r"\bfrom\s+" + re.escape(sender_hint.lower()) + r"\b",
+                " ",
+                lowered,
+                flags=re.IGNORECASE,
+            )
         for phrase in (
             "whatsapp feed",
             "whats app feed",
@@ -3448,15 +3483,66 @@ class KanbanTicketTool(BaseTool):
             "fetch",
             "look at",
             "go look at",
+            "from the",
+            "from",
+            "the",
             "new messages",
             "messages",
             "feed",
+            "group",
+            "chat",
             "create a ticket",
             "create ticket",
             "out of them",
+            "recent",
+            "latest",
+            "last couple",
+            "last few",
         ):
-            lowered = lowered.replace(phrase, " ")
+            lowered = re.sub(r"\b" + re.escape(phrase) + r"\b", " ", lowered)
         return re.sub(r"\s+", " ", lowered).strip(" .,:;-")
+
+    def _extract_whatsapp_sender_hint(self, text: str) -> str:
+        lowered = (text or "").strip()
+        if not lowered:
+            return ""
+        match = re.search(r"\bfrom\s+([A-Za-z][A-Za-z .'-]{1,40})(?:\b|$)", lowered, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        hint = match.group(1)
+        hint = re.split(
+            r"\b(?:and|with|has|have|having|in|on|at|for|group|chat|messages?|message|whatsapp|ticket|snapshot|recent|latest|last|couple|few)\b",
+            hint,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        return hint.strip(" .,:;-")
+
+    def _select_whatsapp_messages_for_request(self, messages: list[dict], text: str) -> list[dict]:
+        if not messages:
+            return []
+        request = (text or "").lower()
+        sender_hint = self._extract_whatsapp_sender_hint(text)
+        wants_recent_slice = bool(re.search(r"\b(last couple|last few|recent|latest)\b", request))
+        if sender_hint:
+            matches = []
+            for index, msg in enumerate(messages):
+                sender = msg.get("sender_push_name") or msg.get("sender_phone") or msg.get("sender_jid") or ""
+                if self._name_matches(sender, sender_hint, fuzzy=True):
+                    matches.append(index)
+            if matches:
+                latest = matches[-1]
+                if any(
+                    phrase in request
+                    for phrase in ("ticket", "snapshot", "screenshot", "screen shot", "photo", "message")
+                ) or wants_recent_slice:
+                    start = max(0, latest - 1)
+                    end = min(len(messages), latest + 4)
+                    return messages[start:end]
+                return [messages[i] for i in matches]
+        if wants_recent_slice:
+            return messages[-6:]
+        return messages
 
     def _resolve_whatsapp_feed_scope(
         self,
@@ -3486,8 +3572,7 @@ class KanbanTicketTool(BaseTool):
                         break
                 if not project:
                     for candidate in projects:
-                        key = self._name_key(candidate.name or "")
-                        if key and hint_key and (hint_key in key or key in hint_key):
+                        if self._name_matches(candidate.name or "", hint):
                             project = candidate
                             break
                 if not project:
@@ -3505,11 +3590,9 @@ class KanbanTicketTool(BaseTool):
                 if b:
                     boards = [b]
             if not boards and board_name:
-                name_key = self._name_key(board_name)
                 boards = [
                     b for b in board_query.all()
-                    if self._name_key(b.name or "") == name_key
-                    or (name_key and (name_key in self._name_key(b.name or "") or self._name_key(b.name or "") in name_key))
+                    if self._name_matches(b.name or "", board_name)
                 ]
             if not boards and project:
                 candidates = []
@@ -3527,7 +3610,7 @@ class KanbanTicketTool(BaseTool):
                 project_key = self._name_key(project.name or "")
                 candidates.extend([
                     b for b in board_query.all()
-                    if project_key and (project_key in self._name_key(b.name or "") or self._name_key(b.name or "") in project_key)
+                    if project_key and self._name_matches(b.name or "", project.name or "")
                 ])
                 seen_ids = set()
                 boards = []
@@ -3539,8 +3622,19 @@ class KanbanTicketTool(BaseTool):
             if not boards and hint:
                 boards = [
                     b for b in board_query.all()
-                    if hint_key and (hint_key in self._name_key(b.name or "") or self._name_key(b.name or "") in hint_key)
+                    if hint_key and self._name_matches(b.name or "", hint)
                 ]
+            if not boards and hint:
+                linked_board_ids = {
+                    link.board_id
+                    for link in s.query(WhatsAppPhoneLink).all()
+                    if link.board_id and self._name_matches(link.contact_name or link.phone_number or link.phone_jid or "", hint)
+                }
+                if linked_board_ids:
+                    boards = [
+                        b for b in board_query.all()
+                        if b.id in linked_board_ids
+                    ]
 
             scoped = []
             for board in boards:
@@ -3681,6 +3775,7 @@ class KanbanTicketTool(BaseTool):
                 "No board with a WhatsApp link resolved from the project/board name. Link the board to a WhatsApp chat first.",
             )
         messages = self._collect_whatsapp_feed_messages(scope, limit=limit)
+        messages = self._select_whatsapp_messages_for_request(messages, text)
         board_names = ", ".join(b["board"]["name"] for b in scope["boards"])
         if not messages:
             return voice_then_reference(
@@ -3700,6 +3795,9 @@ class KanbanTicketTool(BaseTool):
             "If confirmed, call create_ticket with action='whatsapp_project_snapshot_to_ticket' "
             f"and message_ids={ids}."
         )
+        sender_hint = self._extract_whatsapp_sender_hint(text)
+        if sender_hint:
+            ref = f"Anchored on sender: {sender_hint}\n" + ref
         return voice_then_reference(spoken, ref)
 
     def _action_whatsapp_project_snapshot_to_ticket(
@@ -3728,6 +3826,8 @@ class KanbanTicketTool(BaseTool):
                 "No board with a WhatsApp link resolved from the project/board name.",
             )
         messages = self._collect_whatsapp_feed_messages(scope, limit=limit, message_ids=message_ids)
+        if not message_ids:
+            messages = self._select_whatsapp_messages_for_request(messages, text)
         if not messages:
             board_names = ", ".join(b["board"]["name"] for b in scope["boards"])
             return voice_then_reference(

@@ -27,6 +27,7 @@ from distr.core.db.workflow import (
     AutoWorkflowStepResult,
     AutoWorkflowVariable,
 )
+from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
 from distr.core.db.orchestrator import OrchestratorCorrectionAttempt, OrchestratorEvent, OrchestratorLearnedRule, OrchestratorValidationRecord
 from distr.gui.web.routes.settings.workflows import register_routes
 
@@ -102,6 +103,14 @@ class TestWorkflowTypeValidation422:
         resp = tc.post("/api/workflows", json={"name": "default"})
         assert resp.status_code == 200
         assert resp.json()["workflow_type"] == "manual"
+
+    def test_create_workflow_notifies_live_workflow_ui(self, client):
+        tc, _ = client
+        with patch("distr.gui.web.workflow_events.increment_workflow_updated") as inc:
+            resp = tc.post("/api/workflows", json={"name": "live-create"})
+
+        assert resp.status_code == 200
+        inc.assert_called_once()
 
     def test_update_invalid_workflow_type(self, client):
         tc, _ = client
@@ -232,6 +241,137 @@ class TestWorkflowTypeValidation422:
         assert body["visual_baseline_readiness"]["ready"] is True
         assert body["visual_baseline_readiness"]["baseline_count"] == 1
         assert body["next_action"] == "Visual baseline is ready for UI validation."
+
+    def test_codex_needs_input_records_contextual_agent_activity(self, client):
+        tc, factory = client
+        with factory() as session:
+            wf = AutoWorkflow(name="QA Workflow")
+            session.add(wf)
+            session.flush()
+            step = AutoWorkflowStep(
+                workflow_id=wf.id,
+                position=0,
+                name="Verify browser guard",
+                action_type="playwright",
+                step_type="playwright",
+                config=json.dumps({"tools": ["playwright", "browser_use"], "skills": ["browser-qa"]}),
+            )
+            session.add(step)
+            session.flush()
+            run = AutoWorkflowRun(
+                workflow_id=wf.id,
+                status="running",
+                current_step_id=step.id,
+                run_data=json.dumps({"project_name": "Player1Sport"}),
+            )
+            session.add(run)
+            session.commit()
+            wf_id, run_id, step_id = wf.id, run.id, step.id
+
+        resp = tc.post(
+            f"/api/workflows/{wf_id}/runs/{run_id}/codex-events",
+            json={
+                "event_type": "codex_needs_input",
+                "status": "waiting",
+                "message": "Should I block Add all until a workflow is selected?",
+                "step_id": step_id,
+                "project_id": 42,
+                "payload": {"situation": "The Jira board button can target a stale workflow id."},
+            },
+        )
+
+        assert resp.status_code == 200
+        with factory() as session:
+            run = session.get(AutoWorkflowRun, run_id)
+            run_data = json.loads(run.run_data or "{}")
+            event = (
+                session.query(OrchestratorEvent)
+                .filter(OrchestratorEvent.run_id == run_id)
+                .order_by(OrchestratorEvent.id.desc())
+                .first()
+            )
+            payload = json.loads(event.payload or "{}")
+
+        assert run.status == "waiting"
+        assert run_data["needs_input_context"]["project"] == "Player1Sport"
+        assert run_data["needs_input_context"]["workflow"] == "QA Workflow"
+        assert run_data["needs_input_context"]["step"] == "Verify browser guard"
+        assert run_data["needs_input_context"]["tools"] == ["playwright", "browser_use"]
+        assert run_data["worker_question_spoken"].startswith(
+            "I'm working on Player1Sport in QA Workflow"
+        )
+        assert "Should I block Add all" in run_data["worker_question_spoken"]
+        assert payload["agent_activity"]["step_type"] == "needs_input"
+        assert payload["agent_activity"]["context"]["workflow"] == "QA Workflow"
+        assert payload["agent_activity"]["context"]["tools"] == ["playwright", "browser_use"]
+
+    def test_delete_inactive_run_clears_only_that_run_logs(self, client):
+        tc, factory = client
+        with factory() as session:
+            wf = AutoWorkflow(name="Per-run cleanup")
+            session.add(wf)
+            session.flush()
+            inactive = AutoWorkflowRun(workflow_id=wf.id, status="completed", run_data="{}")
+            other = AutoWorkflowRun(workflow_id=wf.id, status="completed", run_data="{}")
+            active = AutoWorkflowRun(workflow_id=wf.id, status="running", run_data="{}")
+            session.add_all([inactive, other, active])
+            session.flush()
+            inactive_session = ProjectExecutionSession(
+                workflow_id=wf.id,
+                run_id=inactive.id,
+                project_id=1,
+                status="completed",
+            )
+            other_session = ProjectExecutionSession(
+                workflow_id=wf.id,
+                run_id=other.id,
+                project_id=1,
+                status="completed",
+            )
+            session.add_all([inactive_session, other_session])
+            session.flush()
+            session.add_all([
+                ProjectExecutionEvent(session_id=inactive_session.id, event_type="progress"),
+                ProjectExecutionEvent(session_id=other_session.id, event_type="progress"),
+                OrchestratorEvent(
+                    event_uid="inactive-run-event",
+                    workflow_id=wf.id,
+                    run_id=inactive.id,
+                    source="codex",
+                    event_type="worker_progress",
+                ),
+                OrchestratorEvent(
+                    event_uid="other-run-event",
+                    workflow_id=wf.id,
+                    run_id=other.id,
+                    source="codex",
+                    event_type="worker_progress",
+                ),
+            ])
+            session.commit()
+            wf_id, inactive_id, other_id, active_id = wf.id, inactive.id, other.id, active.id
+
+        active_resp = tc.delete(f"/api/workflows/{wf_id}/runs/{active_id}")
+        assert active_resp.status_code == 409
+
+        resp = tc.delete(f"/api/workflows/{wf_id}/runs/{inactive_id}")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted_run"] == inactive_id
+        assert body["deleted_executor_sessions"] == 1
+        assert body["deleted_executor_events"] == 1
+        assert body["deleted_orchestrator_events"] == 1
+        with factory() as session:
+            assert session.get(AutoWorkflowRun, inactive_id) is None
+            assert session.get(AutoWorkflowRun, other_id) is not None
+            assert session.get(AutoWorkflowRun, active_id) is not None
+            assert (
+                session.query(OrchestratorEvent)
+                .filter(OrchestratorEvent.run_id == other_id)
+                .count()
+                == 1
+            )
 
     def test_post_ui_feedback_accept_baseline_upserts_screens_into_named_set(self, client, tmp_path, monkeypatch):
         tc, _ = client
@@ -899,6 +1039,18 @@ class TestAuditWorkflowReadOnly403:
         resp = tc.delete(f"/api/workflows/{wf_id}")
         assert resp.status_code == 403
         assert "read-only" in resp.json()["detail"].lower()
+
+    def test_delete_workflow_notifies_live_workflow_ui(self, client):
+        tc, _ = client
+        create_resp = tc.post("/api/workflows", json={"name": "live-delete"})
+        assert create_resp.status_code == 200
+        wf_id = create_resp.json()["id"]
+
+        with patch("distr.gui.web.workflow_events.increment_workflow_updated") as inc:
+            resp = tc.delete(f"/api/workflows/{wf_id}")
+
+        assert resp.status_code == 200
+        inc.assert_called_once()
 
     def test_run_audit_workflow_returns_403(self, client):
         tc, factory = client

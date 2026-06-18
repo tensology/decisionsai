@@ -268,7 +268,7 @@ def _record_packet_ui_quality_validation(
     project_id: Optional[int],
     execution_session_id: Optional[int],
 ) -> Dict[str, Any]:
-    """Record packet UI artifacts as Hermes validation and merge the snapshot."""
+    """Record packet UI artifacts as orchestrator validation and merge the snapshot."""
     updated = dict(packet or {})
     artifacts = dict(updated.get("artifacts") or {})
     ui_quality = dict(artifacts.get("ui_quality") or {})
@@ -944,7 +944,7 @@ def start_workflow_run(
             },
         )
     except Exception:
-        logger.debug("Could not emit Hermes workflow_run_started event", exc_info=True)
+        logger.debug("Could not emit orchestrator workflow_run_started event", exc_info=True)
     def _dispatch_first_step() -> Dict[str, Any]:
         _tid = threading.get_ident()
         _set_workflow_thread_env(_tid, run_id, first_step_id, workflow_id)
@@ -1049,7 +1049,7 @@ def cancel_run(run_id: int) -> bool:
             summary="Workflow run cancelled.",
         )
     except Exception:
-        logger.debug("Could not emit Hermes workflow_run_cancelled event", exc_info=True)
+        logger.debug("Could not emit orchestrator workflow_run_cancelled event", exc_info=True)
     _finalize_terminal_run(_run_id, _wf_id, "cancelled")
     return True
 
@@ -1317,7 +1317,7 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
             payload={"feedback": optional_input or ""},
         )
     except Exception:
-        logger.debug("Could not emit Hermes workflow_run_resumed event", exc_info=True)
+        logger.debug("Could not emit orchestrator workflow_run_resumed event", exc_info=True)
 
     if waiting_kind == "approval":
         try:
@@ -1621,7 +1621,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         )
         increment_workflow_updated()
     except Exception:
-        logger.debug("Could not emit Hermes workflow_run_completed event", exc_info=True)
+        logger.debug("Could not emit orchestrator workflow_run_completed event", exc_info=True)
     try:
         if board_id is not None:
             from distr.gui.web.kanban_events import increment_kanban_updated

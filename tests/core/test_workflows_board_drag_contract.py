@@ -135,16 +135,24 @@ def test_workflow_loop_ui_has_ring_and_list_views():
     assert "function openLoopStepModal(opts)" in js
     assert "function renderLoopStepSkillsPicker" in js
     assert "function determineLoopStepSkills" in js
+    assert "suggestion.refined_instruction" in js
+    assert "suggestion.guardrail" in js
+    assert "suggestion.validation_prompt" in js
     assert "wf-loop-step-action-type" not in html
     assert "wf-loop-step-wait" not in html
-    assert 'id="wf-loop-step-other-tool-wrap"' in html
-    assert 'id="wf-loop-step-other-tool"' in html
+    assert 'id="wf-loop-step-other-tool-wrap"' not in html
+    assert 'id="wf-loop-step-other-tool"' not in html
+    assert '{ id: "agent", label: "Agent"' in js
+    assert '{ id: "python", label: "Python"' in js
+    assert '{ id: "shell", label: "Shell"' in js
+    assert '{ id: "http", label: "HTTP"' in js
+    assert '{ id: "macro", label: "Macro"' in js
     assert 'id="wf-loop-preset-mode"' in html
     assert 'id="wf-loop-preset-capacity"' in html
     assert 'id="wf-loop-preset-import-btn"' in html
     assert 'id="wf-loop-preset-export-btn"' in html
     assert 'id="wf-loop-preset-save-btn"' in html
-    assert "function syncLoopStepOtherToolVisibility" in js
+    assert "function syncLoopStepOtherToolVisibility" not in js
     assert "function syncLoopPresetCapacityHint" in js
     assert "function exportCurrentLoopPreset" in js
     assert "function importLoopPresetFile" in js
@@ -176,6 +184,9 @@ def test_workflows_detail_tabs_use_loop_and_conditional_runs():
 
 def test_workflow_lane_add_all_disables_when_nothing_left_to_add():
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    target_block = js.split("function hasWorkflowQueueTarget()", 1)[1].split(
+        "function getWorkflowRenameDraftName", 1
+    )[0]
     add_all_block = js.split("function refreshWorkflowLaneAddAllButtons()", 1)[1].split(
         "function rememberWorkflowBoardTicketSource", 1
     )[0]
@@ -186,11 +197,34 @@ def test_workflow_lane_add_all_disables_when_nothing_left_to_add():
         "function handleWorkflowTicketDropPayload", 1
     )[0]
 
-    assert "btn.disabled = getAddableBoardTicketItems(laneId).length === 0" in add_all_block
+    assert "if (!currentWorkflowId || !currentWorkflow || !detail || detail.classList.contains(\"hidden\")) return false" in target_block
+    assert "tab.classList.contains(\"active\")" in target_block
+    assert "tab.getAttribute(\"aria-selected\") === \"true\"" in target_block
+    assert "btn.disabled = !hasWorkflowQueueTarget() || getAddableBoardTicketItems(laneId).length === 0" in add_all_block
     assert "workflowBoardTicketLinkState(item).canDragToWorkflow" in get_addable_block
     assert "isBoardTicketQueuedInCurrentWorkflow" in js
     assert "refreshWorkflowLaneAddAllButtons()" in finish_block
     assert "refreshWorkflowBoardTicketsFromQueue()" in js
+    assert "if (!hasWorkflowQueueTarget())" in finish_block
+
+
+def test_workflow_board_add_controls_require_loaded_selected_workflow():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    render_block = js.split("function renderWorkflowBoardTickets(board, selected, message)", 1)[1].split(
+        "function getSelectedBoardLocalId", 1
+    )[0]
+    sync_block = js.split("function syncWorkflowBoardTicketRowUi(ticketKey, rowEl)", 1)[1].split(
+        "function refreshWorkflowLaneAddAllButtons", 1
+    )[0]
+    drag_block = js.split("function beginWorkflowBoardMouseDrag(row, ticketKey, evt)", 1)[1].split(
+        "function initWorkflowBoardTicketMouseDrag", 1
+    )[0]
+
+    assert "var showAddAll = boardHasProject && hasWorkflowQueueTarget()" in render_block
+    assert "showAddToWorkflow: hasWorkflowQueueTarget()" in render_block
+    assert "hasWorkflowQueueTarget() && state.canDragToWorkflow" in sync_block
+    assert "hasWorkflowQueueTarget() && !state.isLinkedToWorkflow && !state.isPendingLink" in sync_block
+    assert "if (!hasWorkflowQueueTarget())" in drag_block
 
 
 def test_workflows_board_drag_row_state_uses_dataset_draggable():

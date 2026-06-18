@@ -103,3 +103,81 @@ def test_get_workflow_tickets_includes_cli_route_without_500():
     assert len(rows) == 1
     assert rows[0]["id"] == ticket_id
     assert isinstance(rows[0].get("cli_route"), dict)
+
+
+def test_create_ticket_auto_complexity_stores_assessed_level():
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.gui.web.routes.kanban import create_routes
+
+    factory = _make_factory()
+    with factory() as session:
+        board = KanbanBoard(name="Auto complexity board", in_use=True)
+        session.add(board)
+        session.flush()
+        lane = KanbanLane(board_id=board.id, name="Backlog", position=0)
+        session.add(lane)
+        session.commit()
+        lane_id = lane.id
+
+    def get_session():
+        return _session_ctx(factory)
+
+    app = FastAPI()
+    with patch("distr.gui.web.routes.kanban.get_session", get_session):
+        app.include_router(create_routes(), prefix="/api")
+        client = TestClient(app)
+        response = client.post(
+            "/api/tickets/tickets",
+            json={
+                "lane_id": lane_id,
+                "title": "Migrate workflow orchestration",
+                "description": "Add database schema migration, regression tests, server deployment, and websocket integration.",
+                "priority": "medium",
+                "complexity": "auto",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    ticket_id = response.json()["id"]
+    with factory() as session:
+        ticket = session.get(KanbanTicket, ticket_id)
+        assert ticket.complexity == "high"
+
+
+def test_create_ticket_explicit_complexity_overrides_auto_assessment():
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.gui.web.routes.kanban import create_routes
+
+    factory = _make_factory()
+    with factory() as session:
+        board = KanbanBoard(name="Manual complexity board", in_use=True)
+        session.add(board)
+        session.flush()
+        lane = KanbanLane(board_id=board.id, name="Backlog", position=0)
+        session.add(lane)
+        session.commit()
+        lane_id = lane.id
+
+    def get_session():
+        return _session_ctx(factory)
+
+    app = FastAPI()
+    with patch("distr.gui.web.routes.kanban.get_session", get_session):
+        app.include_router(create_routes(), prefix="/api")
+        client = TestClient(app)
+        response = client.post(
+            "/api/tickets/tickets",
+            json={
+                "lane_id": lane_id,
+                "title": "Migrate workflow orchestration",
+                "description": "Add database schema migration, regression tests, server deployment, and websocket integration.",
+                "priority": "medium",
+                "complexity": "low",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    ticket_id = response.json()["id"]
+    with factory() as session:
+        ticket = session.get(KanbanTicket, ticket_id)
+        assert ticket.complexity == "low"
