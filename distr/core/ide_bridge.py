@@ -298,6 +298,31 @@ def record_ide_event(
             db.commit()
             db.refresh(row)
         latest = serialize_execution_session(row, include_events=True) if row else session_data
+
+    try:
+        from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+
+        ticket_id = int(session_data.get("ticket_id")) if str(session_data.get("ticket_id") or "").isdigit() else None
+        project_id_val = int(session_data.get("project_id")) if str(session_data.get("project_id") or "").isdigit() else None
+        if not project_id_val and bridge.get("project"):
+            project_id_val = int(bridge["project"].get("id") or 0) or None
+        persist_worker_feedback(
+            message=body,
+            output=output_text,
+            input_text=input_text,
+            event_type=event_type,
+            source=source,
+            ticket_id=ticket_id,
+            project_id=project_id_val,
+            workflow_id=int(session_data.get("workflow_id")) if str(session_data.get("workflow_id") or "").isdigit() else None,
+            run_id=int(session_data.get("run_id")) if str(session_data.get("run_id") or "").isdigit() else None,
+            step_id=int(session_data.get("step_id")) if str(session_data.get("step_id") or "").isdigit() else None,
+            execution_session_id=session_id,
+            skip_steering_log=bool(session_data.get("run_id")),
+        )
+    except Exception:
+        pass
+
     return {"project": bridge["project"], "session": latest, "chat_id": chat_id}
 
 

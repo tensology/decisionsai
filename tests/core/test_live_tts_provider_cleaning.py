@@ -6,6 +6,7 @@ from distr.core.agent.services.tts.coqui import CoquiTTSService
 
 
 def _prepare_streaming_service(service):
+    service._init_tts_pipeline_state()
     service._cancelled = False
     service._is_hands_free = False
     service._ptt_active = False
@@ -39,7 +40,8 @@ def test_openai_live_textframes_are_cleaned_before_sentence_synthesis():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame("OpenAI should ignore <tool_call>{bad}</tool_call> ahhhhh artifacts.")
+    text = TextFrame()
+    text.text = "OpenAI should ignore <tool_call>{bad}</tool_call> ahhhhh artifacts."
 
     asyncio.run(service.process_frame(start, None))
     asyncio.run(service.process_frame(text, None))

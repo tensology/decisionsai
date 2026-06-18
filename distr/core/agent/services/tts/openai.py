@@ -263,6 +263,7 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
                 FrameClass = OutputAudioRawFrame if OutputAudioRawFrame else AudioRawFrame
                 
                 frames_yielded = 0
+                yielded_audio_bytes = 0
                 for i in range(0, len(audio_bytes), chunk_size):
                     if self._cancelled:
                         break
@@ -309,14 +310,19 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
                         
                         yield frame
                         frames_yielded += 1
+                        yielded_audio_bytes += len(chunk)
                 
-                # Calculate audio duration
-                # Duration = total_bytes / (sample_rate * bytes_per_sample * channels)
-                # For int16: 2 bytes per sample, typically 1 channel
-                total_audio_bytes = len(audio_bytes)
+                # Duration tracks audio actually yielded (interrupted synthesis may stop early).
                 bytes_per_second = sample_rate * 2 * 1  # sample_rate * bytes_per_sample * num_channels
-                audio_duration_seconds = total_audio_bytes / bytes_per_second if bytes_per_second > 0 else 0
-                logger.debug(f"TTS: Calculated audio duration: {audio_duration_seconds:.3f}s (bytes={total_audio_bytes}, sample_rate={sample_rate}, bytes_per_second={bytes_per_second})")
+                audio_duration_seconds = (
+                    yielded_audio_bytes / bytes_per_second if bytes_per_second > 0 else 0
+                )
+                logger.debug(
+                    "TTS: Calculated audio duration: %.3fs (yielded_bytes=%s, sample_rate=%s)",
+                    audio_duration_seconds,
+                    yielded_audio_bytes,
+                    sample_rate,
+                )
             else:
                 audio_duration_seconds = 0
         except asyncio.TimeoutError:

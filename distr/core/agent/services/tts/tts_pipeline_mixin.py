@@ -134,10 +134,20 @@ class TTSPipelineMixin:
             return
         logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
         audio_frame_count = 0
+        truncated = False
         async for audio_frame in self.run_tts(sentence):  # type: ignore[attr-defined]
             if generation != self._tts_generation or self._cancelled:
+                truncated = True
                 break
             if isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
+                # Transport needs TTSStartedFrame to disable VAD barge-in and
+                # prepare the output stream before the first audio chunk.
+                try:
+                    await self.push_frame(audio_frame, direction)  # type: ignore[attr-defined]
+                except Exception as e:
+                    logger.error("TTS: Error pushing lifecycle frame: %s", e, exc_info=True)
+                    truncated = True
+                    break
                 continue
             is_audio = isinstance(audio_frame, AudioRawFrame) or (
                 OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)
@@ -150,8 +160,14 @@ class TTSPipelineMixin:
                 audio_frame_count += 1
             except Exception as e:
                 logger.error("TTS: Error pushing frame: %s", e, exc_info=True)
+                truncated = True
                 break
-        if audio_frame_count > 0:
+        if truncated and audio_frame_count > 0:
+            logger.warning(
+                "TTS: sentence playback truncated after %s audio frame(s) (generation/cancelled)",
+                audio_frame_count,
+            )
+        elif audio_frame_count > 0:
             logger.debug("TTS: Pushed %s audio frames for sentence", audio_frame_count)
 
     def _apply_volume_to_audio_frame(self, audio_frame: Any) -> None:

@@ -1639,8 +1639,10 @@ class InitiativeService:
 
     @staticmethod
     def _clean_summary_fragment(value: str, max_len: int = 150) -> str:
-        clean = re.sub(r"\s+", " ", str(value or "")).strip()
-        clean = clean.strip(" -:")
+        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+
+        clean = clean_text_for_tts(str(value or ""), spoken_prose=True)
+        clean = re.sub(r"\s+", " ", clean).strip().strip(" -:")
         if len(clean) <= max_len:
             return clean
         return clean[: max_len - 1].rsplit(" ", 1)[0].rstrip() + "..."
@@ -1695,27 +1697,29 @@ class InitiativeService:
         )
 
     def _execution_instruction_summary(self, row, input_packet: dict) -> str:
-        for key in (
-            "instruction",
-            "prompt",
-            "user_request",
-            "request",
-            "task",
-            "ticket_title",
-            "message",
-        ):
+        from distr.core.agent.services.llm.text_utils import spoken_task_summary
+
+        spoken = spoken_task_summary(
+            str(input_packet.get("instruction") or ""),
+            ticket_title=str(input_packet.get("ticket_title") or input_packet.get("ticket_name") or ""),
+            max_len=150,
+        )
+        if spoken:
+            return spoken
+        for key in ("prompt", "user_request", "request", "task", "message"):
             summary = self._clean_summary_fragment(input_packet.get(key, ""))
             if summary:
                 return summary
         return ""
 
     def _execution_result_summary(self, row, output_packet: dict) -> str:
+        from distr.core.agent.services.llm.text_utils import spoken_result_summary
+
         for key in ("summary", "result", "message", "final_response", "output"):
-            summary = self._clean_summary_fragment(output_packet.get(key, ""), 170)
+            summary = spoken_result_summary(output_packet.get(key, ""), max_len=170)
             if summary:
                 return summary
-        error = self._clean_summary_fragment(getattr(row, "error", ""), 150)
-        return error
+        return spoken_result_summary(getattr(row, "error", ""), max_len=150)
 
     def _execution_idle_fingerprint(self, row, status: str, input_packet: dict) -> str:
         # Idle means the user-facing state has not changed. updated_at can churn

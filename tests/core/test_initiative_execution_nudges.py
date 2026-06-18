@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 from types import SimpleNamespace
 
 
@@ -389,6 +390,65 @@ def test_initiative_skips_automation_run_status_rows(monkeypatch):
     service._maybe_send_execution_nudges({"initiative_allow_telegram": True})
 
     assert manager.sent == []
+
+
+def test_initiative_execution_terminal_nudge_strips_markdown_from_task(monkeypatch):
+    from distr.core.human_engagement import reset_engagement_ledger
+    from distr.core.initiative.service import InitiativeService
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+
+    enriched_instruction = (
+        "# Pick up brief\n\n## Handoff\n\nTightened the now-playing bar.\n\n---\n\n"
+        "[KANBAN TICKET CONTEXT]\n\n--- PRIMARY TASK ---\n"
+        "Tighten the now-playing bar"
+    )
+    row = SimpleNamespace(
+        id=7501,
+        project_id=46,
+        route_type="ide_bridge",
+        route_backend="cursor",
+        status="completed",
+        started_at=datetime.utcnow() - timedelta(minutes=5),
+        updated_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+        error="",
+        input_packet=json.dumps(
+            {
+                "source": "cursor",
+                "ticket_title": "Tighten the now-playing bar",
+                "instruction": enriched_instruction,
+            }
+        ),
+        output_packet=json.dumps({"summary": "Done."}),
+    )
+    project = SimpleNamespace(
+        id=46,
+        name="Spotify",
+        folder_location="/tmp/spotify-remake",
+        coding_backend="cursor",
+    )
+    fake_session = FakeSession(project_rows=[(row, project)], workflow_rows=[])
+    monkeypatch.setattr("distr.core.db.get_session", lambda: fake_session)
+
+    manager = DummyTelegram()
+    service = InitiativeService.__new__(InitiativeService)
+    service.telegram_manager = manager
+    service._execution_notice_cache = {}
+    service._execution_stale_after_s = 900
+    service._execution_stale_repeat_s = 1800
+    service._execution_terminal_notice_window_s = 3600
+
+    service._maybe_send_execution_nudges({"initiative_allow_telegram": True})
+
+    assert len(manager.sent) == 1
+    spoken = manager.sent[0]
+    assert "#" not in spoken
+    assert "Pick up brief" not in spoken
+    assert "Tighten the now-playing bar" in spoken
+    assert "Cursor finished" in spoken
 
 
 def test_initiative_idle_nudge_uses_text_even_when_event_queue_is_available():

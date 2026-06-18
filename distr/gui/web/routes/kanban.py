@@ -2817,9 +2817,8 @@ def create_routes():
                         _resolve_ticket_execution_route(
                             s,
                             {
-                                "project": projects.get(effective_project_id),
-                                "ticket": t,
-                                "board": board,
+                                "ticket_id": t.id,
+                                "project_id": int(effective_project_id),
                                 "complexity": normalize_ticket_complexity(t.complexity),
                             },
                             allow_orchestrator_override=False,
@@ -5010,12 +5009,21 @@ source: kanban_ticket_{t.id}
         *,
         allow_orchestrator_override: bool = True,
     ) -> dict:
+        from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+        from distr.core.db.projects import Project
         from distr.core.orchestrator_routing import resolve_execution_route
 
+        ticket = orm_get_by_id(s, KanbanTicket, ctx["ticket_id"]) if ctx.get("ticket_id") else None
+        project = orm_get_by_id(s, Project, ctx["project_id"])
+        board = None
+        if ticket and ticket.lane_id:
+            lane = orm_get_by_id(s, KanbanLane, ticket.lane_id)
+            if lane and lane.board_id:
+                board = orm_get_by_id(s, KanbanBoard, lane.board_id)
         decision = resolve_execution_route(
-            project=ctx["project"],
-            ticket=ctx.get("ticket"),
-            board=ctx.get("board"),
+            project=project,
+            ticket=ticket,
+            board=board,
             complexity=ctx.get("complexity"),
             emit_event=False,
             allow_orchestrator_override=allow_orchestrator_override,
@@ -5063,6 +5071,7 @@ source: kanban_ticket_{t.id}
         """Send a ticket's instruction to the selected project coding backend."""
 
         payload = payload or SendToCliRequest()
+        route_backend_preview = ""
         with get_session() as s:
             ctx = _resolve_ticket_cli_context(s, ticket_id)
             title = ctx["title"]
@@ -5070,41 +5079,82 @@ source: kanban_ticket_{t.id}
             project_id = ctx["project_id"]
             project_name = ctx["project_name"]
             complexity = ctx["complexity"]
-            instruction = (payload.instruction or "").strip() or ctx["instruction"]
-
-        try:
-            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
-
-            hook_ensure_workspace("tickets", tid, reason="send_to_cli")
+            board = ctx.get("board")
+            board_id = int(board.id) if board and getattr(board, "id", None) else None
             ticket = ctx.get("ticket")
             linked_wf = getattr(ticket, "linked_workflow_id", None) if ticket else None
-            if linked_wf:
-                hook_ensure_workspace("workflows", int(linked_wf), reason="send_to_cli")
-            hook_ensure_workspace("projects", project_id, reason="send_to_cli")
-        except Exception:
-            pass
+            instruction = (payload.instruction or "").strip() or ctx["instruction"]
+            try:
+                route_preview = _resolve_ticket_execution_route(s, ctx)
+                route_backend_preview = (route_preview.get("backend") or "").strip()
+            except Exception:
+                route_backend_preview = ""
 
-        # Create audit trail using AutoWorkflow models
+        from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+
+        backend_for_run = (payload.backend_id or "").strip() or route_backend_preview
+        ide_mode = is_ide_backend(backend_for_run)
+
+        # Create audit trail + dispatch run (bridge URLs for IDE plugin callbacks)
         from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
-        audit_id = step_id = None
+        from distr.core.kanban.ticket_cli_memory import (
+            create_ticket_cli_dispatch_run,
+            enrich_kanban_ticket_cli_instruction,
+        )
+
+        audit_id = step_id = run_id = None
         try:
             with get_session() as s:
                 audit = AutoWorkflow(
-                    name=f"[Project: {project_name}] Ticket #{tid}: {title}",
-                    status="in_progress", workflow_type="project_cli",
+                    name=f"{project_name} · {title}",
+                    status="in_progress",
+                    workflow_type="project_cli",
                 )
                 s.add(audit)
                 s.flush()
                 step = AutoWorkflowStep(
-                    workflow_id=audit.id, position=0,
-                    name=f"Ticket #{tid}", instruction=instruction[:500],
-                    status="running", tool_used="project_cli",
+                    workflow_id=audit.id,
+                    position=0,
+                    name=title[:120],
+                    instruction=instruction[:500],
+                    status="waiting" if ide_mode else "running",
+                    tool_used="project_cli",
                 )
                 s.add(step)
+                s.flush()
+                run_id = create_ticket_cli_dispatch_run(
+                    s,
+                    audit_workflow_id=int(audit.id),
+                    step_id=int(step.id),
+                    ticket_id=int(tid),
+                    project_id=int(project_id),
+                    board_id=board_id,
+                    ide_mode=ide_mode,
+                    backend_id=backend_for_run or "cursor",
+                )
+                instruction = enrich_kanban_ticket_cli_instruction(
+                    s,
+                    ticket_id=int(tid),
+                    project_id=int(project_id),
+                    board_id=board_id,
+                    base_instruction=instruction,
+                    run_id=run_id,
+                    linked_workflow_id=int(linked_wf) if linked_wf else None,
+                )
+                step.instruction = instruction[:500]
                 s.commit()
-                audit_id, step_id = audit.id, step.id
+                audit_id, step_id = int(audit.id), int(step.id)
         except Exception:
-            pass
+            logger.debug("send_ticket_to_cli: dispatch run setup failed", exc_info=True)
+            try:
+                from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                hook_ensure_workspace("tickets", tid, reason="send_to_cli")
+                if linked_wf:
+                    hook_ensure_workspace("workflows", int(linked_wf), reason="send_to_cli")
+                hook_ensure_workspace("projects", project_id, reason="send_to_cli")
+            except Exception:
+                pass
 
         from distr.core.db.projects import Project
         from distr.core.project_cli_backends.registry import run_project_task
@@ -5114,6 +5164,7 @@ source: kanban_ticket_{t.id}
                 project = orm_get_by_id(s, Project, project_id)
                 if not project:
                     raise HTTPException(400, "Project no longer exists")
+                ctx = _resolve_ticket_cli_context(s, ticket_id, include_instruction=False)
                 route = _resolve_ticket_execution_route(s, ctx)
             backend_override = (payload.backend_id or "").strip() or route.get("backend")
             model_override = (payload.model or "").strip() or route.get("model", "")
@@ -5137,7 +5188,8 @@ source: kanban_ticket_{t.id}
                     project,
                     instruction,
                     audit_id=audit_id,
-                    workflow_id=payload.workflow_id,
+                    workflow_id=audit_id,
+                    run_id=run_id,
                     step_id=step_id,
                     ticket_id=tid,
                     ticket_complexity=complexity,
@@ -5155,6 +5207,7 @@ source: kanban_ticket_{t.id}
             "success": result.success,
             "message": f"Ticket #{tid} sent to the project backend for '{project_name}'. Check the ticket execution trail for progress.",
             "audit_id": audit_id,
+            "run_id": run_id,
             "execution_session_id": result.execution_session_id,
             "backend_id": result.backend_id,
             "engine": result.engine,

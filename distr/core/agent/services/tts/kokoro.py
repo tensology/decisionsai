@@ -198,6 +198,11 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
             if generation != self._tts_generation or self._cancelled:
                 break
             if isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
+                try:
+                    await self.push_frame(audio_frame, direction)
+                except Exception as e:
+                    logger.error("TTS: Error pushing lifecycle frame: %s", e, exc_info=True)
+                    break
                 continue
             is_audio = isinstance(audio_frame, AudioRawFrame) or (
                 OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)

@@ -101,14 +101,69 @@ def feedback_to_standard(feedback: str) -> str:
     return f"- Review feedback to apply on future workflow runs: {text}"
 
 
+def _workflow_accepts_adaptive_standards(workflow_id: int) -> bool:
+    with get_session() as db:
+        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+        if not wf:
+            return False
+        return (wf.workflow_type or "") not in {"audit", "project_cli"}
+
+
+def capture_feedback_as_memory(
+    feedback: str,
+    *,
+    workflow_id: Optional[int] = None,
+    linked_workflow_id: Optional[int] = None,
+    board_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+) -> bool:
+    """Persist reusable feedback into learned rules and workflow adaptive context."""
+    if not should_capture_feedback(feedback):
+        return False
+
+    captured = False
+    standard = feedback_to_standard(feedback)
+    target_workflow_id = None
+    if workflow_id and _workflow_accepts_adaptive_standards(int(workflow_id)):
+        target_workflow_id = int(workflow_id)
+    elif linked_workflow_id and _workflow_accepts_adaptive_standards(int(linked_workflow_id)):
+        target_workflow_id = int(linked_workflow_id)
+
+    if target_workflow_id:
+        captured = capture_feedback_as_standard(target_workflow_id, feedback) or captured
+
+    try:
+        from distr.core.orchestrator import record_learning_signal
+
+        scope = "board" if board_id else "project" if project_id else "global"
+        scope_id = board_id or project_id
+        record_learning_signal(
+            scope=scope,
+            scope_id=scope_id,
+            rule_type="adaptive_standard",
+            summary=standard[:500],
+            payload={
+                "workflow_id": workflow_id,
+                "linked_workflow_id": linked_workflow_id,
+                "feedback_excerpt": feedback[:500],
+            },
+        )
+        captured = True
+    except Exception:
+        pass
+    return captured
+
+
 def capture_feedback_as_standard(workflow_id: Optional[int], feedback: str) -> bool:
     """Persist meaningful feedback into the workflow Agent Context table."""
     if not workflow_id or not should_capture_feedback(feedback):
         return False
+    if not _workflow_accepts_adaptive_standards(int(workflow_id)):
+        return False
     standard = feedback_to_standard(feedback)
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
-        if not wf or (wf.workflow_type or "") == "audit":
+        if not wf:
             return False
         row = (
             db.query(AutoWorkflowVariable)

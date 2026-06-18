@@ -996,6 +996,23 @@ async def run_project_task(
     except Exception:
         runtime_snapshot = {}
 
+    ticket_title = ""
+    if ticket_id:
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.kanban import KanbanTicket
+
+            with get_session() as db:
+                ticket_row = (
+                    db.query(KanbanTicket)
+                    .filter(KanbanTicket.id == int(ticket_id))
+                    .first()
+                )
+                if ticket_row and ticket_row.title:
+                    ticket_title = str(ticket_row.title).strip()
+        except Exception:
+            ticket_title = ""
+
     execution_session_id = create_execution_session(
         project_id=task.project_id,
         ticket_id=ticket_id,
@@ -1014,6 +1031,7 @@ async def run_project_task(
             "project_name": task.project_name,
             "folder": task.folder,
             "ticket_id": ticket_id,
+            "ticket_title": ticket_title,
             "workflow_id": workflow_id,
             "run_id": run_id,
             "step_id": step_id,

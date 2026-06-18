@@ -210,6 +210,8 @@ def clean_text_for_tts(
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
     text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
+    # Inline headings after whitespace collapse (e.g. "# Pick up brief ## Handoff").
+    text = re.sub(r'#{1,6}\s+', '', text)
     # Markdown numbered-list markers require whitespace after the dot. In live
     # streaming, a chunk can start mid-version/decimal ("2.3"), and the old
     # zero-or-more whitespace pattern stripped the leading "2." from speech.
@@ -249,6 +251,79 @@ def clean_text_for_tts(
     # text = inject_prosody_hints(text)
 
     return text
+
+
+def _truncate_spoken_words(text: str, max_len: int) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip().strip(" -:")
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 1].rsplit(" ", 1)[0].rstrip() + "..."
+
+
+def spoken_task_summary(
+    instruction: str,
+    *,
+    ticket_title: str = "",
+    max_len: int = 150,
+) -> str:
+    """Short spoken task label from CLI/workflow instruction blobs (not raw markdown)."""
+    title = clean_text_for_tts(str(ticket_title or "").strip(), spoken_prose=True)
+    title = re.sub(r"\s+", " ", title).strip()
+    if title:
+        return _truncate_spoken_words(title, max_len)
+
+    raw = str(instruction or "").strip()
+    if not raw:
+        return ""
+
+    if "--- PRIMARY TASK ---" in raw:
+        primary = raw.rsplit("--- PRIMARY TASK ---", 1)[-1].strip()
+        first_line = primary.splitlines()[0].strip() if primary else ""
+        if first_line:
+            spoken = clean_text_for_tts(first_line, spoken_prose=True)
+            spoken = re.sub(r"\s+", " ", spoken).strip()
+            if spoken:
+                return _truncate_spoken_words(spoken, max_len)
+
+    if "## Instruction" in raw:
+        chunk = raw.split("## Instruction", 1)[1]
+        for stop in ("## Return contract", "## Workspace memory", "## Agent map", "## Pick up brief"):
+            if stop in chunk:
+                chunk = chunk.split(stop, 1)[0]
+        spoken = clean_text_for_tts(chunk, spoken_prose=True)
+        spoken = re.sub(r"\s+", " ", spoken).strip()
+        if spoken:
+            return _truncate_spoken_words(spoken, max_len)
+
+    spoken = clean_text_for_tts(raw, spoken_prose=True)
+    spoken = re.sub(r"\s+", " ", spoken).strip()
+    low = spoken.lower()
+    for boilerplate in (
+        "pick up brief",
+        "linked entities",
+        "read-only pickup",
+        "kanban ticket context",
+    ):
+        if low.startswith(boilerplate):
+            spoken = ""
+            break
+    if spoken:
+        return _truncate_spoken_words(spoken, max_len)
+    return ""
+
+
+def spoken_result_summary(value: str, *, max_len: int = 170) -> str:
+    """Compress CLI/backend result text for voice without model-list noise."""
+    clean = clean_text_for_tts(str(value or ""), spoken_prose=True)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    if not clean:
+        return ""
+    low = clean.lower()
+    if "available models:" in low:
+        clean = clean.split("Available models:", 1)[0].strip().rstrip(".")
+    if "cannot use this model" in low or "can't use this model" in low:
+        clean = "The selected coding model isn't available."
+    return _truncate_spoken_words(clean, max_len)
 
 
 def clean_model_text_for_chat(text: str, strip_whitespace: bool = True) -> str:

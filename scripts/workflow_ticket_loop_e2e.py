@@ -59,6 +59,13 @@ SPOTIFY_IDEATION_PRESET = "ideation-brief-to-board"
 SPOTIFY_DEVELOPMENT_PRESET = "development-ticket-to-implementation"
 SPOTIFY_POLISH_PRESET = "polish-verify-and-ship"
 E2E_HARNESS_PREFIX = "[e2e]"
+E2E_SPOTIFY_LEGACY_NAMES = (
+    "[e2e] Spotify",
+    "Spotify · Ideation",
+    "Spotify · Development",
+    "Spotify · Polish",
+    "Spotify · Ship ticket",
+)
 E2E_LEGACY_NAME_PREFIXES = (
     "DecisionsAI dogfood ",
     "DecisionsAI dogfood spawn project ",
@@ -119,15 +126,13 @@ def _slug(value: str) -> str:
 
 
 def e2e_spotify_program_names() -> dict[str, str]:
-    """One Spotify remake program: project, board, ideation/dev/polish workflows."""
-    label = e2e_fixture_label()
-    base = f"{E2E_HARNESS_PREFIX} spotify-remake-{label}"
+    """One Spotify remake program: project is the product; board/workflows stay generic."""
     return {
-        "project_name": f"{base} project",
-        "board_name": f"{base} board",
-        "ideation_workflow_name": f"{base} · ideation",
-        "development_workflow_name": f"{base} · development",
-        "polish_workflow_name": f"{base} · polish",
+        "project_name": "Spotify",
+        "board_name": "[e2e] Product board",
+        "ideation_workflow_name": "Ideation",
+        "development_workflow_name": "Development",
+        "polish_workflow_name": "Polish",
     }
 
 
@@ -137,7 +142,7 @@ def spotify_program_project_dir(work_dir: Path | None = None) -> Path:
     env_dir = (os.environ.get("WORKFLOW_E2E_SPOTIFY_PROJECT_DIR") or "").strip()
     if env_dir:
         return Path(env_dir).expanduser()
-    return Path.home() / "development" / "spotify-remake-e2e"
+    return Path.home() / "development" / "spotify-remake"
 
 
 def spotify_use_codex() -> bool:
@@ -149,7 +154,7 @@ def e2e_ide_backend() -> tuple[str, str]:
     backend = (os.environ.get("WORKFLOW_E2E_IDE_BACKEND") or "codex").strip() or "codex"
     model = (os.environ.get("WORKFLOW_E2E_IDE_MODEL") or "").strip()
     if not model:
-        model = "gpt-5-codex" if backend == "codex" else "auto"
+        model = "gpt-5.3-codex" if backend == "codex" else "auto"
     return backend, model
 
 
@@ -158,14 +163,18 @@ def e2e_fixture_label() -> str:
 
 
 def e2e_fixture_names(profile: str) -> dict[str, str]:
-    """Stable harness names — one workflow/board/project/ticket per profile per label."""
+    """Stable harness names — human labels; [e2e] only where we need a disposable marker."""
     label = e2e_fixture_label()
-    base = f"{E2E_HARNESS_PREFIX} {profile}-{label}"
+    profile_title = {
+        "dogfood": "Spotify",
+        "until-green": "Release",
+        "browser": "Player",
+    }.get(profile, profile.replace("-", " ").title())
     return {
-        "workflow_name": f"{base} workflow",
-        "board_name": f"{base} board",
-        "project_name": f"{base} project",
-        "ticket_title": f"{base} ticket",
+        "workflow_name": "Ticket loop",
+        "board_name": "[e2e] Harness board",
+        "project_name": profile_title,
+        "ticket_title": "Improve the now-playing bar layout",
     }
 
 
@@ -175,11 +184,18 @@ def is_e2e_harness_disposable_name(name: str, *, profile: str | None = None) -> 
         return False
     if profile:
         if profile == "spotify-remake":
-            if text in set(e2e_spotify_program_names().values()):
+            names = e2e_spotify_program_names()
+            if text in set(names.values()):
+                return True
+            if text in E2E_SPOTIFY_LEGACY_NAMES:
+                return True
+            if text == names["project_name"] or text == names["board_name"]:
                 return True
         elif text in set(e2e_fixture_names(profile).values()):
             return True
     if text.startswith(E2E_HARNESS_PREFIX):
+        return True
+    if text.startswith("[e2e]"):
         return True
     return any(text.startswith(prefix) for prefix in E2E_LEGACY_NAME_PREFIXES)
 

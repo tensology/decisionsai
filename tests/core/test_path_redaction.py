@@ -85,8 +85,37 @@ def test_clean_text_for_tts_email_lines_become_distinct_sentences():
     assert out == "Subject: Quarterly update. We met with the client. No issues found."
 
 
-def test_clean_text_for_tts_does_not_double_periods():
-    raw = "All good.\nSee you soon."
+def test_clean_text_for_tts_strips_inline_markdown_headings():
+    raw = "It was working on: # Pick up brief ## Handoff Tightened the now-playing bar."
     out = clean_text_for_tts(raw, spoken_prose=True)
-    assert out == "All good. See you soon."
-    assert ".." not in out
+    assert "#" not in out
+    assert "Pick up brief Handoff Tightened the now-playing bar" in out
+
+
+def test_spoken_task_summary_prefers_ticket_title():
+    from distr.core.agent.services.llm.text_utils import spoken_task_summary
+
+    instruction = "# Pick up brief\n\n## Handoff\n\nSome notes\n\n--- PRIMARY TASK ---\nTighten the now-playing bar"
+    out = spoken_task_summary(instruction, ticket_title="Tighten the now-playing bar")
+    assert out == "Tighten the now-playing bar"
+
+
+def test_spoken_task_summary_uses_primary_task_without_title():
+    from distr.core.agent.services.llm.text_utils import spoken_task_summary
+
+    instruction = (
+        "# Pick up brief\n\n## Handoff\n\nNotes\n\n---\n\n"
+        "[KANBAN TICKET CONTEXT]\n\n--- PRIMARY TASK ---\n"
+        "Tighten the now-playing bar\n\nMake the scrubber easier to grab."
+    )
+    out = spoken_task_summary(instruction)
+    assert out == "Tighten the now-playing bar"
+
+
+def test_spoken_result_summary_shortens_model_errors():
+    from distr.core.agent.services.llm.text_utils import spoken_result_summary
+
+    raw = "Cannot use this model: gpt-5-codex. Available models: gpt-4o, auto."
+    out = spoken_result_summary(raw)
+    assert "Available models" not in out
+    assert "isn't available" in out

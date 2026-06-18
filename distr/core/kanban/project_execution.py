@@ -200,6 +200,28 @@ def complete_execution_session(
         except Exception:
             pass
 
+    if success:
+        try:
+            packet = output_packet or {}
+            summary = str(packet.get("output") or "").strip()
+            if summary:
+                from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+
+                persist_worker_feedback(
+                    message=summary,
+                    event_type="cli_completed",
+                    source=str(packet.get("backend_id") or row.route_backend or "cli"),
+                    ticket_id=row.ticket_id,
+                    project_id=row.project_id,
+                    workflow_id=row.workflow_id,
+                    run_id=row.run_id,
+                    step_id=row.step_id,
+                    execution_session_id=row.id,
+                    skip_steering_log=bool(row.run_id),
+                )
+        except Exception:
+            pass
+
 
 def list_execution_sessions_for_ticket(ticket_id: int, limit: int = 20) -> list[dict[str, Any]]:
     ensure_project_execution_tables()

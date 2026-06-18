@@ -467,7 +467,11 @@ class HumanEngagementService:
             or "/api/remote/" in str(intent.voice_body or "")
         )
         body = sanitize_engagement_text(intent.body, preserve_links=preserve_links)
-        voice_body = voice_friendly_text(intent.voice_body or intent.body)
+        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+
+        voice_body = voice_friendly_text(
+            clean_text_for_tts(intent.voice_body or intent.body, spoken_prose=True)
+        )
         had_attachment_request = bool(intent.attachments)
         usable_attachments = [a for a in intent.attachments if a.usable()]
         if not intent.explicit_artifact_intent:

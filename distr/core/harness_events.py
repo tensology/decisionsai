@@ -203,13 +203,43 @@ def record_harness_event(payload: HarnessEventPayload) -> dict[str, Any]:
     event_type = (payload.event_type or "").strip().lower().replace("-", "_")
     if event_type.endswith("_completed") or event_type in {"worker_completed", "codex_completed", "cursor_completed"}:
         try:
-            from distr.core.workspace_memory.lifecycle import handoff_cli_session
+            from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
 
-            handoff_cli_session(
+            persist_worker_feedback(
+                message=(payload.message or payload.output or "").strip(),
+                output=payload.output or "",
+                input_text=payload.input or "",
+                event_type=payload.event_type or "",
+                source=_normalize_harness(payload.harness),
                 ticket_id=_as_int(payload.ticket_id),
                 project_id=project_id,
-                summary=(payload.output or payload.message or "").strip()[:2000],
-                source=event_type,
+                board_id=_as_int(payload.board_id),
+                workflow_id=_as_int(payload.workflow_id),
+                linked_workflow_id=None,
+                run_id=_as_int(payload.run_id),
+                step_id=_as_int(payload.step_id),
+                execution_session_id=_as_int(payload.execution_session_id),
+                skip_steering_log=bool(_as_int(payload.run_id)),
+            )
+        except Exception:
+            pass
+    elif event_type in {"user_steer", "codex_needs_input", "cursor_needs_input", "codex_interrupted", "cursor_interrupted"}:
+        try:
+            from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+
+            persist_worker_feedback(
+                message=(payload.message or payload.input or "").strip(),
+                input_text=payload.input or "",
+                event_type=payload.event_type or "",
+                source=_normalize_harness(payload.harness),
+                ticket_id=_as_int(payload.ticket_id),
+                project_id=project_id,
+                board_id=_as_int(payload.board_id),
+                workflow_id=_as_int(payload.workflow_id),
+                run_id=_as_int(payload.run_id),
+                step_id=_as_int(payload.step_id),
+                execution_session_id=_as_int(payload.execution_session_id),
+                skip_steering_log=bool(_as_int(payload.run_id)),
             )
         except Exception:
             pass

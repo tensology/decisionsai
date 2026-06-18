@@ -486,6 +486,10 @@ def bootstrap_ticket(ticket_id: int, *, force: bool = False) -> str:
         lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).first()
         board_id = lane.board_id if lane else None
         title = ticket.title or f"Ticket {ticket_id}"
+        linked_project_id = ticket.linked_project_id
+        linked_workflow_id = ticket.linked_workflow_id
+        description = ticket.description or ""
+        context_notes = ticket.context_notes or ""
 
     if board_id:
         try:
@@ -502,21 +506,21 @@ def bootstrap_ticket(ticket_id: int, *, force: bool = False) -> str:
             ticket_id=ticket_id,
             title=title,
             board_id=board_id,
-            linked_project_id=ticket.linked_project_id,
-            linked_workflow_id=ticket.linked_workflow_id,
+            linked_project_id=linked_project_id,
+            linked_workflow_id=linked_workflow_id,
             parent_path=parent,
         ),
         context_content=ticket_context_md(
             title=title,
-            description=ticket.description or "",
-            context_notes=ticket.context_notes or "",
+            description=description,
+            context_notes=context_notes,
         ),
         decisions={
             "entity_type": "ticket",
             "ticket_id": ticket_id,
             "board_id": board_id,
-            "linked_project_id": ticket.linked_project_id,
-            "linked_workflow_id": ticket.linked_workflow_id,
+            "linked_project_id": linked_project_id,
+            "linked_workflow_id": linked_workflow_id,
         },
     )
     return path

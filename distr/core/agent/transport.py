@@ -1016,6 +1016,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._pipeline_cut = False
             self._force_silence = False
             self._tts_started_event_emitted = False
+            # Some TTS paths skipped TTSStartedFrame; mirror its side effects here.
+            await self._ensure_output_stream_ready_async(reason="first audio frame")
+            if self._aec_ref_buf is not None:
+                self._aec_ref_buf.set_active(True)
+            if self._input_transport is not None:
+                self._input_transport._allow_interruptions = False
             if self._state == AudioPlaybackState.COMPLETED:
                 self._total_output_bytes = 0
                 self._total_audio_duration = 0.0

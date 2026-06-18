@@ -90,6 +90,7 @@ def test_tts_duplicate_filter_does_not_drop_similar_legitimate_sentences():
 
 def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
     service = object.__new__(CoquiTTSService)
+    service._init_tts_pipeline_state()
     service._cancelled = False
     service._in_response_after_start = False
     service._llm_response_started_at = 0
@@ -109,7 +110,10 @@ def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
         pushed.append(frame)
 
     async def run_tts(text):
-        audio = AudioRawFrame(audio=b"\x00" * 320, sample_rate=16000, num_channels=1)
+        audio = AudioRawFrame()
+        audio.audio = b"\x00" * 320
+        audio.sample_rate = 16000
+        audio.num_channels = 1
         yield TTSStartedFrame()
         yield audio
         yield TTSStoppedFrame()
@@ -118,7 +122,8 @@ def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame("Coqui should preserve playback lifecycle.")
+    text = TextFrame()
+    text.text = "Coqui should preserve playback lifecycle."
 
     asyncio.run(service.process_frame(start, None))
     asyncio.run(service.process_frame(text, None))
@@ -154,6 +159,50 @@ def test_pixazo_batches_three_sentences_per_synthesis_call():
     asyncio.run(_run())
 
     assert enqueued == ["One. Two. Three.", "Four. Five."]
+
+
+def test_play_queued_sentence_forwards_tts_lifecycle_frames():
+    from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
+    from distr.core.agent.libs import TTSStartedFrame, TTSStoppedFrame
+
+    class FakeAudioFrame:
+        def __init__(self, audio: bytes, sample_rate: int, num_channels: int):
+            self.audio = audio
+            self.sample_rate = sample_rate
+            self.num_channels = num_channels
+
+    class FakeTTS(TTSPipelineMixin):
+        def __init__(self):
+            self._init_tts_pipeline_state()
+            self._cancelled = False
+            self._speech_volume = 1.0
+            self._volume_in_run_tts = True
+            self.pushed = []
+
+        async def push_frame(self, frame, direction):
+            self.pushed.append(frame)
+
+        async def run_tts(self, text):
+            yield TTSStartedFrame()
+            yield FakeAudioFrame(audio=b"\x01\x00" * 160, sample_rate=16000, num_channels=1)
+            yield FakeAudioFrame(audio=b"\x02\x00" * 160, sample_rate=16000, num_channels=1)
+            yield TTSStoppedFrame()
+
+    tts = FakeTTS()
+    # Mixin checks isinstance against AudioRawFrame; treat our fake as audio.
+    import distr.core.agent.services.tts.tts_pipeline_mixin as mixin_mod
+
+    real_audio = mixin_mod.AudioRawFrame
+    mixin_mod.AudioRawFrame = FakeAudioFrame
+    try:
+        asyncio.run(tts._play_queued_sentence("hello", tts._tts_generation, None))
+    finally:
+        mixin_mod.AudioRawFrame = real_audio
+
+    types = [type(frame).__name__ for frame in tts.pushed]
+    assert types[0] == "TTSStartedFrame"
+    assert types.count("FakeAudioFrame") == 2
+    assert types[-1] == "TTSStoppedFrame"
 
 
 def test_llm_end_flushes_partial_batch_when_text_buffer_empty():

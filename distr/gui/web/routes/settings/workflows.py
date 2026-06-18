@@ -2002,18 +2002,29 @@ def register_routes(router, templates):
                         }
                         run_data["latest_backend_handoff"] = latest_handoff
                 elif worker_terminal:
-                    if run.status == "waiting":
-                        run.status = "running"
-                    if step_id:
-                        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
-                        if step and step.status == "waiting":
-                            step.status = "running"
-                    if run_data.get("waiting_kind") in {"needs_human_input", "worker_needs_input"}:
+                    if run_data.get("ticket_dispatch"):
+                        run.status = "failed" if "failed" in lower_event_type else "completed"
+                        if step_id:
+                            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+                            if step:
+                                step.status = "failed" if "failed" in lower_event_type else "completed"
                         run_data.pop("waiting_kind", None)
-                    if run_data.get("next_action") == "needs_human_input":
-                        run_data.pop("next_action", None)
-                    run_data["human_intervention_state"] = "resolved"
-                    run_data["worker_status"] = "failed" if "failed" in lower_event_type else "completed"
+                        run_data.pop("ide_handoff_pending", None)
+                        run_data["human_intervention_state"] = "resolved"
+                        run_data["worker_status"] = "failed" if "failed" in lower_event_type else "completed"
+                    else:
+                        if run.status == "waiting":
+                            run.status = "running"
+                        if step_id:
+                            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+                            if step and step.status == "waiting":
+                                step.status = "running"
+                        if run_data.get("waiting_kind") in {"needs_human_input", "worker_needs_input"}:
+                            run_data.pop("waiting_kind", None)
+                        if run_data.get("next_action") == "needs_human_input":
+                            run_data.pop("next_action", None)
+                        run_data["human_intervention_state"] = "resolved"
+                        run_data["worker_status"] = "failed" if "failed" in lower_event_type else "completed"
                     run_data["last_codex_bridge_state"] = {
                         "event_type": event_type,
                         "status": status,
@@ -2119,11 +2130,35 @@ def register_routes(router, templates):
                 except Exception:
                     logger.debug("Could not record harness step report", exc_info=True)
 
+            try:
+                from distr.core.workspace_memory.feedback_sync import persist_worker_feedback
+
+                persist_worker_feedback(
+                    message=message,
+                    output=event.output or "",
+                    input_text=event.input or "",
+                    event_type=event_type,
+                    source="cursor" if "cursor" in lower_event_type else "codex",
+                    ticket_id=int(ticket_id) if ticket_id else None,
+                    project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                    board_id=int(board_id) if board_id else None,
+                    workflow_id=int(workflow_id),
+                    run_id=int(run_id),
+                    step_id=int(step_id) if step_id else None,
+                    execution_session_id=int(execution_session_id) if execution_session_id else None,
+                    mistake_label=event.mistake_label or "",
+                    skip_steering_log=True,
+                    skip_human_intervention=True,
+                )
+            except Exception:
+                logger.debug("Could not persist bridge feedback to workspace memory", exc_info=True)
+
             auto_continue_result = None
             if (
                 bridge_suffix == "completed"
                 and run_status_before == "waiting"
                 and waiting_kind_before in {"ide_handoff", "needs_human_input"}
+                and not bool(run_data.get("ticket_dispatch"))
             ):
                 try:
                     from distr.core.workflow.dispatcher import continue_waiting_step
