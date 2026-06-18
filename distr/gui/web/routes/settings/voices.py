@@ -34,6 +34,10 @@ def _tts_online_provider_verified(settings: dict, provider_id: str) -> bool:
         return bool(settings.get("elevenlabs_enabled")) and bool(
             str(settings.get("elevenlabs_key") or "").strip()
         )
+    if provider_id == "pixazo":
+        from distr.core.third_party_keys import pixazo_enabled
+
+        return pixazo_enabled()
     return True
 
 
@@ -122,13 +126,16 @@ def register_routes(router, templates):
             elif provider_id == "supertonic":
                 from distr.core.agent.services.tts.supertonic_descriptor import SUPERTONIC_VOICES
                 voices = [{"id": vid, "name": name} for vid, name in SUPERTONIC_VOICES.items()]
+            elif provider_id == "pixazo":
+                from distr.core.agent.services.tts.pixazo_descriptor import PIXAZO_VOICES
+                voices = [dict(v) for v in PIXAZO_VOICES]
         except Exception as e:
             logger.warning("Could not load voices for %s: %s", provider_id, e)
 
         # Append custom voices from DB (status=ready)
         # For ElevenLabs: API cloned voices are already marked custom above.
         # DB entries take precedence — replace API-cloned entries that match DB records.
-        if provider_id in ("kokoro", "elevenlabs", "coqui", "supertonic"):
+        if provider_id in ("kokoro", "elevenlabs", "coqui", "supertonic", "pixazo"):
             try:
                 from distr.core.db import get_session
                 from sqlalchemy import text
@@ -327,8 +334,8 @@ def register_routes(router, templates):
 
         if not name:
             return JSONResponse({"error": "Name is required"}, status_code=400)
-        if provider not in ("elevenlabs", "kokoro", "coqui", "supertonic"):
-            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, or supertonic"}, status_code=400)
+        if provider not in ("elevenlabs", "kokoro", "coqui", "supertonic", "pixazo"):
+            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, supertonic, or pixazo"}, status_code=400)
 
         # Check ElevenLabs limit (max 5 custom voices)
         session = get_session()
@@ -442,6 +449,25 @@ def register_routes(router, templates):
         except Exception as e:
             logger.warning("Could not delete ElevenLabs voice %s: %s", voice_id, e)
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    @router.get("/custom-voices/{voice_id}/reference-audio")
+    async def get_custom_voice_reference_audio(voice_id: int):
+        """Serve reference WAV locally (fallback when relay staging is not used)."""
+        from fastapi.responses import FileResponse
+        from distr.core.agent.services.tts.pixazo_descriptor import PixazoDescriptor
+        from distr.core.db import get_session, CustomVoice
+
+        session = get_session()
+        try:
+            voice = session.query(CustomVoice).filter(CustomVoice.id == voice_id).first()
+            if not voice or voice.provider != "pixazo":
+                return JSONResponse({"error": "Not found"}, status_code=404)
+            path = PixazoDescriptor.reference_audio_path(f"custom_{voice_id}")
+            if not path or not os.path.isfile(path):
+                return JSONResponse({"error": "Reference audio not found"}, status_code=404)
+            return FileResponse(path, media_type="audio/wav", filename=os.path.basename(path))
+        finally:
+            session.close()
 
     @router.get("/custom-voices/{voice_id}/status")
     async def get_custom_voice_status(voice_id: int):

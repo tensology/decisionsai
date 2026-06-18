@@ -10,6 +10,28 @@ import sys
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_dyld_library_path_for_apple_silicon() -> None:
+    """Drop Intel Homebrew paths from DYLD on ARM Macs (breaks psycopg2/torch wheels)."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import platform
+
+        if platform.machine() != "arm64":
+            return
+    except Exception:
+        return
+    dyld = (os.environ.get("DYLD_LIBRARY_PATH") or "").strip()
+    if not dyld or "/usr/local/lib" not in dyld.split(":"):
+        return
+    kept = [part for part in dyld.split(":") if part and part != "/usr/local/lib"]
+    if kept:
+        os.environ["DYLD_LIBRARY_PATH"] = ":".join(kept)
+    else:
+        os.environ.pop("DYLD_LIBRARY_PATH", None)
+    logger.info("Removed /usr/local/lib from DYLD_LIBRARY_PATH on arm64")
+
+
 def _path_looks_minimal(path: str) -> bool:
     parts = [p for p in path.split(os.pathsep) if p]
     if len(parts) < 6:
@@ -59,6 +81,8 @@ def bootstrap_gui_launch_environment() -> None:
         if name.startswith("DECISIONS_"):
             continue
         os.environ[name] = value.decode("utf-8", errors="replace")
+
+    _sanitize_dyld_library_path_for_apple_silicon()
 
     logger.info(
         "Bootstrapped GUI launch environment (shell=%s, path_entries=%s)",

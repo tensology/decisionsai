@@ -416,7 +416,14 @@ def create_workflow(name: str = "Untitled Workflow", description: str = "", work
         db.add(wf)
         db.commit()
         db.refresh(wf)
-        return wf.id
+        wf_id = wf.id
+    try:
+        from distr.core.workspace_memory.provision import bootstrap_workflow
+
+        bootstrap_workflow(wf_id)
+    except Exception:
+        pass
+    return wf_id
 
 
 def get_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
@@ -488,7 +495,13 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
                 else:
                     setattr(wf, k, v)
         db.commit()
-        return True
+    try:
+        from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+        hook_ensure_workspace("workflows", workflow_id, reason="update_workflow")
+    except Exception:
+        pass
+    return True
 
 
 def get_context_items(workflow_id: int) -> List[Dict[str, Any]]:
@@ -860,7 +873,14 @@ def add_step(
         db.add(step)
         db.commit()
         db.refresh(step)
-        return step.id
+        step_id = step.id
+    try:
+        from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+        hook_ensure_workspace("workflows", workflow_id, reason="add_step")
+    except Exception:
+        pass
+    return step_id
 
 
 def update_step(step_id: int, **kwargs) -> bool:
@@ -883,8 +903,15 @@ def update_step(step_id: int, **kwargs) -> bool:
                 if k == "config" and isinstance(v, (dict, list)):
                     v = json.dumps(v)
                 setattr(step, k, v)
+        workflow_id = step.workflow_id
         db.commit()
-        return True
+    try:
+        from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+        hook_ensure_workspace("workflows", workflow_id, reason="update_step")
+    except Exception:
+        pass
+    return True
 
 
 def delete_step(step_id: int, workflow_id: Optional[int] = None) -> bool:
@@ -1328,6 +1355,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
                 "phase": run_data.get("phase"),
                 "waiting_kind": run_data.get("waiting_kind") or "",
+                "approval_decision": run_data.get("approval_decision") or None,
                 "auto_queued_from_run_id": run_data.get("auto_queued_from_run_id"),
             })
         return results

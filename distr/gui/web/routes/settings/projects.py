@@ -443,67 +443,29 @@ def register_routes(router, templates):
             logger.error(f"Failed to get boards: {e}", exc_info=True)
             return JSONResponse({"boards": []})
 
-    def _pi_cli_models():
-        """Return available models for the CLI dropdown.
-        Reads custom models from ~/.pi/agent/models.json and built-in providers
-        configured in settings."""
-        import json as _json
-        
-        models = []
-        
-        # Load custom models from pi's models.json
-        try:
-            models_path = os.path.expanduser("~/.pi/agent/models.json")
-            if os.path.exists(models_path):
-                with open(models_path) as f:
-                    cfg = _json.load(f)
-                for prov_name, prov in (cfg.get("providers") or {}).items():
-                    for m in (prov.get("models") or []):
-                        mid = m.get("id", "")
-                        mname = m.get("name") or mid
-                        if mid:
-                            models.append({"id": mid, "name": mname, "provider": prov_name})
-        except Exception as e:
-            logger.debug(f"Failed to load models.json: {e}")
-        
-        # Also add well-known OpenAI models (not from models.json)
-        builtin_openai = [
-            "gpt-5.4-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
-            "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.2-pro",
-            "gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5-pro", "gpt-5",
-            "o3-pro", "o3", "o3-deep-research", "o4-mini", "o4-mini-deep-research",
-            "o1", "o1-pro", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-            "gpt-4o", "gpt-4o-mini",
-        ]
-        for mid in builtin_openai:
-            if not any(m["id"] == mid for m in models):
-                models.append({"id": mid, "name": mid, "provider": "openai"})
-
-        # Deduplicate by model id
-        seen = set()
-        unique_models = []
-        for m in models:
-            if m["id"] not in seen:
-                seen.add(m["id"])
-                unique_models.append(m)
-        models = unique_models
-
-        return models
+    def _models_from_pi_json():
+        from distr.core.project_cli_backends.models_catalog import models_from_pi_json
+        return models_from_pi_json()
 
     def _model_entry(model_id: str, provider: str, name: str | None = None) -> dict:
-        model_id = (model_id or "").strip()
-        return {"id": model_id, "name": (name or model_id).strip() or model_id, "provider": provider}
+        from distr.core.project_cli_backends.models_catalog import model_entry
+        return model_entry(model_id, provider, name)
 
     def _dedupe_model_entries(models: list[dict]) -> list[dict]:
-        seen = set()
-        out = []
-        for item in models:
-            mid = (item.get("id") or "").strip()
-            if not mid or mid in seen:
-                continue
-            seen.add(mid)
-            out.append(item)
-        return out
+        from distr.core.project_cli_backends.models_catalog import dedupe_model_entries
+        return dedupe_model_entries(models)
+
+    def _settings_backed_cloud_models(settings: dict) -> list[dict]:
+        from distr.core.project_cli_backends.models_catalog import settings_backed_cloud_models
+        return settings_backed_cloud_models(settings)
+
+    def _pi_cli_models(settings: dict | None = None) -> list[dict]:
+        from distr.core.project_cli_backends.models_catalog import pi_cli_models
+        return pi_cli_models(settings)
+
+    def _opencode_models(settings: dict) -> tuple[list[dict], str, str]:
+        from distr.core.project_cli_backends.models_catalog import opencode_models
+        return opencode_models(settings)
 
     def _cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
         from distr.core.project_cli_backends.registry import _cursor_api_key
@@ -636,7 +598,10 @@ def register_routes(router, templates):
                 "source": "cline-config",
                 "message": "Default model comes from cline auth; override per task with -m.",
             }
-        return {"models": _pi_cli_models(), "source": "pi-models", "message": ""}
+        if model_backend == "opencode":
+            models, source, message = _opencode_models(settings)
+            return {"models": models, "source": source, "message": message}
+        return {"models": _pi_cli_models(settings), "source": "pi-models", "message": ""}
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
         if project_id:
@@ -692,7 +657,7 @@ def register_routes(router, templates):
             current_model = ""
             current_provider = backend_id
         elif not current_model:
-            current_model = "auto" if backend_id in ("cursor", "codex", "cline") else ("default" if backend_id == "claude_code" else "")
+            current_model = "auto" if backend_id in ("cursor", "codex", "cline", "opencode") else ("default" if backend_id == "claude_code" else "")
             current_provider = backend_id
 
         return JSONResponse({
@@ -1046,6 +1011,12 @@ def register_routes(router, templates):
                 session.add(item)
                 session.commit()
                 session.refresh(item)
+                try:
+                    from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                    hook_ensure_workspace("projects", project_id, reason="create_context_item")
+                except Exception:
+                    pass
                 return JSONResponse({"id": item.id, "success": True})
         except HTTPException:
             raise
@@ -1071,6 +1042,12 @@ def register_routes(router, templates):
                 if payload.content is not None:
                     item.content = (payload.content or "").strip()
                 session.commit()
+                try:
+                    from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                    hook_ensure_workspace("projects", project_id, reason="update_context_item")
+                except Exception:
+                    pass
                 return JSONResponse({"success": True})
         except HTTPException:
             raise
@@ -1093,6 +1070,12 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Context item not found")
                 session.delete(item)
                 session.commit()
+                try:
+                    from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                    hook_ensure_workspace("projects", project_id, reason="delete_context_item")
+                except Exception:
+                    pass
                 return JSONResponse({"success": True})
         except HTTPException:
             raise
@@ -1294,6 +1277,15 @@ def register_routes(router, templates):
                 if "kanban_board_id" in fields_set:
                     project.kanban_board_id = payload.kanban_board_id or None
                 session.commit()
+                try:
+                    from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+                    from distr.core.workspace_memory.sync import sync_projection_for_project
+
+                    hook_ensure_workspace("projects", project_id, reason="update_project")
+                    if project.folder_location:
+                        sync_projection_for_project(project_id)
+                except Exception:
+                    logger.debug("update_project: workspace sync failed", exc_info=True)
                 return JSONResponse({"success": True})
         except HTTPException:
             raise
@@ -1329,6 +1321,14 @@ def register_routes(router, templates):
                         linked_board_name = board.name
 
                 session.commit()
+                try:
+                    from distr.core.workspace_memory.provision import bootstrap_project
+                    from distr.core.workspace_memory.sync import sync_projection_for_project
+
+                    bootstrap_project(project_id)
+                    sync_projection_for_project(project_id)
+                except Exception:
+                    logger.debug("set_project_in_use: workspace sync failed", exc_info=True)
                 return JSONResponse({"success": True, "linked_board": linked_board_name})
         except HTTPException:
             raise
@@ -1364,6 +1364,12 @@ def register_routes(router, templates):
                 session.add(project)
                 session.commit()
                 session.refresh(project)
+                try:
+                    from distr.core.workspace_memory.provision import bootstrap_project
+
+                    bootstrap_project(project.id)
+                except Exception:
+                    logger.debug("create_project: workspace bootstrap failed", exc_info=True)
                 return JSONResponse({"id": project.id, "success": True})
         except Exception as e:
             logger.error(f"Failed to create project: {e}", exc_info=True)
@@ -2070,7 +2076,7 @@ def register_routes(router, templates):
     @router.post("/projects/{project_id}/startup-terminals/start")
     async def start_project_startup_terminals_api(project_id: int, request: Request):
         """Start all startup terminals for a project and speak a short confirmation."""
-        from distr.core.project_startup_terminals import start_project_startup_terminals
+        from distr.core.project_startup_terminals import start_project_startup_terminals_async
         from distr.core.terminal import get_startup_sessions_for_project
 
         body = {}
@@ -2091,23 +2097,13 @@ def register_routes(router, templates):
         if start_time_tracker is not None:
             start_time_tracker = bool(start_time_tracker)
 
-        result = start_project_startup_terminals(
+        result = await start_project_startup_terminals_async(
             project_id,
             commands=commands,
             announce=True,
             startup_instructions=startup_instructions,
             start_time_tracker=start_time_tracker,
         )
-        from distr.core.terminal import materialize_queued_startup_terminals
-
-        try:
-            await materialize_queued_startup_terminals(project_id)
-        except Exception as e:
-            logger.warning(
-                "Failed to materialize queued startup sessions for project %s: %s",
-                project_id,
-                e,
-            )
         sessions = get_startup_sessions_for_project(project_id, purpose="startup")
         return JSONResponse({
             "success": result.success,

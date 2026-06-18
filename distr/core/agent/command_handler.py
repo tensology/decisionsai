@@ -194,10 +194,11 @@ def _cmd_hot_swap_llm(session, params):
 
 
 def _cmd_hot_swap_tts(session, params):
-    session._hot_swap_tts_service(
-        params.get('voice_provider', ''),
-        params.get('voice_model', ''),
-    )
+    vp = params.get('voice_provider', '')
+    vm = params.get('voice_model', '')
+    session._hot_swap_tts_service(vp, vm)
+    if session.llm_service and vp and vm:
+        _update_agent_identity_from_chat_voice(session, vp, vm)
 
 
 def _cmd_update_stt_model(session, params):
@@ -1256,13 +1257,20 @@ def _update_agent_identity_from_chat_voice(session, voice_provider, voice_model)
     (e.g. Heart -> Puck). Resolves ElevenLabs voice IDs to display names.
     """
     from . import service_factory
+    from .constants import normalize_voice_provider
+
+    vp = normalize_voice_provider(voice_provider or '')
+    session._load_custom_voice_personality(vp, voice_model or '')
     new_name = service_factory.resolve_voice_to_display_name(
-        voice_provider or '', voice_model or '', session.settings or {}
+        vp, voice_model or '', session.settings or {}
     )
-    if new_name != session.agent_name:
-        session.agent_name = new_name
-        session.role = session._load_agent_role()
-        session.logger.debug("Load chat: agent identity changed to %s", session.agent_name)
+    session.agent_name = new_name
+    session.role = session._load_agent_role()
+    session.logger.debug(
+        "Load chat: agent identity %s (custom personality=%s)",
+        session.agent_name,
+        bool(getattr(session, '_custom_voice_personality', '')),
+    )
     service_factory.update_agent_name_on_llm(session.llm_service, session.agent_name, session.role)
 
 

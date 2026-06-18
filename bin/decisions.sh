@@ -630,6 +630,11 @@ prefetch_local_models_bootstrap() {
 }
 prefetch_local_models_bootstrap
 
+# macOS: keep login shells on arm64 so Django/psycopg2 venvs match pip wheels.
+if [[ "$OSTYPE" == darwin* ]]; then
+    bash "$SCRIPT_DIR/bin/setup_macos_dev_shell.sh" 2>/dev/null || true
+fi
+
 # On macOS ARM (Sequoia+), the kernel's code signing monitor (codeSigningMonitor:2)
 # rejects pages from universal (fat) binaries even when codesign --verify passes.
 # Fix: thin fat binaries to arm64-only, then ad-hoc re-sign everything.

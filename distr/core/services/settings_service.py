@@ -253,6 +253,8 @@ def save_general_settings(data) -> None:
         "qwen3_voice",
         "f5tts_voice",
         "voxcpm_voice",
+        "pixazo_voice",
+        "pixazo_dit_steps",
         "supertonic_voice",
         "chatterbox_voice",
     )
@@ -699,6 +701,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("kilo_enabled", "kilo_key"),
         ("gemini_enabled", "gemini_key"),
         ("nvidia_enabled", "nvidia_key"),
+        ("pixazo_enabled", "pixazo_key"),
         ("masko_enabled", "masko_key"),
     ]:
         enabled_field, key_field = field_pair
@@ -723,8 +726,10 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
     save_settings_to_db(settings)
     _safe_emit(signal_manager.reload_agent, label="reload_agent (third-party save)")
     try:
+        from distr.core.third_party_keys import sync_third_party_env_keys
         from distr.core.mcp_harness import recalibrate_mcp_harness_quiet
 
+        sync_third_party_env_keys()
         recalibrate_mcp_harness_quiet()
     except Exception:
         pass

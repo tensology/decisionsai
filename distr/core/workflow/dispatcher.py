@@ -185,6 +185,36 @@ def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_s
         logger.debug("Could not append workflow summary note to ticket", exc_info=True)
 
 
+_E2E_SMOKE_SLUGS = frozenset({
+    "dogfood-e2e-smoke",
+    "dogfood-spawn-e2e",
+    "spotify-e2e-ideation",
+    "spotify-e2e-dev",
+    "spotify-e2e-polish",
+})
+
+
+def _is_e2e_smoke_workflow(workflow_id: int | None) -> bool:
+    """Harness/dogfood smoke workflows skip production validation gates."""
+    if not workflow_id:
+        return False
+    try:
+        with get_session() as db:
+            wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+            if not wf:
+                return False
+            try:
+                wf_input = json.loads(wf.workflow_input or "{}") or {}
+            except Exception:
+                wf_input = {}
+            slug = str(wf_input.get("slug") or "").strip().lower()
+            if slug in _E2E_SMOKE_SLUGS:
+                return True
+            return bool(wf_input.get("e2e_smoke"))
+    except Exception:
+        return False
+
+
 def _finalize_result_packet_for_terminal_run(
     packet: Dict[str, Any],
     *,
@@ -771,6 +801,8 @@ def start_workflow_run(
         if loop_input.get("goal") or loop_input.get("max_iterations") or loop_input.get("check_command"):
             normalized_metadata["loop_contract"] = loop_input
             normalized_metadata["loop_iteration"] = 0
+        if loop_input.get("skip_human_checkpoints"):
+            normalized_metadata["skip_human_checkpoints"] = True
         packet = normalized_metadata.get("result_packet") or {}
         packet_audit = dict(packet.get("audit") or {})
         packet_audit["audits_run"] = build_audit_gates(
@@ -791,6 +823,24 @@ def start_workflow_run(
         db.add(run)
         db.flush()
         run_id = run.id
+        project_id = normalized_metadata.get("project_id")
+        try:
+            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+            hook_ensure_workspace(
+                "runs",
+                run_id,
+                reason="start_workflow_run",
+                run_kwargs={
+                    "workflow_id": workflow_id,
+                    "board_id": board_id,
+                    "ticket_id": ticket_id,
+                    "project_id": int(project_id) if project_id else None,
+                    "step_id": first_step.id if first_step else None,
+                },
+            )
+        except Exception:
+            logger.debug("start_workflow_run: workspace bootstrap failed", exc_info=True)
         if normalized_metadata.get("loop_contract"):
             try:
                 from distr.core.orchestrator import emit_event
@@ -1425,7 +1475,8 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                 project_id=int(project_id) if str(project_id or "").isdigit() else None,
                 execution_session_id=int(execution_session_id) if str(execution_session_id or "").isdigit() else None,
             )
-            if status == "completed" and _packet_has_failed_ui_quality_validation(packet):
+            e2e_smoke = _is_e2e_smoke_workflow(workflow_id)
+            if status == "completed" and _packet_has_failed_ui_quality_validation(packet) and not e2e_smoke:
                 status = "failed"
                 auto_retry = _maybe_auto_dispatch_terminal_ui_correction(
                     db,
@@ -1435,18 +1486,29 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                 )
                 if auto_retry:
                     status = "running"
-            enforced_status, updated_packet, missing_checks = enforce_validation_requirements(
-                packet=packet,
-                run_status=status,
-                risk_profile=risk_profile,
-            )
-            if missing_checks:
-                logger.info(
-                    "complete_run: enforcing required checks for run %s, missing=%s",
-                    run_id,
-                    ",".join(missing_checks),
+            if e2e_smoke:
+                enforced_status, updated_packet, missing_checks = status, packet, []
+            else:
+                enforced_status, updated_packet, missing_checks = enforce_validation_requirements(
+                    packet=packet,
+                    run_status=status,
+                    risk_profile=risk_profile,
                 )
-            status = enforced_status or status
+            from distr.core.workflow.dogfood_gate import enforce_dogfood_exit_gate
+
+            dogfood_status, updated_packet, dogfood_missing = enforce_dogfood_exit_gate(
+                packet=updated_packet,
+                run_status=enforced_status or status,
+                workflow_id=workflow_id,
+            )
+            if dogfood_missing:
+                missing_checks = list(missing_checks or []) + dogfood_missing
+                logger.info(
+                    "complete_run: dogfood gate for run %s, missing=%s",
+                    run_id,
+                    ",".join(dogfood_missing),
+                )
+            status = dogfood_status or enforced_status or status
             run_data["result_packet"] = updated_packet
             run.run_data = json.dumps(run_data)
         run.status = status
@@ -1466,6 +1528,50 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             except Exception:
                 pass
         return True
+    try:
+        if status == "completed" and workflow_id and isinstance(run_data, dict):
+            from distr.core.workspace_memory.demo_artifact import write_demo_artifact
+            from distr.core.workspace_memory.pickup_handoff import read_handoff_preview
+
+            packet = run_data.get("result_packet") or {}
+            ticket_title = ""
+            if ticket_id:
+                try:
+                    from distr.core.db.kanban import KanbanTicket
+
+                    with get_session() as db:
+                        t = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                        if t:
+                            ticket_title = t.title or ""
+                except Exception:
+                    pass
+            write_demo_artifact(
+                workflow_id=int(workflow_id),
+                run_id=run_id,
+                ticket_title=ticket_title,
+                handoff_summary=read_handoff_preview("runs", run_id),
+                result_packet=packet if isinstance(packet, dict) else {},
+            )
+        if status == "failed" and workflow_id and isinstance(run_data, dict):
+            packet = run_data.get("result_packet") or {}
+            steps = packet.get("steps") or []
+            last_fail = next(
+                (s for s in reversed(steps) if str(s.get("status") or "").lower() == "failed"),
+                None,
+            )
+            if last_fail and "playwright" in str(last_fail.get("step_name") or "").lower():
+                from distr.core.workflow.dogfood_gate import create_playwright_failure_followup_ticket
+
+                evidence = str(last_fail.get("result") or last_fail.get("step_result") or "")[:4000]
+                create_playwright_failure_followup_ticket(
+                    run_id=run_id,
+                    workflow_id=workflow_id,
+                    ticket_id=ticket_id,
+                    board_id=board_id,
+                    evidence=evidence,
+                )
+    except Exception:
+        logger.debug("demo artifact / playwright follow-up failed for run %s", run_id, exc_info=True)
     try:
         if workflow_id and isinstance(run_data, dict):
             from distr.core.db.projects import Project

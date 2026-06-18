@@ -62,6 +62,8 @@ def register_routes(router, templates):
             "qwen3_voice": settings.get("qwen3_voice", "aiden"),
             "f5tts_voice": settings.get("f5tts_voice", "default"),
             "voxcpm_voice": settings.get("voxcpm_voice", "default"),
+            "pixazo_voice": settings.get("pixazo_voice", "voxcpm"),
+            "pixazo_dit_steps": int(settings.get("pixazo_dit_steps") or 6),
             "supertonic_voice": settings.get("supertonic_voice", "M1"),
             "chatterbox_voice": settings.get("chatterbox_voice", "default"),
             "playback_speed": settings.get("playback_speed", 1.0),

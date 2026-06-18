@@ -200,6 +200,20 @@ def record_harness_event(payload: HarnessEventPayload) -> dict[str, Any]:
 
     _record_learning(payload, attachment, project_id)
 
+    event_type = (payload.event_type or "").strip().lower().replace("-", "_")
+    if event_type.endswith("_completed") or event_type in {"worker_completed", "codex_completed", "cursor_completed"}:
+        try:
+            from distr.core.workspace_memory.lifecycle import handoff_cli_session
+
+            handoff_cli_session(
+                ticket_id=_as_int(payload.ticket_id),
+                project_id=project_id,
+                summary=(payload.output or payload.message or "").strip()[:2000],
+                source=event_type,
+            )
+        except Exception:
+            pass
+
     notification_id = None
     if _should_notify(payload, attachment):
         try:

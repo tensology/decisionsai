@@ -94,6 +94,8 @@ class Settings(Base):
     vision_llm_model = Column(String, default='qwen3-vl:235b-cloud')
     image_llm_provider = Column(String, default='Ollama')
     image_llm_model = Column(String, default='x/flux2-klein:latest')
+    video_llm_provider = Column(String, default='')
+    video_llm_model = Column(String, default='')
     computer_use_provider = Column(String, default='')
     computer_use_model = Column(String, default='')
     project_cli_low_backend = Column(String, default='cursor')
@@ -142,6 +144,7 @@ class Settings(Base):
     kilo_enabled = Column(Boolean, default=False)
     gemini_enabled = Column(Boolean, default=False)
     nvidia_enabled = Column(Boolean, default=False)
+    pixazo_enabled = Column(Boolean, default=False)
 
     # Provider Keys/URLs
     assemblyai_key = Column(String, default='')
@@ -156,6 +159,9 @@ class Settings(Base):
     kilo_key = Column(String, default='')
     gemini_key = Column(String, default='')
     nvidia_key = Column(String, default='')
+    pixazo_key = Column(String, default='')
+    pixazo_voice = Column(String, default='voxcpm')
+    pixazo_dit_steps = Column(Integer, default=6)
 
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=True)
@@ -580,6 +586,12 @@ try:
                 ("gemini_key", "VARCHAR DEFAULT ''"),
                 ("nvidia_enabled", "BOOLEAN DEFAULT 0"),
                 ("nvidia_key", "VARCHAR DEFAULT ''"),
+                ("pixazo_enabled", "BOOLEAN DEFAULT 0"),
+                ("pixazo_key", "VARCHAR DEFAULT ''"),
+                ("pixazo_voice", "VARCHAR DEFAULT 'voxcpm'"),
+                ("pixazo_dit_steps", "INTEGER DEFAULT 6"),
+                ("video_llm_provider", "VARCHAR DEFAULT ''"),
+                ("video_llm_model", "VARCHAR DEFAULT ''"),
                 # Cursor project CLI provider
                 ("cursor_enabled", "BOOLEAN DEFAULT 0"),
                 ("cursor_key", "VARCHAR DEFAULT ''"),

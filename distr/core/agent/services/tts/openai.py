@@ -61,6 +61,8 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
         self._total_audio_duration = 0.0
         self._tts_started_emitted = False  # Track if we've emitted tts_started for this session
         self._processed_sentences = set()  # Track processed sentences (normalized text) to prevent duplicates
+        self._tts_sentence_batch_size = 1
+        self._sentence_batch_hold: list[str] = []
         self._last_processed_text_hash = None  # Track last processed text to prevent duplicate processing
         # Timestamp when LLMFullResponseStartFrame last received - used to ignore stale InterruptionFrames
         # from interrupt_tts that ran before process_text_input (they arrive late and wrongly cancel new response)
@@ -96,6 +98,73 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
     def _extract_complete_sentences(self, text: str):
         """Extract complete sentences from text buffer."""
         return extract_complete_sentences(text)
+
+    def _get_sentence_batch_size(self) -> int:
+        """How many complete sentences to synthesize per API call (1 = legacy per-sentence)."""
+        return max(1, int(getattr(self, "_tts_sentence_batch_size", 1) or 1))
+
+    def _is_duplicate_sentence(self, sentence: str) -> bool:
+        normalized = (sentence or "").strip().lower()
+        if not normalized:
+            return True
+        if normalized in self._processed_sentences:
+            return True
+        if len(normalized) > 20:
+            for processed in self._processed_sentences:
+                if len(processed) > 20 and normalized in processed:
+                    return True
+        return False
+
+    def _mark_sentence_processed(self, sentence: str) -> None:
+        normalized = (sentence or "").strip().lower()
+        if not normalized:
+            return
+        self._processed_sentences.add(normalized)
+        if len(self._processed_sentences) > 100:
+            self._processed_sentences = set(list(self._processed_sentences)[-50:])
+
+    async def _enqueue_new_sentences(self, sentences: list[str], direction) -> None:
+        """Dedupe, optionally batch (e.g. Pixazo), and enqueue for synthesis."""
+        batch_size = self._get_sentence_batch_size()
+        hold: list[str] = getattr(self, "_sentence_batch_hold", None) or []
+
+        async def _flush_hold() -> None:
+            nonlocal hold
+            if not hold:
+                return
+            chunk = " ".join(hold)
+            hold = []
+            self._sentence_batch_hold = hold
+            await self._enqueue_sentence(chunk, direction)
+
+        for sentence in sentences:
+            if self._cancelled:
+                self._text_buffer = ""
+                hold = []
+                self._sentence_batch_hold = hold
+                break
+            if self._is_duplicate_sentence(sentence):
+                logger.debug("TTS: Skipping duplicate sentence: %r", sentence[:50])
+                continue
+            self._mark_sentence_processed(sentence)
+            if batch_size <= 1:
+                await self._enqueue_sentence(sentence, direction)
+            else:
+                hold.append(sentence)
+                if len(hold) >= batch_size:
+                    chunk = " ".join(hold)
+                    hold = []
+                    await self._enqueue_sentence(chunk, direction)
+
+        self._sentence_batch_hold = hold
+
+    async def _flush_sentence_batch_hold(self, direction) -> None:
+        """Speak any trailing sentences fewer than batch_size (end of LLM response)."""
+        hold: list[str] = getattr(self, "_sentence_batch_hold", None) or []
+        if not hold:
+            return
+        self._sentence_batch_hold = []
+        await self._enqueue_sentence(" ".join(hold), direction)
 
     def _generate_audio(self, text: str):
         """Generate audio from text using OpenAI TTS API"""
@@ -395,46 +464,12 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
             self._text_buffer = remaining
             
             if sentences:
-                logger.debug(f"TTS: Processing {len(sentences)} sentence(s) from TextFrame (buffer had {len(self._text_buffer)} chars before extraction)")
-                for sentence in sentences:
-                    # CRITICAL: Check cancellation before processing each sentence
-                    # This ensures we stop immediately if cancelled during sentence processing
-                    if self._cancelled:
-                        logger.debug(f"TTS: Cancelled before processing sentence '{sentence[:50]}...' - stopping sentence loop")
-                        # Clear remaining buffer since we're cancelling
-                        self._text_buffer = ""
-                        break
-                    
-                    # CRITICAL: Prevent duplicate processing of the same sentence
-                    # Use normalized sentence text (strip and lowercase) for duplicate detection
-                    # This is more reliable than hash() which can vary
-                    normalized_sentence = sentence.strip().lower()
-                    if normalized_sentence in self._processed_sentences:
-                        logger.debug(f"TTS: Skipping duplicate sentence: '{sentence[:50]}...' (already processed)")
-                        continue
-                    
-                    # Only skip when current sentence is a SUBSET of something we already spoke (redundant).
-                    # Do NOT skip when processed is subset of current - that would drop longer, complete
-                    # sentences (e.g. we spoke "I'll help you." from early chunk, then get "I'll help
-                    # you with that." - we must speak the latter).
-                    is_duplicate = False
-                    if len(normalized_sentence) > 20:
-                        for processed in self._processed_sentences:
-                            if len(processed) > 20:
-                                # Skip only when current is substring of processed (we'd be repeating)
-                                if normalized_sentence in processed:
-                                    logger.debug(f"TTS: Skipping duplicate sentence (subset): '{sentence[:50]}...'")
-                                    is_duplicate = True
-                                    break
-                    
-                    if is_duplicate:
-                        continue
-                    
-                    self._processed_sentences.add(normalized_sentence)
-                    if len(self._processed_sentences) > 100:
-                        self._processed_sentences = set(list(self._processed_sentences)[-50:])
-                    
-                    await self._enqueue_sentence(sentence, direction)
+                logger.debug(
+                    "TTS: Processing %s sentence(s) from TextFrame (batch=%s)",
+                    len(sentences),
+                    self._get_sentence_batch_size(),
+                )
+                await self._enqueue_new_sentences(sentences, direction)
             else:
                 logger.debug(f"TTS: No complete sentences yet, buffering")
             
@@ -450,6 +485,7 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
             self._cancelled = False
             self._cancelled_since = 0.0
             self._processed_sentences.clear()
+            self._sentence_batch_hold = []
             
             # Start new TTS session - reset duration accumulator and mark session as active
             self._tts_session_active = True
@@ -518,14 +554,14 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
                     sentences, trailing = self._extract_complete_sentences(text)
                     if trailing.strip():
                         sentences = list(sentences) + [trailing.strip()]
-                    for sentence in sentences:
-                        normalized = sentence.strip().lower()
-                        if normalized in self._processed_sentences:
-                            continue
-                        self._processed_sentences.add(normalized)
-                        await self._enqueue_sentence(sentence, direction)
+                    await self._enqueue_new_sentences(sentences, direction)
             else:
                 logger.debug("TTS: No remaining text to process (buffer empty or cancelled)")
+
+            # ponytail: Pixazo batches 3 sentences — short replies can leave 1–2 in hold
+            # after streaming drained the text buffer; always flush at response end.
+            if not self._cancelled:
+                await self._flush_sentence_batch_hold(direction)
 
             if not self._cancelled:
                 await self._drain_speak_queue()

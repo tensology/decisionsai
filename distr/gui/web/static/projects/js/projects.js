@@ -221,6 +221,22 @@
             useBtn.textContent = "Use";
         }
         renderList(projectsData);
+        loadProjectAgentMap(project.id);
+    }
+
+    function loadProjectAgentMap(projectId) {
+        var mapEl = document.getElementById("detail-agent-map");
+        if (!mapEl || !projectId) {
+            if (mapEl) mapEl.value = "";
+            return;
+        }
+        apiFetch("/api/projects/" + projectId + "/workspace-memory").then(function(data) {
+            var paths = (data && data.workspace && data.workspace.companion_paths) || {};
+            var companion = paths.project || "";
+            mapEl.value = companion ? (companion + "/agents.md") : "";
+        }).catch(function() {
+            mapEl.value = "";
+        });
     }
 
     function selectProject(id) {
@@ -918,6 +934,14 @@
 
         var folderBrowseBtn = document.getElementById("folder-browse");
         if (folderBrowseBtn) folderBrowseBtn.addEventListener("click", browseFolder);
+
+        var agentSyncBtn = document.getElementById("detail-agent-sync");
+        if (agentSyncBtn) agentSyncBtn.addEventListener("click", function() {
+            if (!currentProjectId) return;
+            apiFetch("/api/projects/" + currentProjectId + "/workspace-memory/sync", { method: "POST" })
+                .then(function() { loadProjectAgentMap(currentProjectId); })
+                .catch(function(err) { alert((err && err.message) || "Sync failed"); });
+        });
 
         var triggersInput = document.getElementById("detail-triggers-input");
         if (triggersInput) triggersInput.addEventListener("keydown", function(e) {
@@ -2669,6 +2693,8 @@
                     if (attempts < maxAttempts) {
                         setTimeout(poll, delay);
                     } else if (commands && commands.length) {
+                        clearStartupTerminalPlaceholders();
+                        restoreStartupTerminalChrome();
                         showSnackbar("Startup terminals did not attach. Check folder path and startup commands, then try again.", "error");
                     }
                 })
@@ -3240,6 +3266,48 @@
             return;
         }
 
+        var hasPendingOnly = false;
+        var grid = document.getElementById("startup-terminal-grid");
+        if (grid) {
+            hasPendingOnly = grid.querySelectorAll(".startup-terminal-card--pending").length > 0
+                && !grid.querySelector(".startup-terminal-card:not(.startup-terminal-card--pending)");
+        }
+
+        function resetStartupUi(stopped) {
+            Object.keys(_startupTerminals).forEach(function(termId) {
+                var termData = _startupTerminals[termId];
+                if (termData && termData.ws) {
+                    try { termData.ws.onclose = null; termData.ws.close(); } catch (e) {}
+                }
+                if (termData && termData.term) {
+                    try { termData.term.dispose(); } catch (e2) {}
+                }
+            });
+            _startupTerminals = {};
+            delete _projectTerminalState[currentProjectId];
+            clearStartupTerminalPlaceholders();
+            restoreStartupTerminalChrome();
+            if (stopped > 0) {
+                showSnackbar("Stopped " + stopped + " startup terminal" + (stopped === 1 ? "" : "s") + ".", "success");
+            } else if (hasPendingOnly) {
+                showSnackbar("Cleared queued startup terminals.", "info");
+            } else {
+                showSnackbar("No startup terminals were running.", "info");
+            }
+        }
+
+        if (hasPendingOnly) {
+            apiFetch("/api/projects/" + currentProjectId + "/startup-terminals/stop", {
+                method: "POST"
+            }).then(function(response) {
+                resetStartupUi(Number(response && response.stopped) || 0);
+            }).catch(function(err) {
+                resetStartupUi(0);
+                showSnackbar("Failed to stop startup terminals: " + (err && err.message ? err.message : ""), "error");
+            });
+            return;
+        }
+
         window.DecisionsAPI.confirm({
             title: "Terminate startup terminals",
             message: "Terminate all startup terminals?",
@@ -3249,24 +3317,7 @@
                 apiFetch("/api/projects/" + currentProjectId + "/startup-terminals/stop", {
                     method: "POST"
                 }).then(function(response) {
-                    Object.keys(_startupTerminals).forEach(function(termId) {
-                        var termData = _startupTerminals[termId];
-                        if (termData && termData.ws) {
-                            try { termData.ws.onclose = null; termData.ws.close(); } catch (e) {}
-                        }
-                        if (termData && termData.term) {
-                            try { termData.term.dispose(); } catch (e2) {}
-                        }
-                    });
-                    _startupTerminals = {};
-                    delete _projectTerminalState[currentProjectId];
-                    restoreStartupTerminalChrome();
-                    var stopped = Number(response && response.stopped) || 0;
-                    if (stopped > 0) {
-                        showSnackbar("Stopped " + stopped + " startup terminal" + (stopped === 1 ? "" : "s") + ".", "success");
-                    } else {
-                        showSnackbar("No startup terminals were running.", "info");
-                    }
+                    resetStartupUi(Number(response && response.stopped) || 0);
                 }).catch(function(err) {
                     showSnackbar("Failed to stop startup terminals: " + (err && err.message ? err.message : ""), "error");
                 });

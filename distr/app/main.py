@@ -2042,6 +2042,12 @@ def run():
     
     setup_logging()
     logger = logging.getLogger(__name__)
+    try:
+        from distr.core.integrations.relay_auth import ensure_relay_env_loaded
+
+        ensure_relay_env_loaded()
+    except Exception:
+        pass
     logger.info("Starting application")
     
     app = Application(sys.argv)

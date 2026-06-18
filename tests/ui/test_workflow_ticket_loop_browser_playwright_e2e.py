@@ -158,7 +158,7 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     page.locator(".wf-runs-subtab[data-runs-tab='active']").click()
     expect(page.locator("#wf-active-runs-list")).not_to_contain_text(str(ids["ticket_title"]), timeout=15000)
 
-    terminal = harness.terminal_summary(
+    terminal = harness.wait_until_run_completed(
         int(ids["workflow_id"]),
         int(ids["ticket_id"]),
         board_id=int(ids["board_id"]),

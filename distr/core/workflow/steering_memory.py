@@ -47,6 +47,18 @@ def append_run_steering_entry(
         run_data["latest_steering"] = text[:500]
         run.run_data = json.dumps(run_data)
         db.commit()
+    try:
+        from distr.core.workspace_memory.pickup_handoff import append_ledger
+
+        append_ledger(
+            "runs",
+            run_id,
+            event_type=event_type,
+            message=text,
+            extra={"source": source, "step_id": step_id, **(extra or {})},
+        )
+    except Exception:
+        pass
     return True
 
 

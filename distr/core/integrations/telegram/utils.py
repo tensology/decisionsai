@@ -9,9 +9,12 @@ from pathlib import Path
 
 def env_file_value(name: str) -> str:
     """Read a single DecisionsAI .env value without requiring shell export."""
-    env_path = Path(__file__).resolve().parents[4] / ".env"
+    from distr.core.integrations.relay_auth import _project_env_path, ensure_relay_env_loaded
+
+    ensure_relay_env_loaded()
+    env_path = _project_env_path()
     try:
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             raw = line.strip()
             if not raw or raw.startswith("#") or "=" not in raw:
                 continue
@@ -24,7 +27,10 @@ def env_file_value(name: str) -> str:
 
 
 def relay_internal_token() -> str:
-    """Relay auth token from process env, falling back to the project .env file."""
+    """Relay auth token from process env, then project .env."""
+    from distr.core.integrations.relay_auth import ensure_relay_env_loaded
+
+    ensure_relay_env_loaded()
     return (os.getenv("RELAY_INTERNAL_TOKEN") or env_file_value("RELAY_INTERNAL_TOKEN") or "").strip()
 
 

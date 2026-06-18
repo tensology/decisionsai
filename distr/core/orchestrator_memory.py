@@ -734,12 +734,44 @@ def run_weekly_machine_activity_compaction(
     return {"ran": True, **result}
 
 
-def build_memory_context(limit: int = 30) -> str:
-    memories = list_user_memories(limit=limit)
+def build_memory_context(
+    limit: int = 30,
+    *,
+    project_id: int | None = None,
+    board_id: int | None = None,
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+) -> str:
+    memories = list_user_memories(limit=limit * 3, include_disabled=False)
     if not memories:
         return ""
+
+    def _matches(memory: dict[str, Any]) -> bool:
+        scope = (memory.get("scope") or "global").strip().lower()
+        scope_id = memory.get("scope_id")
+        if scope == "global" or not scope:
+            return True
+        if scope == "project" and project_id and scope_id == project_id:
+            return True
+        if scope == "board" and board_id and scope_id == board_id:
+            return True
+        if scope == "workflow" and workflow_id and scope_id == workflow_id:
+            return True
+        if scope == "run" and run_id and scope_id == run_id:
+            return True
+        mem_project_id = memory.get("project_id")
+        if mem_project_id and project_id and mem_project_id == project_id:
+            return True
+        return False
+
+    filtered = [m for m in memories if _matches(m)]
+    if not filtered and (project_id or board_id or workflow_id):
+        filtered = [m for m in memories if (m.get("scope") or "global") == "global"]
+    if not filtered:
+        filtered = memories
+
     lines = ["- orchestrator_user_memory:"]
-    for memory in memories[: max(1, min(int(limit or 30), 100))]:
+    for memory in filtered[: max(1, min(int(limit or 30), 100))]:
         lines.append(f"  - {memory['category']}: {memory['content']}")
     return "\n".join(lines)
 

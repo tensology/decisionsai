@@ -465,6 +465,28 @@ class ImageGeneratorTool(BaseTool):
         logger.warning("Anthropic doesn't support image generation - only vision (image analysis)")
         return None
     
+    def _generate_with_pixazo(self, prompt: str, model: str, style: Optional[str] = None) -> Optional[str]:
+        """Generate image via Pixazo gateway (async job + poll)."""
+        try:
+            from distr.core.third_party_keys import pixazo_api_key
+            from distr.core.pixazo_client import download_url_to_bytes, pixazo_generate_media_urls
+
+            api_key = pixazo_api_key()
+            if not api_key:
+                self._last_error = "Pixazo API key not configured. Add it in Settings → API Keys."
+                return None
+
+            enhanced = f"{prompt}, {style} style" if style else prompt
+            urls = pixazo_generate_media_urls(api_key, model, enhanced, timeout_sec=180)
+            if not urls:
+                return None
+            data = download_url_to_bytes(urls[0])
+            return base64.b64encode(data).decode("utf-8")
+        except Exception as e:
+            logger.error("Error generating image with Pixazo: %s", e)
+            self._last_error = str(e)
+            return None
+
     def _run(self, prompt: str = "", output_path: Optional[str] = None, reference_images: Optional[str] = None, style: Optional[str] = None, **kwargs) -> str:
         """
         Generate an image based on the prompt.
@@ -522,18 +544,25 @@ class ImageGeneratorTool(BaseTool):
         # Generate image based on provider
         # Note: OpenRouter models like google/gemini-2.5-flash-image ARE image generation models
         # when used with modalities: ["image", "text"] - don't confuse with vision/analysis models
+        from distr.core.chat import provider_slug
+
+        provider_key = provider_slug(image_provider)
         image_b64 = None
-        
-        if image_provider == "OpenAI":
+
+        if provider_key == "openai":
             image_b64 = self._generate_with_openai(prompt, valid_ref_images, style)
-        elif image_provider == "Ollama":
+        elif provider_key == "ollama":
             image_b64 = self._generate_with_ollama(prompt, image_model, valid_ref_images, style)
-        elif image_provider == "OpenRouter":
+        elif provider_key == "openrouter":
             image_b64 = self._generate_with_openrouter(prompt, image_model, valid_ref_images, style)
-        elif image_provider == "Anthropic":
-            return "Error: Anthropic doesn't support image generation. Anthropic only supports vision (image analysis), not image creation. Please use OpenAI, Ollama, or OpenRouter for image generation."
+        elif provider_key == "pixazo":
+            if valid_ref_images:
+                return "Error: Pixazo image-to-image is not wired in image_generator yet. Use MCP pixazo-media or a text-only prompt."
+            image_b64 = self._generate_with_pixazo(prompt, image_model, style)
+        elif provider_key == "anthropic":
+            return "Error: Anthropic doesn't support image generation. Anthropic only supports vision (image analysis), not image creation. Please use OpenAI, Ollama, OpenRouter, or Pixazo for image generation."
         else:
-            return f"Error: Unsupported image generation provider: {image_provider}. Supported providers: OpenAI, Ollama, OpenRouter."
+            return f"Error: Unsupported image generation provider: {image_provider}. Supported providers: OpenAI, Ollama, OpenRouter, Pixazo."
         
         if not image_b64:
             # Log detailed error for debugging
@@ -548,13 +577,15 @@ class ImageGeneratorTool(BaseTool):
             
             # Fallback to generic error messages
             error_msg = f"Error: Failed to generate image using {image_provider} (model: {image_model}). "
-            if image_provider == "OpenRouter":
+            if provider_key == "openrouter":
                 error_msg += "Check that the model has 'image' in output_modalities. "
                 error_msg += "Compatible models include: google/gemini-2.5-flash-image-preview, black-forest-labs/flux.2-pro, etc."
-            elif image_provider == "OpenAI":
+            elif provider_key == "openai":
                 error_msg += "Please check your OpenAI API key and ensure it has access to DALL-E."
-            elif image_provider == "Ollama":
+            elif provider_key == "ollama":
                 error_msg += "Please ensure Ollama is running and the image model is available."
+            elif provider_key == "pixazo":
+                error_msg += "Check Pixazo API key in Settings → API Keys and pick a model under LLMs → Image."
             else:
                 error_msg += "Please check your API key and model configuration."
             return error_msg

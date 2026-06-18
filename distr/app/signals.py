@@ -51,18 +51,81 @@ class SignalBridgeMixin:
             pass
         return None
 
-    def _workflow_report_agent_payload(self, report_text):
-        payload = {
-            'text': (
-                "The workflow just finished. Please give me a short, plain-English "
-                f"summary of what happened.\n\n{report_text}"
-            ),
-            'speak': False,
-        }
-        chat_id = self._resolve_workflow_report_chat_id()
-        if chat_id:
-            payload['chat_id'] = chat_id
-        return payload
+    def _persist_workflow_system_activity(self, report_text: str) -> None:
+        """Record workflow completion on the chat timeline — not as a fake user prompt."""
+        clean = (report_text or "").strip()
+        if not clean:
+            return
+        lower = clean.lower()
+        if "didn't work out" in lower or " didn't clear" in lower:
+            status = "failed"
+        elif "stopped that run" in lower or "cancel" in lower:
+            status = "cancelled"
+        else:
+            status = "completed"
+
+        meta = self._workflow_report_run_metadata(clean)
+        run_id = meta.get("run_id")
+        try:
+            if run_id:
+                from distr.core.workflow.chat_trace import record_workflow_chat_event
+
+                record_workflow_chat_event(
+                    int(run_id),
+                    "run_completed",
+                    status=status,
+                    summary=clean,
+                    phase="completion",
+                )
+                return
+            chat_id = self._resolve_workflow_report_chat_id()
+            if chat_id:
+                from distr.core.workflow.chat_trace import record_chat_workflow_event
+
+                record_chat_workflow_event(
+                    int(chat_id),
+                    "run_completed",
+                    status=status,
+                    summary=clean,
+                    phase="completion",
+                )
+        except Exception:
+            logger.debug("Workflow system activity persist failed", exc_info=True)
+
+    def _deliver_workflow_finished_report(self, session_id: int, summary: str) -> None:
+        """Drain the workflow report queue and surface completion as system activity."""
+        from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
+
+        report_text = (summary or "").strip()
+        try:
+            reports = WorkflowAgentBridge.get_pending_reports(session_id)
+            if reports:
+                report_text = str(reports[-1].get("report") or report_text).strip()
+        except Exception:
+            logger.debug(
+                "Workflow finished: could not drain report queue for session %d",
+                session_id,
+                exc_info=True,
+            )
+        if not report_text:
+            logger.warning(
+                "Workflow finished: no report text for session %d, skipping delivery",
+                session_id,
+            )
+            return
+        if self._workflow_report_is_automation(report_text):
+            logger.info(
+                "Workflow finished: automation report for session %d stays in automation/chat ledger",
+                session_id,
+            )
+            return
+
+        self._persist_workflow_system_activity(report_text)
+        self._send_workflow_report_to_telegram(session_id, report_text)
+        logger.info(
+            "Workflow finished: recorded system activity for session %d (no chat agent prompt)",
+            session_id,
+        )
 
     def _workflow_report_run_metadata(self, report_text):
         """Return AutoWorkflowRun metadata referenced by a workflow report, when available."""
@@ -639,70 +702,14 @@ class SignalBridgeMixin:
         )
         logger.info("Connected web_load_chat_and_process_requested")
 
-        # Workflow completion → forward summary to agent so it can report back
+        # Workflow completion → system activity on chat timeline + optional Telegram
         def on_workflow_finished(session_id, summary):
-            """When a workflow finishes, drain the report queue and send the summary to the agent."""
             try:
-                from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
-                reports = WorkflowAgentBridge.get_pending_reports()
-                # Use the most recent report for this session, or fall back to the signal summary.
-                # Re-queue reports that belong to other sessions so they are not lost.
-                report_text = summary
-                for r in reports:
-                    if r.get("session_id") == session_id:
-                        report_text = r.get("report", summary)
-                    else:
-                        # Re-queue reports belonging to other sessions
-                        WorkflowAgentBridge().queue_report_to_agent(
-                            r.get("session_id", 0), r.get("report", "")
-                        )
-                if not report_text:
-                    logger.warning(
-                        "Workflow finished: no report text for session %d, skipping agent delivery",
-                        session_id,
-                    )
-                    return
-                if self._workflow_report_is_automation(report_text):
-                    logger.info(
-                        "Workflow finished: automation report for session %d stays in automation/chat ledger",
-                        session_id,
-                    )
-                    return
-
-                # Check if the agent command queue is available before sending
-                has_queue = (
-                    hasattr(self, 'agent_command_queue')
-                    and self.agent_command_queue is not None
-                )
-                agent_alive = (
-                    hasattr(self, 'agent_process')
-                    and self.agent_process is not None
-                    and self.agent_process.is_alive()
-                )
-                if not has_queue:
-                    logger.warning(
-                        "Workflow finished: agent command queue unavailable for session %d, "
-                        "report not delivered",
-                        session_id,
-                    )
-                    return
-                if not agent_alive:
-                    logger.warning(
-                        "Workflow finished: agent process not running for session %d, "
-                        "attempting delivery anyway (agent may restart)",
-                        session_id,
-                    )
-
-                self._send_command_to_agent(
-                    'process_text_input',
-                    self._workflow_report_agent_payload(report_text),
-                )
-                self._send_workflow_report_to_telegram(session_id, report_text)
-                logger.info("Workflow finished: forwarded report for session %d to agent", session_id)
+                self._deliver_workflow_finished_report(session_id, summary)
             except Exception as e:
                 logger.error("Workflow finished handler failed for session %d: %s", session_id, e, exc_info=True)
         signal_manager.workflow_finished.connect(on_workflow_finished)
-        logger.info("Connected workflow_finished signal to agent report forwarding")
+        logger.info("Connected workflow_finished signal to system activity delivery")
 
     def _send_workflow_report_to_telegram(self, session_id, report_text):
         """Send a concise workflow completion report to Telegram when connected."""

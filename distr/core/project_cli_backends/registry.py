@@ -659,6 +659,26 @@ class HermesAgentBackend(OneShotCliBackend):
         return cmd + [task.instruction]
 
 
+class OpenCodeBackend(OneShotCliBackend):
+    """OpenCode CLI — provider/model via build.nvidia.com, OpenRouter, Kilo, etc."""
+
+    id = "opencode"
+    name = "OpenCode"
+    description = "OpenCode agent CLI with multi-provider model routing."
+    executable_candidates = ["opencode"]
+    command_args = ["run"]
+    setup_instructions = (
+        "Install OpenCode and configure providers with opencode providers login "
+        "or NVIDIA_API_KEY / KILO_API_KEY in your shell."
+    )
+
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable] + self.command_args
+        if task.model and task.model not in ("auto", "default", ""):
+            cmd += ["-m", task.model]
+        return cmd + [task.instruction]
+
+
 class ClineBackend(OneShotCliBackend):
     """Cline terminal CLI (shared agent core with the VS Code extension)."""
 
@@ -711,6 +731,7 @@ _BACKENDS: dict[str, ProjectCliBackend] = {
     "codex_ide": CodexIdeBackend(),
     "hermes_agent": HermesAgentBackend(),
     "cline": ClineBackend(),
+    "opencode": OpenCodeBackend(),
 }
 
 
@@ -737,6 +758,7 @@ def normalize_backend_id(value: str | None) -> str:
         "hermes_agent": "hermes_agent",
         "nous_hermes": "hermes_agent",
         "cline_cli": "cline",
+        "open_code": "opencode",
     }
     backend_id = aliases.get(backend_id, backend_id)
     return backend_id if backend_id in _BACKENDS else DEFAULT_BACKEND_ID

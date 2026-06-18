@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, File, UploadFile, Request, WebSock
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any
 from urllib.parse import quote, urlparse, unquote
 from datetime import datetime
 import html
@@ -1646,6 +1646,17 @@ class SendToWorkflowRequest(BaseModel):
     workflow_id: Optional[int] = None
 
 
+class SpawnWorkflowForTicketRequest(BaseModel):
+    preset_slug: Optional[str] = None
+    workflow_name: Optional[str] = None
+    start_run: bool = True
+    skip_human_checkpoints: bool = True
+    force: bool = False
+    link_board_default: bool = False
+    steps: Optional[list[dict[str, Any]]] = None
+    workflow_input: Optional[dict[str, Any]] = None
+
+
 class SendToCliRequest(BaseModel):
     workflow_id: Optional[int] = None
     backend_id: Optional[str] = None
@@ -2399,6 +2410,12 @@ def create_routes():
             for i, lane_name in enumerate(DEFAULT_LANES):
                 s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
             s.flush()
+            try:
+                from distr.core.workspace_memory.provision import bootstrap_board
+
+                bootstrap_board(board.id)
+            except Exception:
+                pass
             return JSONResponse({"success": True, "id": board.id})
 
     @router.put("/tickets/boards/{board_id}")
@@ -2436,6 +2453,12 @@ def create_routes():
                     if proj and proj.kanban_board_id != board.id:
                         proj.kanban_board_id = board.id
                         s.commit()
+            try:
+                from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                hook_ensure_workspace("boards", board_id, reason="update_board")
+            except Exception:
+                pass
             return JSONResponse({"success": True})
 
     @router.delete("/tickets/boards/{board_id}")
@@ -2672,6 +2695,12 @@ def create_routes():
             s.add(ticket)
             s.flush()
             _emit_ticket_channel_intake(ticket, board=board)
+            try:
+                from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                hook_ensure_workspace("tickets", ticket.id, reason="create_ticket")
+            except Exception:
+                pass
             return JSONResponse({"success": True, "id": ticket.id, "lane_id": ticket.lane_id})
 
     @router.get("/tickets/tickets/{ticket_id}")
@@ -3132,6 +3161,12 @@ def create_routes():
                 time_estimate=t.time_estimate,
                 time_spent=t.time_spent,
             )
+            try:
+                from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                hook_ensure_workspace("tickets", ticket_id, reason="update_ticket")
+            except Exception:
+                pass
             return JSONResponse({"success": True})
 
     @router.put("/tickets/tickets/{ticket_id}/move")
@@ -3181,6 +3216,19 @@ def create_routes():
                 )
             except Exception:
                 logger.debug("move_ticket: chat notify failed", exc_info=True)
+        try:
+            from distr.core.workspace_memory.lifecycle import handoff_ticket_lane_done, hook_ensure_workspace
+
+            hook_ensure_workspace("tickets", ticket_id, reason="move_ticket")
+            done_lane = (new_lane_name or "").strip().lower()
+            if done_lane and any(token in done_lane for token in ("done", "complete", "closed", "shipped")):
+                handoff_ticket_lane_done(
+                    ticket_id=ticket_id,
+                    lane_name=new_lane_name or "",
+                    summary=f"Ticket moved to {new_lane_name}.",
+                )
+        except Exception:
+            pass
         return JSONResponse({"success": True})
 
     @router.delete("/tickets/tickets/{ticket_id}")
@@ -4716,6 +4764,27 @@ source: kanban_ticket_{t.id}
 
     # ── Send ticket to CLI ──
 
+    @router.post("/tickets/tickets/{ticket_id}/spawn-workflow")
+    async def spawn_workflow_for_ticket_route(ticket_id: int, payload: SpawnWorkflowForTicketRequest):
+        """Create a workflow (preset or explicit steps), link ticket, optionally start run."""
+        from distr.core.workflow.spawn_workflow import spawn_workflow_for_ticket
+
+        result = spawn_workflow_for_ticket(
+            ticket_id,
+            preset_slug=payload.preset_slug,
+            steps=payload.steps,
+            workflow_name=payload.workflow_name,
+            workflow_input=payload.workflow_input,
+            link_board_default=payload.link_board_default,
+            start_run=payload.start_run,
+            skip_human_checkpoints=payload.skip_human_checkpoints,
+            force=payload.force,
+            dispatch_async=True,
+        )
+        if not result.get("success"):
+            raise HTTPException(400, result.get("error") or "Failed to spawn workflow")
+        return JSONResponse(result)
+
     @router.post("/tickets/tickets/{ticket_id}/send-to-workflow")
     async def send_ticket_to_workflow(ticket_id: int, payload: SendToWorkflowRequest):
         """Start the selected/default workflow for a ticket."""
@@ -4799,38 +4868,39 @@ source: kanban_ticket_{t.id}
             if workflow_brief:
                 run_metadata["ticket_workflow_brief"] = workflow_brief
 
-            run_result = start_workflow_run(
-                workflow_id,
-                context=context,
-                board_id=board_id_value,
-                ticket_id=ticket_id,
-                run_metadata=run_metadata,
-                dispatch_async=True,
-            )
-            if "error" in run_result:
-                raise HTTPException(400, run_result["error"])
-            if execution_route:
-                try:
-                    from distr.core.orchestrator import emit_event
+        # ponytail: start_workflow_run opens its own session — nested SQLite tx = "database is locked"
+        run_result = start_workflow_run(
+            workflow_id,
+            context=context,
+            board_id=board_id_value,
+            ticket_id=ticket_id,
+            run_metadata=run_metadata,
+            dispatch_async=True,
+        )
+        if "error" in run_result:
+            raise HTTPException(400, run_result["error"])
+        if execution_route:
+            try:
+                from distr.core.orchestrator import emit_event
 
-                    emit_event(
-                        source="orchestrator",
-                        event_type="route_decided",
-                        status="selected",
-                        workflow_id=workflow_id,
-                        run_id=run_result.get("run_id"),
-                        ticket_id=ticket_id,
-                        board_id=board_id_value,
-                        project_id=int(project_id_value) if project_id_value else None,
-                        summary=(
-                            "Route selected: "
-                            f"{execution_route.get('backend') or execution_route.get('backend_id') or 'auto'}"
-                            f" / {execution_route.get('model') or 'auto'}"
-                        ),
-                        payload={"decision": execution_route},
-                    )
-                except Exception:
-                    logger.debug("send-to-workflow: route_decided event failed", exc_info=True)
+                emit_event(
+                    source="orchestrator",
+                    event_type="route_decided",
+                    status="selected",
+                    workflow_id=workflow_id,
+                    run_id=run_result.get("run_id"),
+                    ticket_id=ticket_id,
+                    board_id=board_id_value,
+                    project_id=int(project_id_value) if project_id_value else None,
+                    summary=(
+                        "Route selected: "
+                        f"{execution_route.get('backend') or execution_route.get('backend_id') or 'auto'}"
+                        f" / {execution_route.get('model') or 'auto'}"
+                    ),
+                    payload={"decision": execution_route},
+                )
+            except Exception:
+                logger.debug("send-to-workflow: route_decided event failed", exc_info=True)
         return JSONResponse({
             "success": True,
             "message": f"Ticket #{ticket_id} sent to workflow.",
@@ -5001,6 +5071,18 @@ source: kanban_ticket_{t.id}
             project_name = ctx["project_name"]
             complexity = ctx["complexity"]
             instruction = (payload.instruction or "").strip() or ctx["instruction"]
+
+        try:
+            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+            hook_ensure_workspace("tickets", tid, reason="send_to_cli")
+            ticket = ctx.get("ticket")
+            linked_wf = getattr(ticket, "linked_workflow_id", None) if ticket else None
+            if linked_wf:
+                hook_ensure_workspace("workflows", int(linked_wf), reason="send_to_cli")
+            hook_ensure_workspace("projects", project_id, reason="send_to_cli")
+        except Exception:
+            pass
 
         # Create audit trail using AutoWorkflow models
         from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep

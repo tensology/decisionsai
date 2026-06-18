@@ -69,6 +69,27 @@ async def _spawn_pty_process(
     fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
     return master_fd, proc.pid, proc
 
+
+def _native_pty_command(shell_bin: str, shell_command: str) -> list[str]:
+    """Build shell argv for startup PTYs: source rc, run command, stay on arm64."""
+    shell_name = os.path.basename(shell_bin or "")
+    # ponytail: -l runs .zshrc before -c and can exec away the command on Rosetta Macs
+    if "zsh" in shell_name:
+        init = "source ~/.zshrc 2>/dev/null; "
+        cmd_args = [shell_bin, "-i", "-c", init + shell_command]
+    else:
+        init = "source ~/.bash_profile 2>/dev/null; source ~/.bashrc 2>/dev/null; "
+        cmd_args = [shell_bin, "-i", "-c", init + shell_command]
+    if sys.platform == "darwin":
+        try:
+            import platform
+
+            if platform.machine() == "arm64":
+                cmd_args = ["arch", "-arm64", *cmd_args]
+        except Exception:
+            pass
+    return cmd_args
+
 # ── Global terminal registry ──────────────────────────────────────────────
 # Maps project_id -> TerminalSession
 _sessions: Dict[int, "TerminalSession"] = {}
@@ -79,6 +100,7 @@ _startup_queue_lock = asyncio.Lock()
 
 # ── ANSI escape regex (compiled once) ─────────────────────────────────────
 import re
+import sys
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[.*?[a-zA-Z]')
 _LOCAL_URL_RE = re.compile(r'https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::(\d{2,5}))?(?:/[^\s]*)?', re.IGNORECASE)
 _PORT_HINT_RE = re.compile(
@@ -163,6 +185,47 @@ async def materialize_queued_startup_terminals(project_id: int) -> tuple[int, in
     return started, failed
 
 
+def discard_queued_startup_terminals_for_project(project_id: int) -> int:
+    """Drop queued-but-unmaterialized startup commands for one project."""
+    path = _startup_queue_path()
+    if not os.path.exists(path):
+        return 0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            queued = json.load(f) or []
+            if not isinstance(queued, list):
+                queued = []
+    except Exception:
+        return 0
+    remaining = [item for item in queued if int(item.get("project_id") or 0) != int(project_id)]
+    removed = len(queued) - len(remaining)
+    if removed:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(remaining, f)
+    return removed
+
+
+async def spawn_startup_shell_sessions(
+    project_id: int,
+    cwd: str,
+    commands: list[str],
+) -> tuple[int, int]:
+    """Spawn startup PTYs on the current asyncio loop (web API path)."""
+    started = 0
+    failed = 0
+    for cmd in commands:
+        command = (cmd or "").strip()
+        if not command:
+            continue
+        try:
+            await create_startup_shell_session(int(project_id), cwd, command)
+            started += 1
+        except Exception as e:
+            logger.warning("Failed to spawn startup command '%s': %s", command, e)
+            failed += 1
+    return started, failed
+
+
 def materialize_queued_startup_terminals_sync(
     project_id: int,
     *,
@@ -219,29 +282,22 @@ class TerminalSession:
         shell_spec_match = re.match(r'^\s*\[(zsh|bash)\]\s+(.+)$', self.shell_command or '', re.IGNORECASE)
 
         if shell_spec_match:
-            # Explicit shell — source config for virtualenvwrapper/nvm/pyenv
             explicit_shell = shell_spec_match.group(1)
             actual_cmd = shell_spec_match.group(2)
-            if explicit_shell == "zsh":
-                init = "source ~/.zshrc 2>/dev/null; "
-                cmd_args = [shutil.which(explicit_shell) or "/bin/" + explicit_shell, "-i", "-l", "-c", init + actual_cmd]
-            else:
-                init = "source ~/.bash_profile 2>/dev/null; source ~/.bashrc 2>/dev/null; "
-                cmd_args = [shutil.which(explicit_shell) or "/bin/" + explicit_shell, "-i", "-l", "-c", init + actual_cmd]
+            shell_bin = shutil.which(explicit_shell) or f"/bin/{explicit_shell}"
+            cmd_args = _native_pty_command(shell_bin, actual_cmd)
         else:
-            # No prefix — source shell config for virtualenvwrapper/nvm/pyenv
-            # Use -i (interactive) so aliases from .zshrc/.bashrc are expanded
             if "zsh" in shell_name:
-                init = "source ~/.zshrc 2>/dev/null; "
-                cmd_args = [user_shell, "-i", "-l", "-c", init + self.shell_command]
+                shell_bin = user_shell or shutil.which("zsh") or "/bin/zsh"
             else:
-                init = "source ~/.bash_profile 2>/dev/null; source ~/.bashrc 2>/dev/null; "
-                cmd_args = [user_shell, "-i", "-l", "-c", init + self.shell_command]
+                shell_bin = user_shell or shutil.which("bash") or "/bin/bash"
+            cmd_args = _native_pty_command(shell_bin, self.shell_command or "")
 
         # Build env with TERM set for proper color/cursor support
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
+        env["DECISIONS_STARTUP_TERMINAL"] = "1"
         env.pop("DISPLAY", None)
 
         self.master_fd, self.pid, self._subprocess = await _spawn_pty_process(

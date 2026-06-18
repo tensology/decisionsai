@@ -10,6 +10,7 @@ Serves: /flow, /board, /settings, /chat on 127.0.0.1:8765.
 Uses project venv if present so deps (fastapi, uvicorn) are available.
 """
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -55,6 +56,9 @@ def main():
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     _load_dotenv()
+    # Headless Playwright E2E doesn't need macOS screencapture; skipping avoids Screen Recording prompts.
+    if platform.system() == "Darwin":
+        os.environ.setdefault("DECISIONS_SKIP_UI_SCREEN_CAPTURE", "1")
     try:
         from distr.gui.web.server import create_app, DEFAULT_HOST, DEFAULT_PORT
         import uvicorn

@@ -2,6 +2,7 @@ import asyncio
 
 from distr.core.agent.libs import (
     AudioRawFrame,
+    LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     TextFrame,
     TTSStartedFrame,
@@ -125,3 +126,61 @@ def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
     assert any(isinstance(frame, TTSStartedFrame) for frame in pushed)
     assert any(isinstance(frame, AudioRawFrame) for frame in pushed)
     assert any(isinstance(frame, TTSStoppedFrame) for frame in pushed)
+
+
+def test_pixazo_batches_three_sentences_per_synthesis_call():
+    from distr.core.agent.services.tts.pixazo import PixazoTTSService
+
+    service = object.__new__(PixazoTTSService)
+    service._cancelled = False
+    service._text_buffer = ""
+    service._processed_sentences = set()
+    service._tts_sentence_batch_size = 3
+    service._sentence_batch_hold = []
+    enqueued: list[str] = []
+
+    async def _enqueue_sentence(sentence, direction):
+        enqueued.append(sentence)
+
+    service._enqueue_sentence = _enqueue_sentence
+
+    async def _run():
+        await service._enqueue_new_sentences(
+            ["One.", "Two.", "Three.", "Four.", "Five."],
+            None,
+        )
+        await service._flush_sentence_batch_hold(None)
+
+    asyncio.run(_run())
+
+    assert enqueued == ["One. Two. Three.", "Four. Five."]
+
+
+def test_llm_end_flushes_partial_batch_when_text_buffer_empty():
+    from distr.core.agent.services.tts.openai import OpenAITTSService
+
+    service = object.__new__(OpenAITTSService)
+    service._cancelled = False
+    service._text_buffer = ""
+    service._processed_sentences = set()
+    service._tts_sentence_batch_size = 3
+    service._sentence_batch_hold = ["Yep.", "I can hear you."]
+    service._tts_session_active = True
+    service._total_audio_duration = 0.0
+    service._tts_started_emitted = False
+    service.event_queue = None
+    enqueued: list[str] = []
+
+    async def _enqueue_sentence(sentence, direction):
+        enqueued.append(sentence)
+
+    async def _drain_speak_queue():
+        return None
+
+    service._enqueue_sentence = _enqueue_sentence
+    service._drain_speak_queue = _drain_speak_queue
+    service.push_frame = lambda frame, direction: asyncio.sleep(0)
+
+    asyncio.run(service.process_frame(LLMFullResponseEndFrame(), None))
+
+    assert enqueued == ["Yep. I can hear you."]

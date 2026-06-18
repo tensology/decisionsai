@@ -190,6 +190,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.stt_ready = False
         self._startup_loading = True
         self._voice_capture_blocked_not_listening = False
+        self._listening_blocked_prompt = None
         
         # Dictation state
         self.is_dictating = False
@@ -825,7 +826,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def _mark_voice_capture_blocked_not_listening(self):
         """Remember that the user tried to speak while listening was off."""
+        if self._is_listening_blocked_prompt_open():
+            return
         self._voice_capture_blocked_not_listening = True
+
+    def _is_listening_blocked_prompt_open(self) -> bool:
+        msg = getattr(self, "_listening_blocked_prompt", None)
+        if msg is None:
+            return False
+        try:
+            return msg.isVisible()
+        except RuntimeError:
+            self._listening_blocked_prompt = None
+            return False
 
     def _maybe_prompt_enable_listening_on_release(self):
         """On key/button release, offer to turn listening back on if capture was blocked."""
@@ -834,10 +847,20 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._voice_capture_blocked_not_listening = False
         if self.is_listening:
             return
+        if self._is_listening_blocked_prompt_open():
+            return
         self._prompt_enable_listening_after_blocked_capture()
 
     def _prompt_enable_listening_after_blocked_capture(self):
         """Ask whether to enable listening after a blocked PTT/dictation attempt."""
+        if self._is_listening_blocked_prompt_open():
+            try:
+                self._listening_blocked_prompt.raise_()
+                self._listening_blocked_prompt.activateWindow()
+            except Exception:
+                pass
+            return
+
         msg = QtWidgets.QMessageBox(self)
         msg.setWindowTitle("Not Listening")
         msg.setText("The agent wasn't listening, so nothing was captured.")
@@ -852,6 +875,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._keep_dialog_on_oracle_screen(msg)
         except Exception:
             pass
+
+        self._listening_blocked_prompt = msg
+
+        def _clear_prompt(*_args):
+            if getattr(self, "_listening_blocked_prompt", None) is msg:
+                self._listening_blocked_prompt = None
+
+        msg.finished.connect(_clear_prompt)
         if msg.exec() == QtWidgets.QMessageBox.StandardButton.Yes:
             self.enable_tray()
 

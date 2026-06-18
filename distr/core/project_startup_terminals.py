@@ -139,8 +139,9 @@ def stop_project_startup_terminals(
             announce_project_terminal_feedback(result.speak_message)
         return result
 
-    from distr.core.terminal import kill_all_startup_sessions_for_project
+    from distr.core.terminal import kill_all_startup_sessions_for_project, discard_queued_startup_terminals_for_project
 
+    discard_queued_startup_terminals_for_project(project_id)
     stopped = kill_all_startup_sessions_for_project(project_id, purpose="startup")
     speak = _build_stop_speak_message(project["name"], stopped)
     result = ProjectTerminalActionResult(
@@ -295,6 +296,139 @@ def start_project_startup_terminals(
         announce_project_terminal_feedback(speak)
     logger.info(
         "Project startup terminals started: project_id=%s started=%s failed=%s",
+        project_id,
+        started,
+        failed,
+    )
+    return result
+
+
+async def start_project_startup_terminals_async(
+    project_id: int,
+    *,
+    commands: Optional[list[str]] = None,
+    announce: bool = True,
+    startup_instructions: Optional[str] = None,
+    start_time_tracker: Optional[bool] = None,
+) -> ProjectTerminalActionResult:
+    """Web API entry: spawn PTYs on the running server loop (no sync bridge)."""
+    _persist_project_startup_preferences(
+        project_id,
+        startup_instructions=startup_instructions,
+        start_time_tracker=start_time_tracker,
+    )
+    project = _load_project(project_id)
+    if not project:
+        result = ProjectTerminalActionResult(
+            success=False,
+            project_id=project_id,
+            project_name="Project",
+            action="error",
+            message="Project not found.",
+            speak_message="Project not found.",
+        )
+        if announce:
+            announce_project_terminal_feedback(result.speak_message)
+        return result
+
+    if project_startup_terminals_running(project_id):
+        speak = f"Project {project['name']} startup terminals are already running."
+        result = ProjectTerminalActionResult(
+            success=True,
+            project_id=project_id,
+            project_name=project["name"],
+            action="already_running",
+            message=speak,
+            speak_message=speak,
+        )
+        if announce:
+            announce_project_terminal_feedback(speak)
+        return result
+
+    resolved_commands = [
+        (command or "").strip()
+        for command in (
+            commands
+            if commands is not None
+            else parse_startup_command_lines(project["startup_instructions"])
+        )
+        if (command or "").strip()
+    ]
+    folder = project["folder_location"]
+    if not resolved_commands:
+        speak = f"Project {project['name']} has no startup terminal instructions."
+        result = ProjectTerminalActionResult(
+            success=False,
+            project_id=project_id,
+            project_name=project["name"],
+            action="no_commands",
+            message=speak,
+            speak_message=speak,
+        )
+        if announce:
+            announce_project_terminal_feedback(speak)
+        return result
+
+    if not folder or not os.path.isdir(folder):
+        speak = f"Project {project['name']} does not have a valid folder location."
+        result = ProjectTerminalActionResult(
+            success=False,
+            project_id=project_id,
+            project_name=project["name"],
+            action="error",
+            message=speak,
+            speak_message=speak,
+        )
+        if announce:
+            announce_project_terminal_feedback(speak)
+        return result
+
+    from distr.core.terminal import (
+        materialize_queued_startup_terminals,
+        spawn_startup_shell_sessions,
+    )
+
+    canonical = os.path.realpath(folder)
+    started, failed = await spawn_startup_shell_sessions(
+        project_id, canonical, resolved_commands
+    )
+    mat_started, mat_failed = await materialize_queued_startup_terminals(project_id)
+    if mat_started or mat_failed:
+        started += mat_started
+        failed = max(0, failed - mat_started) + mat_failed
+        logger.info(
+            "Project startup terminals materialized from queue: project_id=%s started=%s failed=%s",
+            project_id,
+            mat_started,
+            mat_failed,
+        )
+    if started > 0 and project.get("start_time_tracker", True):
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.services import schedule_blocks as schedule_service
+
+            with get_session() as session:
+                db_project = session.query(Project).filter(Project.id == project_id).first()
+                if db_project and schedule_service.project_has_linked_board(db_project):
+                    schedule_service.start_project_time_tracker(session, db_project)
+        except Exception as exc:
+            logger.warning("Project time tracker start skipped: %s", exc)
+    speak = _build_start_speak_message(project["name"], started, failed)
+    result = ProjectTerminalActionResult(
+        success=started > 0,
+        project_id=project_id,
+        project_name=project["name"],
+        action="started",
+        started=started,
+        failed=failed,
+        message=speak,
+        speak_message=speak,
+    )
+    if announce:
+        announce_project_terminal_feedback(speak)
+    logger.info(
+        "Project startup terminals started (async): project_id=%s started=%s failed=%s",
         project_id,
         started,
         failed,

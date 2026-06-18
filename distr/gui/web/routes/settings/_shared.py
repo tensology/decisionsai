@@ -118,6 +118,8 @@ class ThirdPartySettings(BaseModel):
     gemini_key: str = ""
     nvidia_enabled: bool = False
     nvidia_key: str = ""
+    pixazo_enabled: bool = False
+    pixazo_key: str = ""
     masko_enabled: bool = False
     masko_key: str = ""
     composio_enabled: bool = False
@@ -160,6 +162,8 @@ class GeneralSettings(BaseModel):
     qwen3_voice: str = "aiden"
     f5tts_voice: str = "default"
     voxcpm_voice: str = "default"
+    pixazo_voice: str = "voxcpm"
+    pixazo_dit_steps: int = Field(default=6, ge=4, le=30)
     supertonic_voice: str = "M1"
     chatterbox_voice: str = "default"
     playback_speed: float = 1.0
@@ -243,6 +247,8 @@ class LLMSettings(BaseModel):
     vision_model: str = ""
     image_provider: str = "ollama"
     image_model: str = ""
+    video_provider: str = ""
+    video_model: str = ""
     workflow_provider: str = ""
     workflow_model: str = ""
     computer_use_provider: str = ""

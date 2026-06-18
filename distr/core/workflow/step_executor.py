@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import platform
 import re
 import subprocess
@@ -24,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 def capture_ui_screenshot(*, step_id: int, run_id: Optional[int], label: str) -> Optional[str]:
     """Capture a workflow UI screenshot to the local workflow screenshot folder."""
+    # ponytail: macOS screencapture triggers Screen Recording permission spam (Cursor/Codex);
+    # headless Playwright and E2E harnesses use browser screenshots instead.
+    if os.environ.get("DECISIONS_SKIP_UI_SCREEN_CAPTURE", "").strip().lower() in ("1", "true", "yes"):
+        return None
     try:
         from distr.core.paths import DB_DIR
 
@@ -89,7 +94,9 @@ class StepExecutorMixin:
         handler = handlers.get(action_type)
         if handler is None:
             return {"output": f"Unknown action type: {action_type}", "passed": False}
-        wants_ui_capture = self._should_capture_ui_evidence(step_data, action_type, config=config)
+        wants_ui_capture = self._should_capture_ui_evidence(
+            step_data, action_type, config=config, run_id=run_id,
+        )
         before_path = None
         if wants_ui_capture:
             before_path = capture_ui_screenshot(
@@ -117,13 +124,47 @@ class StepExecutorMixin:
         step_data: Dict[str, Any],
         action_type: str,
         config: Optional[dict] = None,
+        run_id: Optional[int] = None,
     ) -> bool:
+        config = config if isinstance(config, dict) else {}
+        if config.get("skip_ui_screen_capture"):
+            return False
+        if run_id and self._run_is_e2e_smoke(run_id):
+            return False
+        if action_type == "playwright" and config.get("headless", True):
+            return False
         if action_type in {"computer_use", "playwright"}:
             return True
         if action_type == "agent_instruction":
             return self._is_computer_use_instruction(step_data.get("instruction") or "")
-        config = config if isinstance(config, dict) else {}
         return bool(config.get("ui_quality_capture") or config.get("capture_ui_evidence"))
+
+    @staticmethod
+    def _run_is_e2e_smoke(run_id: int) -> bool:
+        try:
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run:
+                    return False
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == run.workflow_id).first()
+                if not wf:
+                    return False
+                try:
+                    wf_input = json.loads(wf.workflow_input or "{}") or {}
+                except Exception:
+                    wf_input = {}
+                slug = str(wf_input.get("slug") or "").strip().lower()
+                if slug in (
+                    "dogfood-e2e-smoke",
+                    "dogfood-spawn-e2e",
+                    "spotify-e2e-ideation",
+                    "spotify-e2e-dev",
+                    "spotify-e2e-polish",
+                ) or wf_input.get("e2e_smoke"):
+                    return True
+        except Exception:
+            return False
+        return False
 
     def _with_ui_screenshot_evidence(
         self,
@@ -444,6 +485,31 @@ class StepExecutorMixin:
                 ),
                 "passed": False,
             }
+
+        try:
+            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+            from distr.core.workspace_memory.pickup_handoff import build_pickup_brief, load_decisions_json
+
+            ticket_id_brief = _coerce_int(run_data.get("ticket_id"))
+            brief = ""
+            if ticket_id_brief:
+                hook_ensure_workspace("tickets", ticket_id_brief, reason="send_to_project_cli")
+                brief = build_pickup_brief(
+                    entity_type="tickets",
+                    entity_id=ticket_id_brief,
+                    decisions=load_decisions_json("tickets", ticket_id_brief),
+                )
+            elif project_id:
+                hook_ensure_workspace("projects", project_id, reason="send_to_project_cli")
+                brief = build_pickup_brief(
+                    entity_type="projects",
+                    entity_id=project_id,
+                    decisions=load_decisions_json("projects", project_id),
+                )
+            if brief.strip():
+                instruction = brief.strip() + "\n\n---\n\n" + instruction
+        except Exception:
+            logger.debug("send_to_project_cli: pickup brief injection failed", exc_info=True)
 
         try:
             from distr.core.project_cli_backends.harness import HarnessContext

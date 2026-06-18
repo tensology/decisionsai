@@ -28,18 +28,22 @@ def test_build_run_briefing_message_is_plain_english():
     assert "Session Report feedback" in message
     assert "Player1Sport" in message
     assert "Ingest ticket and project context" in message
+    assert "**About to do:**" in message
+    assert "**Recommendation:**" in message
     assert "reply continue" not in message.lower()
 
 
 def test_classify_human_workflow_response():
     assert classify_human_workflow_response("yes go ahead", waiting_kind="run_briefing") == "confirm"
     assert classify_human_workflow_response("yes, go ahead", waiting_kind="run_briefing") == "confirm"
+    assert classify_human_workflow_response("do the safe option", waiting_kind="run_briefing") == "confirm"
     assert classify_human_workflow_response("stop", waiting_kind="run_briefing") == "stop"
     assert classify_human_workflow_response(
         "Focus on the PDF spec first, not the Google doc yet.",
         waiting_kind="run_briefing",
     ) == "steer"
     assert classify_human_workflow_response("looks good", waiting_kind="step_review") == "continue"
+    assert classify_human_workflow_response("approve", waiting_kind="step_review") == "continue"
     assert classify_human_workflow_response("looks good, continue", waiting_kind="step_review") == "continue"
 
 
@@ -52,9 +56,9 @@ def test_build_step_review_message():
         result_summary="Restated scope and risks.",
         next_step_name="Write plan.md and attach to ticket",
     )
-    assert "Step 1" in message
+    assert "Continue after" in message
     assert "Write plan.md" in message
-    assert "adjust direction" in message
+    assert "**Recommendation:**" in message
 
 
 def test_human_checkpoint_enabled_for_ticket_runs():

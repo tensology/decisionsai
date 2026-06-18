@@ -40,6 +40,7 @@ BROWSER_CONTENT_ECC_SKILLS: tuple[str, ...] = (
     "social-publisher",
     "marketing-campaign",
     "fal-ai-media",
+    "pixazo-media",
     "frontend-design",
     "strategic-compact",
 )
@@ -149,6 +150,14 @@ def _mcp_recommendations() -> dict[str, Any]:
             },
             "docs": "https://fal.ai",
             "skill": "fal-ai-media",
+        },
+        "pixazo_media": {
+            "description": "Image, video, TTS, and music via Pixazo (one API key)",
+            "mcp": {
+                "url": "https://gateway.pixazo.ai/pixazo/mcp",
+            },
+            "docs": "https://www.pixazo.ai/models/mcp",
+            "skill": "pixazo-media",
         },
         "playwright": {
             "description": "Decisions Hermes playwright_browser tool + workflow playwright steps",

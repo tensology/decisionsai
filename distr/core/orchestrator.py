@@ -1129,6 +1129,17 @@ def record_learning_signal(
         )
     except Exception:
         pass
+    try:
+        if normalized_scope == "board" and scope_id is not None:
+            from distr.core.workspace_memory.references import sync_board_references
+
+            sync_board_references(int(scope_id))
+        elif normalized_scope == "project" and scope_id is not None:
+            from distr.core.workspace_memory.references import sync_project_references
+
+            sync_project_references(int(scope_id))
+    except Exception:
+        pass
     return rule_id
 
 

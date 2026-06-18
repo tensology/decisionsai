@@ -1,0 +1,104 @@
+{
+  "format_version": "1.0",
+  "format": "decisionsai_loop_preset_v1",
+  "slug": "decisionsai-dogfood-ticket",
+  "name": "DecisionsAI Dogfood Ticket",
+  "role": "senior_software_engineer",
+  "category": "Engineering",
+  "archetype": "incremental_ship",
+  "description": "Dogfood loop for DecisionsAI: scope ticket, implement in harness, lint/test, Playwright verify on local server, self-assess with return contract.",
+  "kickoff": "Start the DecisionsAI dogfood ticket loop.\nGoal: ticket implemented, Playwright proof on http://127.0.0.1:8765, harness return contract recorded\nMax iterations: 5\nExit when: acceptance criteria met, unit/lint green, Playwright screenshots in result packet, return contract complete",
+  "loop_contract": {
+    "name": "DecisionsAI Dogfood Ticket",
+    "goal": "ticket implemented with Playwright proof and harness return contract",
+    "exit_when": "acceptance criteria met, tests green, Playwright screenshots attached, return contract complete",
+    "check_command": "python3 -m unittest + Playwright UI check on /workflows/",
+    "max_iterations": 5,
+    "guardrails": [
+      "Do not skip Playwright verification for UI tickets",
+      "Do not mark complete without return contract fields",
+      "Stay on ticket acceptance criteria"
+    ],
+    "pacing_notes": "Self-pace: implement → test → Playwright → self-assess → handoff.",
+    "step_1": "Read ticket acceptance criteria, user journey, and developer_context before acting.",
+    "archetype": "incremental_ship",
+    "role": "senior_software_engineer"
+  },
+  "expected_check_command": "python3 -m unittest + Playwright on /workflows/",
+  "tags": ["dogfood", "decisionsai", "playwright", "engineering"],
+  "steps": [
+    {
+      "name": "Scope ticket and context",
+      "instruction": "Read linked ticket acceptance criteria, developer_context, and workspace pickup brief. Restate user journey and definition of done. Report using harness return contract.",
+      "skills": ["product-lens", "brainstorming", "decisions-playwright"],
+      "tools": ["cli", "other"],
+      "guardrail": "- Stay on ticket scope\n- List acceptance criteria explicitly",
+      "failure_checklist": ["Acceptance criteria not restated"],
+      "validation_prompt": "Ticket scope, acceptance criteria, and user journey are explicit.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli"
+    },
+    {
+      "name": "Implement in harness",
+      "instruction": "Implement the ticket slice in the linked project using harness pickup brief. Iterate: develop → test → correct → report return contract.",
+      "skills": ["executing-plans", "tdd-workflow", "verification-loop"],
+      "tools": ["cli", "playwright"],
+      "guardrail": "- Minimal diff\n- Run real project tests before reporting complete",
+      "failure_checklist": ["No tests run", "Scope drift"],
+      "validation_prompt": "Implementation matches acceptance criteria with tests run.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli",
+      "on_fail_goto_position": 1
+    },
+    {
+      "name": "Unit and lint gate",
+      "instruction": "Run discovered lint/unit commands from repo config (e.g. python3 -m unittest). Capture exact commands and output.",
+      "skills": ["verification-loop", "systematic-debugging"],
+      "tools": ["cli"],
+      "guardrail": "- Use project's real test commands",
+      "failure_checklist": ["Tests not run"],
+      "validation_prompt": "Lint/unit commands ran with pass/fail captured.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "run_command",
+      "config": {
+        "command": "python3 -m unittest discover -s distr/core/workspace_memory -p 'test_*.py' -q",
+        "timeout_seconds": 120
+      }
+    },
+    {
+      "name": "Playwright verify DecisionsAI UI",
+      "instruction": "Run Playwright against http://127.0.0.1:8765 for the ticket user journey. Capture screenshots into result packet evidence.",
+      "skills": ["decisions-playwright", "browser-qa", "webapp-testing"],
+      "tools": ["playwright", "browser_use"],
+      "guardrail": "- Server must be running on 127.0.0.1:8765\n- Attach screenshots to evidence",
+      "failure_checklist": ["No screenshots", "Journey not exercised"],
+      "validation_prompt": "Playwright journey passed with screenshots attached.",
+      "validation_type": "browser_ui",
+      "wait_for_continue": false,
+      "action_type": "playwright",
+      "config": {
+        "headless": true,
+        "timeout_seconds": 60,
+        "code": "from playwright.sync_api import sync_playwright\nurl = 'http://127.0.0.1:8765/workflows/'\nwith sync_playwright() as p:\n    browser = p.chromium.launch(headless=True)\n    page = browser.new_page(viewport={'width': 1440, 'height': 900})\n    page.goto(url, wait_until='domcontentloaded', timeout=30000)\n    page.wait_for_timeout(1500)\n    assert 'workflow' in page.url.lower() or page.locator('#wf-list, #wf-empty').count() > 0\n    print('DOGFOOD_PLAYWRIGHT_OK: workflows page loaded')\n    browser.close()\n"
+      }
+    },
+    {
+      "name": "Self-assessment and return contract",
+      "instruction": "Fill the full harness return contract (status, summary, tests_run, drift_check, security, ui_assessment, self_corrections, files_changed, blockers). Confirm definition of done met.",
+      "skills": ["learnings-keeper", "browser-qa"],
+      "tools": ["cli"],
+      "guardrail": "- All return contract fields required\n- Say handoff in DecisionsAI when done",
+      "failure_checklist": ["Return contract incomplete"],
+      "validation_prompt": "Return contract complete; ticket ready to mark done.",
+      "validation_type": "llm_judgment",
+      "wait_for_continue": false,
+      "action_type": "send_to_project_cli"
+    }
+  ],
+  "meta": {
+    "parked_presets": "Dogfood preset for DecisionsAI repo verification."
+  }
+}

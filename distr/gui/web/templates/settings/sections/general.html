@@ -260,6 +260,24 @@
                         </label>
                     </div>
                 </div>
+
+                <!-- Pixazo VoxCPM speed (cloud API — lower dit_steps = faster synthesis) -->
+                <div id="pixazo_voice_options" class="hidden mb-4 max-w-md">
+                    <label for="pixazo_dit_steps" class="block text-sm font-semibold text-[#ececf1] mb-2">VoxCPM generation speed:</label>
+                    <select id="pixazo_dit_steps" name="pixazo_dit_steps"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                    focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
+                        <option value="4">Fast (4 steps)</option>
+                        <option value="6" selected>Balanced (6 steps)</option>
+                        <option value="8">High (8 steps)</option>
+                        <option value="10">Quality (10 steps)</option>
+                    </select>
+                    <p class="text-xs text-[#7a7c8c] mt-2">
+                        Pixazo cloud API — each line waits on a remote round-trip. Lower steps is faster;
+                        the OpenBMB repo’s “real-time” path is local GPU streaming, not this hosted endpoint.
+                    </p>
+                </div>
+
                 <!-- VAD bar: below voice card, same width, floating right (fill grows from right) -->
                 <div class="mt-2 w-full flex justify-end">
                     <div id="audio_monitor_container" class="w-full max-w-full cursor-pointer flex flex-col items-end" title="Click to enable or disable microphone level">

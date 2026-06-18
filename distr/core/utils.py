@@ -35,6 +35,7 @@ SECRET_SETTINGS_FIELDS = {
     "kilo_key",
     "gemini_key",
     "nvidia_key",
+    "pixazo_key",
 }
 CONNECTED_ACCOUNT_SECRET_FIELDS = {
     "api_token",

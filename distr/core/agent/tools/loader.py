@@ -111,6 +111,7 @@ def _get_tool_definitions(
         ("AddWorkflowStepTool", {}),
         ("UpdateWorkflowStepTool", {}),
         ("GenerateWorkflowTool", {}),
+        ("SpawnTicketWorkflowTool", {}),
         ("CreateStepRunnerTool", {}),
         ("ResetWorkflowTool", {}),
         ("ClearWorkflowHistoryTool", {}),
@@ -165,6 +166,7 @@ def _get_tool_definitions(
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
         ("DeveloperContextTool", {}),
+        ("EcosystemScanTool", {}),
         ("BoardNotesTool", {}),
         ("CodexThreadContextTool", {}),
         ("IdeThreadTool", {}),
@@ -188,6 +190,7 @@ def _get_tool_definitions(
             ),
         ),
         ("ImageGeneratorTool", {}),
+        ("VideoGeneratorTool", {}),
         # Wake Up
         ("WakeUpTool", {}),
         # Speak on Desktop (remote intercom from Telegram)
@@ -457,6 +460,7 @@ TOOL_REGISTRY = {
     "ScreenshotAnalyzerTool":  ("vision.screenshot_analyzer", "ScreenshotAnalyzerTool"),
     "VisionAnalyzerTool":      ("vision.vision_analyzer", "VisionAnalyzerTool"),
     "ImageGeneratorTool":      ("vision.image_generator", "ImageGeneratorTool"),
+    "VideoGeneratorTool":      ("vision.video_generator", "VideoGeneratorTool"),
     # web/
     "WebSearchTool":           ("web.web_search", "WebSearchTool"),
     "WebFetchTool":            ("web.web_fetch", "WebFetchTool"),
@@ -474,6 +478,7 @@ TOOL_REGISTRY = {
     "AddWorkflowStepTool":        ("step_runner.workflow_tools", "AddWorkflowStepTool"),
     "UpdateWorkflowStepTool":     ("step_runner.workflow_tools", "UpdateWorkflowStepTool"),
     "GenerateWorkflowTool":       ("step_runner.workflow_tools", "GenerateWorkflowTool"),
+    "SpawnTicketWorkflowTool":    ("step_runner.workflow_tools", "SpawnTicketWorkflowTool"),
     "CreateStepRunnerTool":       ("step_runner.workflow_tools", "CreateStepRunnerTool"),
     "ResetWorkflowTool":          ("step_runner.workflow_tools", "ResetWorkflowTool"),
     "ClearWorkflowHistoryTool":   ("step_runner.workflow_tools", "ClearWorkflowHistoryTool"),
@@ -495,6 +500,7 @@ TOOL_REGISTRY = {
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
+    "EcosystemScanTool":       ("system.ecosystem_scan", "EcosystemScanTool"),
     "BoardNotesTool":          ("system.board_notes", "BoardNotesTool"),
     "CodexThreadContextTool":  ("system.codex_thread_context", "CodexThreadContextTool"),
     "IdeThreadTool":           ("system.ide_thread", "IdeThreadTool"),
@@ -591,6 +597,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "ScreenshotAnalyzerTool": "Capture a screenshot of the desktop or a specific screen. THREE MODES: 1) Analysis — capture and analyze with vision LLM. 2) Direct send — capture and send to Telegram. 3) Capture-only — capture and return file path for chaining to other tools (save to folder, attach to ticket, send to pi agent, send to Telegram). Use for: take a screenshot, what do you see, screenshot and save, screenshot and attach to ticket, screenshot and send to pi, push to CLI.",
     "VisionAnalyzerTool": "Analyze a dropped or specified image file using a vision-enabled LLM to describe its contents.",
     "ImageGeneratorTool": "Generate an image from a text description using an image generation LLM and save it to disk.",
+    "VideoGeneratorTool": "Generate a short video clip from a text prompt via Pixazo and save it to disk.",
     # web/
     "WebSearchTool": "Search the web, Google, or the internet for current information, news, facts, or answers.",
     "WebFetchTool": "Fetch, read, or extract the text content of a web page given its URL.",
@@ -612,6 +619,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "AddWorkflowStepTool": "Add a new step to an existing workflow at a specified position.",
     "UpdateWorkflowStepTool": "Update the configuration of an existing workflow step.",
     "GenerateWorkflowTool": "Auto-generate a complete workflow from a natural language description of the desired process.",
+    "SpawnTicketWorkflowTool": "Create and start a ticket workflow from a loop preset when none exists yet.",
     "CreateStepRunnerTool": "Create a workflow or step-runner automation from a natural language instruction.",
     "ResetWorkflowTool": "Reset a workflow to its initial state, clearing all step statuses and run data.",
     "ClearWorkflowHistoryTool": "Clear the run history of a workflow while keeping its step definitions intact.",
@@ -633,6 +641,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
+    "EcosystemScanTool": "Scan all boards and projects for health issues: unscoped tickets, missing folders, empty current lanes, and workflow/board name index.",
     "BoardNotesTool": "Read, create, edit, append to, or delete ticket board scratchpad notes in the kanban board area (not MEMORY.md). Actions: list, create, update, append, delete.",
     "CodexThreadContextTool": "Load a matching local Codex conversation transcript for project context, ticket creation, plans, skill handoffs, or follow-up replies instead of asking the user to paste the thread.",
     "IdeThreadTool": "List, read, check status, prompt, or amend Codex and Cursor IDE threads (transcripts, bridge sessions, CLI follow-ups).",

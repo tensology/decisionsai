@@ -127,13 +127,23 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
     display_name = _resolve_display_name(provider, voice, voice_name)
     # Sanitize display name — phonemizer/espeak can't handle newlines or special chars
     display_name = re.sub(r'\s+', ' ', display_name).strip()
-    test_text = (
-        f"Hi there, my name is {display_name}. I would love to help you get things done. "
-        "Save this voice and let's get started."
-    )
+    pixazo_dit_steps = None
+    if provider == "pixazo":
+        from distr.core.pixazo_client import pixazo_dit_steps_from_settings
+
+        pixazo_dit_steps = pixazo_dit_steps_from_settings(settings)
+        test_text = f"Hi, I'm {display_name}. Ready when you are."
+    else:
+        test_text = (
+            f"Hi there, my name is {display_name}. I would love to help you get things done. "
+            "Save this voice and let's get started."
+        )
 
     os.makedirs(TMP_DIR, exist_ok=True)
-    text_hash = hashlib.md5(f"{test_text}:{speed}".encode()).hexdigest()[:8]
+    cache_seed = f"{test_text}:{speed}"
+    if pixazo_dit_steps is not None:
+        cache_seed = f"{cache_seed}:{pixazo_dit_steps}"
+    text_hash = hashlib.md5(cache_seed.encode()).hexdigest()[:8]
     out_file = os.path.join(TMP_DIR, f"tts_{provider}_{voice}_{text_hash}_web.wav")
 
     if provider not in ("elevenlabs", "coqui") and not voice.startswith("custom_") and os.path.exists(out_file):

@@ -233,7 +233,7 @@ class TelegramMessagesMixin:
             # Acknowledge receipt as soon as the local app accepts the message.
             # This covers text, voice notes, and media messages that may return
             # before the normal private-text path below.
-            self._mark_message_as_read(msg_id)
+            self._mark_message_as_read(msg_id, chat_id=chat_id)
 
         # Store chat type for later use in print statement
         self._last_chat_type_display = chat_type_display

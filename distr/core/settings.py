@@ -53,6 +53,8 @@ DEFAULT_SETTINGS = {
     'gemini_key': '',
     'nvidia_enabled': False,
     'nvidia_key': '',
+    'pixazo_enabled': False,
+    'pixazo_key': '',
     'ollama_enabled': True,
     'ollama_url': 'http://localhost:11434/',
     'accepted_eula': False,

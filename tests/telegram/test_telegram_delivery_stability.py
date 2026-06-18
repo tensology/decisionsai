@@ -492,7 +492,7 @@ class DummyTelegramMessages(TelegramMessagesMixin):
     def _track_telegram_group(self, *args, **kwargs):
         pass
 
-    def _mark_message_as_read(self, message_id):
+    def _mark_message_as_read(self, message_id, *, chat_id=None):
         self.marked_read.append(message_id)
 
     def _enqueue_telegram_batch(self, text, image_path=None, input_type="text"):

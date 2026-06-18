@@ -87,6 +87,24 @@ def _base_capabilities_mcps() -> dict[str, Any]:
             },
             "skill": "fal-ai-media",
         },
+        "pixazo_media": {
+            "description": "Image, video, TTS, and music via Pixazo (80+ models, one API key)",
+            "auto_merge": True,
+            "requires_env": ["PIXAZO_API_KEY"],
+            "api_key_settings_field": "pixazo_key",
+            "api_key_header": "Ocp-Apim-Subscription-Key",
+            "cursor_name": "pixazo",
+            "mcp": {
+                "url": "https://gateway.pixazo.ai/pixazo/mcp",
+                "headers": {
+                    "Ocp-Apim-Subscription-Key": "${env:PIXAZO_API_KEY}",
+                    "Authorization": "Bearer ${env:PIXAZO_API_KEY}",
+                },
+            },
+            "skill": "pixazo-media",
+            "docs": "https://www.pixazo.ai/models/mcp",
+            "note": "Merged when Pixazo API key is saved in Settings → Third-party. REST/TTS use the same key.",
+        },
         "playwright": {
             "description": "Decisions Hermes playwright_browser tool + workflow playwright steps",
             "auto_merge": False,
@@ -271,6 +289,37 @@ def _apply_composio_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[
     return out
 
 
+def _pixazo_api_key() -> str:
+    from distr.core.third_party_keys import pixazo_api_key, pixazo_enabled
+
+    if not pixazo_enabled():
+        return ""
+    return pixazo_api_key()
+
+
+def _apply_pixazo_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    """Inject Pixazo subscription key into MCP HTTP headers when configured."""
+    key = _pixazo_api_key()
+    if not key or "url" not in cfg:
+        return cfg
+    out = dict(cfg)
+    headers = dict(out.get("headers") or {})
+    sub_key = str(entry.get("api_key_header") or "Ocp-Apim-Subscription-Key")
+    headers[sub_key] = key
+    headers["Authorization"] = f"Bearer {key}"
+    out["headers"] = headers
+    return out
+
+
+def _apply_settings_api_key(cfg: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    field = entry.get("api_key_settings_field")
+    if field == "pixazo_key":
+        return _apply_pixazo_api_key(cfg, entry)
+    if entry.get("api_key_env") or field:
+        return _apply_composio_api_key(cfg, entry)
+    return cfg
+
+
 def _agent_mcp_block(entry: dict[str, Any], catalog_key: str, *, agent: str) -> tuple[str, dict[str, Any]] | None:
     """Resolve MCP block for cursor vs codex (composio entries may differ by agent URL)."""
     effective = _effective_entry(entry)
@@ -283,7 +332,7 @@ def _agent_mcp_block(entry: dict[str, Any], catalog_key: str, *, agent: str) -> 
         return None
     name, cfg = block
     if entry.get("api_key_env") or entry.get("api_key_settings_field"):
-        cfg = _apply_composio_api_key(cfg, entry)
+        cfg = _apply_settings_api_key(cfg, entry)
     return name, cfg
 
 
@@ -383,13 +432,13 @@ def _prune_deprecated_cursor_servers(servers: dict[str, Any]) -> list[str]:
 
 
 def _patch_composio_cursor_servers(servers: dict[str, Any], catalog: dict[str, Any]) -> list[str]:
-    """Inject Composio API keys into active composio MCP server blocks."""
+    """Inject Composio and Pixazo API keys into active MCP server blocks."""
     patches: list[str] = []
     key = _composio_api_key()
     composio_entries = {
         str(entry.get("cursor_name") or catalog_key): entry
         for catalog_key, entry in catalog.items()
-        if entry.get("api_key_env") or entry.get("api_key_settings_field")
+        if entry.get("api_key_env") and entry.get("api_key_settings_field") != "pixazo_key"
     }
 
     for name, entry in composio_entries.items():
@@ -404,6 +453,16 @@ def _patch_composio_cursor_servers(servers: dict[str, Any], catalog: dict[str, A
                 headers[header_name] = key
                 cfg["headers"] = headers
                 patches.append(f"{name}:headers")
+
+    pixazo_key = _pixazo_api_key()
+    pixazo_cfg = servers.get("pixazo")
+    if pixazo_key and isinstance(pixazo_cfg, dict) and "url" in pixazo_cfg:
+        headers = dict(pixazo_cfg.get("headers") or {})
+        if headers.get("Ocp-Apim-Subscription-Key") != pixazo_key:
+            headers["Ocp-Apim-Subscription-Key"] = pixazo_key
+            headers["Authorization"] = f"Bearer {pixazo_key}"
+            pixazo_cfg["headers"] = headers
+            patches.append("pixazo:headers")
 
     return patches
 
@@ -495,6 +554,12 @@ def recalibrate_mcp_harness(
 ) -> dict[str, Any]:
     """Rewrite MCP catalog and lightly merge auto_merge servers into Cursor and Codex."""
     _ = run_full  # reserved; env-gated entries only merge when credentials exist
+    try:
+        from distr.core.third_party_keys import sync_third_party_env_keys
+
+        sync_third_party_env_keys()
+    except Exception:
+        pass
     base_home = _home(home)
     catalog = collect_mcp_catalog()
     _write_json(_recommendations_path(base_home), catalog)

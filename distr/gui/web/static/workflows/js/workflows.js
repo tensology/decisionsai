@@ -104,6 +104,59 @@
         return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    function renderApprovalDecisionCard(decision, opts) {
+        if (!decision || typeof decision !== "object" || !decision.title) return "";
+        opts = opts || {};
+        var fields = [
+            ["About to do", decision.about_to_do],
+            ["Why it matters", decision.why_it_matters],
+            ["What could go wrong", decision.what_could_go_wrong],
+            ["If we stop", decision.fallback],
+            ["Recommendation", decision.recommendation]
+        ];
+        var rows = fields.filter(function (f) { return f[1]; }).map(function (f) {
+            return '<div class="mt-1 text-[11px]"><span class="text-gray-500">' + esc(f[0]) + ':</span> <span class="text-gray-200">' + esc(f[1]) + '</span></div>';
+        }).join("");
+        var hints = decision.reply_hints
+            ? '<p class="mt-2 text-[11px] text-gray-400">' + esc(String(decision.reply_hints).replace(/\*\*/g, "")) + '</p>'
+            : "";
+        var actions = "";
+        if (opts.showActions && opts.workflowId && opts.runId) {
+            actions = '<div class="mt-2 flex flex-wrap gap-2">' +
+                '<button type="button" class="wf-decision-approve px-2 py-1 rounded bg-green-600/80 text-white text-xs hover:bg-green-600" data-workflow-id="' + esc(opts.workflowId) + '" data-run-id="' + esc(opts.runId) + '">Yes, go ahead</button>' +
+                '<button type="button" class="wf-decision-stop px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-workflow-id="' + esc(opts.workflowId) + '" data-run-id="' + esc(opts.runId) + '">No, stop</button>' +
+            '</div>';
+        }
+        return '<div class="rounded border border-sky-500/30 bg-sky-500/10 p-3">' +
+            '<p class="text-xs text-sky-200 font-medium">' + esc(decision.title) + '</p>' +
+            rows + hints + actions +
+        '</div>';
+    }
+
+    function bindApprovalDecisionButtons(root) {
+        if (!root) return;
+        root.querySelectorAll(".wf-decision-approve").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                btn.disabled = true;
+                continueWorkflowRun(btn.dataset.workflowId, btn.dataset.runId, { input: "yes, go ahead" })
+                    .then(function (resp) {
+                        snack(workflowFeedbackText(resp, "Run continued"));
+                        loadActiveRuns();
+                        if (currentWorkflowId) loadDetail(currentWorkflowId);
+                    })
+                    .catch(function (e) {
+                        btn.disabled = false;
+                        snack(workflowErrorText(e, "Failed to continue"), "error");
+                    });
+            });
+        });
+        root.querySelectorAll(".wf-decision-stop").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                cancelWorkflowRun(btn.dataset.workflowId, btn.dataset.runId, btn);
+            });
+        });
+    }
+
     function normalizeStepConfig(step) {
         var config = step && step.config ? step.config : {};
         if (typeof config === "string") {
@@ -1716,6 +1769,7 @@
     };
     var WORKFLOW_EXEC_BACKEND_OPTIONS = [
         { id: "pi", label: "Pi" },
+        { id: "opencode", label: "OpenCode" },
         { id: "cursor", label: "Cursor CLI" },
         { id: "cursor_ide", label: "Cursor IDE" },
         { id: "codex", label: "Codex CLI" },
@@ -1755,6 +1809,79 @@
         if (!model) return "";
         if (typeof model === "string") return model;
         return model.id || model.model || model.name || "";
+    }
+
+    function cliModelGroupsFromList(models) {
+        var groups = {};
+        (models || []).forEach(function (m) {
+            if (!m) return;
+            var p = m.provider || "other";
+            if (!groups[p]) groups[p] = [];
+            groups[p].push(m);
+        });
+        return groups;
+    }
+
+    function appendCliModelOption(parent, model, selectedId) {
+        var opt = document.createElement("option");
+        opt.value = model.id;
+        opt.dataset.provider = model.provider || "";
+        opt.textContent = model.name || model.id;
+        if (model.id === selectedId) opt.selected = true;
+        parent.appendChild(opt);
+    }
+
+    function populateCliModelSelect(select, data, options) {
+        if (!select) return;
+        options = options || {};
+        var models = Array.isArray(data.models) ? data.models : [];
+        var current = (data.current_model || "").trim();
+        var includeAuto = options.includeAuto !== false;
+        select.innerHTML = "";
+        if (includeAuto) {
+            var autoOpt = document.createElement("option");
+            autoOpt.value = "auto";
+            autoOpt.textContent = "Auto";
+            autoOpt.dataset.provider = "";
+            select.appendChild(autoOpt);
+        }
+        var groups = cliModelGroupsFromList(models);
+        Object.keys(groups).sort().forEach(function (prov) {
+            var og = document.createElement("optgroup");
+            og.label = prov.charAt(0).toUpperCase() + prov.slice(1);
+            groups[prov].forEach(function (m) {
+                appendCliModelOption(og, m, current);
+            });
+            select.appendChild(og);
+        });
+        if (current && !models.some(function (m) { return m.id === current; })) {
+            var cur = document.createElement("option");
+            cur.value = current;
+            cur.dataset.provider = data.current_provider || "";
+            cur.textContent = current + " (current)";
+            cur.selected = true;
+            select.insertBefore(cur, select.firstChild);
+        }
+        if (includeAuto) {
+            var hasCurrent = current && Array.prototype.some.call(select.options, function (o) { return o.value === current; });
+            select.value = hasCurrent ? current : "auto";
+        } else if (current) {
+            select.value = current;
+        }
+    }
+
+    function selectedCliModelProvider(select) {
+        if (!select || select.selectedIndex < 0) return "";
+        var opt = select.options[select.selectedIndex];
+        return opt ? String(opt.dataset.provider || "").trim() : "";
+    }
+
+    function providerForCliModelBackend(backendId, provider) {
+        backendId = String(backendId || "pi").trim();
+        if (backendId === "pi" || backendId === "opencode") {
+            return provider || "ollama";
+        }
+        return backendId;
     }
 
     function workflowExecRouteBackendOptionsHtml(readyMap) {
@@ -1882,7 +2009,8 @@
 
     function workflowExecModelsSourceIsVerified(source) {
         var s = String(source || "").toLowerCase();
-        return s === "cursor-api" || s === "codex-cli" || s === "anthropic-api" || s === "pi-models";
+        return s === "cursor-api" || s === "codex-cli" || s === "anthropic-api" || s === "pi-models"
+            || s === "opencode-cli" || s === "opencode-fallback" || s === "opencode-missing";
     }
 
     function setWorkflowExecRouteModelHint(root, level, message) {
@@ -1940,48 +2068,30 @@
                 var verified = workflowExecModelsSourceIsVerified(source);
                 var aliasesOnly = sourceLower === "claude-code-aliases";
                 var defaultsOnly = sourceLower.indexOf("defaults") >= 0 || sourceLower === "error";
-                var seen = {};
-                select.innerHTML = "";
-                function append(value, label) {
-                    value = (value || "auto").trim();
-                    if (!value || seen[value]) return;
-                    seen[value] = true;
-                    var opt = document.createElement("option");
-                    opt.value = value;
-                    opt.textContent = label || value;
-                    select.appendChild(opt);
-                }
-                append("auto", "Auto");
-                if (verified || aliasesOnly) {
-                    models.forEach(function (model) {
-                        var value = workflowExecRouteModelValue(model);
-                        if (!value || value === "auto") return;
-                        append(value, workflowExecRouteModelLabel(model));
-                    });
-                    if (aliasesOnly && message) setWorkflowExecRouteModelHint(root, level, message);
+                populateCliModelSelect(select, {
+                    models: models,
+                    current_model: preferred,
+                    current_provider: data.current_provider || ""
+                }, { includeAuto: true });
+                if (aliasesOnly && message) {
+                    setWorkflowExecRouteModelHint(root, level, message);
                 } else if (defaultsOnly) {
                     setWorkflowExecRouteModelHint(
                         root,
                         level,
                         message || "Could not load models from this executor. Use Auto or fix the CLI/API setup."
                     );
-                } else if (models.length) {
-                    models.forEach(function (model) {
-                        var value = workflowExecRouteModelValue(model);
-                        if (!value || value === "auto") return;
-                        append(value, workflowExecRouteModelLabel(model));
-                    });
-                    if (message) setWorkflowExecRouteModelHint(root, level, message);
-                } else {
+                } else if (!verified && !models.length) {
                     setWorkflowExecRouteModelHint(
                         root,
                         level,
                         message || "No models reported by this executor."
                     );
+                } else if (message) {
+                    setWorkflowExecRouteModelHint(root, level, message);
+                } else {
+                    setWorkflowExecRouteModelHint(root, level, "");
                 }
-                var current = preferred || "auto";
-                if (!seen[current]) current = "auto";
-                select.value = current;
                 select.disabled = false;
                 updateWorkflowExecCodexPrefVisibility(level, root);
             })
@@ -2613,14 +2723,17 @@
         });
     }
 
-    function syncWorkflowCliProjectModel(projectId, backendId, model) {
+    function syncWorkflowCliProjectModel(projectId, backendId) {
+        var modelSel = document.getElementById("wf-cli-model-select");
+        var model = modelSel ? (modelSel.value || "").trim() : "";
         model = (model || "").trim();
         if (!model || model === "auto") return Promise.resolve();
+        var provider = providerForCliModelBackend(backendId, selectedCliModelProvider(modelSel));
         return api("POST", "/projects/cli-model", {
             project_id: projectId,
             backend_id: backendId || "pi",
             model: model,
-            provider: backendId === "pi" ? "ollama" : (backendId || "pi")
+            provider: provider
         }).catch(function (e) {
             var msg = e.message || "Could not set CLI model";
             snack(msg, "error");
@@ -2635,7 +2748,7 @@
         if (!_wfCliSessionReady) {
             return Promise.reject(new Error("Connect the CLI first"));
         }
-        return syncWorkflowCliProjectModel(projectId, backendId, model);
+        return syncWorkflowCliProjectModel(projectId, backendId);
     }
 
     function sendWorkflowCliPrompt() {
@@ -2685,28 +2798,10 @@
         var params = "backend_id=" + encodeURIComponent(backendId || "pi");
         if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
         return api("GET", "/projects/cli-models?" + params).then(function (data) {
-            var models = Array.isArray(data.models) ? data.models : [];
-            var current = data.current_model || "auto";
-            select.innerHTML = "";
-            var seen = {};
-            function add(value, label) {
-                if (!value || seen[value]) return;
-                seen[value] = true;
-                var opt = document.createElement("option");
-                opt.value = value;
-                opt.textContent = label || value;
-                select.appendChild(opt);
+            populateCliModelSelect(select, data, { includeAuto: true });
+            if (!data.models || !data.models.length) {
+                if (data.message) appendWorkflowCliLine("system", data.message);
             }
-            add("auto", "Auto");
-            models.forEach(function (model) {
-                var value = workflowExecRouteModelValue(model);
-                if (value) add(value, workflowExecRouteModelLabel(model));
-            });
-            if (current && !seen[current]) add(current, current);
-            if (!models.length && data.message) {
-                appendWorkflowCliLine("system", data.message);
-            }
-            select.value = (current && seen[current]) ? current : "auto";
             select.disabled = false;
         }).catch(function (e) {
             select.innerHTML = "";
@@ -3405,6 +3500,13 @@
             checkActiveRun();
             syncWorkflowRunsTabVisibility();
             scheduleWorkflowTabMarquees();
+            syncWorkflowHarnessHandoffButton();
+            api("GET", "/workflows/" + id + "/workspace-memory").then(function (mem) {
+                var el = document.getElementById("wf-config-agent-map");
+                if (!el) return;
+                var paths = (mem && mem.workspace && mem.workspace.companion_paths) || {};
+                el.value = paths.workflow ? (paths.workflow + "/agents.md") : "";
+            }).catch(function () {});
             if (restoreTabAfterLoad) {
                 if (activeRunsPromise && typeof activeRunsPromise.then === "function") {
                     activeRunsPromise.finally(finishDetailTabRestore);
@@ -4777,9 +4879,17 @@
                     : '';
                 var rowCls = "rounded px-3 py-2 border border-white/10 " + (isCurrentWorkflow ? "wf-live-run" : "bg-[#152054]/50");
                 var waitingKind = r.waiting_kind || "";
+                var hasDecision = r.approval_decision && r.approval_decision.title;
                 var continueLabel = waitingKind === "ide_handoff"
                     ? "Report IDE complete"
-                    : (waitingKind === "route_approval" ? "Review route" : "Continue");
+                    : (waitingKind === "route_approval" ? "Review route" : (hasDecision ? "Yes, go ahead" : "Continue"));
+                var decisionCard = (r.status === "waiting" && hasDecision)
+                    ? '<div class="mt-2">' + renderApprovalDecisionCard(r.approval_decision, {
+                        showActions: true,
+                        workflowId: r.workflow_id,
+                        runId: r.id
+                    }) + '</div>'
+                    : '';
                 var actions = '<div class="flex items-center gap-2 ml-auto">' +
                     (r.status === "waiting" ? '<button type="button" class="wf-active-continue px-2 py-1 rounded border border-amber-500/50 text-amber-300 text-xs hover:bg-amber-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '" data-waiting-kind="' + esc(waitingKind) + '">' + esc(continueLabel) + '</button>' : '') +
                     '<button type="button" class="wf-active-stop inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '">' + SVG_STOP + '<span>Stop</span></button>' +
@@ -4802,6 +4912,7 @@
                         '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
                     '</div>' +
                     '<div class="mt-2">' + routeCard + '</div>' +
+                    decisionCard +
                 '</div>';
             }).join("");
             listEl.querySelectorAll(".wf-active-continue").forEach(function (btn) {
@@ -4835,6 +4946,7 @@
                     cancelWorkflowRun(btn.dataset.workflowId, btn.dataset.runId, btn);
                 });
             });
+            bindApprovalDecisionButtons(listEl);
         }).catch(function () {
             renderWorkflowTickets(workflowQueueTickets);
             return [];
@@ -5132,6 +5244,117 @@
         if (textarea) textarea.focus();
     }
 
+    function copyWorkflowHarnessText(text, label) {
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+            snack("Clipboard is unavailable in this browser", "error");
+            return;
+        }
+        navigator.clipboard.writeText(text || "")
+            .then(function () { snack((label || "Text") + " copied", "success"); })
+            .catch(function (e) { snack("Copy failed: " + (e && e.message ? e.message : String(e)), "error"); });
+    }
+
+    function _workflowActiveRunIdForHarness() {
+        var run = currentWorkflowActiveRun(latestActiveRuns || []);
+        return run && run.id != null ? run.id : null;
+    }
+
+    function openWorkflowHarnessModal() {
+        if (!currentWorkflowId) {
+            snack("Select a workflow first", "error");
+            return;
+        }
+        var existing = document.getElementById("wf-harness-handoff-modal");
+        if (existing) existing.remove();
+        var runId = _workflowActiveRunIdForHarness();
+        var qs = runId ? ("?run_id=" + encodeURIComponent(String(runId))) : "";
+        var html = '' +
+            '<div id="wf-harness-handoff-modal" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/60 p-4">' +
+                '<div class="w-full max-w-2xl max-h-[90vh] flex flex-col bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden">' +
+                    '<div class="px-5 pt-5 pb-3 flex-shrink-0">' +
+                        '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Development environment</p>' +
+                        '<h3 class="text-white text-lg font-semibold">Work with this workflow in your harness</h3>' +
+                        '<p class="mt-1 text-xs text-gray-400">Cursor, Codex, Claude Code, Pi, Cline, Hermes, VS Code, Antigravity, Kiro, or any agent — copy instructions into your tool of choice. DecisionsAI does not need to launch it for you.</p>' +
+                    '</div>' +
+                    '<div id="wf-harness-handoff-body" class="px-5 pb-3 flex-1 min-h-0 overflow-y-auto">' +
+                        '<p class="text-sm text-gray-400">Loading workflow memory…</p>' +
+                    '</div>' +
+                    '<div class="flex flex-wrap items-center justify-end gap-2 px-5 py-4 border-t border-white/10 flex-shrink-0">' +
+                        '<button type="button" class="wf-harness-handoff-close px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Close</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        var modal = document.getElementById("wf-harness-handoff-modal");
+        function closeModal() { if (modal) modal.remove(); }
+        modal.addEventListener("click", function (evt) { if (evt.target === modal) closeModal(); });
+        modal.querySelectorAll(".wf-harness-handoff-close").forEach(function (btn) {
+            btn.addEventListener("click", closeModal);
+        });
+        api("GET", "/workflows/" + currentWorkflowId + "/harness-handoff" + qs).then(function (data) {
+            var body = document.getElementById("wf-harness-handoff-body");
+            if (!body) return;
+            var entry = (data && data.entry_file) || "";
+            var paste = (data && data.paste_block) || "";
+            var pickup = (data && data.pickup_prompt) || "";
+            var tree = (data && data.file_tree) || "";
+            var contract = (data && data.return_contract) || "";
+            var handoff = (data && data.handoff_preview) || "";
+            var wfName = esc((data && data.workflow_name) || "Workflow");
+            body.innerHTML =
+                '<div class="space-y-4 text-sm">' +
+                    '<div class="rounded border border-white/10 bg-[#12183a]/60 px-3 py-2">' +
+                        '<p class="text-xs text-gray-400">Workflow</p>' +
+                        '<p class="text-white font-medium">' + wfName + '</p>' +
+                        (entry ? '<p class="mt-1 text-[11px] text-gray-500 break-all">Entry: ' + esc(entry) + '</p>' : '') +
+                    '</div>' +
+                    '<div>' +
+                        '<p class="text-xs text-gray-300 mb-2">1. Paste full instructions into your harness (custom instructions, first message, or AGENTS rules).</p>' +
+                        '<textarea id="wf-harness-paste-block" readonly rows="8" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-gray-200 text-xs font-mono">' + esc(paste) + '</textarea>' +
+                        '<div class="mt-2 flex flex-wrap gap-2">' +
+                            '<button type="button" id="wf-harness-copy-full" class="px-2.5 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Copy full instructions</button>' +
+                            '<button type="button" id="wf-harness-copy-pickup" class="px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy short pickup prompt</button>' +
+                            '<button type="button" id="wf-harness-copy-entry" class="px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy entry path</button>' +
+                        '</div>' +
+                    '</div>' +
+                    '<div>' +
+                        '<p class="text-xs text-gray-300 mb-2">2. Read the workspace files in order (agents → router → context → handoff → learning-guide).</p>' +
+                        '<pre class="text-[11px] text-gray-400 whitespace-pre-wrap break-all bg-[#152054]/50 border border-white/10 rounded px-3 py-2 max-h-32 overflow-y-auto">' + esc(tree) + '</pre>' +
+                        '<button type="button" id="wf-harness-copy-tree" class="mt-2 px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy file tree</button>' +
+                    '</div>' +
+                    (handoff ? '<div><p class="text-xs text-gray-300 mb-1">Current handoff</p><pre class="text-[11px] text-gray-400 whitespace-pre-wrap bg-[#152054]/50 border border-white/10 rounded px-3 py-2 max-h-24 overflow-y-auto">' + esc(handoff.slice(0, 800)) + '</pre></div>' : '') +
+                    '<div>' +
+                        '<p class="text-xs text-gray-300 mb-2">3. When done, report back using the return contract (or say <strong class="text-gray-200">handoff</strong> in DecisionsAI).</p>' +
+                        '<pre class="text-[11px] text-gray-400 whitespace-pre-wrap bg-[#152054]/50 border border-white/10 rounded px-3 py-2">' + esc(contract) + '</pre>' +
+                        '<button type="button" id="wf-harness-copy-contract" class="mt-2 px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy return contract</button>' +
+                    '</div>' +
+                '</div>';
+            var copyFull = document.getElementById("wf-harness-copy-full");
+            if (copyFull) copyFull.addEventListener("click", function () { copyWorkflowHarnessText(paste, "Full instructions"); });
+            var copyPickup = document.getElementById("wf-harness-copy-pickup");
+            if (copyPickup) copyPickup.addEventListener("click", function () { copyWorkflowHarnessText(pickup, "Pickup prompt"); });
+            var copyEntry = document.getElementById("wf-harness-copy-entry");
+            if (copyEntry) copyEntry.addEventListener("click", function () { copyWorkflowHarnessText(entry, "Entry path"); });
+            var copyTree = document.getElementById("wf-harness-copy-tree");
+            if (copyTree) copyTree.addEventListener("click", function () { copyWorkflowHarnessText(tree, "File tree"); });
+            var copyContract = document.getElementById("wf-harness-copy-contract");
+            if (copyContract) copyContract.addEventListener("click", function () { copyWorkflowHarnessText(contract, "Return contract"); });
+        }).catch(function (e) {
+            var body = document.getElementById("wf-harness-handoff-body");
+            if (body) body.innerHTML = '<p class="text-sm text-red-400">' + esc(e.message || "Failed to load harness handoff") + '</p>';
+        });
+    }
+
+    function syncWorkflowHarnessHandoffButton() {
+        var btn = document.getElementById("wf-harness-handoff-btn");
+        if (!btn) return;
+        if (currentWorkflowId) {
+            btn.classList.remove("hidden");
+        } else {
+            btn.classList.add("hidden");
+        }
+    }
+
     function renderRunCommandCenter(runs) {
         var el = document.getElementById("wf-run-command-center");
         if (!el) return;
@@ -5156,6 +5379,31 @@
             runtimeHtml = '<p class="text-[11px] text-gray-500 mt-2">Project #' + esc(run.project_id) + (run.project_name ? " · " + esc(run.project_name) : "") + '</p>';
         }
         var approvalHtml = "";
+        var humanDecision = run.approval_decision && run.approval_decision.title ? run.approval_decision : null;
+        if (run.status === "waiting" && humanDecision) {
+            approvalHtml = '<div class="mt-3">' + renderApprovalDecisionCard(humanDecision, {
+                showActions: true,
+                workflowId: run.workflow_id,
+                runId: run.id
+            }) + '</div>';
+        }
+        var permKind = (run.waiting_kind || "").toLowerCase();
+        var needsPermission = !humanDecision && run.status === "waiting" && (
+            permKind.indexOf("approval") >= 0 ||
+            permKind === "ide_handoff" ||
+            (run.current_step_tools || []).some(function (t) {
+                return t === "playwright" || t === "browser_use" || t === "computer_use" || t === "cli";
+            })
+        );
+        if (needsPermission) {
+            approvalHtml = '<div class="mt-3 rounded border border-purple-500/30 bg-purple-500/10 p-3">' +
+                '<p class="text-xs text-purple-200 font-medium">Harness permission</p>' +
+                '<p class="mt-1 text-[11px] text-gray-300">This step is waiting on your harness or tool approval. Copy instructions from <strong class="text-gray-200">Work in your IDE</strong> or steer below.</p>' +
+                '<div class="mt-2 flex flex-wrap gap-2">' +
+                    '<button type="button" class="wf-run-open-harness px-2 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Open harness handoff</button>' +
+                '</div>' +
+            '</div>';
+        }
         if (hasPendingRoute && (run.waiting_kind === "route_approval" || run.status === "waiting")) {
             approvalHtml = '<div class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3">' +
                 '<p class="text-xs text-amber-200 font-medium">Route override pending approval</p>' +
@@ -5195,7 +5443,9 @@
         }
         el.innerHTML = '<div class="flex items-start justify-between gap-3 mb-2">' +
                 '<div><p class="text-sm font-semibold text-white">Run command center</p>' +
-                '<p class="text-xs text-gray-400">Run #' + esc(run.id) + ' · ' + esc(run.status || "running") + '</p></div>' +
+                '<p class="text-xs text-gray-400">Run #' + esc(run.id) + ' · ' + esc(run.status || "running") +
+                (run.waiting_kind ? ' · <span class="text-amber-300">blocked: ' + esc(run.waiting_kind) + '</span>' : '') +
+                '</p></div>' +
                 '<div class="flex items-center gap-2 flex-shrink-0">' +
                     '<button type="button" class="wf-open-steering-memory px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" data-run-id="' + esc(run.id) + '">View memory</button>' +
                     (run.ide_handoff_pending ? '<span class="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200">IDE handoff pending</span>' : '') +
@@ -5232,6 +5482,12 @@
                 switchRunsSubtab("memory");
             });
         });
+        el.querySelectorAll(".wf-run-open-harness").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                if (typeof openWorkflowHarnessModal === "function") openWorkflowHarnessModal();
+            });
+        });
+        bindApprovalDecisionButtons(el);
     }
 
     function submitHarnessSteer(workflowId, runId) {
@@ -5827,6 +6083,7 @@
         if (b === "codex") return "Codex CLI";
         if (b === "claude_code") return "Claude Code CLI";
         if (b === "pi") return "Pi CLI";
+        if (b === "opencode") return "OpenCode";
         if (b === "hermes_agent") return "Hermes";
         if (b === "cline") return "Cline CLI";
         if (!b || b === "auto") return "Auto";
@@ -9943,6 +10200,8 @@
 
         var runAllBtn = document.getElementById("wf-run-all-btn");
         if (runAllBtn) runAllBtn.addEventListener("click", runAllWorkflowQueueTickets);
+        var harnessBtn = document.getElementById("wf-harness-handoff-btn");
+        if (harnessBtn) harnessBtn.addEventListener("click", openWorkflowHarnessModal);
         var refreshRunHistory = document.getElementById("wf-refresh-run-history");
         if (refreshRunHistory) refreshRunHistory.addEventListener("click", function () { loadWorkflowRunHistory({ quiet: false }); });
         var runsHistoryPane = document.getElementById("wf-runs-pane-history");

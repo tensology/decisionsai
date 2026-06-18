@@ -104,6 +104,10 @@ async function loadGeneralSettings() {
         document.getElementById('elevenlabs_speaker_boost').checked = speakerBoost;
         const elevenlabsOpts = document.getElementById('elevenlabs_voice_options');
         if (elevenlabsOpts) elevenlabsOpts.classList.toggle('hidden', voiceProvider !== 'elevenlabs');
+        const pixazoOpts = document.getElementById('pixazo_voice_options');
+        const pixazoSteps = document.getElementById('pixazo_dit_steps');
+        if (pixazoOpts) pixazoOpts.classList.toggle('hidden', voiceProvider !== 'pixazo');
+        if (pixazoSteps) pixazoSteps.value = String(settings.pixazo_dit_steps !== undefined ? settings.pixazo_dit_steps : 6);
 
         // Load oracle settings
         document.getElementById('restore_position').checked = settings.restore_position !== undefined ? settings.restore_position : true;
@@ -149,6 +153,7 @@ async function saveGeneralSettings() {
             elevenlabs_similarity_boost: parseInt(document.getElementById('elevenlabs_similarity').value, 10) / 100,
             elevenlabs_style: parseInt(document.getElementById('elevenlabs_style').value, 10) / 100,
             elevenlabs_use_speaker_boost: document.getElementById('elevenlabs_speaker_boost').checked,
+            pixazo_dit_steps: parseInt(document.getElementById('pixazo_dit_steps')?.value || '6', 10),
             restore_position: document.getElementById('restore_position').checked,
             oracle_position: document.getElementById('oracle_position').value,
             global_ptt_hotkey_enabled: document.getElementById('shortcuts_global_ptt_hotkey_enabled') ? document.getElementById('shortcuts_global_ptt_hotkey_enabled').checked : true,
@@ -449,6 +454,8 @@ function _initGeneral() {
             updateVoiceOptions(p);
             const el = document.getElementById('elevenlabs_voice_options');
             if (el) el.classList.toggle('hidden', p !== 'elevenlabs');
+            const pixazoEl = document.getElementById('pixazo_voice_options');
+            if (pixazoEl) pixazoEl.classList.toggle('hidden', p !== 'pixazo');
             _updateCustomVoiceButton(p);
         });
     }

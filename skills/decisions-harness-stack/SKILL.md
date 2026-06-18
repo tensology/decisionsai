@@ -13,7 +13,7 @@ One Decisions install enhances every CLI/IDE you already use. Run `bin/setup.py`
 |------|---------|
 | **ECC** (`decisions-ecc-harness`) | Full vendored skill/agent/command surface under `plugins/ecc` |
 | **Competition** (`decisions-competition-harness`) | Ponytail + Fallow skills and Cursor ponytail rule; project `ponytail.mdc` on workflow provision |
-| **Capabilities** (`decisions-browser-content-harness`) | Browser QA, video/Remotion, content-engine, fal-ai-media |
+| **Capabilities** (`decisions-browser-content-harness`) | Browser QA, video/Remotion, content-engine, fal-ai-media, pixazo-media |
 | **Design references** (`decisions-design-reference-harness`) | Refero, Mobbin, Aceternity, Godly + UI ideation |
 | **Agent Reach** (`decisions-agent-reach-harness`) | Internet research — Twitter, Reddit, YouTube, GitHub, web, RSS, Exa |
 | **Community** (`decisions-community-skills-harness`) | humanizer, last30days, curated marketing + design aesthetics |

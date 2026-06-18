@@ -1485,6 +1485,7 @@ class InitiativeService:
         requires_response: bool = False,
         priority: str = "normal",
         allow_voice: bool | None = None,
+        voice_body: str | None = None,
     ) -> None:
         text = _initiative_update_text(text)
         if not text:
@@ -1524,7 +1525,7 @@ class InitiativeService:
             subject_id=str(subject_id),
             state_fingerprint=state_fingerprint or text,
             body=text,
-            voice_body=text if allow_voice else None,
+            voice_body=(voice_body or text) if allow_voice else None,
             allow_voice=bool(allow_voice),
             requires_response=requires_response,
         ))
@@ -1659,6 +1660,7 @@ class InitiativeService:
             "claude": "Claude",
             "claude_code": "Claude",
             "cline": "Cline",
+            "opencode": "OpenCode",
             "claude-code": "Claude",
         }
         for candidate in candidates:
@@ -1926,14 +1928,43 @@ class InitiativeService:
                     elif status == "waiting":
                         key = f"workflow:{run.id}:waiting"
                         if self._notice_allowed(key):
+                            run_data = self._packet(run.run_data)
+                            waiting_kind = str(run_data.get("waiting_kind") or "")
+                            step_name = ""
+                            if run.current_step_id:
+                                try:
+                                    from distr.core.db.workflow import AutoWorkflowStep
+
+                                    with get_session() as s:
+                                        step = (
+                                            s.query(AutoWorkflowStep)
+                                            .filter(AutoWorkflowStep.id == int(run.current_step_id))
+                                            .first()
+                                        )
+                                        if step:
+                                            step_name = (step.name or "").strip()
+                                except Exception:
+                                    pass
+                            ticket_title = str(run_data.get("ticket_title") or "").strip()
+                            from distr.core.kanban.ticket_workflow_engagement import (
+                                build_workflow_waiting_nudge,
+                            )
+
+                            nudge_text, nudge_voice = build_workflow_waiting_nudge(
+                                workflow_name=workflow_name,
+                                ticket_title=ticket_title,
+                                step_name=step_name,
+                                waiting_kind=waiting_kind,
+                            )
                             self._send_telegram_if_allowed(
-                                f"{workflow_name} is waiting for input.",
+                                nudge_text,
                                 settings,
                                 kind="workflow_waiting",
                                 subject_type="workflow_run",
                                 subject_id=str(run.id),
-                                state_fingerprint=str(run.started_at),
+                                state_fingerprint=f"{waiting_kind}:{run.started_at}",
                                 requires_response=True,
+                                voice_body=nudge_voice,
                             )
                             sent_this_tick += 1
                             if sent_this_tick >= max_notices:

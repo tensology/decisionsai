@@ -310,6 +310,32 @@ def validate_masko(api_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def validate_pixazo(api_key: str) -> tuple[bool, str]:
+    """Validate Pixazo API key via status endpoint (auth-only probe)."""
+    try:
+        req = urllib.request.Request(
+            "https://gateway.pixazo.ai/v2/requests/status/__decisions_validate__",
+            headers={
+                "Ocp-Apim-Subscription-Key": api_key,
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            if response.status == 200:
+                return True, ""
+        return False, "Invalid API key"
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return False, "Invalid API key"
+        # Missing/unknown request id still proves the subscription key was accepted.
+        if e.code in (400, 404, 422):
+            return True, ""
+        return False, f"HTTP Error: {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def validate_provider(provider: str, key: str) -> tuple[bool, str]:
     """
     Validate API key for any provider.
@@ -333,6 +359,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "gemini": validate_gemini,
         "nvidia": validate_nvidia,
         "masko": validate_masko,
+        "pixazo": validate_pixazo,
     }
 
     validator = validators.get(provider.lower())

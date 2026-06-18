@@ -78,6 +78,45 @@ class StepInputContext:
     previous_results: List[Dict[str, Any]] = field(default_factory=list)
     step_config: Dict[str, Any] = field(default_factory=dict)
     resolved_variables: Dict[str, str] = field(default_factory=dict)
+    workspace_slice: str = ""
+
+
+def build_workspace_slice(
+    *,
+    project_id: Optional[int] = None,
+    board_id: Optional[int] = None,
+    workflow_id: Optional[int] = None,
+    run_id: Optional[int] = None,
+    ticket_id: Optional[int] = None,
+    folder_location: str = "",
+) -> str:
+    """Compact filesystem workspace block for step/run context."""
+    if not any((project_id, board_id, workflow_id, run_id, ticket_id)):
+        return ""
+    try:
+        from distr.core.workspace_memory.reader import load_workspace_context
+
+        ctx = load_workspace_context(
+            project_id=project_id,
+            board_id=board_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            ticket_id=ticket_id,
+            folder_location=folder_location,
+            ensure=True,
+        )
+    except Exception:
+        return ""
+    lines = ["## Workspace memory"]
+    if ctx.projection_path:
+        lines.append(f"- projection: `{ctx.projection_path}`")
+    if ctx.handoff_preview:
+        lines.append(f"- handoff: {ctx.handoff_preview}")
+    for key, path in (ctx.companion_paths or {}).items():
+        lines.append(f"- {key}: `{path}`")
+    if ctx.references_index:
+        lines.append(f"- references: {', '.join(ctx.references_index[:8])}")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +158,13 @@ def assemble_step_context(
     session,
     step,
     prior_results: List[Dict[str, Any]],
+    *,
+    run_id: Optional[int] = None,
+    ticket_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    board_id: Optional[int] = None,
+    workflow_id: Optional[int] = None,
+    folder_location: str = "",
 ) -> StepInputContext:
     """Assemble the full input context for a step based on its type.
 
@@ -179,5 +225,17 @@ def assemble_step_context(
     elif step_type == "play_recording":
         # Self-contained — only step config (already set above)
         pass
+
+    ctx.workspace_slice = build_workspace_slice(
+        project_id=project_id,
+        board_id=board_id,
+        workflow_id=workflow_id or getattr(step, "workflow_id", None),
+        run_id=run_id,
+        ticket_id=ticket_id,
+        folder_location=folder_location,
+    )
+    if ctx.workspace_slice:
+        rules = (ctx.workflow_rules or "").strip()
+        ctx.workflow_rules = f"{rules}\n\n{ctx.workspace_slice}".strip() if rules else ctx.workspace_slice
 
     return ctx

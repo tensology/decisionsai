@@ -1178,15 +1178,15 @@ class TelegramWebSocketManager(
         """Send typing indicator to Telegram so user sees '...' dots. Call periodically during long operations."""
         self._send_websocket_message({"type": "typing_indicator", "action": action})
 
-    def _mark_message_as_read(self, message_id: int):
-        """Tell the server to mark a Telegram message as read (send read receipt).
+    def _mark_message_as_read(self, message_id: int, *, chat_id=None):
+        """Tell the relay the desktop accepted this inbound message.
 
-        The server translates this into a Telegram ``readHistory`` / ``readMessageContents``
-        API call so the sender sees the double-check (read) indicator.
+        Relay may call readBusinessMessage for business-bot links; standard bots
+        only get typing/record_voice indicators (no Bot API read receipts).
         """
         if not message_id:
             return
-        chat_id = self._get_chat_id()
+        chat_id = chat_id or self._get_chat_id() or getattr(self, "telegram_user_id", None)
         if not chat_id:
             logger.debug("[Telegram] Cannot mark message %s as read — no chat_id", message_id)
             return

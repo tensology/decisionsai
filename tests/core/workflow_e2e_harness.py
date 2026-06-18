@@ -188,6 +188,10 @@ def workflow_patch_stack(factory, tmp_path):
             lambda *, packet, run_status, risk_profile: (run_status or "completed", dict(packet or {}), []),
         ),
         patch(
+            "distr.core.workflow.dogfood_gate.enforce_dogfood_exit_gate",
+            lambda *, packet, run_status, workflow_id: (run_status or "completed", dict(packet or {}), []),
+        ),
+        patch(
             "distr.core.workflow.dispatcher._record_packet_ui_quality_validation",
             lambda packet, **kwargs: dict(packet or {}),
         ),

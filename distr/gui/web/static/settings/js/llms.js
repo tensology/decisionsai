@@ -3,18 +3,31 @@
 // Populate provider dropdowns from available providers (Third-Party configured only)
 async function populateProviderDropdowns() {
     try {
-        const response = await fetch('/api/llms/available-providers');
-        const data = response.ok ? await response.json() : { providers: [] };
-        const providers = data.providers || [];
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
-        const optionalTypes = ['workflow', 'computer_use'];
+        const [llmRes, mediaRes] = await Promise.all([
+            fetch('/api/llms/available-providers'),
+            fetch('/api/llms/available-media-providers'),
+        ]);
+        const llmData = llmRes.ok ? await llmRes.json() : { providers: [] };
+        const mediaData = mediaRes.ok ? await mediaRes.json() : { providers: [] };
+        const baseProviders = llmData.providers || [];
+        const mediaProviders = mediaData.providers || [];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+        const optionalTypes = ['workflow', 'computer_use', 'video'];
         const emptyLabels = {
             'workflow': 'Inherit from Conversational',
             'computer_use': 'Disabled (accessibility tree only)',
+            'video': 'Disabled',
         };
         for (const type of llmTypes) {
             const sel = document.getElementById(`${type}_provider`);
             if (!sel) continue;
+            let providers = baseProviders;
+            if (type === 'image') {
+                const seen = new Set(baseProviders.map(p => p.id));
+                providers = baseProviders.concat(mediaProviders.filter(p => !seen.has(p.id)));
+            } else if (type === 'video') {
+                providers = mediaProviders.length ? mediaProviders : [];
+            }
             let html = '';
             if (optionalTypes.includes(type)) {
                 html += `<option value="">${escapeHtml(emptyLabels[type] || 'Inherit')}</option>`;
@@ -147,8 +160,8 @@ async function loadLLMsSettings() {
             instantDictation.checked = settings.instant_dictation !== undefined ? settings.instant_dictation : true;
         }
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
-        const optionalTypes = ['workflow', 'computer_use'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+        const optionalTypes = ['workflow', 'computer_use', 'video'];
         for (const type of llmTypes) {
             const provider = (settings[`${type}_provider`] || '').toLowerCase();
             const model = (settings[`${type}_model`] || '').trim();
@@ -214,6 +227,8 @@ async function saveLLMsSettings() {
             vision_model: document.getElementById('vision_model').value,
             image_provider: document.getElementById('image_provider').value,
             image_model: document.getElementById('image_model').value,
+            video_provider: document.getElementById('video_provider') ? document.getElementById('video_provider').value : '',
+            video_model: document.getElementById('video_model') ? document.getElementById('video_model').value : '',
             workflow_provider: document.getElementById('workflow_provider').value,
             workflow_model: document.getElementById('workflow_model').value,
             computer_use_provider: document.getElementById('computer_use_provider').value,
@@ -532,7 +547,7 @@ if (document.readyState === 'loading') {
             updateDownloadButtonVisibility();
             initOllamaBrowserModal();
 
-            const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
+            const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
             llmTypes.forEach(type => {
                 const providerSelect = document.getElementById(`${type}_provider`);
                 if (providerSelect) {
@@ -564,7 +579,7 @@ if (document.readyState === 'loading') {
         updateDownloadButtonVisibility();
         initOllamaBrowserModal();
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
         llmTypes.forEach(type => {
             const providerSelect = document.getElementById(`${type}_provider`);
             if (providerSelect) {

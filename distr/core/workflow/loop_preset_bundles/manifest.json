@@ -34,6 +34,14 @@
       "category": "Engineering",
       "archetype": "incremental_ship",
       "file": "bundles/implement-js-fallow-audit.json"
+    },
+    {
+      "slug": "decisionsai-dogfood-ticket",
+      "name": "DecisionsAI Dogfood Ticket",
+      "role": "senior_software_engineer",
+      "category": "Engineering",
+      "archetype": "incremental_ship",
+      "file": "bundles/decisionsai-dogfood-ticket.json"
     }
   ]
 }

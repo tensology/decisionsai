@@ -19,6 +19,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def is_pickup_request(user_request: str) -> bool:
+    from distr.core.workspace_memory.pickup_handoff import is_pickup_keyword
+
+    return is_pickup_keyword(user_request or "")
+
+
+def _handoff_request(user_request: str) -> bool:
+    from distr.core.workspace_memory.pickup_handoff import is_handoff_keyword
+
+    return is_handoff_keyword(user_request or "")
+
+
 @dataclass(frozen=True)
 class DeveloperProjectContext:
     id: int
@@ -72,6 +84,7 @@ class DeveloperWorkflowContext:
     name: str
     status: str
     workflow_type: str = "manual"
+    workflow_id: int | None = None
     current_step_id: int | None = None
     current_step_name: str = ""
     board_id: int | None = None
@@ -79,6 +92,8 @@ class DeveloperWorkflowContext:
     parent_run_id: int | None = None
     started_at: str = ""
     modified_date: str = ""
+    waiting_kind: str = ""
+    elapsed_seconds: int | None = None
     live_agent_context: dict[str, Any] = field(default_factory=dict)
 
 
@@ -124,6 +139,8 @@ class DeveloperWorkContext:
     user_memory_context: str = ""
     board_notes: list[dict[str, Any]] = field(default_factory=list)
     recommended_skills: list[DeveloperSkillContext] = field(default_factory=list)
+    workspace: dict[str, Any] = field(default_factory=dict)
+    ecosystem: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -179,6 +196,10 @@ class DeveloperWorkContext:
                     f"  - run/workflow #{workflow.id} {workflow.name} "
                     f"({workflow.status}{step}{ticket})"
                 )
+                if workflow.waiting_kind:
+                    lines.append(f"    waiting_kind={workflow.waiting_kind}")
+                if workflow.elapsed_seconds is not None:
+                    lines.append(f"    elapsed_s={workflow.elapsed_seconds}")
                 live = workflow.live_agent_context or {}
                 live_summary = _live_agent_context_line(live)
                 if live_summary:
@@ -207,6 +228,17 @@ class DeveloperWorkContext:
         if self.user_memory_context:
             lines.append(self.user_memory_context)
 
+        if self.workspace:
+            preview = (self.workspace.get("handoff_preview") or "").strip()
+            projection = (self.workspace.get("projection_path") or "").strip()
+            if projection:
+                lines.append(f"- workspace_projection: {projection}")
+            if preview:
+                lines.append(f"- workspace_handoff: {_one_line(preview, 220)}")
+            pickup_brief = (self.workspace.get("pickup_brief") or "").strip()
+            if pickup_brief:
+                lines.append(pickup_brief[:1200])
+
         if self.board_notes:
             from distr.core.kanban.board_notes import format_board_notes_for_prompt
 
@@ -220,7 +252,28 @@ class DeveloperWorkContext:
                 lines.append(f"  - {skill.name}: {_one_line(skill.reason, 160)}")
 
         if self.warnings:
-            lines.append("- context_warnings: " + "; ".join(self.warnings[:4]))
+            lines.append("- context_warnings: " + "; ".join(self.warnings[:8]))
+
+        eco = self.ecosystem or {}
+        name_index = eco.get("name_index") or {}
+        if name_index:
+            wf_names = name_index.get("workflows") or {}
+            board_names = name_index.get("boards") or {}
+            if wf_names:
+                bits = [f"{n}=#{i}" for n, i in list(wf_names.items())[:12]]
+                lines.append("- workflow_name_index: " + ", ".join(bits))
+            if board_names:
+                bits = [f"{n}=#{i}" for n, i in list(board_names.items())[:12]]
+                lines.append("- board_name_index: " + ", ".join(bits))
+        for note in (eco.get("board_health") or [])[:6]:
+            if isinstance(note, str) and note.strip():
+                lines.append(f"  - board: {note.strip()}")
+        for note in (eco.get("unscoped_tickets") or [])[:6]:
+            if isinstance(note, str) and note.strip():
+                lines.append(f"  - unscoped: {note.strip()}")
+        for note in (eco.get("projects_missing_folder") or [])[:4]:
+            if isinstance(note, str) and note.strip():
+                lines.append(f"  - project: {note.strip()}")
 
         text = "\n".join(lines)
         if len(text) <= max_chars:
@@ -257,9 +310,37 @@ class DeveloperContextAssembler:
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
         external_agent_context = _safe_call("external agent context", warnings, self._fetch_external_agent_context) or {}
-        user_memory_context = _safe_call("Orchestrator user memory", warnings, self._fetch_user_memory_context) or ""
-        board_notes = _safe_call("ticket board notes", warnings, self._fetch_board_notes) or []
+        user_memory_context = _safe_call(
+            "Orchestrator user memory",
+            warnings,
+            self._fetch_user_memory_context,
+            active_project,
+            active_board,
+            active_workflows,
+        ) or ""
+        board_notes = _safe_call("ticket board notes", warnings, self._fetch_board_notes, active_board) or []
         recommended_skills = _safe_call("skill recommendations", warnings, self._recommend_skills, user_request) or []
+        workspace = _safe_call(
+            "workspace memory",
+            warnings,
+            self._fetch_workspace,
+            active_project,
+            active_board,
+            active_tickets,
+            active_workflows,
+            user_request,
+        ) or {}
+        ecosystem = _safe_call("ecosystem snapshot", warnings, self._fetch_ecosystem_snapshot) or {}
+
+        if is_pickup_request(user_request):
+            pickup_brief = _safe_call("pickup brief", warnings, self._build_pickup_brief, workspace) or ""
+            if pickup_brief:
+                workspace = {**workspace, "pickup_brief": pickup_brief}
+
+        if _handoff_request(user_request):
+            handoff_result = _safe_call("handoff", warnings, self._perform_handoff, workspace, user_request) or {}
+            if handoff_result:
+                workspace = {**workspace, "handoff_result": handoff_result}
 
         return DeveloperWorkContext(
             runtime=runtime,
@@ -272,6 +353,8 @@ class DeveloperContextAssembler:
             user_memory_context=user_memory_context,
             board_notes=board_notes,
             recommended_skills=recommended_skills,
+            workspace=workspace,
+            ecosystem=ecosystem,
             warnings=warnings,
         )
 
@@ -500,6 +583,7 @@ class DeveloperContextAssembler:
                     name=workflow.name or "",
                     status=run.status or workflow.status or "",
                     workflow_type=workflow.workflow_type or "manual",
+                    workflow_id=workflow.id,
                     current_step_id=run.current_step_id,
                     current_step_name=step_names.get(run.current_step_id or 0, ""),
                     board_id=run.board_id,
@@ -507,6 +591,8 @@ class DeveloperContextAssembler:
                     parent_run_id=run.parent_run_id,
                     started_at=run.started_at.isoformat() if run.started_at else "",
                     modified_date=workflow.modified_date.isoformat() if workflow.modified_date else "",
+                    waiting_kind=_waiting_kind_from_run(run),
+                    elapsed_seconds=_elapsed_seconds(run.started_at),
                     live_agent_context=_live_context_from_run_data(run.run_data),
                 )
                 for run, workflow in rows
@@ -561,15 +647,123 @@ class DeveloperContextAssembler:
 
         return build_external_agent_context(limit=8)
 
-    def _fetch_user_memory_context(self) -> str:
+    def _fetch_user_memory_context(
+        self,
+        active_project: DeveloperProjectContext | None = None,
+        active_board: DeveloperBoardContext | None = None,
+        active_workflows: list[DeveloperWorkflowContext] | None = None,
+    ) -> str:
         from distr.core.orchestrator_memory import build_memory_context
 
-        return build_memory_context(limit=30)
+        workflow_id = None
+        run_id = None
+        if active_workflows:
+            wf = active_workflows[0]
+            workflow_id = wf.workflow_id
+            run_id = wf.id
+        return build_memory_context(
+            limit=30,
+            project_id=active_project.id if active_project else None,
+            board_id=active_board.id if active_board else None,
+            workflow_id=workflow_id,
+            run_id=run_id,
+        )
 
-    def _fetch_board_notes(self) -> list[dict[str, Any]]:
+    def _fetch_board_notes(self, active_board: DeveloperBoardContext | None = None) -> list[dict[str, Any]]:
         from distr.core.kanban.board_notes import load_board_notes
 
-        return load_board_notes()
+        board_id = active_board.id if active_board else None
+        return load_board_notes(board_id=board_id)
+
+    def _fetch_workspace(
+        self,
+        active_project: DeveloperProjectContext | None,
+        active_board: DeveloperBoardContext | None,
+        active_tickets: list[DeveloperTicketContext],
+        active_workflows: list[DeveloperWorkflowContext],
+        user_request: str,
+    ) -> dict[str, Any]:
+        from distr.core.workspace_memory.reader import load_workspace_context
+
+        project_id = active_project.id if active_project else None
+        board_id = active_board.id if active_board else None
+        workflow_id = None
+        run_id = None
+        ticket_id = None
+        if active_workflows:
+            wf = active_workflows[0]
+            workflow_id = wf.workflow_id
+            run_id = wf.id
+            ticket_id = wf.ticket_id
+        elif active_tickets:
+            ticket_id = active_tickets[0].id
+        folder = active_project.folder_location if active_project else ""
+        ctx = load_workspace_context(
+            project_id=project_id,
+            board_id=board_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            ticket_id=ticket_id,
+            folder_location=folder,
+            ensure=True,
+            include_pickup_brief=is_pickup_request(user_request),
+        )
+        return {
+            "companion_paths": ctx.companion_paths,
+            "projection_path": ctx.projection_path,
+            "router_chain": ctx.router_chain,
+            "handoff_preview": ctx.handoff_preview,
+            "pickup_brief": ctx.pickup_brief,
+            "org_router": ctx.org_router,
+            "references_index": ctx.references_index,
+        }
+
+    def _build_pickup_brief(self, workspace: dict[str, Any]) -> str:
+        from distr.core.workspace_memory.pickup_handoff import build_pickup_brief, load_decisions_json
+
+        paths = workspace.get("companion_paths") or {}
+        for key, entity_type in (
+            ("run", "runs"),
+            ("project", "projects"),
+            ("board", "boards"),
+            ("workflow", "workflows"),
+        ):
+            root = paths.get(key)
+            if not root:
+                continue
+            entity_id = root.rstrip("/").split("/")[-1]
+            decisions = load_decisions_json(entity_type, entity_id)
+            return build_pickup_brief(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                decisions=decisions,
+            )
+        return ""
+
+    def _perform_handoff(self, workspace: dict[str, Any], user_request: str) -> dict[str, str]:
+        from distr.core.workspace_memory.pickup_handoff import load_decisions_json, perform_handoff
+
+        paths = workspace.get("companion_paths") or {}
+        summary = (user_request or "").strip() or "Session handoff requested."
+        for key, entity_type in (
+            ("run", "runs"),
+            ("project", "projects"),
+            ("board", "boards"),
+            ("workflow", "workflows"),
+        ):
+            root = paths.get(key)
+            if not root:
+                continue
+            entity_id = root.rstrip("/").split("/")[-1]
+            decisions = load_decisions_json(entity_type, entity_id)
+            return perform_handoff(
+                entity_type,
+                entity_id,
+                summary=summary,
+                source="chat_handoff",
+                extra=decisions,
+            )
+        return {}
 
     def _recommend_skills(self, user_request: str) -> list[DeveloperSkillContext]:
         if not (user_request or "").strip():
@@ -580,6 +774,92 @@ class DeveloperContextAssembler:
             DeveloperSkillContext(name=rec.name, reason=rec.reason)
             for rec in recommend_skills_for_ticket(user_request)
         ]
+
+    def _fetch_ecosystem_snapshot(self) -> dict[str, Any]:
+        from distr.core.db import get_session
+        from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+        from distr.core.db.projects import Project
+        from distr.core.db.workflow import AutoWorkflow
+
+        board_health: list[str] = []
+        unscoped: list[str] = []
+        projects_missing_folder: list[str] = []
+        workflow_names: dict[str, int] = {}
+        board_names: dict[str, int] = {}
+
+        with get_session() as session:
+            boards = (
+                session.query(KanbanBoard)
+                .filter(KanbanBoard.archived == False)  # noqa: E712
+                .order_by(KanbanBoard.position.asc(), KanbanBoard.id.asc())
+                .limit(30)
+                .all()
+            )
+            for board in boards:
+                name = (board.name or f"Board {board.id}").strip()
+                board_names[name] = int(board.id)
+                lanes = (
+                    session.query(KanbanLane)
+                    .filter(KanbanLane.board_id == board.id)
+                    .order_by(KanbanLane.position.asc())
+                    .all()
+                )
+                lane_counts = []
+                backlog_count = current_count = 0
+                for lane in lanes:
+                    count = session.query(KanbanTicket).filter(KanbanTicket.lane_id == lane.id).count()
+                    lane_counts.append(f"{lane.name}={count}")
+                    lname = (lane.name or "").strip().lower()
+                    if lname in {"backlog", "todo", "to do"}:
+                        backlog_count += count
+                    if lname in {"current", "active", "in progress", "in-progress", "doing"}:
+                        current_count += count
+                if backlog_count and not current_count:
+                    board_health.append(
+                        f"#{board.id} {name}: backlog has {backlog_count} ticket(s), current lane empty"
+                    )
+                if not board.default_project_id:
+                    board_health.append(f"#{board.id} {name}: no default_project_id — harness dispatch may fail")
+                if lane_counts:
+                    board_health.append(f"#{board.id} {name} lanes: {', '.join(lane_counts[:8])}")
+
+                rows = (
+                    session.query(KanbanTicket, KanbanLane)
+                    .join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
+                    .filter(KanbanLane.board_id == board.id)
+                    .limit(80)
+                    .all()
+                )
+                for ticket, lane in rows:
+                    if not ticket.linked_project_id and not board.default_project_id:
+                        unscoped.append(
+                            f"ticket #{ticket.id} on board #{board.id} ({lane.name}): no linked project"
+                        )
+
+            projects = session.query(Project).order_by(Project.modified_date.desc()).limit(40).all()
+            for project in projects:
+                if not (project.folder_location or "").strip():
+                    projects_missing_folder.append(f"#{project.id} {project.name or 'Project'}: no folder_location")
+
+            workflows = (
+                session.query(AutoWorkflow)
+                .order_by(AutoWorkflow.modified_date.desc())
+                .limit(40)
+                .all()
+            )
+            for wf in workflows:
+                wname = (wf.name or f"Workflow {wf.id}").strip()
+                workflow_names[wname] = int(wf.id)
+
+        return {
+            "name_index": {
+                "workflows": workflow_names,
+                "boards": board_names,
+            },
+            "board_health": board_health[:20],
+            "unscoped_tickets": unscoped[:20],
+            "projects_missing_folder": projects_missing_folder[:15],
+        }
 
 
 def build_developer_context(
@@ -684,6 +964,18 @@ def format_developer_context_dict_for_prompt(
     if user_memory_context:
         lines.append(str(user_memory_context))
 
+    workspace = context.get("workspace") or {}
+    if workspace:
+        preview = (workspace.get("handoff_preview") or "").strip()
+        projection = (workspace.get("projection_path") or "").strip()
+        if projection:
+            lines.append(f"- workspace_projection: {projection}")
+        if preview:
+            lines.append(f"- workspace_handoff: {_one_line(preview, 220)}")
+        pickup_brief = (workspace.get("pickup_brief") or "").strip()
+        if pickup_brief:
+            lines.append(pickup_brief[:1200])
+
     if board_notes:
         from distr.core.kanban.board_notes import format_board_notes_for_prompt
 
@@ -700,6 +992,28 @@ def format_developer_context_dict_for_prompt(
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "…"
+
+
+def _waiting_kind_from_run(run: Any) -> str:
+    try:
+        data = json.loads(run.run_data or "{}") or {}
+    except Exception:
+        return ""
+    return str(data.get("waiting_kind") or "").strip()
+
+
+def _elapsed_seconds(started_at: Any) -> int | None:
+    if not started_at:
+        return None
+    try:
+        if getattr(started_at, "tzinfo", None) is None:
+            started = started_at.replace(tzinfo=timezone.utc)
+        else:
+            started = started_at
+        delta = datetime.now(timezone.utc) - started.astimezone(timezone.utc)
+        return max(0, int(delta.total_seconds()))
+    except Exception:
+        return None
 
 
 def _safe_call(label: str, warnings: list[str], func, *args):

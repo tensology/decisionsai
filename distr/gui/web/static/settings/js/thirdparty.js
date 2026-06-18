@@ -13,6 +13,7 @@ const PROVIDERS = [
     {id: 'kilocode', name: 'KiloCode', keyField: 'key', settingsKey: 'kilo'},
     {id: 'gemini', name: 'Google Gemini', keyField: 'key'},
     {id: 'nvidia', name: 'NVIDIA', keyField: 'key'},
+    {id: 'pixazo', name: 'Pixazo', keyField: 'key'},
     {id: 'masko', name: 'Masko AI', keyField: 'key'}
 ];
 

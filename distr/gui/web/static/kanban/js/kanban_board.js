@@ -250,7 +250,18 @@
                 loadBoardDefaults(null);
             }
             ensureBoardModalCustomSelects();
-            if (boardId) deps.loadBoardWaLinks(boardId);
+            if (boardId) {
+                deps.loadBoardWaLinks(boardId);
+                deps.apiFetch("/api/tickets/boards/" + boardId + "/workspace-memory").then(function(data) {
+                    var paths = (data && data.workspace && data.workspace.companion_paths) || {};
+                    var mapPath = paths.board ? (paths.board + "/agents.md") : "";
+                    var input = document.getElementById("kb-board-agent-map");
+                    if (input) input.value = mapPath;
+                }).catch(function() {});
+            } else {
+                var mapInput = document.getElementById("kb-board-agent-map");
+                if (mapInput) mapInput.value = "";
+            }
             document.getElementById("kb-board-modal").classList.remove("hidden");
             if (typeof injectInfoIcons === "function") injectInfoIcons();
         }

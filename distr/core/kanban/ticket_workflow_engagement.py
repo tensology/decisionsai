@@ -176,6 +176,61 @@ def build_workflow_waiting_voice(
     )
 
 
+def build_workflow_waiting_nudge(
+    *,
+    workflow_name: str,
+    ticket_title: str = "",
+    step_name: str = "",
+    waiting_kind: str = "",
+) -> tuple[str, str]:
+    """Actionable text + voice for initiative / background workflow-waiting alerts."""
+    subject = (ticket_title or workflow_name or "A workflow").strip()
+    step = (step_name or "").strip()
+    kind = (waiting_kind or "").strip().lower()
+
+    if kind == "run_briefing":
+        text = (
+            f"{subject} is ready to start but waiting for your go-ahead. "
+            "Open Workflows → Active Runs, or tell me **go ahead** or **continue** to start."
+        )
+        voice = f"{subject} is ready to start. Say go ahead or continue to proceed."
+    elif kind == "step_review":
+        step_bit = f" after {step}" if step else ""
+        text = (
+            f"{subject} paused{step_bit} for a quick checkpoint. "
+            "Open Workflows → Active Runs, or tell me **continue** to proceed, **stop** to cancel."
+        )
+        voice = f"{subject} paused for a checkpoint. Say continue to proceed, or stop to cancel."
+    elif kind == "approval":
+        step_bit = f" ({step})" if step else ""
+        text = (
+            f"{subject} needs your approval{step_bit}. "
+            "Open Workflows → Active Runs and approve the step, or tell me **approve** or **continue**."
+        )
+        voice = f"{subject} needs your approval. Open Workflows or say approve to continue."
+    elif kind == "route_approval":
+        text = (
+            f"{subject} wants to change execution route. "
+            "Open Workflows → Active Runs to approve or reject, or tell me what to do."
+        )
+        voice = f"{subject} needs route approval. Open Workflows or tell me how to proceed."
+    elif kind in {"ide_handoff", "needs_human_input", "worker_needs_input"}:
+        text = (
+            f"{subject} is waiting on you in the linked IDE or harness. "
+            "Finish there, then tell me **continue**, or open Workflows → Active Runs."
+        )
+        voice = f"{subject} is waiting in your IDE. Say continue when you're ready."
+    else:
+        step_bit = f" at {step}" if step else ""
+        text = (
+            f"{subject} is paused{step_bit} and needs a decision. "
+            "Open Workflows → Active Runs, or tell me **continue** to proceed, **stop** to cancel."
+        )
+        voice = f"{subject} is paused. Say continue to proceed, or stop to cancel."
+
+    return text, voice
+
+
 def _run_context(run_id: int) -> dict[str, Any]:
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()

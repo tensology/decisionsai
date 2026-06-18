@@ -1638,6 +1638,7 @@ body.wf-split-dragging * {
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                             <span>Stop</span>
                         </button>
+                        <button type="button" id="wf-harness-handoff-btn" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10" title="Copy workflow memory instructions for your IDE or CLI harness">Work in your IDE</button>
                         <button type="button" id="wf-run-all-btn" class="px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Run all</button>
                     </div>
                 </div>
@@ -2209,7 +2210,10 @@ body.wf-split-dragging * {
         '<th class="text-left text-[11px] font-medium text-gray-400 px-2 py-1.5">Rule</th>',
         '<th class="text-right text-[11px] font-medium text-gray-400 px-2 py-1.5">Actions</th>',
         '</tr></thead><tbody id="wf-config-context-items-list" class="divide-y divide-white/10"></tbody></table>',
-        '</div><p id="wf-config-context-save-status" class="text-[11px] text-gray-500 mt-1.5 flex-shrink-0"></p></div>',
+        '</div>',
+        '<div class="mt-2 flex-shrink-0"><label class="text-[11px] text-gray-500 block mb-1">Agent map</label>',
+        '<input id="wf-config-agent-map" type="text" readonly class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-[11px] font-mono" placeholder="Select a workflow"></div>',
+        '<p id="wf-config-context-save-status" class="text-[11px] text-gray-500 mt-1.5 flex-shrink-0"></p></div>',
         '</div>',
         '<div id="wf-config-tab-execution" class="wf-global-config-pane space-y-2">',
         '<p class="wf-config-section-label">Executors</p>',

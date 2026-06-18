@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from html import unescape
@@ -48,9 +50,40 @@ REGISTERED_BACKEND_IDS = (
     "codex_ide",
     "hermes_agent",
     "cline",
+    "opencode",
 )
-SPOTIFY_PROJECT_PREFIX = "decisionsai-e2e-spotify-remake-"
+SPOTIFY_PROJECT_PREFIX = "spotify-remake-e2e-"
 SPOTIFY_LANES = ("Backlog", "Ready", "In Progress", "Validation", "Improve", "Complete")
+SPOTIFY_PROGRAM_REQUIREMENTS = ROOT / "tests" / "core" / "fixtures" / "spotify_remake_requirements.md"
+SPOTIFY_IDEATION_PRESET = "ideation-brief-to-board"
+SPOTIFY_DEVELOPMENT_PRESET = "development-ticket-to-implementation"
+SPOTIFY_POLISH_PRESET = "polish-verify-and-ship"
+E2E_HARNESS_PREFIX = "[e2e]"
+E2E_LEGACY_NAME_PREFIXES = (
+    "DecisionsAI dogfood ",
+    "DecisionsAI dogfood spawn project ",
+    "Dogfood board ",
+    "Dogfood spawn board ",
+    "Dogfood smoke",
+    "Dogfood spawn",
+    "E2E until green workflow ",
+    "E2E workflow board ",
+    "E2E browser project ",
+    "E2E browser loop ticket ",
+    "E2E Spotify ",
+    "spotify-remake",
+)
+E2E_LEGACY_WORKFLOW_SEARCHES = (
+    E2E_HARNESS_PREFIX,
+    "spotify-remake",
+    "DecisionsAI dogfood",
+    "Dogfood board",
+    "Dogfood spawn",
+    "E2E until green",
+    "E2E workflow board",
+    "E2E browser",
+    "E2E Spotify",
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +116,72 @@ def _quote_shell(path: Path) -> str:
 def _slug(value: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip().lower()).strip("-")
     return text or "default"
+
+
+def e2e_spotify_program_names() -> dict[str, str]:
+    """One Spotify remake program: project, board, ideation/dev/polish workflows."""
+    label = e2e_fixture_label()
+    base = f"{E2E_HARNESS_PREFIX} spotify-remake-{label}"
+    return {
+        "project_name": f"{base} project",
+        "board_name": f"{base} board",
+        "ideation_workflow_name": f"{base} · ideation",
+        "development_workflow_name": f"{base} · development",
+        "polish_workflow_name": f"{base} · polish",
+    }
+
+
+def spotify_program_project_dir(work_dir: Path | None = None) -> Path:
+    if work_dir is not None:
+        return work_dir / "spotify-remake"
+    env_dir = (os.environ.get("WORKFLOW_E2E_SPOTIFY_PROJECT_DIR") or "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser()
+    return Path.home() / "development" / "spotify-remake-e2e"
+
+
+def spotify_use_codex() -> bool:
+    return (os.environ.get("WORKFLOW_E2E_USE_CODEX") or "").strip().lower() in {"1", "true", "yes"}
+
+
+def e2e_ide_backend() -> tuple[str, str]:
+    """IDE backend for Spotify program E2E — default Codex when USE_CODEX is set."""
+    backend = (os.environ.get("WORKFLOW_E2E_IDE_BACKEND") or "codex").strip() or "codex"
+    model = (os.environ.get("WORKFLOW_E2E_IDE_MODEL") or "").strip()
+    if not model:
+        model = "gpt-5-codex" if backend == "codex" else "auto"
+    return backend, model
+
+
+def e2e_fixture_label() -> str:
+    return (os.environ.get("WORKFLOW_E2E_FIXTURE_ID") or "canonical").strip() or "canonical"
+
+
+def e2e_fixture_names(profile: str) -> dict[str, str]:
+    """Stable harness names — one workflow/board/project/ticket per profile per label."""
+    label = e2e_fixture_label()
+    base = f"{E2E_HARNESS_PREFIX} {profile}-{label}"
+    return {
+        "workflow_name": f"{base} workflow",
+        "board_name": f"{base} board",
+        "project_name": f"{base} project",
+        "ticket_title": f"{base} ticket",
+    }
+
+
+def is_e2e_harness_disposable_name(name: str, *, profile: str | None = None) -> bool:
+    text = (name or "").strip()
+    if not text:
+        return False
+    if profile:
+        if profile == "spotify-remake":
+            if text in set(e2e_spotify_program_names().values()):
+                return True
+        elif text in set(e2e_fixture_names(profile).values()):
+            return True
+    if text.startswith(E2E_HARNESS_PREFIX):
+        return True
+    return any(text.startswith(prefix) for prefix in E2E_LEGACY_NAME_PREFIXES)
 
 
 def backend_status_map() -> dict[str, dict[str, Any]]:
@@ -394,28 +493,71 @@ class WorkflowTicketLoopHarness:
                 payload = {"raw": raw}
             raise AssertionError(f"{method} /api{path} failed with {exc.code}: {payload}") from exc
 
+    def cleanup_e2e_harness_artifacts(
+        self,
+        *,
+        profile: str | None = None,
+        include_legacy: bool = True,
+    ) -> dict[str, list[int]]:
+        """Remove disposable E2E harness workflows, boards, and projects."""
+        deleted: dict[str, list[int]] = {"workflows": [], "boards": [], "projects": []}
+        workflow_ids: set[int] = set()
+        for search in E2E_LEGACY_WORKFLOW_SEARCHES:
+            if not include_legacy and search != E2E_HARNESS_PREFIX:
+                continue
+            rows = self.api_request(
+                f"/workflows?limit=500&search={urllib.parse.quote(search)}",
+            )
+            for row in rows or []:
+                name = str(row.get("name") or "")
+                if is_e2e_harness_disposable_name(name, profile=profile):
+                    workflow_ids.add(int(row["id"]))
+        for workflow_id in sorted(workflow_ids, reverse=True):
+            self._best_effort_api_delete(f"/workflows/{workflow_id}")
+            deleted["workflows"].append(workflow_id)
+
+        boards = self.api_request("/tickets/boards?include_archived=true")
+        for board in boards or []:
+            name = str(board.get("name") or "")
+            if is_e2e_harness_disposable_name(name, profile=profile):
+                board_id = int(board["id"])
+                self._best_effort_api_delete(f"/tickets/boards/{board_id}")
+                deleted["boards"].append(board_id)
+
+        projects = self.api_request("/projects")
+        for project in projects or []:
+            name = str(project.get("name") or "")
+            if is_e2e_harness_disposable_name(name, profile=profile):
+                project_id = int(project["id"])
+                self._best_effort_api_delete(f"/projects/{project_id}")
+                deleted["projects"].append(project_id)
+        return deleted
+
     def seed_until_green_fixture(self, work_dir: Path | None = None, *, stamp: int | None = None) -> dict[str, int | str]:
         """Create a deterministic red-to-green workflow fixture through public APIs."""
+        _ = stamp  # ponytail: legacy arg ignored; one canonical fixture per profile label
+        self.cleanup_e2e_harness_artifacts(profile="until-green", include_legacy=True)
+        names = e2e_fixture_names("until-green")
         root = work_dir or Path(tempfile.mkdtemp(prefix="workflow-ticket-loop-e2e-"))
         root.mkdir(parents=True, exist_ok=True)
-        stamp = int(stamp or time.time() * 1000)
-        project_dir = root / f"workflow-project-{stamp}"
+        project_dir = root / "workflow-project"
         project_dir.mkdir(parents=True, exist_ok=True)
-        marker_path = root / f"workflow-green-{stamp}.txt"
+        marker_path = root / "workflow-green-marker.txt"
 
-        workflow_name = f"E2E until green workflow {stamp}"
-        board_name = f"E2E workflow board {stamp}"
-        project_name = f"E2E browser project {stamp}"
-        ticket_title = f"E2E browser loop ticket {stamp}"
+        workflow_name = names["workflow_name"]
+        board_name = names["board_name"]
+        project_name = names["project_name"]
+        ticket_title = names["ticket_title"]
 
+        ide_backend, ide_model = e2e_ide_backend()
         project = self.api_request(
             "/projects",
             method="POST",
             data={
                 "name": project_name,
                 "folder_location": str(project_dir),
-                "coding_backend": "codex",
-                "coding_backend_model": "gpt-5-codex",
+                "coding_backend": ide_backend,
+                "coding_backend_model": ide_model,
             },
         )
         project_id = int(project["id"])
@@ -434,8 +576,8 @@ class WorkflowTicketLoopHarness:
                 "orchestrator_policy": {
                     "harness_preferences": {
                         "frontend": {
-                            "backend": "codex",
-                            "model": "gpt-5-codex",
+                            "backend": ide_backend,
+                            "model": ide_model,
                             "skills": [
                                 "executing-plans",
                                 "tdd-workflow",
@@ -526,7 +668,7 @@ class WorkflowTicketLoopHarness:
                 "action_type": "run_command",
                 "instruction": "Validate the route decision and skill handoff before running the loop.",
                 "config": {
-                    "command": "echo 'route selected: codex / gpt-5-codex'",
+                    "command": f"echo 'route selected: {ide_backend} / {ide_model}'",
                     "timeout_seconds": 10,
                     "skills": ["executing-plans", "tdd-workflow"],
                     "tools": ["cli"],
@@ -640,6 +782,434 @@ class WorkflowTicketLoopHarness:
             "work_dir": str(root),
         }
 
+    def _create_preset_workflow(
+        self,
+        *,
+        name: str,
+        description: str,
+        preset_slug: str,
+        workflow_input: dict[str, Any],
+    ) -> int:
+        workflow = self.api_request(
+            "/workflows",
+            method="POST",
+            data={"name": name, "description": description, "workflow_type": "manual"},
+        )
+        workflow_id = int(workflow["id"])
+        self.api_request(
+            f"/workflows/{workflow_id}",
+            method="PATCH",
+            data={
+                "workflow_input": json.dumps(workflow_input),
+                "run_settings": {
+                    "execution_mode": "sequential",
+                    "max_parallel_tickets": 1,
+                    "human_checkpoints": False,
+                },
+            },
+        )
+        self.api_request(
+            f"/workflows/{workflow_id}/apply-loop-preset",
+            method="POST",
+            data={"preset_name": preset_slug, "mode": "replace"},
+        )
+        return workflow_id
+
+    def _write_spotify_ideation_artifacts(self, project_dir: Path) -> dict[str, str]:
+        project_dir.mkdir(parents=True, exist_ok=True)
+        requirements_path = project_dir / "product-requirements.md"
+        if SPOTIFY_PROGRAM_REQUIREMENTS.is_file():
+            requirements_path.write_text(
+                SPOTIFY_PROGRAM_REQUIREMENTS.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        specs = build_spotify_ticket_specs()[:3]
+        brief_lines = [
+            "# Spotify remake product brief",
+            "",
+            "## Delivery slices",
+        ]
+        for spec in specs:
+            brief_lines.append(f"- {spec.title}")
+        brief_lines.extend(["", "Polish and ship run after development tickets complete.", ""])
+        brief_path = project_dir / "product-brief.md"
+        brief_path.write_text("\n".join(brief_lines), encoding="utf-8")
+        return {
+            "requirements_path": str(requirements_path),
+            "brief_path": str(brief_path),
+        }
+
+    def _patch_spotify_e2e_dev_workflow(self, workflow_id: int, project_dir: Path) -> None:
+        """Deterministic dev steps for CI when Codex is not used."""
+        if spotify_use_codex():
+            return
+        pd = _quote_shell(project_dir)
+        ingest_cmd = f"cd {pd} && test -f product-requirements.md && test -f product-brief.md && echo 'Ingested ticket, brief, and project route for slice 1.'"
+        plan_cmd = (
+            f"cd {pd} && printf '%s\\n' '# plan.md' '## Slice' 'App shell and player foundation' "
+            "'## Tests' 'npm test' > plan.md && echo 'plan.md written.'"
+        )
+        implement_cmd = (
+            f"cd {pd} && node -e \""
+            "const fs=require('fs');"
+            "const s=JSON.parse(fs.readFileSync('src/app-state.json','utf8'));"
+            "s.features=['app-shell','player','sidebar'];"
+            "fs.writeFileSync('src/app-state.json',JSON.stringify(s,null,2)+'\\\\n');"
+            "fs.writeFileSync('.decisions-current-ticket.json',JSON.stringify({requiredFeatureCount:1})+'\\\\n');"
+            "\" && npm test"
+        )
+        close_cmd = (
+            "printf '%s\\n' "
+            "'Development slice closed with evidence on ticket.' "
+            "'GREEN validation passed: Spotify slice 1 implemented and npm test green.' "
+            "'Commands run: npm test'"
+        )
+        workflow = self.api_request(f"/workflows/{workflow_id}")
+        by_name = {str(s.get("name") or ""): s for s in workflow.get("steps") or []}
+        patches = {
+            "Ingest ticket and project context": ingest_cmd,
+            "Write plan.md and attach to ticket": plan_cmd,
+            "Implement, test, and self-correct": implement_cmd,
+            "Close development slice with evidence": close_cmd,
+        }
+        for step_name, command in patches.items():
+            step = by_name.get(step_name)
+            if not step:
+                continue
+            payload: dict[str, Any] = {
+                "action_type": "run_command",
+                "config": {"command": command, "timeout_seconds": 120},
+                "validation_type": "none",
+            }
+            if step_name == "Close development slice with evidence":
+                payload["validation_type"] = "text_match"
+                payload["validation_prompt"] = "GREEN validation passed"
+            self.api_request(
+                f"/workflows/{workflow_id}/steps/{int(step['id'])}",
+                method="PATCH",
+                data=payload,
+            )
+
+    def _patch_spotify_e2e_polish_workflow(self, workflow_id: int, project_dir: Path) -> None:
+        if spotify_use_codex():
+            return
+        pd = _quote_shell(project_dir)
+        polish_prep = (
+            f"cd {pd} && node -e \""
+            "const fs=require('fs');"
+            "const s=JSON.parse(fs.readFileSync('src/app-state.json','utf8'));"
+            "s.features=['shell','library','search','browse'];"
+            "s.polish={responsive:true,accessible:true,secure:true};"
+            "fs.writeFileSync('src/app-state.json',JSON.stringify(s,null,2)+'\\\\n');"
+            "\" && npm run build"
+        )
+        release_cmd = (
+            "printf '%s\\n' "
+            "'Release evidence attached. Spotify remake polish gates are green.' "
+            "'GREEN validation passed: security, UI, and build checks complete.'"
+        )
+        workflow = self.api_request(f"/workflows/{workflow_id}")
+        for step in workflow.get("steps") or []:
+            name = str(step.get("name") or "")
+            step_id = int(step["id"])
+            if "security" in name.lower() and step.get("action_type") == "run_command":
+                self.api_request(
+                    f"/workflows/{workflow_id}/steps/{step_id}",
+                    method="PATCH",
+                    data={
+                        "config": {"command": polish_prep.replace("npm run build", "npm test && npm run build"), "timeout_seconds": 180},
+                        "validation_type": "none",
+                    },
+                )
+            elif step.get("action_type") == "playwright":
+                self.api_request(
+                    f"/workflows/{workflow_id}/steps/{step_id}",
+                    method="PATCH",
+                    data={
+                        "action_type": "run_command",
+                        "config": {
+                            "command": polish_prep,
+                            "timeout_seconds": 180,
+                            "skip_ui_screen_capture": True,
+                        },
+                        "validation_type": "text_match",
+                        "validation_prompt": "build-check: green",
+                    },
+                )
+            elif step.get("action_type") == "agent_instruction" and "release" in name.lower():
+                self.api_request(
+                    f"/workflows/{workflow_id}/steps/{step_id}",
+                    method="PATCH",
+                    data={
+                        "action_type": "run_command",
+                        "config": {"command": release_cmd, "timeout_seconds": 30},
+                        "validation_type": "text_match",
+                        "validation_prompt": "GREEN validation passed",
+                    },
+                )
+            elif step.get("action_type") == "agent_instruction":
+                self.api_request(
+                    f"/workflows/{workflow_id}/steps/{step_id}",
+                    method="PATCH",
+                    data={
+                        "action_type": "run_command",
+                        "config": {
+                            "command": "echo 'Polish step complete with evidence attached.'",
+                            "timeout_seconds": 15,
+                        },
+                        "validation_type": "none",
+                    },
+                )
+            elif step.get("action_type") == "run_command" and step.get("validation_type") == "llm_judgment":
+                self.api_request(
+                    f"/workflows/{workflow_id}/steps/{step_id}",
+                    method="PATCH",
+                    data={"validation_type": "none"},
+                )
+
+    def seed_spotify_program(
+        self,
+        work_dir: Path | None = None,
+        *,
+        stamp: int | None = None,
+    ) -> dict[str, Any]:
+        """One Spotify remake program: project, board, tickets, ideation/dev/polish workflows."""
+        _ = stamp
+        self.cleanup_e2e_harness_artifacts(profile="spotify-remake", include_legacy=True)
+        names = e2e_spotify_program_names()
+        root = work_dir or Path(tempfile.mkdtemp(prefix="spotify-program-e2e-"))
+        root.mkdir(parents=True, exist_ok=True)
+        project_dir = spotify_program_project_dir(work_dir)
+        self.scaffold_spotify_project(project_dir)
+        artifacts = self._write_spotify_ideation_artifacts(project_dir)
+
+        ide_backend, ide_model = e2e_ide_backend()
+        project = self.api_request(
+            "/projects",
+            method="POST",
+            data={
+                "name": names["project_name"],
+                "folder_location": str(project_dir),
+                "coding_backend": ide_backend,
+                "coding_backend_model": ide_model,
+            },
+        )
+        project_id = int(project["id"])
+
+        board = self.api_request(
+            "/tickets/boards",
+            method="POST",
+            data={
+                "name": names["board_name"],
+                "description": "Spotify remake program board (ideation output + dev queue).",
+            },
+        )
+        board_id = int(board["id"])
+        board_detail = self.api_request(f"/tickets/boards/{board_id}")
+        lanes = self._spotify_lane_map_from_board(board_detail)
+        policy = build_spotify_board_policy(backend_id=ide_backend)
+
+        ideation_wf_id = self._create_preset_workflow(
+            name=names["ideation_workflow_name"],
+            description="Ideation: requirements → brief → board tickets",
+            preset_slug=SPOTIFY_IDEATION_PRESET,
+            workflow_input={
+                "slug": "spotify-e2e-ideation",
+                "e2e_smoke": True,
+                "skip_human_checkpoints": True,
+                "requirements_path": artifacts["requirements_path"],
+                "product_brief_path": artifacts["brief_path"],
+            },
+        )
+        dev_wf_id = self._create_preset_workflow(
+            name=names["development_workflow_name"],
+            description="Development: ticket slice → plan.md → implement → evidence",
+            preset_slug=SPOTIFY_DEVELOPMENT_PRESET,
+            workflow_input={
+                "slug": "spotify-e2e-dev",
+                "e2e_smoke": True,
+                "skip_human_checkpoints": True,
+                "goal": "Implement Spotify remake ticket slice with project tests green",
+                "max_iterations": 4,
+                "exit_when": "npm test passes and development evidence on ticket",
+                "check_command": f"cd {project_dir} && npm test",
+            },
+        )
+        polish_wf_id = self._create_preset_workflow(
+            name=names["polish_workflow_name"],
+            description="Polish: security, UI regression, release evidence",
+            preset_slug=SPOTIFY_POLISH_PRESET,
+            workflow_input={
+                "slug": "spotify-e2e-polish",
+                "e2e_smoke": True,
+                "skip_human_checkpoints": True,
+                "goal": "Polish gates and release evidence green",
+                "max_iterations": 3,
+                "exit_when": "npm run build passes with polish flags set",
+                "check_command": f"cd {project_dir} && npm run build",
+            },
+        )
+        self._patch_spotify_e2e_dev_workflow(dev_wf_id, project_dir)
+        self._patch_spotify_e2e_polish_workflow(polish_wf_id, project_dir)
+
+        self.api_request(
+            f"/tickets/boards/{board_id}",
+            method="PUT",
+            data={
+                "default_project_id": project_id,
+                "default_workflow_id": dev_wf_id,
+                "orchestrator_policy": policy,
+            },
+        )
+
+        tickets: list[dict[str, Any]] = []
+        specs = build_spotify_ticket_specs()[:3]
+        for index, spec in enumerate(specs):
+            ticket = self.api_request(
+                "/tickets/tickets",
+                method="POST",
+                data={
+                    "lane_id": lanes["Backlog"],
+                    "title": spec.title,
+                    "description": spec.description
+                    + "\n\nAcceptance:\n"
+                    + "\n".join(f"- {item}" for item in spec.acceptance),
+                    "priority": spec.priority,
+                    "complexity": spec.complexity,
+                },
+            )
+            ticket_id = int(ticket["id"])
+            self.api_request(
+                f"/tickets/tickets/{ticket_id}",
+                method="PUT",
+                data={
+                    "linked_project_id": project_id,
+                    "linked_workflow_id": dev_wf_id,
+                    "time_estimate": spec.time_estimate,
+                    "workflow_queue_position": index,
+                },
+            )
+            for item in spec.acceptance:
+                self.api_request(
+                    f"/tickets/tickets/{ticket_id}/todos",
+                    method="POST",
+                    data={"text": item},
+                )
+            self._move_ticket_to_lane(ticket_id, lanes["Ready"], position=index)
+            tickets.append({"id": ticket_id, "title": spec.title, "spec": spec})
+
+        return {
+            "project_id": project_id,
+            "project_name": names["project_name"],
+            "project_dir": str(project_dir),
+            "board_id": board_id,
+            "board_name": names["board_name"],
+            "lanes": lanes,
+            "tickets": tickets,
+            "ideation_workflow_id": ideation_wf_id,
+            "development_workflow_id": dev_wf_id,
+            "polish_workflow_id": polish_wf_id,
+            "requirements_path": artifacts["requirements_path"],
+            "brief_path": artifacts["brief_path"],
+            "work_dir": str(root),
+        }
+
+    def assert_spotify_ideation_artifacts(self, fixture: dict[str, Any]) -> None:
+        """Post-ideation state: requirements, brief, board, and dev-ready tickets."""
+        project_dir = Path(str(fixture["project_dir"]))
+        assert (project_dir / "product-requirements.md").is_file(), "requirements missing"
+        assert (project_dir / "product-brief.md").is_file(), "product brief missing"
+        board = self.api_request(f"/tickets/boards/{int(fixture['board_id'])}")
+        ticket_count = sum(len(lane.get("tickets") or []) for lane in board.get("lanes") or [])
+        assert ticket_count >= 3, f"expected ideation tickets on board, saw {ticket_count}"
+        titles = [str(t["title"]) for t in fixture.get("tickets") or []]
+        expected = [spec.title for spec in build_spotify_ticket_specs()[:3]]
+        assert titles == expected, f"ticket titles mismatch: {titles}"
+
+    def _auto_continue_waiting_run(self, workflow_id: int, run_id: int) -> None:
+        self.api_request(
+            f"/workflows/{workflow_id}/runs/{int(run_id)}/continue",
+            method="POST",
+            data={"input": "yes, go ahead"},
+            timeout=30,
+        )
+
+    def start_ticket_workflow_run(
+        self,
+        *,
+        workflow_id: int,
+        ticket_id: int,
+        board_id: int,
+        project_id: int,
+        ticket_title: str,
+        timeout_seconds: float = 600.0,
+    ) -> dict[str, Any]:
+        run_result = self.api_request(
+            f"/tickets/tickets/{ticket_id}/send-to-workflow",
+            method="POST",
+            data={"workflow_id": workflow_id},
+            timeout=60,
+        )
+        run_id = int(run_result.get("run_id") or 0)
+        assert run_id, f"send-to-workflow did not return run_id: {run_result}"
+        terminal = self.wait_for_ticket_run_terminal(
+            workflow_id=workflow_id,
+            ticket_id=ticket_id,
+            run_id=run_id,
+            timeout_seconds=timeout_seconds,
+            auto_continue=True,
+        )
+        if str(terminal.get("status")) != "completed":
+            raise AssertionError(f"Run {run_id} for {ticket_title!r} ended {terminal.get('status')!r}")
+        summary = self.wait_until_run_completed(
+            workflow_id,
+            ticket_id,
+            run_id=run_id,
+            board_id=board_id,
+            ticket_title=ticket_title,
+            timeout_seconds=30.0,
+        )
+        return {"run_id": run_id, "terminal": terminal, "summary": summary}
+
+    def run_spotify_program_chain(
+        self,
+        work_dir: Path | None = None,
+        *,
+        development_ticket_index: int = 0,
+        run_polish: bool = True,
+    ) -> dict[str, Any]:
+        """Ideation artifacts → development on one ticket → polish. One project, one board."""
+        fixture = self.seed_spotify_program(work_dir)
+        self.assert_spotify_ideation_artifacts(fixture)
+
+        tickets = fixture["tickets"]
+        dev_ticket = tickets[int(development_ticket_index)]
+        dev_result = self.start_ticket_workflow_run(
+            workflow_id=int(fixture["development_workflow_id"]),
+            ticket_id=int(dev_ticket["id"]),
+            board_id=int(fixture["board_id"]),
+            project_id=int(fixture["project_id"]),
+            ticket_title=str(dev_ticket["title"]),
+            timeout_seconds=180.0,
+        )
+
+        polish_result = None
+        if run_polish:
+            polish_result = self.start_ticket_workflow_run(
+                workflow_id=int(fixture["polish_workflow_id"]),
+                ticket_id=int(dev_ticket["id"]),
+                board_id=int(fixture["board_id"]),
+                project_id=int(fixture["project_id"]),
+                ticket_title=str(dev_ticket["title"]),
+                timeout_seconds=180.0,
+            )
+
+        return {
+            "fixture": fixture,
+            "development": dev_result,
+            "polish": polish_result,
+        }
+
     def _workflow_step_by_name(self, workflow: dict[str, Any], name: str) -> dict[str, Any]:
         for step in workflow.get("steps") or []:
             if step.get("name") == name:
@@ -741,6 +1311,33 @@ class WorkflowTicketLoopHarness:
                 return
             time.sleep(0.5)
         raise AssertionError(f"Ticket still has an active workflow run: {ticket_title}")
+
+    def wait_until_run_completed(
+        self,
+        workflow_id: int,
+        ticket_id: int,
+        run_id: int | None = None,
+        *,
+        board_id: int | None = None,
+        ticket_title: str | None = None,
+        timeout_seconds: float = 120.0,
+    ) -> dict[str, Any]:
+        """Poll until the workflow run and ticket reach completed state."""
+        deadline = time.time() + timeout_seconds
+        last_error = ""
+        while time.time() < deadline:
+            try:
+                return self.terminal_summary(
+                    workflow_id,
+                    ticket_id,
+                    run_id=run_id,
+                    board_id=board_id,
+                    ticket_title=ticket_title,
+                )
+            except AssertionError as exc:
+                last_error = str(exc)
+                time.sleep(0.5)
+        raise AssertionError(f"Run did not reach completed state: {last_error}")
 
     def terminal_summary(
         self,
@@ -866,6 +1463,29 @@ console.log('build-check: green');
         )
         if not (project_dir / ".git").exists():
             subprocess.run(["git", "init"], cwd=project_dir, check=False, capture_output=True, text=True)
+
+    def _spotify_lane_map_from_board(self, board_detail: dict[str, Any]) -> dict[str, int]:
+        """Map Spotify program lane names onto the board's actual lanes (API-safe)."""
+        rows = board_detail.get("lanes") or []
+        by_name = {str(row.get("name") or ""): int(row["id"]) for row in rows}
+        if not by_name:
+            raise AssertionError("Board has no lanes")
+        fallback_names = list(by_name.keys())
+
+        def pick(*names: str) -> int:
+            for name in names:
+                if name in by_name:
+                    return by_name[name]
+            return by_name[fallback_names[0]]
+
+        return {
+            "Backlog": pick("Backlog"),
+            "Ready": pick("Ready", "Current", "Backlog"),
+            "In Progress": pick("In Progress", "Current", "Ready"),
+            "Validation": pick("Validation", "QA / Assess", "In Progress"),
+            "Improve": pick("Improve", "QA / Assess", "Validation"),
+            "Complete": pick("Complete", "Done", "Improve"),
+        }
 
     def _set_spotify_lanes(self, board_id: int) -> dict[str, int]:
         from distr.core.db import get_session
@@ -1116,11 +1736,22 @@ console.log('build-check: green');
             data={"lane_id": lane_id, "position": position},
         )
 
+    def _run_from_workflow(self, workflow_id: int, run_id: int) -> dict[str, Any]:
+        workflow = self.api_request(f"/workflows/{workflow_id}")
+        for run in workflow.get("runs") or []:
+            if int(run.get("id") or 0) == int(run_id):
+                return run
+        raise AssertionError(f"No run {run_id} on workflow {workflow_id}")
+
     def _latest_run_for_ticket(self, workflow_id: int, ticket_id: int) -> dict[str, Any]:
         workflow = self.api_request(f"/workflows/{workflow_id}")
         for run in workflow.get("runs") or []:
             if int(run.get("ticket_id") or 0) == int(ticket_id):
                 return run
+        # ponytail: workflow run list may omit ticket_id; fall back to newest run
+        runs = workflow.get("runs") or []
+        if runs:
+            return runs[0]
         raise AssertionError(f"No run found for ticket {ticket_id}")
 
     def wait_for_ticket_run_terminal(
@@ -1128,14 +1759,24 @@ console.log('build-check: green');
         *,
         workflow_id: int,
         ticket_id: int,
+        run_id: int | None = None,
         timeout_seconds: float = 900.0,
+        auto_continue: bool = False,
     ) -> dict[str, Any]:
         deadline = time.time() + timeout_seconds
         latest: dict[str, Any] = {}
         while time.time() < deadline:
             try:
-                latest = self._latest_run_for_ticket(workflow_id, ticket_id)
-                if str(latest.get("status") or "") in {"completed", "failed", "cancelled", "canceled"}:
+                if run_id is not None:
+                    latest = self._run_from_workflow(workflow_id, int(run_id))
+                else:
+                    latest = self._latest_run_for_ticket(workflow_id, ticket_id)
+                status = str(latest.get("status") or "")
+                if status == "waiting" and auto_continue:
+                    self._auto_continue_waiting_run(workflow_id, int(latest["id"]))
+                    time.sleep(0.5)
+                    continue
+                if status in {"completed", "failed", "cancelled", "canceled"}:
                     return latest
             except AssertionError:
                 pass
@@ -1547,6 +2188,38 @@ def _cmd_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_seed_spotify_program(args: argparse.Namespace) -> int:
+    harness = WorkflowTicketLoopHarness(args.base_url)
+    if not harness.server_reachable():
+        raise SystemExit(f"Web server not reachable at {args.base_url}")
+    work_dir = Path(args.work_dir) if args.work_dir else None
+    ids = harness.seed_spotify_program(work_dir)
+    print(json.dumps(ids, indent=2, default=str))
+    return 0
+
+
+def _cmd_run_spotify_program(args: argparse.Namespace) -> int:
+    harness = WorkflowTicketLoopHarness(args.base_url)
+    if not harness.server_reachable():
+        raise SystemExit(f"Web server not reachable at {args.base_url}")
+    work_dir = Path(args.work_dir) if args.work_dir else None
+    result = harness.run_spotify_program_chain(work_dir, run_polish=not args.skip_polish)
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def _cmd_cleanup_e2e_harness(args: argparse.Namespace) -> int:
+    harness = WorkflowTicketLoopHarness(args.base_url)
+    if not harness.server_reachable():
+        raise SystemExit(f"Web server not reachable at {args.base_url}")
+    deleted = harness.cleanup_e2e_harness_artifacts(
+        profile=(args.profile or None),
+        include_legacy=not args.canonical_only,
+    )
+    print(json.dumps(deleted, indent=2))
+    return 0
+
+
 def _cmd_assert_terminal(args: argparse.Namespace) -> int:
     harness = WorkflowTicketLoopHarness(args.base_url)
     summary = harness.terminal_summary(args.workflow_id, args.ticket_id, args.run_id)
@@ -1626,6 +2299,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
     seed = sub.add_parser("seed", help="Create the deterministic until-green workflow fixture")
     seed.add_argument("--work-dir", default="", help="Optional project/marker root directory")
     seed.set_defaults(func=_cmd_seed)
+
+    seed_spotify = sub.add_parser(
+        "seed-spotify-program",
+        help="Create one Spotify remake program (project, board, tickets, ideation/dev/polish workflows)",
+    )
+    seed_spotify.add_argument("--work-dir", default="", help="Optional root directory for spotify-remake project")
+    seed_spotify.set_defaults(func=_cmd_seed_spotify_program)
+
+    run_spotify = sub.add_parser(
+        "run-spotify-program",
+        help="Run Spotify program chain: ideation artifacts → dev ticket → polish",
+    )
+    run_spotify.add_argument("--work-dir", default="", help="Optional root directory for spotify-remake project")
+    run_spotify.add_argument("--skip-polish", action="store_true", help="Stop after development workflow")
+    run_spotify.set_defaults(func=_cmd_run_spotify_program)
+
+    cleanup_e2e = sub.add_parser(
+        "cleanup-e2e-harness",
+        help="Delete disposable E2E harness workflows, boards, and projects",
+    )
+    cleanup_e2e.add_argument(
+        "--profile",
+        default="",
+        help="Only remove one profile's canonical fixture (until-green, spotify-remake)",
+    )
+    cleanup_e2e.add_argument(
+        "--canonical-only",
+        action="store_true",
+        help="Only remove [e2e] canonical fixtures, not legacy stamped names",
+    )
+    cleanup_e2e.set_defaults(func=_cmd_cleanup_e2e_harness)
 
     terminal = sub.add_parser("assert-terminal", help="Assert completed run/ticket/event terminal state")
     terminal.add_argument("--workflow-id", type=int, required=True)

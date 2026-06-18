@@ -485,6 +485,84 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add nvidia_key column: {e}")
 
+    # Handle database migration for pixazo_enabled column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT pixazo_enabled FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN pixazo_enabled BOOLEAN DEFAULT 0"))
+                conn.commit()
+                logger.info("Added pixazo_enabled column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add pixazo_enabled column: {e}")
+
+    # Handle database migration for pixazo_key column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT pixazo_key FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN pixazo_key VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added pixazo_key column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add pixazo_key column: {e}")
+
+    # Handle database migration for pixazo_voice column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT pixazo_voice FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN pixazo_voice VARCHAR DEFAULT 'voxcpm'"))
+                conn.commit()
+                logger.info("Added pixazo_voice column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add pixazo_voice column: {e}")
+
+    # Handle database migration for pixazo_dit_steps column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT pixazo_dit_steps FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN pixazo_dit_steps INTEGER DEFAULT 6"))
+                conn.commit()
+                logger.info("Added pixazo_dit_steps column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add pixazo_dit_steps column: {e}")
+
+    # Handle database migration for video_llm_provider column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT video_llm_provider FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN video_llm_provider VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added video_llm_provider column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add video_llm_provider column: {e}")
+
+    # Handle database migration for video_llm_model column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT video_llm_model FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN video_llm_model VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added video_llm_model column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add video_llm_model column: {e}")
+
     # Handle database migration for cursor_enabled column
     try:
         with Session() as session:

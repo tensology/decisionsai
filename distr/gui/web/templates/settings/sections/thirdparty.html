@@ -437,6 +437,44 @@
             </div>
         </div>
 
+        <!-- Pixazo (image, video, audio APIs) -->
+        <div>
+            <div class="provider-row">
+                <input type="checkbox" id="pixazo_enabled" name="pixazo_enabled"
+                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer"
+                        onchange="toggleProviderInput('pixazo', this.checked)">
+                <span class="provider-label">Pixazo:</span>
+                <div class="provider-input-wrapper">
+                    <div class="relative flex-1">
+                        <input type="password" id="pixazo_key" name="pixazo_key"
+                                placeholder="Enter Pixazo API Key (sk_live_...)"
+                                disabled
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors
+                                        hover:border-[#7a7c8c] disabled:opacity-50">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('pixazo_key')" title="Show password">
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </button>
+                    </div>
+                    <button type="button" class="validate-btn" id="pixazo_validate" onclick="validateProvider('pixazo')" disabled>Validate</button>
+                    <span id="pixazo_indicator" class="validation-indicator"></span>
+                </div>
+            </div>
+            <div class="api-key-info">
+                Get your API key at <a href="https://api-console.pixazo.ai/api_keys" target="_blank" rel="noopener">api-console.pixazo.ai</a> — one key for image, video, and audio models. Browse models at <a href="https://www.pixazo.ai/models" target="_blank" rel="noopener">pixazo.ai/models</a>. Validate saves automatically.
+            </div>
+        </div>
+
         <!-- Masko (AI Skin Generation) -->
         <div>
             <div class="provider-row">

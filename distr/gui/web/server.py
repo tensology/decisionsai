@@ -77,6 +77,13 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Decisions AI GUI Server", redirect_slashes=False)
     app.state.internal_api_token = get_internal_api_token()
     os.environ.setdefault("DECISIONSAI_INTERNAL_API_TOKEN", app.state.internal_api_token)
+
+    try:
+        from distr.core.integrations.relay_auth import ensure_relay_env_loaded
+
+        ensure_relay_env_loaded()
+    except Exception:
+        pass
     
     # Add CORS middleware to allow requests from QWebEngineView
     app.add_middleware(
@@ -361,6 +368,10 @@ def create_app() -> FastAPI:
         from distr.gui.web.routes.orchestrator_memory import create_routes as create_orchestrator_memory_routes
         orchestrator_memory_router = create_orchestrator_memory_routes()
         app.include_router(orchestrator_memory_router, prefix="/api", tags=["orchestrator"])
+
+        from distr.gui.web.routes.workspace_memory import create_routes as create_workspace_memory_routes
+        workspace_memory_router = create_workspace_memory_routes()
+        app.include_router(workspace_memory_router, prefix="/api", tags=["workspace_memory"])
         logger.info("Orchestrator memory routes mounted at /api/orchestrator")
     except Exception as e:
         logger.error("Failed to load Orchestrator memory routes: %s", e, exc_info=True)
@@ -910,6 +921,15 @@ def create_app() -> FastAPI:
         if server is not None:
             server.asyncio_loop = asyncio.get_running_loop()
             logger.info("Unified GUI server asyncio loop bound for in-process terminals")
+
+    @app.on_event("startup")
+    async def _bootstrap_workspace_org():
+        try:
+            from distr.core.workspace_memory.provision import bootstrap_org
+
+            bootstrap_org()
+        except Exception as e:
+            logger.debug("Workspace org bootstrap skipped: %s", e)
 
     # Check model recommendations staleness on startup
     @app.on_event("startup")

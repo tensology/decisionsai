@@ -71,7 +71,7 @@ class IdeThreadTool(BaseTool):
 
     def _run(
         self,
-        action: str,
+        action: str = "list",
         surface: str = "auto",
         instruction: str = "",
         amendment: str = "",

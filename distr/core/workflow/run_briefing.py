@@ -126,33 +126,26 @@ def gather_run_briefing_context(run_id: int) -> RunBriefingContext | None:
 
 
 def build_run_briefing_message(ctx: RunBriefingContext) -> str:
-    """Plain-English pre-run briefing for desktop/Telegram."""
-    project = ctx.project_name or "the linked project"
-    parts = [
-        f"Before I start, here's the plan for {ctx.ticket_title}.",
-        f"It's on {project}.",
-    ]
-    if ctx.ticket_summary:
-        parts.append(f"In short: {ctx.ticket_summary}")
-    if ctx.loop_goal:
-        parts.append(f"The loop will work toward: {ctx.loop_goal}.")
-    if ctx.loop_exit:
-        parts.append(f"We're done when: {_one_line(ctx.loop_exit, limit=200)}")
-    if ctx.step_count > 1:
-        parts.append(
-            f"I'll run {ctx.step_count} steps, starting with {ctx.first_step_name}."
-        )
-        if ctx.first_step_instruction:
-            parts.append(f"First up: {ctx.first_step_instruction}")
-    else:
-        parts.append(f"I'll start with {ctx.first_step_name}.")
-    if ctx.steering_notes:
-        parts.append(f"I'll also keep in mind: {_one_line(ctx.steering_notes, limit=180)}")
-    parts.append(
-        "Tell me if you want to change anything, or say you're happy for me to begin. "
-        "When you confirm, I'll write the work packet and start the Cursor harness on step one."
+    """Plain-English pre-run briefing — one decision with context."""
+    from distr.core.workflow.approval_decision import (
+        approval_loop_diagnostics,
+        build_run_briefing_decision,
+        format_approval_decision_text,
     )
-    return " ".join(parts)
+
+    try:
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(ctx.run_id)).first()
+            if run:
+                run_data = json.loads(run.run_data or "{}") or {}
+                loop_msg = approval_loop_diagnostics(run_data, waiting_kind="run_briefing")
+                if loop_msg:
+                    return loop_msg
+    except Exception:
+        pass
+
+    decision = build_run_briefing_decision(ctx)
+    return format_approval_decision_text(decision)
 
 
 def build_step_review_message(
@@ -165,18 +158,26 @@ def build_step_review_message(
     result_summary: str,
     next_step_name: str = "",
 ) -> str:
-    label = step_name.strip() or "the step"
-    if step_index and step_index > 0:
-        label = f"Step {step_index}: {label}"
-    status = "finished" if passed else "didn't get through"
-    summary = _one_line(result_summary, limit=200)
-    parts = [f"{label} {status}."]
-    if summary and summary.lower() not in {"step completed.", "completed.", "passed."}:
-        parts.append(summary)
-    try:
-        from distr.core.db import get_session
-        from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.approval_decision import (
+        approval_loop_diagnostics,
+        build_step_review_decision,
+        format_approval_decision_text,
+    )
 
+    if run_id is not None:
+        try:
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if run and run.run_data:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                    loop_msg = approval_loop_diagnostics(run_data, waiting_kind="step_review")
+                    if loop_msg:
+                        return loop_msg
+        except Exception:
+            pass
+
+    summary = _one_line(result_summary, limit=200)
+    try:
         if run_id is not None:
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -186,13 +187,19 @@ def build_step_review_message(
                     fields = latest.get("fields") if isinstance(latest.get("fields"), dict) else {}
                     harness_summary = _one_line(str(fields.get("summary") or ""), limit=180)
                     if harness_summary and harness_summary not in (summary or ""):
-                        parts.append(f"Harness reported: {harness_summary}")
+                        summary = f"{summary} Harness reported: {harness_summary}".strip()
     except Exception:
         pass
-    if next_step_name:
-        parts.append(f"Next would be {next_step_name}.")
-    parts.append("Tell me if you want to adjust direction, or I'm ready to continue.")
-    return " ".join(parts)
+
+    decision = build_step_review_decision(
+        ticket_title=ticket_title,
+        step_name=step_name,
+        step_index=step_index,
+        passed=passed,
+        result_summary=summary,
+        next_step_name=next_step_name,
+    )
+    return format_approval_decision_text(decision)
 
 
 def classify_human_workflow_response(
@@ -207,6 +214,10 @@ def classify_human_workflow_response(
         return "confirm" if kind == "run_briefing" else "continue"
     if _STOP_RE.search(clean):
         return "stop"
+    if re.search(r"\b(safe option|do the safe|recommended path)\b", clean, re.IGNORECASE):
+        return "confirm" if (waiting_kind or "").strip().lower() == "run_briefing" else "continue"
+    if re.search(r"\b(approve|sign off|sign-off)\b", clean, re.IGNORECASE) and len(clean) < 60:
+        return "continue"
     if _CONTINUE_RE.match(clean) and len(clean) < 80:
         return "confirm" if (waiting_kind or "").strip().lower() == "run_briefing" else "continue"
     if len(clean) < 12 and _CONTINUE_RE.search(clean):
@@ -232,6 +243,14 @@ def enter_run_briefing_wait(run_id: int, first_step_id: int) -> str:
     if not ctx:
         return ""
     message = build_run_briefing_message(ctx)
+    from distr.core.workflow.approval_decision import (
+        build_run_briefing_decision,
+        format_approval_decision_voice,
+        increment_checkpoint_counter,
+    )
+
+    decision = build_run_briefing_decision(ctx)
+    voice = format_approval_decision_voice(decision)
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
         if not run:
@@ -240,6 +259,8 @@ def enter_run_briefing_wait(run_id: int, first_step_id: int) -> str:
             run_data = json.loads(run.run_data or "{}") or {}
         except Exception:
             run_data = {}
+        run_data = increment_checkpoint_counter(run_data, gate="run_briefing")
+        run_data["approval_decision"] = decision.to_dict()
         run.status = "waiting"
         run.current_step_id = int(first_step_id)
         run_data["waiting_kind"] = "run_briefing"
@@ -253,7 +274,7 @@ def enter_run_briefing_wait(run_id: int, first_step_id: int) -> str:
         notify_ticket_workflow_progress(
             run_id=run_id,
             body=message,
-            voice_body=message,
+            voice_body=voice,
             state_fingerprint=f"run_briefing:{run_id}",
             step_id=first_step_id,
             priority="high",
@@ -291,10 +312,28 @@ def enter_step_review_wait(
             result_summary=result_text,
             next_step_name=next_step_name,
         )
+        from distr.core.workflow.approval_decision import (
+            build_step_review_decision,
+            format_approval_decision_voice,
+            increment_checkpoint_counter,
+        )
+
+        summary = _one_line(result_text, limit=200)
+        decision = build_step_review_decision(
+            ticket_title=ticket_title,
+            step_name=(step.name or "").strip(),
+            step_index=step_index,
+            passed=passed,
+            result_summary=summary,
+            next_step_name=next_step_name,
+        )
+        voice = format_approval_decision_voice(decision)
         try:
             run_data = json.loads(run.run_data or "{}") or {}
         except Exception:
             run_data = {}
+        run_data = increment_checkpoint_counter(run_data, gate="step_review")
+        run_data["approval_decision"] = decision.to_dict()
         run.status = "waiting"
         run.current_step_id = int(step_id)
         step.status = "waiting"
@@ -312,7 +351,7 @@ def enter_step_review_wait(
         notify_ticket_workflow_progress(
             run_id=run_id,
             body=message,
-            voice_body=message,
+            voice_body=voice,
             state_fingerprint=f"step_review:{run_id}:{step_id}",
             step_id=step_id,
             priority="normal" if passed else "high",

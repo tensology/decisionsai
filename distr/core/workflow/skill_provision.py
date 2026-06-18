@@ -144,6 +144,13 @@ def provision_workflow_skills(
         skill_ids = merge_harness_pre_chain(skill_ids, project_folder=project_folder)
     if not skill_ids or not project_folder:
         return []
+    if chain_type == "pre_chain" and project_id:
+        try:
+            from distr.core.workspace_memory.sync import sync_projection_for_project
+
+            sync_projection_for_project(int(project_id))
+        except Exception:
+            logger.debug("provision_workflow_skills: projection sync failed", exc_info=True)
     if chain_type == "pre_chain" and "ponytail" in skill_ids:
         from distr.core.competition_pack import push_ponytail_cursor_rule_to_project
 

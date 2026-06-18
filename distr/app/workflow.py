@@ -277,9 +277,11 @@ class WorkflowOrchestrationMixin:
             )
 
             ctx = {}
+            step_name = ""
+            waiting_kind = ""
             try:
                 from distr.core.db import get_session
-                from distr.core.db.workflow import AutoWorkflowRun
+                from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
 
                 with get_session() as db:
                     run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -287,21 +289,41 @@ class WorkflowOrchestrationMixin:
                         import json
 
                         ctx = json.loads(run.run_data or "{}") or {}
+                        waiting_kind = str(ctx.get("waiting_kind") or "")
+                    if run and run.current_step_id:
+                        step = (
+                            db.query(AutoWorkflowStep)
+                            .filter(AutoWorkflowStep.id == int(run.current_step_id))
+                            .first()
+                        )
+                        if step:
+                            step_name = (step.name or "").strip()
             except Exception:
                 ctx = {}
 
-            message = build_workflow_waiting_message(
-                run_id=run_id,
-                step_id=step_id,
-                result_text=result_text,
-                ticket_title=str(ctx.get("ticket_title") or ""),
-            )
-            voice_message = build_workflow_waiting_voice(
-                step_id=step_id,
-                result_text=result_text,
-                ticket_title=str(ctx.get("ticket_title") or ""),
-                step_name=str(ctx.get("step_name") or ""),
-            )
+            ticket_title = str(ctx.get("ticket_title") or "")
+            if waiting_kind:
+                from distr.core.kanban.ticket_workflow_engagement import build_workflow_waiting_nudge
+
+                message, voice_message = build_workflow_waiting_nudge(
+                    workflow_name=str(ctx.get("workflow_name") or f"Workflow {workflow_id}"),
+                    ticket_title=ticket_title,
+                    step_name=step_name,
+                    waiting_kind=waiting_kind,
+                )
+            else:
+                message = build_workflow_waiting_message(
+                    run_id=run_id,
+                    step_id=step_id,
+                    result_text=result_text,
+                    ticket_title=ticket_title,
+                )
+                voice_message = build_workflow_waiting_voice(
+                    step_id=step_id,
+                    result_text=result_text,
+                    ticket_title=ticket_title,
+                    step_name=step_name,
+                )
             notify_ticket_workflow_progress(
                 run_id=run_id,
                 body=message,
@@ -709,6 +731,11 @@ class WorkflowOrchestrationMixin:
                                 session=wf,
                                 step=step_obj,
                                 prior_results=orch.get("prior_results") or [],
+                                run_id=run_id,
+                                workflow_id=workflow_id,
+                                ticket_id=orch.get("ticket_id"),
+                                project_id=orch.get("project_id"),
+                                board_id=orch.get("board_id"),
                             )
             except Exception as e:
                 logger.debug("Workflow: failed to assemble step context: %s", e)

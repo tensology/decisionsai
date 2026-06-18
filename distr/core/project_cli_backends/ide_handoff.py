@@ -174,7 +174,54 @@ def write_ide_work_packet(
     path = os.path.join(tickets_dir, filename)
 
     ticket_title = _ticket_title_for_task(task) or (task.project_name or "Workflow step")
+    companion_root_path = ""
+    pickup_brief = ""
+    if task.ticket_id:
+        try:
+            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+            from distr.core.workspace_memory.paths import companion_root
+            from distr.core.workspace_memory.pickup_handoff import build_pickup_brief, load_decisions_json
+
+            hook_ensure_workspace("tickets", int(task.ticket_id), reason="ide_work_packet")
+            companion_root_path = str(companion_root("tickets", int(task.ticket_id)))
+            pickup_brief = build_pickup_brief(
+                entity_type="tickets",
+                entity_id=int(task.ticket_id),
+                decisions=load_decisions_json("tickets", int(task.ticket_id)),
+                title=ticket_title,
+            )
+        except Exception:
+            logger.debug("work packet: ticket companion failed", exc_info=True)
+    if not companion_root_path and task.project_id:
+        try:
+            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+            from distr.core.workspace_memory.paths import companion_root
+            from distr.core.workspace_memory.pickup_handoff import build_pickup_brief, load_decisions_json
+
+            hook_ensure_workspace("projects", int(task.project_id), reason="ide_work_packet")
+            companion_root_path = str(companion_root("projects", int(task.project_id)))
+            if not pickup_brief:
+                pickup_brief = build_pickup_brief(
+                    entity_type="projects",
+                    entity_id=int(task.project_id),
+                    decisions=load_decisions_json("projects", int(task.project_id)),
+                    title=ticket_title,
+                )
+        except Exception:
+            logger.debug("work packet: project companion failed", exc_info=True)
+    if companion_root_path:
+        meta["companion_root"] = companion_root_path
     meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+    companion_handoff = ""
+    if task.project_id:
+        try:
+            from distr.core.workspace_memory.paths import companion_memory_file
+
+            companion_handoff = str(companion_memory_file("projects", int(task.project_id), "handoff.md"))
+            meta["companion_handoff"] = companion_handoff
+            meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            logger.debug("work packet: companion handoff path failed", exc_info=True)
     handoff_meta = step_meta if isinstance(step_meta, dict) and step_meta else load_step_handoff_meta(
         getattr(task, "step_id", None)
     )
@@ -197,6 +244,20 @@ def write_ide_work_packet(
     ]
     if loop_context_summary.strip():
         body_parts.extend(["## Loop context (summary)", "", loop_context_summary.strip(), ""])
+    if pickup_brief.strip():
+        body_parts.extend(["## Pick up brief", "", pickup_brief.strip(), ""])
+    if companion_root_path:
+        body_parts.extend(
+            [
+                "## Agent map",
+                "",
+                f"Companion root: `{companion_root_path}`",
+                f"Read `{folder}/.decisions/agents.md` (or repo `AGENTS.md`) then follow `router.md`.",
+                "",
+            ]
+        )
+    elif companion_handoff:
+        body_parts.extend(["## Workspace memory", "", f"Companion handoff: `{companion_handoff}`", ""])
     body_parts.extend(
         [
             "## Instruction",

@@ -137,6 +137,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                             self.SERVICE_NAME, round_num, MAX_TOOL_ROUNDS, len(tool_calls))
 
                 # Save the assistant message with tool_calls
+                tool_calls = self._sanitize_tool_calls(tool_calls)
                 self._messages.append({
                     "role": "assistant",
                     "content": full_content or None,
@@ -322,6 +323,27 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     use_tools = None
                     continue
 
+                if (
+                    self.SERVICE_NAME == "NvidiaLLMService"
+                    and use_tools
+                    and "400" in err
+                    and any(
+                        token in err
+                        for token in (
+                            "unterminated string",
+                            "property name enclosed in double quotes",
+                            "badrequest",
+                            "invalid json",
+                        )
+                    )
+                ):
+                    logger.warning(
+                        "%s: malformed tool payload rejected — retrying without tools",
+                        self.SERVICE_NAME,
+                    )
+                    use_tools = None
+                    continue
+
                 if self.SERVICE_NAME == "OpenRouterLLMService" and "no endpoints found matching your data policy" in err:
                     raise
 
@@ -454,7 +476,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
 
-        return clean_model_text_for_chat(full_content), tool_calls
+        return clean_model_text_for_chat(full_content), self._sanitize_tool_calls(tool_calls)
 
     def _parse_text_tool_calls(self, content: str) -> list:
         """Parse tool calls emitted as <tool_call>JSON</tool_call> in the text stream."""
@@ -665,12 +687,14 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 content = re.sub(r'<tool_call>\s*.*?\s*</tool_call>', '', content, flags=re.DOTALL).strip()
                 logger.info("%s: Parsed %d tool call(s) from follow-up <tool_call> text", self.SERVICE_NAME, len(tool_calls))
 
+        tool_calls = self._sanitize_tool_calls(tool_calls)
         return content, tool_calls
 
     async def _execute_chained_tools(self, tool_calls, follow_up_content):
         """Execute tool calls from a follow-up stream (tool chaining)."""
         import threading
 
+        tool_calls = self._sanitize_tool_calls(tool_calls)
         self._messages.append({
             "role": "assistant",
             "content": follow_up_content or None,
@@ -1271,6 +1295,58 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.error("Error generating welcome summary via %s: %s", self.SERVICE_NAME, e, exc_info=True)
             return ""
 
+    @staticmethod
+    def _sanitize_tool_calls(tool_calls: list | None) -> list:
+        """Ensure tool-call argument strings are valid JSON before API replay."""
+        if not tool_calls:
+            return []
+
+        sanitized = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            func = tc.get("function") or {}
+            name = (func.get("name") or "").strip()
+            if not name:
+                continue
+
+            raw_args = func.get("arguments", "")
+            if raw_args is None:
+                raw_args = ""
+            if isinstance(raw_args, dict):
+                args_obj = raw_args
+            else:
+                raw_text = str(raw_args).strip()
+                if not raw_text:
+                    args_obj = {}
+                else:
+                    try:
+                        args_obj = json.loads(raw_text)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(
+                            "Dropping malformed tool call arguments for %s: %r",
+                            name,
+                            raw_text[:120],
+                        )
+                        args_obj = {}
+
+            if not isinstance(args_obj, dict):
+                args_obj = {}
+
+            tc_id = tc.get("id")
+            if not tc_id:
+                tc_id = f"call_{int(time.time() * 1000000)}_{hash(name) % 1000000}"
+
+            sanitized.append({
+                "id": tc_id,
+                "type": tc.get("type") or "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(args_obj, ensure_ascii=False),
+                },
+            })
+        return sanitized
+
     def _validate_messages(self, messages: list) -> list:
         """Validate and fix message format for OpenAI-compatible APIs."""
         if not messages:
@@ -1282,6 +1358,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
             msg = messages[i]
 
             if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                msg = {
+                    **msg,
+                    "tool_calls": self._sanitize_tool_calls(msg.get("tool_calls")),
+                }
                 tool_call_ids = {tc.get('id') for tc in msg.get('tool_calls', [])}
                 i += 1
 

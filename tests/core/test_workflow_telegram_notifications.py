@@ -44,6 +44,21 @@ class DummyChatManager:
         return self.chat_id
 
 
+def test_workflow_waiting_nudge_is_actionable():
+    from distr.core.kanban.ticket_workflow_engagement import build_workflow_waiting_nudge
+
+    text, voice = build_workflow_waiting_nudge(
+        workflow_name="DecisionsAI dogfood 1781725452487",
+        ticket_title="Dogfood smoke ticket",
+        step_name="Dogfood route",
+        waiting_kind="step_review",
+    )
+    assert "continue" in text.lower()
+    assert "workflows" in text.lower()
+    assert "continue" in voice.lower()
+    assert "1781725452487" not in voice
+
+
 def test_workflow_waiting_state_notifies_with_continue_prompt(monkeypatch):
     captured = []
 
@@ -195,25 +210,55 @@ def test_automation_workflow_report_is_not_sent_to_telegram():
     assert manager.sent == []
 
 
-def test_workflow_report_agent_payload_targets_current_chat(monkeypatch):
+def test_workflow_finished_persists_system_activity_with_run_id(monkeypatch):
+    captured = []
+
+    def _record(run_id, event_type, **kwargs):
+        captured.append({"run_id": run_id, "event_type": event_type, **kwargs})
+
+    monkeypatch.setattr(
+        "distr.core.workflow.chat_trace.record_workflow_chat_event",
+        _record,
+    )
+    monkeypatch.setattr(
+        SignalBridgeMixin,
+        "_workflow_report_run_metadata",
+        lambda self, _text: {"run_id": 4054},
+    )
+    app = DummySignalApp(DummyTelegramManager())
+
+    app._persist_workflow_system_activity(
+        "That didn't work out.\nPolish step complete with evidence attached."
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["run_id"] == 4054
+    assert captured[0]["event_type"] == "run_completed"
+    assert captured[0]["status"] == "failed"
+    assert "didn't work out" in captured[0]["summary"].lower()
+
+
+def test_workflow_finished_persists_to_current_chat_without_run_id(monkeypatch):
+    captured = []
+
+    def _record(chat_id, event_type, **kwargs):
+        captured.append({"chat_id": chat_id, "event_type": event_type, **kwargs})
+
+    monkeypatch.setattr(
+        "distr.core.workflow.chat_trace.record_chat_workflow_event",
+        _record,
+    )
+    monkeypatch.setattr(
+        SignalBridgeMixin,
+        "_workflow_report_run_metadata",
+        lambda self, _text: {},
+    )
     app = DummySignalApp(DummyTelegramManager(), chat_id=44)
     monkeypatch.setattr(app, "_chat_id_exists", lambda chat_id: True)
 
-    payload = app._workflow_report_agent_payload("Workflow finished.")
+    app._persist_workflow_system_activity("All done.\nValidation passed.")
 
-    assert payload["text"].startswith("The workflow just finished.")
-    assert "Workflow finished." in payload["text"]
-    assert payload["speak"] is False
-    assert payload["chat_id"] == 44
-
-
-def test_workflow_report_agent_payload_skips_stale_current_chat(monkeypatch):
-    app = DummySignalApp(DummyTelegramManager(), chat_id=404)
-    monkeypatch.setattr(app, "_chat_id_exists", lambda chat_id: False)
-
-    payload = app._workflow_report_agent_payload("Workflow finished.")
-
-    assert payload["text"].startswith("The workflow just finished.")
-    assert "Workflow finished." in payload["text"]
-    assert payload["speak"] is False
-    assert "chat_id" not in payload
+    assert len(captured) == 1
+    assert captured[0]["chat_id"] == 44
+    assert captured[0]["event_type"] == "run_completed"
+    assert captured[0]["status"] == "completed"

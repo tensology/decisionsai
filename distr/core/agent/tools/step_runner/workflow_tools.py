@@ -303,7 +303,8 @@ class ListWorkflowsTool(BaseTool):
 
 # --- Get workflow details ---
 class GetWorkflowInput(BaseModel):
-    workflow_id: int = Field(description="Workflow ID to retrieve")
+    workflow_id: Optional[int] = Field(default=None, description="Workflow ID to retrieve")
+    workflow_name: Optional[str] = Field(default=None, description="Workflow name (fuzzy match) if workflow_id omitted")
 
 
 class GetWorkflowTool(BaseTool):
@@ -315,8 +316,17 @@ class GetWorkflowTool(BaseTool):
     )
     args_schema: Type[BaseModel] = GetWorkflowInput
 
-    def _run(self, workflow_id: int, **kwargs) -> str:
+    def _run(self, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, **kwargs) -> str:
         try:
+            from distr.core.workflow.workflow_resolve import resolve_workflow_id
+
+            resolved_id, err = resolve_workflow_id(workflow_id=workflow_id, workflow_name=workflow_name)
+            if err or resolved_id is None:
+                return voice_then_reference(
+                    "I could not find that workflow.",
+                    err or "Workflow not found.",
+                )
+            workflow_id = resolved_id
             from distr.core.workflow.service import get_workflow
             wf = get_workflow(workflow_id)
             if not wf:
@@ -338,7 +348,8 @@ class GetWorkflowTool(BaseTool):
 
 # --- Run a workflow ---
 class RunWorkflowInput(BaseModel):
-    workflow_id: int = Field(description="Workflow ID to run")
+    workflow_id: Optional[int] = Field(default=None, description="Workflow ID to run")
+    workflow_name: Optional[str] = Field(default=None, description="Workflow name if workflow_id omitted")
     context: Optional[str] = Field(default=None, description="Optional context to prepend to the first step instruction")
 
 
@@ -351,8 +362,14 @@ class RunWorkflowTool(BaseTool):
     )
     args_schema: Type[BaseModel] = RunWorkflowInput
 
-    def _run(self, workflow_id: int, context: Optional[str] = None, **kwargs) -> str:
+    def _run(self, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, context: Optional[str] = None, **kwargs) -> str:
         try:
+            from distr.core.workflow.workflow_resolve import resolve_workflow_id
+
+            resolved_id, err = resolve_workflow_id(workflow_id=workflow_id, workflow_name=workflow_name)
+            if err or resolved_id is None:
+                return f"Failed to start workflow: {err or 'not found'}"
+            workflow_id = resolved_id
             from distr.core.workflow.service import start_workflow_run
             result = start_workflow_run(workflow_id, context=context)
             if "error" in result:
@@ -832,6 +849,77 @@ class GenerateWorkflowTool(BaseTool):
             return f"Failed to parse generated workflow: {je}"
         except Exception as e:
             logger.error("generate_workflow failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+
+class SpawnTicketWorkflowInput(BaseModel):
+    ticket_id: int = Field(description="Kanban ticket ID to spawn a workflow for")
+    preset_slug: Optional[str] = Field(
+        default=None,
+        description="Loop preset slug (e.g. decisionsai-dogfood-ticket). Inferred from ticket when omitted.",
+    )
+    start_run: bool = Field(default=True, description="Start the workflow run immediately after spawning")
+    force: bool = Field(default=False, description="Replace an existing linked workflow when true")
+
+
+class SpawnTicketWorkflowTool(BaseTool):
+    name: str = "spawn_ticket_workflow"
+    description: str = (
+        "Create a workflow for a ticket that does not have one yet (or force a fresh one), "
+        "apply a loop preset or reuse steps, link the ticket, and start the run. "
+        "Use when a ticket needs execution but no workflow is linked — do this silently; "
+        "tell the user about progress on the feature, not about workflow IDs."
+    )
+    args_schema: Type[BaseModel] = SpawnTicketWorkflowInput
+
+    def _run(
+        self,
+        ticket_id: int,
+        preset_slug: Optional[str] = None,
+        start_run: bool = True,
+        force: bool = False,
+        **kwargs,
+    ) -> str:
+        try:
+            from distr.core.workflow.spawn_workflow import spawn_workflow_for_ticket
+            from distr.core.db import get_session
+            from distr.core.db.kanban import KanbanTicket
+
+            title = ""
+            with get_session() as db:
+                ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                if ticket:
+                    title = (ticket.title or "").strip()
+
+            result = spawn_workflow_for_ticket(
+                int(ticket_id),
+                preset_slug=preset_slug,
+                start_run=bool(start_run),
+                skip_human_checkpoints=True,
+                force=bool(force),
+                dispatch_async=True,
+            )
+            if not result.get("success"):
+                return f"Could not start work on the ticket: {result.get('error') or 'unknown error'}"
+
+            wf_id = int(result["workflow_id"])
+            _remember_workflow_context(workflow_id=wf_id, run_id=result.get("run_id"))
+            subject = title or f"ticket {ticket_id}"
+            if result.get("reused"):
+                spoken = f"I picked up {subject} on the existing workflow and started the run."
+            else:
+                spoken = f"I set up the work loop for {subject} and started on it."
+            ref = (
+                f"Spawned workflow #{wf_id} for ticket #{ticket_id} "
+                f"(preset={result.get('preset_slug')}, steps={result.get('step_count')}, "
+                f"run_id={result.get('run_id')}, reused={result.get('reused')})."
+            )
+            return voice_then_reference(spoken, ref)
+        except Exception as e:
+            logger.error("spawn_ticket_workflow failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
 
     async def _arun(self, **kwargs) -> str:
@@ -1419,6 +1507,7 @@ class ClearWorkflowHistoryTool(BaseTool):
 class ContinueWorkflowInput(BaseModel):
     run_id: Optional[int] = Field(default=None, description="Workflow run ID that is in waiting state. If omitted, auto-resolve latest waiting run.")
     workflow_id: Optional[int] = Field(default=None, description="Optional workflow ID to narrow auto-resolution when run_id is omitted.")
+    workflow_name: Optional[str] = Field(default=None, description="Workflow name if workflow_id omitted")
     user_input: str = Field(default="", description="Optional user input/feedback to pass to the next step")
 
 
@@ -1432,17 +1521,25 @@ class ContinueWorkflowTool(BaseTool):
     )
     args_schema: Type[BaseModel] = ContinueWorkflowInput
 
-    def _resolve_run_id(self, run_id: Optional[int], workflow_id: Optional[int]) -> tuple[Optional[int], Optional[str]]:
+    def _resolve_run_id(self, run_id: Optional[int], workflow_id: Optional[int], workflow_name: Optional[str] = None) -> tuple[Optional[int], Optional[str]]:
         """Resolve a run_id for continue operations when not provided explicitly."""
         if run_id is not None:
             return int(run_id), None
         try:
+            from distr.core.workflow.workflow_resolve import resolve_workflow_id
             from distr.core.workflow.service import get_active_runs
-            effective_workflow_id = workflow_id if workflow_id is not None else _get_remembered_workflow_id()
+
+            effective_workflow_id = workflow_id
+            if effective_workflow_id is None and workflow_name:
+                resolved, err = resolve_workflow_id(workflow_name=workflow_name)
+                if err:
+                    return None, err
+                effective_workflow_id = resolved
+            if effective_workflow_id is None:
+                effective_workflow_id = _get_remembered_workflow_id()
             candidates = get_active_runs(limit=50, workflow_id=effective_workflow_id)
             waiting_runs = [r for r in candidates if str(r.get("status")) == "waiting"]
             if waiting_runs:
-                # Most recent waiting run comes first from get_active_runs.
                 selected = waiting_runs[0]
                 _remember_workflow_context(
                     workflow_id=selected.get("workflow_id"),
@@ -1457,17 +1554,22 @@ class ContinueWorkflowTool(BaseTool):
                 )
             remembered_run = _get_remembered_run_id()
             if remembered_run is not None:
-                # Final fallback: we remember a recent run but it's not active now.
-                return remembered_run, None
+                active_ids = {int(r["id"]) for r in candidates if r.get("id") is not None}
+                if remembered_run in active_ids:
+                    return remembered_run, None
+                return None, (
+                    f"Remembered run #{remembered_run} is not active (running/waiting). "
+                    "Pass an explicit run_id or start a new run."
+                )
             return None, "No active workflow runs found to continue."
         except Exception as e:
             logger.error("continue_workflow auto-resolve failed: %s", e, exc_info=True)
             return None, f"Failed to resolve an active run automatically: {str(e)}"
 
-    def _run(self, run_id: Optional[int] = None, workflow_id: Optional[int] = None, user_input: str = "", **kwargs) -> str:
+    def _run(self, run_id: Optional[int] = None, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, user_input: str = "", **kwargs) -> str:
         try:
             from distr.core.workflow.dispatcher import continue_waiting_step
-            resolved_run_id, resolve_error = self._resolve_run_id(run_id, workflow_id)
+            resolved_run_id, resolve_error = self._resolve_run_id(run_id, workflow_id, workflow_name)
             if resolve_error:
                 return f"Failed: {resolve_error}"
             result = continue_waiting_step(int(resolved_run_id), user_input)

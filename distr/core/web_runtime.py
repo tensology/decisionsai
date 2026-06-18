@@ -106,6 +106,16 @@ def run_on_unified_server_loop(coro, *, timeout: float = STARTUP_TERMINAL_HTTP_T
                 loop is not None,
             )
             return None
+        try:
+            running = asyncio.get_running_loop()
+            if running is loop:
+                # ponytail: sync-bridge from the server loop deadlocks on future.result().
+                logger.warning(
+                    "run_on_unified_server_loop: called from server loop — use await spawn_startup_shell_sessions instead",
+                )
+                return None
+        except RuntimeError:
+            pass
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=timeout)
     except Exception as exc:

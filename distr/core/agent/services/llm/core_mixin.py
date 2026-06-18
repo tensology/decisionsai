@@ -948,6 +948,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     def _prepare_agent_voice_response(self) -> None:
         """Clear stale PTT interrupt flags so the next spoken reply can play."""
         self._cancelled = False
+        self._arm_desktop_tts()
         tts = getattr(self, "_tts_service", None)
         if not tts:
             return

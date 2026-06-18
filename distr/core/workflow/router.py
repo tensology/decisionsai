@@ -381,6 +381,20 @@ class StepRouter:
             except Exception:
                 logger.debug("Could not emit Hermes workflow_step_completed event", exc_info=True)
 
+            try:
+                from distr.core.workspace_memory.lifecycle import handoff_workflow_step
+
+                handoff_workflow_step(
+                    run_id=run_id,
+                    ticket_id=getattr(run, "ticket_id", None),
+                    project_id=(run_data or {}).get("project_id") if isinstance(run_data, dict) else None,
+                    step_name=step.name or f"Step {step_id}",
+                    summary=(result or "")[:2000],
+                    status=status,
+                )
+            except Exception:
+                logger.debug("workflow_step handoff failed", exc_info=True)
+
             if getattr(run, "ticket_id", None):
                 try:
                     from distr.core.kanban.ticket_workflow_engagement import (
@@ -1002,16 +1016,20 @@ class StepRouter:
 
     @staticmethod
     def _build_approval_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:
+        from distr.core.workflow.approval_decision import (
+            build_step_approval_decision,
+            format_approval_decision_text,
+            format_approval_decision_voice,
+        )
+
         clean_result = (result_text or "").strip() or "Step completed with no detailed output."
+        decision = build_step_approval_decision(step_name=step_name, result_summary=clean_result)
+        prompt = format_approval_decision_text(decision)
+        tts = format_approval_decision_voice(decision)
         summary = clean_result[:280]
         if len(clean_result) > 280:
             summary += "..."
         step_label = step_name or "workflow step"
-        prompt = (
-            f"{step_label} passed validation and is waiting for your approval. "
-            "Reply to approve and continue, or provide correction instructions."
-        )
-        tts = f"{summary}. {prompt}"
         report = (
             f"[WORKFLOW_APPROVAL_REQUIRED]\n"
             f"step_name: {step_label}\n"
@@ -1020,9 +1038,9 @@ class StepRouter:
             f"step_result_summary: {summary}\n"
             f"step_result_full: {clean_result[:1500]}\n\n"
             "Orchestrator instructions:\n"
-            "1) Summarize what the step accomplished.\n"
-            "2) Ask the user to approve or request changes.\n"
-            "3) After approval, call continue_workflow with that reply."
+            "1) Present the approval decision card — one decision, plain English.\n"
+            "2) Accept yes/no/steer, not 'approve step N'.\n"
+            "3) After approval, call continue_workflow with the user's words."
         )
         history_entry = f"{clean_result}\n\n[APPROVAL REQUIRED]\n{prompt}"
         if run_id is not None:

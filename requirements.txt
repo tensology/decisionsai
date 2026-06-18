@@ -127,6 +127,7 @@ aiortc>=1.9.0
 # pathspec for .gitignore parsing in project indexing
 pathspec>=0.11.0
 pytest>=8.0.0
+pytest-playwright>=0.5.0
 # OCR for text-based "where is X" locate — needs Tesseract system binary installed separately.
 # Used to cross-reference text labels with detected UI elements for accurate targeting.
 pytesseract>=0.3.10

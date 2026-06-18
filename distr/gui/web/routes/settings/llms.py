@@ -131,6 +131,8 @@ def register_routes(router, templates):
             "vision_model": _model(settings.get("vision_llm_model"), "vision"),
             "image_provider": _provider(settings.get("image_llm_provider")),
             "image_model": _model(settings.get("image_llm_model"), "image"),
+            "video_provider": _provider(settings.get("video_llm_provider")),
+            "video_model": _model(settings.get("video_llm_model"), "video"),
             "workflow_provider": ((settings.get("workflow_llm_provider") or "").strip().lower() or ""),
             "workflow_model": (settings.get("workflow_llm_model") or "").strip(),
             "computer_use_provider": (settings.get("computer_use_provider") or "").strip().lower() or "",
@@ -170,6 +172,8 @@ def register_routes(router, templates):
                 (s.get("vision_llm_model") or "").strip(),
                 (s.get("image_llm_provider") or "ollama").strip().lower(),
                 (s.get("image_llm_model") or "").strip(),
+                (s.get("video_llm_provider") or "").strip().lower(),
+                (s.get("video_llm_model") or "").strip(),
                 (s.get("workflow_llm_provider") or "").strip().lower(),
                 (s.get("workflow_llm_model") or "").strip(),
                 (s.get("computer_use_provider") or "").strip().lower(),
@@ -206,6 +210,8 @@ def register_routes(router, templates):
         settings["vision_llm_model"] = (settings_data.vision_model or "").strip()
         settings["image_llm_provider"] = (settings_data.image_provider or "ollama").strip()
         settings["image_llm_model"] = (settings_data.image_model or "").strip()
+        settings["video_llm_provider"] = (settings_data.video_provider or "").strip()
+        settings["video_llm_model"] = (settings_data.video_model or "").strip()
         workflow_provider = (settings_data.workflow_provider or "").strip()
         workflow_model = (settings_data.workflow_model or "").strip()
         settings["workflow_llm_provider"] = workflow_provider
@@ -283,6 +289,19 @@ def register_routes(router, templates):
                 providers.append({"id": pid, "name": pname})
         return JSONResponse({"providers": providers})
 
+    @router.get("/llms/available-media-providers")
+    @route_handler("get available media providers", fallback={"providers": []})
+    async def get_available_media_providers():
+        """Return media-only providers (Pixazo) when configured."""
+        from distr.core.services.settings_service import thirdparty_llm_provider_ready
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
+        providers = []
+        if thirdparty_llm_provider_ready(settings, "pixazo_enabled", "pixazo_key"):
+            providers.append({"id": "pixazo", "name": "Pixazo"})
+        return JSONResponse({"providers": providers})
+
     @router.get("/llms/models")
     @route_handler("get models", fallback={"models": []})
     async def get_llm_models(type: str, provider: str):
@@ -298,6 +317,7 @@ def register_routes(router, templates):
             get_gemini_models,
             get_nvidia_models,
         )
+        from distr.gui.utils.get_pixazo_models import get_pixazo_models
         from distr.gui.utils.get_openrouter_models import get_openrouter_models
 
         settings = load_settings_from_db()
@@ -320,6 +340,8 @@ def register_routes(router, templates):
                 if settings.get("gemini_enabled") and (settings.get("gemini_key") or "").strip() else [],
             "nvidia": lambda: get_nvidia_models((settings.get("nvidia_key") or "").strip())
                 if settings.get("nvidia_enabled") and (settings.get("nvidia_key") or "").strip() else [],
+            "pixazo": lambda: get_pixazo_models("image" if type == "image" else "video" if type == "video" else None)
+                if settings.get("pixazo_enabled") and (settings.get("pixazo_key") or "").strip() else [],
         }
         fetcher = _fetchers.get(provider_key)
         if fetcher:
@@ -341,6 +363,7 @@ def register_routes(router, templates):
                 "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
                 "vision": lambda m: not _is_dict(m) or "image" in (m.get("input_modalities") or []),
                 "image": lambda m: not _is_dict(m) or "image" in (m.get("output_modalities") or []),
+                "video": lambda m: not _is_dict(m) or "video" in (m.get("output_modalities") or []),
                 "workflow": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
                 "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),  # legacy alias
                 "computer_use": lambda m: True,

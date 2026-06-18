@@ -101,7 +101,7 @@ def test_sequential_queue_auto_starts_next_ticket(tmp_path):
     from distr.core.workflow.dispatcher import _active_runs, _runs_lock, start_workflow_run
 
     factory = make_factory(tmp_path)
-    applied = apply_preset_to_workflow(factory, "de-sloppify-pass")
+    applied = apply_preset_to_workflow(factory, "development-ticket-to-implementation")
     workflow_id = applied["workflow_id"]
     _set_sequential_run_settings(factory, workflow_id)
     ids = _seed_two_queued_tickets(factory, tmp_path, workflow_id)

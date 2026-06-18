@@ -187,6 +187,11 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
             "model": str(raw.get("model") or "auto"),
             "backend_id": str(raw.get("backend_id") or ""),
         }
+        nested_cfg = raw.get("config")
+        if isinstance(nested_cfg, dict):
+            for key, value in nested_cfg.items():
+                if value not in (None, "") and key not in cfg:
+                    cfg[key] = value
         if failure_checklist:
             cfg["failure_checklist"] = failure_checklist
         if other_tool:

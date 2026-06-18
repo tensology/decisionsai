@@ -729,11 +729,13 @@ class AgentSession:
         if tts_config['engine'] == 'elevenlabs' and hasattr(self.tts_service, '_resolved_voice_name'):
             self._apply_agent_name(self.tts_service._resolved_voice_name)
 
-        # For Kokoro custom voices, load custom voice personality
-        if tts_config['engine'] == 'kokoro':
-            _kokoro_voice_name = tts_config.get('voice_name', '')
-            if _kokoro_voice_name and _kokoro_voice_name.startswith('custom_'):
-                self._load_custom_voice_personality('kokoro', _kokoro_voice_name)
+        # For custom voices, ensure personality is in agent role before LLM/TTS wiring.
+        _voice_key = tts_config.get('voice_name') or tts_config.get('voice_id') or ''
+        if _voice_key.startswith('custom_'):
+            from . import service_factory
+            self._load_custom_voice_personality(tts_config.get('engine') or 'kokoro', _voice_key)
+            self.role = self._load_agent_role()
+            service_factory.update_agent_name_on_llm(self.llm_service, self.agent_name, self.role)
 
         # Pass TTS service to LLM service so tools can use it
         if hasattr(self, 'llm_service') and self.llm_service:
@@ -1103,8 +1105,8 @@ class AgentSession:
             except Exception:
                 pass
 
-        # Clear custom voice personality for non-custom voices
-        if vp != 'kokoro' or not (voice_model or '').startswith('custom_'):
+        # Clear custom voice personality only when leaving a custom_* voice.
+        if not (voice_model or '').startswith('custom_'):
             self._custom_voice_personality = ''
 
         # --- In-place swap path ---
@@ -1189,15 +1191,19 @@ class AgentSession:
             self.logger.debug("HOT-SWAP TTS: audio input power sync failed: %s", exc)
 
         self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
+        self.role = self._load_agent_role()
+        service_factory.update_agent_name_on_llm(self.llm_service, self.agent_name, self.role)
 
     def _apply_agent_name(self, new_name: str):
-        """Update agent name, role, and LLM system prompt if the name changed."""
+        """Update agent name, role (incl. custom voice personality), and LLM system prompt."""
+        from . import service_factory
         if new_name and new_name != self.agent_name:
+            self.logger.info("Agent name changed to %s", new_name)
             self.agent_name = new_name
-            self.role = self._load_agent_role()
-            self.logger.info("Agent name changed to %s", self.agent_name)
-        if hasattr(self, 'llm_service') and self.llm_service and hasattr(self.llm_service, 'set_agent_name'):
-            self.llm_service.set_agent_name(self.agent_name)
+        elif new_name:
+            self.agent_name = new_name
+        self.role = self._load_agent_role()
+        service_factory.update_agent_name_on_llm(self.llm_service, self.agent_name, self.role)
 
     def _resolve_kokoro_custom_voice(self, voice_id: str):
         """Resolve a Kokoro custom voice (custom_N) to (ref_audio_path, base_voice).

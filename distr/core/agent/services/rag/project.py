@@ -152,6 +152,15 @@ def scan_project_folder(folder_path: str, gitignore_spec: Optional[pathspec.Path
                 if ext.lower() in indexable_exts or file in ['README', 'Makefile', 'Dockerfile']:
                     indexable_files.append(file_path)
 
+        decisions_dir = os.path.join(folder_path, ".decisions")
+        if os.path.isdir(decisions_dir):
+            for root, _dirs, files in os.walk(decisions_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    _, ext = os.path.splitext(file)
+                    if ext.lower() in indexable_exts and file_path not in indexable_files:
+                        indexable_files.append(file_path)
+
         logger.info(f"Found {len(indexable_files)} indexable files in {folder_path}")
         return indexable_files
 
@@ -352,10 +361,21 @@ def activate_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str,
         # Set new active project
         _active_project_id = project_id
 
-        # Get or create RAG service
+        # Get or create RAG service (optional — project switch/start must not depend on embeddings)
         rag_service = get_project_rag_service(project_id, project.name, model_name)
         if not rag_service:
-            return {"success": False, "error": "RAG service not available"}
+            logger.warning(
+                "RAG service not available for project %s (ID=%s); activating without indexing",
+                project.name,
+                project_id,
+            )
+            return {
+                "success": True,
+                "project_id": project_id,
+                "project_name": project.name,
+                "indexed": False,
+                "rag_available": False,
+            }
 
         # Check if index exists, if not, index the project
         index_path = get_project_index_path(project_id, project.name)
@@ -373,7 +393,8 @@ def activate_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str,
             "success": True,
             "project_id": project_id,
             "project_name": project.name,
-            "indexed": needs_indexing
+            "indexed": needs_indexing,
+            "rag_available": True,
         }
 
     except Exception as e:

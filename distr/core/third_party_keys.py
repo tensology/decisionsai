@@ -56,5 +56,31 @@ def fal_api_key() -> str:
     return settings_secret("FAL_KEY", settings_fields=("fal_key",))
 
 
+def pixazo_api_key() -> str:
+    return settings_secret("PIXAZO_API_KEY", settings_fields=("pixazo_key",))
+
+
+def pixazo_enabled() -> bool:
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db() or {}
+        if settings.get("pixazo_enabled"):
+            return bool((settings.get("pixazo_key") or "").strip())
+        return bool(pixazo_api_key())
+    except Exception:
+        return bool(pixazo_api_key())
+
+
+def sync_third_party_env_keys() -> None:
+    """Mirror DB API keys into process env for MCP subprocesses and Cursor merges."""
+    fal = fal_api_key()
+    if fal:
+        os.environ["FAL_KEY"] = fal
+    pixazo = pixazo_api_key()
+    if pixazo:
+        os.environ["PIXAZO_API_KEY"] = pixazo
+
+
 def exa_api_key() -> str:
     return settings_secret("EXA_API_KEY", settings_fields=("exa_key",))
