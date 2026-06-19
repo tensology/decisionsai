@@ -21,6 +21,7 @@ _fake_tg_pkg = types.ModuleType("distr.core.integrations.telegram")
 _fake_tg_pkg.__path__ = []
 _fake_tg_utils = types.ModuleType("distr.core.integrations.telegram.utils")
 _fake_tg_utils.hash_channel_id = lambda value: f"hash_{value}"
+_fake_tg_utils.relay_internal_token = lambda *args, **kwargs: ""
 
 _TG_KEYS = ("distr.core.integrations.telegram", "distr.core.integrations.telegram.utils")
 _prior_tg = {k: sys.modules[k] for k in _TG_KEYS if k in sys.modules}
@@ -116,12 +117,12 @@ def _patch_message_bus_deliver(monkeypatch, emits):
     )
 
 
-def _voice_payload(mode="dictate"):
+def _voice_payload(mode="dictate", mime_type="audio/webm"):
     audio_b64 = base64.b64encode(b"not-real-audio").decode("ascii")
     return {
         "command": "voice_transcribe",
         "request_id": "ws-req-1",
-        "data": {"audio_data": audio_b64, "mime_type": "audio/webm", "mode": mode},
+        "data": {"audio_data": audio_b64, "mime_type": mime_type, "mode": mode},
     }
 
 
@@ -214,3 +215,46 @@ def test_voice_transcribe_command_mode_routes_to_agent_with_telegram_flag(monkey
     assert emits
     assert emits[-1] == ("hello remote command", True, None, False)
 
+
+def test_voice_transcribe_ogg_normalizes_to_wav(monkeypatch):
+    host = _Host()
+
+    class _QueueSetsResult:
+        def __init__(self, owner):
+            self._owner = owner
+            self.paths = []
+
+        def put(self, payload, **_kwargs):
+            _command, params = payload
+            self.paths.append(params["audio_file_path"])
+            callbacks = getattr(self._owner, "_pending_voice_callbacks", {})
+            req_id = next(iter(callbacks.keys()))
+            event, holder = callbacks[req_id]
+            holder["transcript"] = "compressed audio worked"
+            event.set()
+
+    class _App:
+        def __init__(self, owner):
+            self.agent_command_queue = _QueueSetsResult(owner)
+
+    class _Result:
+        returncode = 0
+
+    ffmpeg_calls = []
+
+    def _fake_ffmpeg(cmd, **_kwargs):
+        ffmpeg_calls.append(cmd)
+        out_path = cmd[-1]
+        Path(out_path).write_bytes(b"wav-data")
+        return _Result()
+
+    monkeypatch.setattr("threading.Thread", _ImmediateThread)
+    _install_fake_qt(monkeypatch, _App(host))
+    monkeypatch.setattr("subprocess.run", _fake_ffmpeg)
+
+    app = sys.modules["PyQt6.QtWidgets"].QApplication.instance()
+    host._handle_remote_control_command(_voice_payload(mime_type="audio/ogg;codecs=opus"))
+
+    assert ffmpeg_calls
+    assert app.agent_command_queue.paths
+    assert app.agent_command_queue.paths[0].endswith(".wav")

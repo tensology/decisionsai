@@ -22,6 +22,13 @@ from distr.core.integrations.telegram.utils import hash_channel_id, relay_intern
 
 logger = logging.getLogger(__name__)
 
+REMOTE_STT_DIRECT_EXTS = {".wav", ".flac"}
+REMOTE_STT_DIRECT_MIME_PREFIXES = (
+    "audio/wav",
+    "audio/x-wav",
+    "audio/flac",
+)
+
 
 class TelegramRemoteControlMixin:
     """Methods for remote-control commands received over the Telegram WebSocket."""
@@ -42,6 +49,31 @@ class TelegramRemoteControlMixin:
             return int(raw)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _remote_voice_temp_extension(mime_type: str) -> str:
+        lower = str(mime_type or "").lower()
+        if "ogg" in lower or "opus" in lower:
+            return ".ogg"
+        if "mp4" in lower or "m4a" in lower:
+            return ".mp4"
+        if "wav" in lower:
+            return ".wav"
+        if "flac" in lower:
+            return ".flac"
+        if "mpeg" in lower or "mp3" in lower:
+            return ".mp3"
+        if "aac" in lower:
+            return ".aac"
+        return ".webm"
+
+    @staticmethod
+    def _remote_voice_needs_wav_normalization(audio_path: str, mime_type: str) -> bool:
+        ext = os.path.splitext(str(audio_path or ""))[1].lower()
+        if ext in REMOTE_STT_DIRECT_EXTS:
+            return False
+        lower = str(mime_type or "").lower()
+        return not any(lower.startswith(prefix) for prefix in REMOTE_STT_DIRECT_MIME_PREFIXES)
 
     def _dispatch_api_relay(self, data: dict) -> None:
         """Relay a local HTTP API call without blocking behind screenshot streaming."""
@@ -1177,11 +1209,8 @@ class TelegramRemoteControlMixin:
                             try:
                                 audio_bytes = _b64.b64decode(audio_b64)
 
-                                # Determine extension
-                                ext = ".webm"
-                                if "mp4" in mime_type: ext = ".mp4"
-                                elif "ogg" in mime_type: ext = ".ogg"
-                                elif "wav" in mime_type: ext = ".wav"
+                                # Preserve the original compressed format when we can.
+                                ext = self._remote_voice_temp_extension(mime_type)
 
                                 # Save to temp file
                                 tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
@@ -1189,24 +1218,32 @@ class TelegramRemoteControlMixin:
                                 tmp.close()
                                 audio_path = tmp.name
 
-                                # Convert to WAV 16kHz mono if ffmpeg available (same as Telegram voice)
-                                wav_path = audio_path + ".wav"
-                                try:
-                                    import subprocess
-                                    result = subprocess.run(
-                                        ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path],
-                                        capture_output=True, timeout=10
-                                    )
-                                    if result.returncode == 0:
-                                        import os
-                                        os.unlink(audio_path)
-                                        audio_path = wav_path
-                                    else:
-                                        logger.warning("ffmpeg conversion failed (rc=%d), using original", result.returncode)
-                                except FileNotFoundError:
-                                    logger.warning("ffmpeg not found, using original audio file")
-                                except Exception as e:
-                                    logger.warning("ffmpeg error: %s, using original", e)
+                                # Keep network uploads compact, but normalize browser-recorded
+                                # containers back to mono 16 kHz WAV for the desktop STT stack.
+                                if self._remote_voice_needs_wav_normalization(audio_path, mime_type):
+                                    wav_path = audio_path + ".wav"
+                                    try:
+                                        import subprocess
+
+                                        result = subprocess.run(
+                                            ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path],
+                                            capture_output=True,
+                                            timeout=10,
+                                        )
+                                        if result.returncode == 0:
+                                            import os
+
+                                            os.unlink(audio_path)
+                                            audio_path = wav_path
+                                        else:
+                                            logger.warning(
+                                                "ffmpeg conversion failed (rc=%d), using original",
+                                                result.returncode,
+                                            )
+                                    except FileNotFoundError:
+                                        logger.warning("ffmpeg not found, using original audio file")
+                                    except Exception as e:
+                                        logger.warning("ffmpeg error: %s, using original", e)
 
                                 # Send to agent's STT via command queue
                                 from PyQt6.QtWidgets import QApplication
