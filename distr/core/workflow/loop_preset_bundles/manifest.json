@@ -26,14 +26,6 @@
       "category": "Quality",
       "archetype": "review_cleanup",
       "file": "bundles/polish-verify-and-ship.json"
-    },
-    {
-      "slug": "ship-pr-until-green",
-      "name": "Deploy: Ship PR Until Green",
-      "role": "release_engineer",
-      "category": "Release",
-      "archetype": "ship_with_ci",
-      "file": "bundles/ship-pr-until-green.json"
     }
   ]
 }

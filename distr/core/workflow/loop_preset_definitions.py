@@ -94,6 +94,7 @@ def _step(
     wait_for_continue: bool = False,
     command: str = "",
     timeout_seconds: int | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "name": name,
@@ -115,6 +116,8 @@ def _step(
         out["command"] = command
     if timeout_seconds is not None:
         out["timeout_seconds"] = timeout_seconds
+    if config:
+        out["config"] = config
     if on_pass_goto_position is not None:
         out["on_pass_goto_position"] = on_pass_goto_position
     if on_fail_goto_position is not None:
@@ -135,10 +138,10 @@ _COMBINED_GATE_COMMAND = (
 
 _IDEATION_KICKOFF = _kickoff(
     "Ideation: Brief to Board",
-    """Goal: requirements become a product brief, board lanes, and development-ready tickets
+    """Goal: requirements become a product/project container, a product board, scoped tickets, and a development queue
 Max iterations: 3
-Exit when: the brief is written, the board exists with tickets and acceptance criteria, and dev-ready tickets are queued
-Step 1: Read the linked requirements document and extract scope, constraints, and delivery slices.
+Exit when: the brief is written, the project/board names are product names, tickets carry the implementation scope, and dev-ready tickets are queued.
+Step 1: Read the linked requirements document and extract product identity, constraints, and delivery slices.
 This workflow stays inside the configured CLI harness.
 """
     + SELF_PACE_FOOTER
@@ -149,48 +152,97 @@ This workflow stays inside the configured CLI harness.
 _IDEATION_STEPS = [
     _step(
         "Read requirements document",
-        "Read the requirements document path from run metadata. Extract product goal, required views, "
-        "interactions, quality bar, and the delivery slices that should become tickets. Summarize scope, "
-        "non-goals, and risks. Do not write code or open an IDE.",
+        "Read the requirements document path from run metadata. Extract product name, domain/repo hint if present, product goal, "
+        "required views, interactions, quality bar, delivery slices, non-goals, and risks. The project and board names must stay "
+        "as product/container names; implementation details belong in ticket titles and descriptions. Do not write code.",
         skills=["product-lens", "brainstorming", "doc-coauthoring"],
         tools=["other"],
         other_tool="Requirements document",
         action_type="agent_instruction",
-        guardrail=_guardrail("- Ideation only: no code, no Cursor, no project CLI"),
-        validation_prompt="Requirements scope, slices, constraints, and non-goals are explicit.",
+        guardrail=_guardrail(
+            "- Ideation only: no code, no Cursor, no project CLI",
+            "- Do not put implementation goals into the project or board name",
+        ),
+        failure_checklist=[
+            "Product/container identity is missing",
+            "Delivery slices are not separated from project/board naming",
+            "Non-goals or risks are missing",
+        ],
+        validation_prompt="Product identity, domain/repo hint, slices, constraints, non-goals, and risks are explicit.",
+        config={
+            "execution_scope": "product_discovery",
+            "expected_outputs": ["product_identity", "delivery_slices", "non_goals", "risks"],
+        },
     ),
     _step(
         "Write product brief",
-        "Write a concise product brief with acceptance themes per delivery slice, recommended lane names, "
-        "and ticket titles. Attach the brief to run metadata for downstream workflows.",
+        "Write a concise product brief with product/container naming, acceptance themes per delivery slice, recommended lanes, "
+        "ticket titles, and ticket descriptions. The brief must clearly separate the product/board name from implementation work.",
         skills=["writing-plans", "product-lens", "doc-coauthoring"],
         tools=["other"],
         other_tool="Product brief artifact",
         action_type="agent_instruction",
-        guardrail=_guardrail("- Brief must map 1:1 to future board tickets"),
-        validation_prompt="Product brief exists with ticket titles and acceptance themes per slice.",
+        guardrail=_guardrail(
+            "- Brief must map 1:1 to future board tickets",
+            "- Board name should be the product/project name, not the first ticket",
+        ),
+        failure_checklist=[
+            "Brief does not name the product/container cleanly",
+            "Ticket slices do not map 1:1 to acceptance themes",
+            "Board/lane recommendations are missing",
+        ],
+        validation_prompt="Product brief exists with clean product/board naming, ticket titles, descriptions, and acceptance themes per slice.",
+        config={
+            "execution_scope": "product_brief",
+            "expected_outputs": ["product_brief", "ticket_blueprint", "lane_plan"],
+        },
     ),
     _step(
         "Create board, lanes, and tickets",
-        "Create a Kanban board with lanes Backlog, Ready, In Progress, Validation, and Complete. "
-        "Create one ticket per development slice from the brief with description and acceptance criteria. "
-        "Do not hand off to Cursor.",
+        "Create or update one product project and one product board using the product name. Create lanes Backlog, Ready, "
+        "In Progress, Validation, and Complete. Create one ticket per development slice from the brief with description, "
+        "acceptance criteria, priority, complexity, and project/workflow linkage. Do not duplicate boards or tickets if matching "
+        "records already exist.",
         skills=["product-lens", "executing-plans"],
         tools=["other"],
         other_tool="Kanban board + ticket creation",
         action_type="agent_instruction",
-        guardrail=_guardrail("- Every ticket needs acceptance criteria; no IDE handoff"),
-        validation_prompt="Board exists with lanes and development tickets that match the brief.",
+        guardrail=_guardrail(
+            "- Every ticket needs acceptance criteria; no IDE handoff",
+            "- One product should have one product board unless the user explicitly asks for another",
+            "- Reuse or update matching records instead of creating residual duplicates",
+        ),
+        failure_checklist=[
+            "Project or board name includes implementation scope",
+            "Duplicate board/tickets were created for the same product",
+            "Tickets lack acceptance criteria, priority, complexity, or workflow linkage",
+        ],
+        validation_prompt="One product project and board exist with lanes and scoped development tickets that match the brief.",
+        config={
+            "execution_scope": "board_creation",
+            "expected_outputs": ["project_id", "board_id", "lane_ids", "ticket_ids"],
+            "idempotency": "reuse_matching_product_records",
+        },
     ),
     _step(
         "Queue tickets for development",
-        "Link the board and tickets to the development workflow. Set queue order, attach the brief, "
-        "and mark tickets ready for the development workflow. End with a handoff summary.",
+        "Link the board and development-ready tickets to the Development: Ticket to Implementation workflow. Set queue order "
+        "from infrastructure/foundation first through feature slices and validation. Attach the brief/result packet and end with "
+        "a concise handoff summary that names the first ticket to run.",
         skills=["internal-comms", "product-lens"],
         tools=["other"],
         other_tool="Workflow queue + board linkage",
         action_type="agent_instruction",
-        validation_prompt="Development tickets are queued on the board with workflow linkage and brief attached.",
+        failure_checklist=[
+            "Tickets are not linked to the development workflow",
+            "Queue order does not put foundation/infrastructure first",
+            "Handoff summary does not identify the first runnable ticket",
+        ],
+        validation_prompt="Development tickets are queued on the product board with workflow linkage, brief attached, and first runnable ticket identified.",
+        config={
+            "execution_scope": "queue_setup",
+            "expected_outputs": ["queued_ticket_ids", "first_ticket_id", "handoff_summary"],
+        },
         validation_pass_action="end_loop",
         validation_fail_action="end_loop",
     ),
@@ -198,10 +250,10 @@ _IDEATION_STEPS = [
 
 _DEVELOPMENT_KICKOFF = _kickoff(
     "Development: Ticket to Implementation",
-    """Goal: one linked ticket is implemented on the project with harness iteration
+    """Goal: one linked ticket is implemented on the linked project with CLI harness iteration
 Max iterations: 6
-Exit when: plan.md is attached, the slice is implemented, browser evidence is captured or explicitly marked N/A, checks are green, and development evidence is on the ticket
-Step 1: Ingest the ticket, project memory, linked files, and acceptance context before changing code.
+Exit when: plan.md exists, the scoped slice is implemented, relevant checks are green or explicitly blocked, browser evidence exists or is marked N/A with reason, and the ticket has a compact result packet.
+Step 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.
 """
     + SELF_PACE_FOOTER
     + "\n\n"
@@ -211,42 +263,100 @@ Step 1: Ingest the ticket, project memory, linked files, and acceptance context 
 _DEVELOPMENT_STEPS = [
     _step(
         "Ingest ticket, memory, and acceptance context",
-        "Read the linked ticket, board, lane, project, acceptance criteria, AGENTS.md/context files, active memory, "
-        "handoff notes, and linked media/files. Restate the slice, constraints, project route, and unknowns before planning.",
+        "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, "
+        "description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current "
+        "repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, "
+        "required files to inspect, missing information, and the proposed CLI/model route. Do not edit files in this step.",
         skills=["product-lens", "brainstorming", "systematic-debugging"],
         tools=["cli", "other"],
-        other_tool="Ticket context, project repository, workspace memory, and linked attachments",
+        other_tool="Ticket context, board, project repository, workspace memory, and linked attachments",
         action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- Do not write code before plan.md exists"),
-        validation_prompt="Ticket brief, acceptance criteria, linked files/media, memory files, unknowns, and project route are explicit.",
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Do not write code before plan.md exists",
+            "- If linked files/media cannot be fetched, record the missing attachment and continue only with an explicit blocker note",
+            "- The project and board are containers; implementation intent belongs to the ticket",
+        ),
+        failure_checklist=[
+            "Ticket scope, non-goals, or acceptance criteria are missing",
+            "Project folder or repository shape was not identified",
+            "Linked files/media or memory files were not checked or marked unavailable",
+            "The agent started editing before the context packet was produced",
+        ],
+        validation_prompt="A context packet exists with ticket scope, non-goals, project route, linked files/media status, memory status, unknowns, and CLI/model route.",
+        config={
+            "execution_scope": "ticket",
+            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "required_context": ["ticket", "board", "project", "workflow_memory", "project_memory", "linked_attachments"],
+            "expected_outputs": ["context_packet", "unknowns", "route_recommendation"],
+        },
     ),
     _step(
         "Plan the smallest implementation slice",
-        "Create ticket-specific plan.md with the smallest shippable slice, affected files, commands to run, browser/evidence plan, "
-        "rollback notes, and explicit skip conditions for non-applicable checks. Attach plan.md to the ticket before implementation.",
+        "Create a ticket-specific plan.md in the project/workflow handoff area before editing code. The plan must describe the "
+        "smallest shippable slice for this ticket, files expected to change, commands to run, browser/evidence plan, rollback "
+        "notes, and skip rules for non-applicable checks. Link or attach the plan to the ticket result packet.",
         skills=["writing-plans", "executing-plans", "doc-coauthoring"],
         tools=["cli", "other"],
         other_tool="Ticket file attachment",
         action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, "- Plan must match this ticket only"),
-        validation_prompt="plan.md exists, is linked to the ticket, and includes implementation slice, checks, browser evidence plan, rollback, and skip rules.",
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Plan must match this ticket only",
+            "- Do not create generic project plans that belong on the board or project",
+            "- If the ticket is too vague, plan the smallest safe discovery slice and ask for the missing decision",
+        ),
+        failure_checklist=[
+            "plan.md is missing",
+            "Plan is broader than the ticket",
+            "Plan does not name expected changed files",
+            "Checks, browser evidence, rollback, or skip rules are missing",
+        ],
+        validation_prompt="plan.md exists for this ticket and includes slice, expected changed files, checks, browser/evidence plan, rollback notes, and explicit skip rules.",
+        config={
+            "execution_scope": "ticket",
+            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "required_context": ["context_packet"],
+            "expected_outputs": ["plan_md", "ticket_plan_link"],
+        },
     ),
     _step(
         "Implement the slice with project checks",
-        "Implement only the planned slice. Detect the actual project commands from repo config, run the relevant checks, "
-        "capture command output, and report files changed. Do not broaden scope without updating the ticket and plan.",
+        "Implement only the planned slice. Detect stack and commands from real repo files such as package.json, pyproject.toml, "
+        "requirements files, manage.py, Makefile, docker compose files, or existing scripts. Make minimal edits, run the relevant "
+        "checks that are available, capture exact command output, and report changed files. If setup requires dependency install "
+        "or network access, report the blocked command clearly instead of pretending checks passed.",
         skills=["executing-plans", "tdd-workflow", "verification-loop", "systematic-debugging"],
         tools=["cli", "shell"],
         action_type="send_to_project_cli",
-        guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
-        validation_prompt="Slice is implemented, relevant project checks were run or explicitly blocked, and changed files are reported.",
+        guardrail=_guardrail(
+            _SCOPE,
+            _DEV_CHECKS,
+            "- Do not create duplicate app roots if the project already has frontend/backend folders",
+            "- Do not install global dependencies; use project-local tooling or a local virtual environment",
+        ),
+        failure_checklist=[
+            "Implementation deviated from plan.md",
+            "Project commands were guessed instead of detected",
+            "Checks were skipped without exact blocker output",
+            "Changed files were not reported",
+            "A duplicate project scaffold was created instead of using the existing folder",
+        ],
+        validation_prompt="The planned slice is implemented, project commands were detected from repo files, checks ran or have exact blockers, and changed files are reported.",
         on_fail_goto_position=2,
+        config={
+            "execution_scope": "ticket",
+            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "required_context": ["plan_md", "project_repo"],
+            "expected_outputs": ["changed_files", "command_log", "blockers"],
+        },
     ),
     _step(
         "Capture browser evidence and self-assess",
-        "If the change affects UI, run the app/browser flow, capture screenshots or Playwright evidence, compare the result against "
-        "the ticket, and list visual/behavior issues. If the change is not UI-facing, mark browser evidence N/A with a concrete reason.",
-        skills=["qa-tester", "verification-loop", "visual-regression-review", "systematic-debugging"],
+        "If the ticket affects UI or app setup, start the app using the documented project commands, open it with Playwright or the "
+        "browser tool, capture screenshot/evidence, inspect console/runtime errors, and compare the result to the ticket acceptance "
+        "criteria. If browser evidence is not applicable or the app cannot start, record the exact reason and command output.",
+        skills=["qa-tester", "verification-loop", "browser-qa", "systematic-debugging"],
         tools=["cli", "playwright", "browser_use"],
         action_type="send_to_project_cli",
         guardrail=_guardrail(
@@ -254,13 +364,26 @@ _DEVELOPMENT_STEPS = [
             "- Do not fake browser evidence; if the app cannot run, report the blocker and exact command/output",
             "- Current step remains open until UI evidence is captured or explicitly marked N/A",
         ),
-        validation_prompt="Browser evidence is attached for UI changes, or N/A is justified for non-UI changes, with self-assessment notes.",
+        failure_checklist=[
+            "UI/app setup change has no screenshot or browser evidence",
+            "Console/runtime errors were not checked",
+            "Browser blocker lacks exact command/output",
+            "Non-UI N/A was asserted without a concrete reason",
+        ],
+        validation_prompt="Browser evidence is attached for UI/app changes, or N/A/blocker is justified with exact command output and self-assessment notes.",
         on_fail_goto_position=2,
+        config={
+            "execution_scope": "ticket",
+            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "required_context": ["implemented_slice", "startup_commands"],
+            "expected_outputs": ["browser_evidence", "console_check", "visual_self_assessment"],
+        },
     ),
     _step(
         "Correct, re-run, or skip with reason",
-        "Use the evidence from checks and browser review to decide the next move: correct defects and re-run, skip a non-applicable "
-        "step with reason, or stop for a human decision. The orchestrator must know why the loop continues or exits.",
+        "Use command output, browser evidence, and self-assessment to decide the next move. Correct defects and re-run the relevant "
+        "checks, skip only non-applicable checks with a ticket-specific reason, or stop for a human decision when the blocker needs "
+        "product or credential input. The result must say whether the loop should continue, retry implementation, or exit.",
         skills=["verification-loop", "systematic-debugging", "executing-plans"],
         tools=["cli", "shell", "playwright"],
         action_type="send_to_project_cli",
@@ -269,21 +392,52 @@ _DEVELOPMENT_STEPS = [
             "- Do not advance on red checks, unresolved visual issues, or missing evidence",
             "- Skipped work needs a concrete reason tied to the ticket scope",
         ),
-        validation_prompt="All known defects are corrected or explicitly blocked/skipped with evidence, and rerun results are recorded.",
+        failure_checklist=[
+            "Known defect was left unresolved without blocker",
+            "Checks or browser evidence were not rerun after correction",
+            "Skip reason is generic or not tied to the ticket",
+            "Next loop action is unclear",
+        ],
+        validation_prompt="All known defects are corrected or explicitly blocked/skipped with evidence, rerun results are recorded, and the next loop action is explicit.",
         on_fail_goto_position=2,
+        validation_pass_action="next",
+        config={
+            "execution_scope": "ticket",
+            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "required_context": ["command_log", "browser_evidence", "self_assessment"],
+            "expected_outputs": ["rerun_results", "skip_or_blocker_reason", "next_action"],
+        },
     ),
     _step(
         "Report, update ticket, and compact memory",
-        "Update the ticket with files changed, commands run, screenshots/evidence, remaining risks, and the final development summary. "
-        "Write the harness return contract so DecisionsAI can persist a compact memory delta for future runs.",
+        "Update the ticket with a compact result packet: summary, files changed, commands run, browser evidence or N/A reason, "
+        "remaining risks, blockers, and next actions. Write only durable memory deltas: project commands, conventions, paths, "
+        "decisions, and gotchas. Do not paste full transcripts into memory.",
         skills=["internal-comms", "finishing-a-development-branch"],
         tools=["cli", "other"],
         other_tool="Ticket update, result packet, and compact workspace memory",
         action_type="send_to_project_cli",
-        validation_prompt="Ticket contains evidence, commands, changed files, risks, and a complete harness return contract for memory compounding.",
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Do not paste full transcripts into memory; compact durable facts only",
+            "- Ticket result must be usable by the next run without reading the full chat",
+        ),
+        failure_checklist=[
+            "Ticket lacks final result packet",
+            "Changed files or commands are missing",
+            "Evidence or N/A reason is missing",
+            "Memory delta contains transcript noise instead of durable facts",
+        ],
+        validation_prompt="Ticket contains summary, evidence, commands, changed files, risks/blockers, next actions, and compact memory deltas for future runs.",
         validation_pass_action="end_loop",
         validation_fail_action="retry",
         on_fail_goto_position=4,
+        config={
+            "execution_scope": "ticket",
+            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "required_context": ["final_changed_files", "command_log", "evidence", "memory_delta"],
+            "expected_outputs": ["ticket_result_packet", "compact_memory_delta"],
+        },
     ),
 ]
 
@@ -425,8 +579,8 @@ LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
             "and queue development-ready work. Never hands off to Cursor."
         ),
         kickoff=_IDEATION_KICKOFF,
-        goal="requirements become a brief, board, tickets, and a development queue",
-        exit_when="board exists with ticket acceptance criteria and dev-ready tickets are queued",
+        goal="requirements become a product/project container, product board, scoped tickets, and a development queue",
+        exit_when="project and board use product names, tickets carry implementation scope, and dev-ready tickets are queued",
         check_command="brief artifact + board ticket count matches requirements slices",
         max_iterations=3,
         steps=_IDEATION_STEPS,
@@ -439,16 +593,16 @@ LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
         category="Engineering",
         archetype="incremental_ship",
         description=(
-            "Ingest a ticket, write plan.md, implement with in-step CLI harness iteration, and close the "
-            "development slice. The only workflow that may hand off to Cursor."
+            "Ingest a ticket, write plan.md, implement with scoped CLI harness iteration, capture evidence, "
+            "correct defects, and close the development slice with compact memory."
         ),
         kickoff=_DEVELOPMENT_KICKOFF,
         goal="linked ticket slice implemented with plan.md and harness evidence",
-        exit_when="plan.md is attached, the slice is implemented and self-tested, and the ticket has dev evidence",
+        exit_when="plan.md exists, the scoped slice is implemented and self-tested, relevant evidence exists, and the ticket has a compact result packet",
         check_command="project lint/test commands from harness self-assessment",
         max_iterations=6,
         steps=_DEVELOPMENT_STEPS,
-        tags=["engineering", "ticket", "plan.md", "cursor"],
+        tags=["engineering", "ticket", "plan.md", "cli", "browser-evidence", "memory"],
     ),
     _meta(
         name="Polish: Verify and Ship",

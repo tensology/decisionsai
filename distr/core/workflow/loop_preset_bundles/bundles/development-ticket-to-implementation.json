@@ -6,12 +6,12 @@
   "role": "senior_software_engineer",
   "category": "Engineering",
   "archetype": "incremental_ship",
-  "description": "Ingest a ticket, write plan.md, implement, capture browser evidence where relevant, correct/re-run, and close with compact memory.",
-  "kickoff": "Start the \"Development: Ticket to Implementation\" loop.\nGoal: one linked ticket is implemented on the project with CLI harness iteration\nMax iterations: 6\nExit when: plan.md is attached, the slice is implemented, browser evidence is captured or explicitly marked N/A, checks are green, and development evidence is on the ticket\nStep 1: Ingest the ticket, project memory, linked files, and acceptance context before changing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "description": "Ingest a ticket, write plan.md, implement with scoped CLI harness iteration, capture evidence, correct defects, and close the development slice with compact memory.",
+  "kickoff": "Start the \"Development: Ticket to Implementation\" loop.\nGoal: one linked ticket is implemented on the linked project with CLI harness iteration\nMax iterations: 6\nExit when: plan.md exists, the scoped slice is implemented, relevant checks are green or explicitly blocked, browser evidence exists or is marked N/A with reason, and the ticket has a compact result packet.\nStep 1: Load the ticket, board, project, workflow memory, AGENTS.md/context files, linked files/media, and acceptance criteria before changing code.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
   "loop_contract": {
     "name": "Development: Ticket to Implementation",
     "goal": "linked ticket slice implemented with plan.md and harness evidence",
-    "exit_when": "plan.md is attached, the slice is implemented, browser evidence is captured or explicitly marked N/A, checks are green, and the ticket has dev evidence",
+    "exit_when": "plan.md exists, the scoped slice is implemented and self-tested, relevant evidence exists, and the ticket has a compact result packet",
     "check_command": "project lint/test commands from harness self-assessment",
     "max_iterations": 6,
     "guardrails": [
@@ -20,7 +20,7 @@
       "If stuck after several iterations, stop and report blockers instead of gaming metrics"
     ],
     "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
-    "step_1": "Read the linked ticket, board, lane, project, acceptance criteria, memory files, and linked media/files. Restate the slice, constraints, and project route before planning.",
+    "step_1": "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, required files to inspect, missing information, and the proposed CLI/model route. Do not edit files in this step.",
     "archetype": "incremental_ship",
     "role": "senior_software_engineer"
   },
@@ -36,7 +36,7 @@
   "steps": [
     {
       "name": "Ingest ticket, memory, and acceptance context",
-      "instruction": "Read the linked ticket, board, lane, project, acceptance criteria, AGENTS.md/context files, active memory, handoff notes, and linked media/files. Restate the slice, constraints, project route, and unknowns before planning.",
+      "instruction": "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, required files to inspect, missing information, and the proposed CLI/model route. Do not edit files in this step.",
       "skills": [
         "product-lens",
         "brainstorming",
@@ -46,21 +46,43 @@
         "cli",
         "other"
       ],
-      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not write code before plan.md exists",
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not write code before plan.md exists\n- If linked files/media cannot be fetched, record the missing attachment and continue only with an explicit blocker note\n- The project and board are containers; implementation intent belongs to the ticket",
       "failure_checklist": [
-        "Acceptance criteria are vague or missing",
-        "Project route, memory files, or linked media/files were not checked",
-        "Unknowns were not listed before planning"
+        "Ticket scope, non-goals, or acceptance criteria are missing",
+        "Project folder or repository shape was not identified",
+        "Linked files/media or memory files were not checked or marked unavailable",
+        "The agent started editing before the context packet was produced"
       ],
-      "validation_prompt": "Ticket brief, acceptance criteria, linked files/media, memory files, unknowns, and project route are explicit.",
+      "validation_prompt": "A context packet exists with ticket scope, non-goals, project route, linked files/media status, memory status, unknowns, and CLI/model route.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
-      "other_tool": "Ticket context, project repository, workspace memory, and linked attachments",
-      "action_type": "send_to_project_cli"
+      "other_tool": "Ticket context, board, project repository, workspace memory, and linked attachments",
+      "action_type": "send_to_project_cli",
+      "config": {
+        "execution_scope": "ticket",
+        "model_policy": {
+          "mode": "auto",
+          "free_only": true,
+          "prefer_local": false
+        },
+        "required_context": [
+          "ticket",
+          "board",
+          "project",
+          "workflow_memory",
+          "project_memory",
+          "linked_attachments"
+        ],
+        "expected_outputs": [
+          "context_packet",
+          "unknowns",
+          "route_recommendation"
+        ]
+      }
     },
     {
       "name": "Plan the smallest implementation slice",
-      "instruction": "Create ticket-specific plan.md with the smallest shippable slice, affected files, commands to run, browser/evidence plan, rollback notes, and explicit skip conditions for non-applicable checks. Attach plan.md to the ticket before implementation.",
+      "instruction": "Create a ticket-specific plan.md in the project/workflow handoff area before editing code. The plan must describe the smallest shippable slice for this ticket, files expected to change, commands to run, browser/evidence plan, rollback notes, and skip rules for non-applicable checks. Link or attach the plan to the ticket result packet.",
       "skills": [
         "writing-plans",
         "executing-plans",
@@ -70,21 +92,37 @@
         "cli",
         "other"
       ],
-      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Plan must match this ticket only",
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Plan must match this ticket only\n- Do not create generic project plans that belong on the board or project\n- If the ticket is too vague, plan the smallest safe discovery slice and ask for the missing decision",
       "failure_checklist": [
-        "Plan is too broad for the ticket",
-        "Plan does not name affected files or checks",
-        "Browser evidence or N/A skip rules are missing"
+        "plan.md is missing",
+        "Plan is broader than the ticket",
+        "Plan does not name expected changed files",
+        "Checks, browser evidence, rollback, or skip rules are missing"
       ],
-      "validation_prompt": "plan.md exists, is linked to the ticket, and includes implementation slice, checks, browser evidence plan, rollback, and skip rules.",
+      "validation_prompt": "plan.md exists for this ticket and includes slice, expected changed files, checks, browser/evidence plan, rollback notes, and explicit skip rules.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Ticket file attachment",
-      "action_type": "send_to_project_cli"
+      "action_type": "send_to_project_cli",
+      "config": {
+        "execution_scope": "ticket",
+        "model_policy": {
+          "mode": "auto",
+          "free_only": true,
+          "prefer_local": false
+        },
+        "required_context": [
+          "context_packet"
+        ],
+        "expected_outputs": [
+          "plan_md",
+          "ticket_plan_link"
+        ]
+      }
     },
     {
       "name": "Implement the slice with project checks",
-      "instruction": "Implement only the planned slice. Detect the actual project commands from repo config, run the relevant checks, capture command output, and report files changed. Do not broaden scope without updating the ticket and plan.",
+      "instruction": "Implement only the planned slice. Detect stack and commands from real repo files such as package.json, pyproject.toml, requirements files, manage.py, Makefile, docker compose files, or existing scripts. Make minimal edits, run the relevant checks that are available, capture exact command output, and report changed files. If setup requires dependency install or network access, report the blocked command clearly instead of pretending checks passed.",
       "skills": [
         "executing-plans",
         "tdd-workflow",
@@ -95,25 +133,44 @@
         "cli",
         "shell"
       ],
-      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them\n- Do not assume npm, pytest, or make unless the repo proves it",
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Detect commands from the actual project config before running them\n- Do not assume npm, pytest, or make unless the repo proves it\n- Do not create duplicate app roots if the project already has frontend/backend folders\n- Do not install global dependencies; use project-local tooling or a local virtual environment",
       "failure_checklist": [
-        "Scope expanded beyond plan.md",
+        "Implementation deviated from plan.md",
         "Project commands were guessed instead of detected",
-        "Changed files or command output were not reported"
+        "Checks were skipped without exact blocker output",
+        "Changed files were not reported",
+        "A duplicate project scaffold was created instead of using the existing folder"
       ],
-      "validation_prompt": "Slice is implemented, relevant project checks were run or explicitly blocked, and changed files are reported.",
+      "validation_prompt": "The planned slice is implemented, project commands were detected from repo files, checks ran or have exact blockers, and changed files are reported.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "action_type": "send_to_project_cli",
+      "config": {
+        "execution_scope": "ticket",
+        "model_policy": {
+          "mode": "auto",
+          "free_only": true,
+          "prefer_local": false
+        },
+        "required_context": [
+          "plan_md",
+          "project_repo"
+        ],
+        "expected_outputs": [
+          "changed_files",
+          "command_log",
+          "blockers"
+        ]
+      },
       "on_fail_goto_position": 2
     },
     {
       "name": "Capture browser evidence and self-assess",
-      "instruction": "If the change affects UI, run the app/browser flow, capture screenshots or Playwright evidence, compare the result against the ticket, and list visual/behavior issues. If the change is not UI-facing, mark browser evidence N/A with a concrete reason.",
+      "instruction": "If the ticket affects UI or app setup, start the app using the documented project commands, open it with Playwright or the browser tool, capture screenshot/evidence, inspect console/runtime errors, and compare the result to the ticket acceptance criteria. If browser evidence is not applicable or the app cannot start, record the exact reason and command output.",
       "skills": [
         "qa-tester",
         "verification-loop",
-        "visual-regression-review",
+        "browser-qa",
         "systematic-debugging"
       ],
       "tools": [
@@ -123,19 +180,37 @@
       ],
       "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not fake browser evidence; if the app cannot run, report the blocker and exact command/output\n- Current step remains open until UI evidence is captured or explicitly marked N/A",
       "failure_checklist": [
-        "UI-affecting change has no screenshot or browser evidence",
+        "UI/app setup change has no screenshot or browser evidence",
+        "Console/runtime errors were not checked",
         "Browser blocker lacks exact command/output",
         "Non-UI N/A was asserted without a concrete reason"
       ],
-      "validation_prompt": "Browser evidence is attached for UI changes, or N/A is justified for non-UI changes, with self-assessment notes.",
+      "validation_prompt": "Browser evidence is attached for UI/app changes, or N/A/blocker is justified with exact command output and self-assessment notes.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "action_type": "send_to_project_cli",
+      "config": {
+        "execution_scope": "ticket",
+        "model_policy": {
+          "mode": "auto",
+          "free_only": true,
+          "prefer_local": false
+        },
+        "required_context": [
+          "implemented_slice",
+          "startup_commands"
+        ],
+        "expected_outputs": [
+          "browser_evidence",
+          "console_check",
+          "visual_self_assessment"
+        ]
+      },
       "on_fail_goto_position": 2
     },
     {
       "name": "Correct, re-run, or skip with reason",
-      "instruction": "Use the evidence from checks and browser review to decide the next move: correct defects and re-run, skip a non-applicable step with reason, or stop for a human decision. The orchestrator must know why the loop continues or exits.",
+      "instruction": "Use command output, browser evidence, and self-assessment to decide the next move. Correct defects and re-run the relevant checks, skip only non-applicable checks with a ticket-specific reason, or stop for a human decision when the blocker needs product or credential input. The result must say whether the loop should continue, retry implementation, or exit.",
       "skills": [
         "verification-loop",
         "systematic-debugging",
@@ -150,18 +225,37 @@
       "failure_checklist": [
         "Known defect was left unresolved without blocker",
         "Checks or browser evidence were not rerun after correction",
-        "Skip reason is generic or not tied to the ticket"
+        "Skip reason is generic or not tied to the ticket",
+        "Next loop action is unclear"
       ],
-      "validation_prompt": "All known defects are corrected or explicitly blocked/skipped with evidence, and rerun results are recorded.",
+      "validation_prompt": "All known defects are corrected or explicitly blocked/skipped with evidence, rerun results are recorded, and the next loop action is explicit.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "action_type": "send_to_project_cli",
+      "config": {
+        "execution_scope": "ticket",
+        "model_policy": {
+          "mode": "auto",
+          "free_only": true,
+          "prefer_local": false
+        },
+        "required_context": [
+          "command_log",
+          "browser_evidence",
+          "self_assessment"
+        ],
+        "expected_outputs": [
+          "rerun_results",
+          "skip_or_blocker_reason",
+          "next_action"
+        ]
+      },
       "on_fail_goto_position": 2,
       "validation_pass_action": "next"
     },
     {
       "name": "Report, update ticket, and compact memory",
-      "instruction": "Update the ticket with files changed, commands run, screenshots/evidence, remaining risks, and the final development summary. Write the harness return contract so DecisionsAI can persist a compact memory delta for future runs.",
+      "instruction": "Update the ticket with a compact result packet: summary, files changed, commands run, browser evidence or N/A reason, remaining risks, blockers, and next actions. Write only durable memory deltas: project commands, conventions, paths, decisions, and gotchas. Do not paste full transcripts into memory.",
       "skills": [
         "internal-comms",
         "finishing-a-development-branch"
@@ -170,20 +264,39 @@
         "cli",
         "other"
       ],
-      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not paste full transcripts into memory; report compact decisions, files, commands, risks, and next actions",
+      "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes\n- Do not paste full transcripts into memory; compact durable facts only\n- Ticket result must be usable by the next run without reading the full chat",
       "failure_checklist": [
-        "Ticket lacks final evidence or changed files",
-        "Harness return contract is incomplete",
-        "Memory delta contains full transcript instead of compact learning"
+        "Ticket lacks final result packet",
+        "Changed files or commands are missing",
+        "Evidence or N/A reason is missing",
+        "Memory delta contains transcript noise instead of durable facts"
       ],
-      "validation_prompt": "Ticket contains evidence, commands, changed files, risks, and a complete harness return contract for memory compounding.",
+      "validation_prompt": "Ticket contains summary, evidence, commands, changed files, risks/blockers, next actions, and compact memory deltas for future runs.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Ticket update, result packet, and compact workspace memory",
       "action_type": "send_to_project_cli",
+      "config": {
+        "execution_scope": "ticket",
+        "model_policy": {
+          "mode": "auto",
+          "free_only": true,
+          "prefer_local": false
+        },
+        "required_context": [
+          "final_changed_files",
+          "command_log",
+          "evidence",
+          "memory_delta"
+        ],
+        "expected_outputs": [
+          "ticket_result_packet",
+          "compact_memory_delta"
+        ]
+      },
+      "on_fail_goto_position": 4,
       "validation_pass_action": "end_loop",
-      "validation_fail_action": "retry",
-      "on_fail_goto_position": 4
+      "validation_fail_action": "retry"
     }
   ],
   "references": {

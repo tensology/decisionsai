@@ -7,11 +7,11 @@
   "category": "Product",
   "archetype": "scope_then_ship",
   "description": "Read a requirements document, write a product brief, create a Kanban board with tickets, and queue development-ready work. Never hands off to Cursor.",
-  "kickoff": "Start the \"Ideation: Brief to Board\" loop.\nGoal: requirements become a product brief, board lanes, and development-ready tickets\nMax iterations: 3\nExit when: the brief is written, the board exists with tickets and acceptance criteria, and dev-ready tickets are queued\nStep 1: Read the linked requirements document and extract scope, constraints, and delivery slices.\nThis workflow stays inside the configured CLI harness.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
+  "kickoff": "Start the \"Ideation: Brief to Board\" loop.\nGoal: requirements become a product/project container, a product board, scoped tickets, and a development queue\nMax iterations: 3\nExit when: the brief is written, the project/board names are product names, tickets carry the implementation scope, and dev-ready tickets are queued.\nStep 1: Read the linked requirements document and extract product identity, constraints, and delivery slices.\nThis workflow stays inside the configured CLI harness.\nSelf-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.\n\nGuardrails (do not skip):\n- Do not modify the check command or exit criteria to force success\n- Do not skip, disable, or bypass checks to pass the exit condition\n- If stuck after several iterations, stop and report blockers instead of gaming metrics",
   "loop_contract": {
     "name": "Ideation: Brief to Board",
-    "goal": "requirements become a brief, board, tickets, and a development queue",
-    "exit_when": "board exists with ticket acceptance criteria and dev-ready tickets are queued",
+    "goal": "requirements become a product/project container, product board, scoped tickets, and a development queue",
+    "exit_when": "project and board use product names, tickets carry implementation scope, and dev-ready tickets are queued",
     "check_command": "brief artifact + board ticket count matches requirements slices",
     "max_iterations": 3,
     "guardrails": [
@@ -20,7 +20,7 @@
       "If stuck after several iterations, stop and report blockers instead of gaming metrics"
     ],
     "pacing_notes": "Self-pace this loop. After each iteration, run the check command, read the output, and only continue if the exit condition is not met. Stop when the exit condition passes or max iterations is reached. Give a short status update each pass.",
-    "step_1": "Read the requirements document path from run metadata. Extract product goal, required views, interactions, quality bar, and the delivery slices that should become tickets. Summarize scope, non-goals, and risks. Do not write code or open an IDE.",
+    "step_1": "Read the requirements document path from run metadata. Extract product name, domain/repo hint if present, product goal, required views, interactions, quality bar, delivery slices, non-goals, and risks. The project and board names must stay as product/container names; implementation details belong in ticket titles and descriptions. Do not write code.",
     "archetype": "scope_then_ship",
     "role": "product_manager"
   },
@@ -34,7 +34,7 @@
   "steps": [
     {
       "name": "Read requirements document",
-      "instruction": "Read the requirements document path from run metadata. Extract product goal, required views, interactions, quality bar, and the delivery slices that should become tickets. Summarize scope, non-goals, and risks. Do not write code or open an IDE.",
+      "instruction": "Read the requirements document path from run metadata. Extract product name, domain/repo hint if present, product goal, required views, interactions, quality bar, delivery slices, non-goals, and risks. The project and board names must stay as product/container names; implementation details belong in ticket titles and descriptions. Do not write code.",
       "skills": [
         "product-lens",
         "brainstorming",
@@ -43,20 +43,30 @@
       "tools": [
         "other"
       ],
-      "guardrail": "- Ideation only: no code, no Cursor, no project CLI",
+      "guardrail": "- Ideation only: no code, no Cursor, no project CLI\n- Do not put implementation goals into the project or board name",
       "failure_checklist": [
-        "No concrete evidence attached",
-        "Step skipped or hand-waved without proof"
+        "Product/container identity is missing",
+        "Delivery slices are not separated from project/board naming",
+        "Non-goals or risks are missing"
       ],
-      "validation_prompt": "Requirements scope, slices, constraints, and non-goals are explicit.",
+      "validation_prompt": "Product identity, domain/repo hint, slices, constraints, non-goals, and risks are explicit.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Requirements document",
-      "action_type": "agent_instruction"
+      "action_type": "agent_instruction",
+      "config": {
+        "execution_scope": "product_discovery",
+        "expected_outputs": [
+          "product_identity",
+          "delivery_slices",
+          "non_goals",
+          "risks"
+        ]
+      }
     },
     {
       "name": "Write product brief",
-      "instruction": "Write a concise product brief with acceptance themes per delivery slice, recommended lane names, and ticket titles. Attach the brief to run metadata for downstream workflows.",
+      "instruction": "Write a concise product brief with product/container naming, acceptance themes per delivery slice, recommended lanes, ticket titles, and ticket descriptions. The brief must clearly separate the product/board name from implementation work.",
       "skills": [
         "writing-plans",
         "product-lens",
@@ -65,20 +75,29 @@
       "tools": [
         "other"
       ],
-      "guardrail": "- Brief must map 1:1 to future board tickets",
+      "guardrail": "- Brief must map 1:1 to future board tickets\n- Board name should be the product/project name, not the first ticket",
       "failure_checklist": [
-        "No concrete evidence attached",
-        "Step skipped or hand-waved without proof"
+        "Brief does not name the product/container cleanly",
+        "Ticket slices do not map 1:1 to acceptance themes",
+        "Board/lane recommendations are missing"
       ],
-      "validation_prompt": "Product brief exists with ticket titles and acceptance themes per slice.",
+      "validation_prompt": "Product brief exists with clean product/board naming, ticket titles, descriptions, and acceptance themes per slice.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Product brief artifact",
-      "action_type": "agent_instruction"
+      "action_type": "agent_instruction",
+      "config": {
+        "execution_scope": "product_brief",
+        "expected_outputs": [
+          "product_brief",
+          "ticket_blueprint",
+          "lane_plan"
+        ]
+      }
     },
     {
       "name": "Create board, lanes, and tickets",
-      "instruction": "Create a Kanban board with lanes Backlog, Ready, In Progress, Validation, and Complete. Create one ticket per development slice from the brief with description and acceptance criteria. Do not hand off to Cursor.",
+      "instruction": "Create or update one product project and one product board using the product name. Create lanes Backlog, Ready, In Progress, Validation, and Complete. Create one ticket per development slice from the brief with description, acceptance criteria, priority, complexity, and project/workflow linkage. Do not duplicate boards or tickets if matching records already exist.",
       "skills": [
         "product-lens",
         "executing-plans"
@@ -86,20 +105,31 @@
       "tools": [
         "other"
       ],
-      "guardrail": "- Every ticket needs acceptance criteria; no IDE handoff",
+      "guardrail": "- Every ticket needs acceptance criteria; no IDE handoff\n- One product should have one product board unless the user explicitly asks for another\n- Reuse or update matching records instead of creating residual duplicates",
       "failure_checklist": [
-        "No concrete evidence attached",
-        "Step skipped or hand-waved without proof"
+        "Project or board name includes implementation scope",
+        "Duplicate board/tickets were created for the same product",
+        "Tickets lack acceptance criteria, priority, complexity, or workflow linkage"
       ],
-      "validation_prompt": "Board exists with lanes and development tickets that match the brief.",
+      "validation_prompt": "One product project and board exist with lanes and scoped development tickets that match the brief.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Kanban board + ticket creation",
-      "action_type": "agent_instruction"
+      "action_type": "agent_instruction",
+      "config": {
+        "execution_scope": "board_creation",
+        "expected_outputs": [
+          "project_id",
+          "board_id",
+          "lane_ids",
+          "ticket_ids"
+        ],
+        "idempotency": "reuse_matching_product_records"
+      }
     },
     {
       "name": "Queue tickets for development",
-      "instruction": "Link the board and tickets to the development workflow. Set queue order, attach the brief, and mark tickets ready for the development workflow. End with a handoff summary.",
+      "instruction": "Link the board and development-ready tickets to the Development: Ticket to Implementation workflow. Set queue order from infrastructure/foundation first through feature slices and validation. Attach the brief/result packet and end with a concise handoff summary that names the first ticket to run.",
       "skills": [
         "internal-comms",
         "product-lens"
@@ -109,14 +139,23 @@
       ],
       "guardrail": "- Stay on the linked ticket scope; avoid unrelated refactors or scope creep\n- Prefer minimal diffs, explicit evidence, and reversible changes",
       "failure_checklist": [
-        "No concrete evidence attached",
-        "Step skipped or hand-waved without proof"
+        "Tickets are not linked to the development workflow",
+        "Queue order does not put foundation/infrastructure first",
+        "Handoff summary does not identify the first runnable ticket"
       ],
-      "validation_prompt": "Development tickets are queued on the board with workflow linkage and brief attached.",
+      "validation_prompt": "Development tickets are queued on the product board with workflow linkage, brief attached, and first runnable ticket identified.",
       "validation_type": "llm_judgment",
       "wait_for_continue": false,
       "other_tool": "Workflow queue + board linkage",
       "action_type": "agent_instruction",
+      "config": {
+        "execution_scope": "queue_setup",
+        "expected_outputs": [
+          "queued_ticket_ids",
+          "first_ticket_id",
+          "handoff_summary"
+        ]
+      },
       "validation_pass_action": "end_loop",
       "validation_fail_action": "end_loop"
     }
