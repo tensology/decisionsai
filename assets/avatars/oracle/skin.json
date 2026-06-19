@@ -16,7 +16,7 @@
   },
   "events": {
     "idle": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -28,10 +28,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "hands_free_listening": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -43,10 +43,10 @@
       "glow_speed": 875,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "ptt_active": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -58,10 +58,10 @@
       "glow_speed": 875,
       "glow_style": "pulse",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "dictation": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -73,10 +73,10 @@
       "glow_speed": 1000,
       "glow_style": "fade",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "ticket_dictation": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -88,10 +88,10 @@
       "glow_speed": 900,
       "glow_style": "pulse",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "recording_action": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -103,10 +103,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "recording",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "file_drop_success": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -118,10 +118,10 @@
       "glow_speed": 650,
       "glow_style": "flash",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "tts_response": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": true,
       "show_chat_bubble": false,
       "glow": false,
@@ -133,10 +133,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "running_action": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -148,10 +148,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "running_step_runner": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -163,10 +163,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "snippet_copied": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -178,10 +178,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "thinking": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -193,10 +193,10 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "needs_attention": {
-      "animation": "1.webm",
+      "animation": "14.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -208,7 +208,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     }
   },
   "transitions": {}

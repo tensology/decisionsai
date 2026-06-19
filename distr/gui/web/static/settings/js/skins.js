@@ -1,6 +1,9 @@
 // Skins Settings JavaScript
 var _skinsList = [];
 var _selectedSkin = null;
+var _loadedSkin = null;
+var _loadedSkinScale = 9;
+var _selectedSkinScale = 9;
 var _editingSkin = null;
 var _editingSkinConfig = null;
 var _skinFiles = [];
@@ -13,6 +16,27 @@ var EVENT_HOOKS = [
     "thinking", "needs_attention"
 ];
 var PLAYBACK_MODES = ["loop", "pingpong"];
+
+function _setSkinsBusy(busy, message) {
+    var overlay = document.getElementById('skins_loading_overlay');
+    var textEl = document.getElementById('skins_loading_text');
+    var loadBtn = document.getElementById('skin_detail_load');
+    var saveBtn = document.getElementById('skin_detail_save');
+    if (overlay) overlay.classList.toggle('hidden', !busy);
+    if (textEl && message) textEl.textContent = message;
+    if (loadBtn) {
+        loadBtn.disabled = !!busy;
+        loadBtn.classList.toggle('opacity-50', !!busy);
+        loadBtn.classList.toggle('cursor-not-allowed', !!busy);
+        loadBtn.textContent = busy ? 'Loading...' : 'Load';
+    }
+    if (saveBtn) {
+        saveBtn.disabled = !!busy;
+        saveBtn.classList.toggle('opacity-50', !!busy);
+        saveBtn.classList.toggle('cursor-not-allowed', !!busy);
+        saveBtn.textContent = busy ? 'Saving...' : 'Save';
+    }
+}
 
 function _getOraclePlaybackMode() {
     if (_editingSkinConfig && _editingSkinConfig.events && _editingSkinConfig.events.idle) {
@@ -53,8 +77,11 @@ async function loadSkinsSettings() {
         var general = responses[1].ok ? await responses[1].json() : {};
         _skinsList = data.skins || [];
         _selectedSkin = data.selected_skin || 'oracle';
+        _loadedSkin = data.selected_skin || 'oracle';
         var rawSize = data.sphere_size !== undefined ? data.sphere_size : 180;
         var scale = rawSize > 10 ? Math.max(4, Math.min(10, Math.round(rawSize / 20))) : Math.max(4, Math.min(10, parseInt(rawSize, 10) || 9));
+        _loadedSkinScale = scale;
+        _selectedSkinScale = scale;
         var slider = document.getElementById('skins_oracle_size');
         if (slider) slider.value = scale;
         updateSkinsOracleSizeLabel(scale);
@@ -66,15 +93,23 @@ async function loadSkinsSettings() {
         if (positionEl) positionEl.value = general.oracle_position || 'custom';
 
         renderSkinsGrid();
-        // Auto-open the selected skin's detail
-        showEditorForSkin(_selectedSkin);
+        closeSkinEditor();
     } catch (e) {
         console.error('Error loading skins:', e);
     }
 }
 
-async function saveSkinsSettings() {
+async function _saveSkinEditorState(showToast) {
+    _setSkinsBusy(true, 'Loading selected skin...');
     try {
+        if (!(_selectedSkin || _loadedSkin)) {
+            throw new Error('No skin selected');
+        }
+
+        if (_editingSkin && _editingSkinConfig && !document.getElementById('avatar_detail').classList.contains('hidden')) {
+            await _persistAvatarConfig(false);
+        }
+
         var restoreEl = document.getElementById('restore_position');
         var positionEl = document.getElementById('oracle_position');
         var restorePosition = restoreEl ? restoreEl.checked : true;
@@ -98,10 +133,84 @@ async function saveSkinsSettings() {
             throw new Error(err.detail || 'Failed to save skins settings');
         }
 
-        if (typeof showNotification === 'function') showNotification('Skins settings saved', 'success');
+        if (_editingSkin && _editingSkinConfig && document.getElementById('oracle_detail') && !document.getElementById('oracle_detail').classList.contains('hidden')) {
+            // Oracle editor writes are already persisted as fields change; nothing extra needed here.
+        }
+
+        var slider = document.getElementById('skins_oracle_size');
+        var stagedScale = slider ? parseInt(slider.value, 10) || _selectedSkinScale : _selectedSkinScale;
+        var sizeSaveResp = await fetch('/api/skins/' + encodeURIComponent(_selectedSkin || _loadedSkin || 'oracle') + '/size', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sphere_size: stagedScale })
+        });
+        if (!sizeSaveResp.ok) {
+            throw new Error('Failed to save skin size');
+        }
+
+        _selectedSkinScale = stagedScale;
+        if ((_selectedSkin || _loadedSkin) === _loadedSkin) {
+            var liveSizeResp = await fetch('/api/oracle/size', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sphere_size: stagedScale })
+            });
+            if (!liveSizeResp.ok) {
+                throw new Error('Failed to update loaded size');
+            }
+            _loadedSkinScale = stagedScale;
+        }
+
+        if (showToast && typeof showNotification === 'function') showNotification('Skin settings saved', 'success');
+        return {
+            selectedSkin: _selectedSkin || _loadedSkin || 'oracle',
+            stagedScale: stagedScale
+        };
     } catch (e) {
         console.error('Error saving skins settings:', e);
-        if (typeof showNotification === 'function') showNotification('Failed to save skins settings', 'error');
+        if (typeof showNotification === 'function') showNotification('Failed to save skin settings', 'error');
+        return null;
+    } finally {
+        _setSkinsBusy(false);
+    }
+}
+
+async function saveSkinsSettings() {
+    var saved = await _saveSkinEditorState(false);
+    if (!saved) return;
+
+    _setSkinsBusy(true, 'Loading selected skin...');
+    try {
+        var selectResp = await fetch('/api/skins/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ skin_name: saved.selectedSkin })
+        });
+
+        if (!selectResp.ok) {
+            var selectErr = await selectResp.json().catch(function() { return {}; });
+            throw new Error(selectErr.detail || 'Failed to load selected skin');
+        }
+
+        var sizeResp = await fetch('/api/oracle/size', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sphere_size: saved.stagedScale })
+        });
+        if (!sizeResp.ok) {
+            throw new Error('Failed to load selected size');
+        }
+
+        _loadedSkin = saved.selectedSkin;
+        _loadedSkinScale = saved.stagedScale;
+        renderSkinsGrid();
+
+        if (typeof showNotification === 'function') showNotification('Skin loaded', 'success');
+    } catch (e) {
+        console.error('Error loading selected skin:', e);
+        if (typeof showNotification === 'function') showNotification('Failed to load skin', 'error');
+    } finally {
+        _setSkinsBusy(false);
     }
 }
 
@@ -111,8 +220,9 @@ function renderSkinsGrid() {
     grid.innerHTML = '';
     _skinsList.forEach(function(skin) {
         var sel = skin.folder_name === _selectedSkin;
+        var isLoaded = skin.folder_name === _loadedSkin;
         var card = document.createElement('div');
-        card.className = 'flex flex-col items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ' +
+        card.className = 'relative flex flex-col items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ' +
             (sel ? 'border-[#10a37f] bg-[#10a37f]/10 shadow-lg shadow-[#10a37f]/20' : 'border-[#565869] bg-[#0d1117] hover:border-[#7a7c8c]');
         card.dataset.folder = skin.folder_name;
 
@@ -166,15 +276,39 @@ function renderSkinsGrid() {
         nameEl.textContent = skin.name;
         card.appendChild(nameEl);
 
+        var editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-[#565869] bg-[#1a1f3a]/95 text-[#ececf1] transition-colors hover:border-[#10a37f] hover:text-white';
+        editButton.setAttribute('aria-label', 'Edit ' + skin.name);
+        editButton.innerHTML = '' +
+            '<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M12 20h9"></path>' +
+            '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"></path>' +
+            '</svg>';
+        editButton.addEventListener('click', function(e) {
+            e.stopPropagation();
+            openSkinEditor(skin.folder_name);
+        });
+        card.appendChild(editButton);
+
         // Selected indicator
         if (sel) {
             var badge = document.createElement('span');
-            badge.className = 'text-xs text-[#10a37f] font-medium';
-            badge.textContent = '✓ Active';
+            badge.className = 'text-xs font-medium ' + (isLoaded ? 'text-[#10a37f]' : 'text-[#f97316]');
+            badge.textContent = isLoaded ? '✓ Loaded' : 'Selected';
             card.appendChild(badge);
+        } else if (isLoaded) {
+            var loadedBadge = document.createElement('span');
+            loadedBadge.className = 'text-xs text-[#10a37f] font-medium';
+            loadedBadge.textContent = 'Loaded';
+            card.appendChild(loadedBadge);
         }
 
         card.addEventListener('click', function() { selectSkin(skin.folder_name); });
+        card.addEventListener('dblclick', function(e) {
+            e.preventDefault();
+            openSkinEditor(skin.folder_name);
+        });
         grid.appendChild(card);
     });
 
@@ -207,30 +341,51 @@ function renderSkinsGrid() {
 function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 async function selectSkin(folderName) {
-    try {
-        var resp = await fetch('/api/skins/select', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({skin_name: folderName})
-        });
-        if (!resp.ok) { var err = await resp.json(); throw new Error(err.detail || 'Failed'); }
-        _selectedSkin = folderName;
-        renderSkinsGrid();
-        showEditorForSkin(folderName);
-        // Update slider to the saved size for this skin
-        try {
-            var sizeResp = await fetch('/api/skins');
-            if (sizeResp.ok) {
-                var sizeData = await sizeResp.json();
-                var rawSize = sizeData.sphere_size !== undefined ? sizeData.sphere_size : 180;
-                var scale = rawSize > 10 ? Math.max(4, Math.min(10, Math.round(rawSize / 20))) : Math.max(4, Math.min(10, parseInt(rawSize, 10) || 9));
-                var slider = document.getElementById('skins_oracle_size');
-                if (slider) slider.value = scale;
-                updateSkinsOracleSizeLabel(scale);
-            }
-        } catch (_) {}
-    } catch (e) {
-        console.error('Error selecting skin:', e);
+    _selectedSkin = folderName;
+    renderSkinsGrid();
+    closeSkinEditor();
+}
+
+async function openSkinEditor(folderName) {
+    _setSkinsBusy(true, 'Loading skin editor...');
+    if (folderName !== _selectedSkin) {
+        await selectSkin(folderName);
     }
+    var grid = document.getElementById('skins_grid');
+    if (grid) grid.classList.add('hidden');
+    try {
+        await loadSkinSize(folderName);
+        await showEditorForSkin(folderName);
+    } finally {
+        _setSkinsBusy(false);
+    }
+}
+
+async function loadSkinSize(folderName) {
+    try {
+        var resp = await fetch('/api/skins/' + encodeURIComponent(folderName) + '/size');
+        if (!resp.ok) throw new Error('Failed');
+        var data = await resp.json();
+        var scale = parseInt(data.sphere_size, 10) || _loadedSkinScale;
+        _selectedSkinScale = scale;
+        var slider = document.getElementById('skins_oracle_size');
+        if (slider) slider.value = scale;
+        updateSkinsOracleSizeLabel(scale);
+    } catch (e) {
+        console.error('Error loading skin size:', e);
+    }
+}
+
+function closeSkinEditor() {
+    var grid = document.getElementById('skins_grid');
+    var panel = document.getElementById('skin_detail_panel');
+    var oracleDetail = document.getElementById('oracle_detail');
+    var avatarDetail = document.getElementById('avatar_detail');
+
+    if (grid) grid.classList.remove('hidden');
+    if (panel) panel.classList.add('hidden');
+    if (oracleDetail) oracleDetail.classList.add('hidden');
+    if (avatarDetail) avatarDetail.classList.add('hidden');
 }
 
 async function showEditorForSkin(folderName) {
@@ -238,9 +393,11 @@ async function showEditorForSkin(folderName) {
     if (!skin) return;
 
     var panel = document.getElementById('skin_detail_panel');
+    var grid = document.getElementById('skins_grid');
     var oracleDetail = document.getElementById('oracle_detail');
     var avatarDetail = document.getElementById('avatar_detail');
 
+    if (grid) grid.classList.add('hidden');
     panel.classList.remove('hidden');
 
     if (skin.type === 'oracle') {
@@ -377,10 +534,6 @@ async function saveOracleGif(filename) {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(_editingSkinConfig)
         });
-        await fetch('/api/skins/select', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({skin_name: _editingSkin})
-        });
     } catch (e) { console.error(e); }
 }
 
@@ -394,10 +547,6 @@ async function saveOraclePlayback(mode) {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(_editingSkinConfig)
         });
-        await fetch('/api/skins/select', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({skin_name: _editingSkin})
-        });
     } catch (e) { console.error(e); }
 }
 
@@ -409,10 +558,6 @@ async function saveOracleUnfocusedOpacity(enabled, value) {
         await fetch('/api/skins/' + encodeURIComponent(_editingSkin) + '/config', {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(_editingSkinConfig)
-        });
-        await fetch('/api/skins/select', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({skin_name: _editingSkin})
         });
     } catch (e) { console.error(e); }
 }
@@ -527,7 +672,7 @@ function clearPreview() {
 // Save avatar config
 // ---------------------------------------------------------------------------
 
-async function saveAvatarConfig() {
+async function _persistAvatarConfig(showToast) {
     if (!_editingSkin || !_editingSkinConfig) return;
     var events = {};
     EVENT_HOOKS.forEach(function(hook) {
@@ -551,12 +696,12 @@ async function saveAvatarConfig() {
             method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
         });
         if (!resp.ok) { var err = await resp.json(); throw new Error(err.detail || 'Failed'); }
-        await fetch('/api/skins/select', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({skin_name: _editingSkin})
-        });
-        if (typeof showNotification === 'function') showNotification('Saved', 'success');
+        if (showToast && typeof showNotification === 'function') showNotification('Saved', 'success');
     } catch (e) { console.error(e); }
+}
+
+async function saveAvatarConfig() {
+    await _persistAvatarConfig(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -569,16 +714,27 @@ function updateSkinsOracleSizeLabel(v) {
 }
 
 function setupSkinsSliders() {
-    var t = null;
-    function apply(s) {
-        s = parseInt(s, 10); updateSkinsOracleSizeLabel(s);
-        fetch('/api/oracle/size', { method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({sphere_size: s}) }).catch(function(e) { console.error(e); });
-    }
     var slider = document.getElementById('skins_oracle_size');
     if (slider) {
-        slider.addEventListener('input', function() { updateSkinsOracleSizeLabel(this.value); if (t) clearTimeout(t); t = setTimeout(function() { t = null; apply(slider.value); }, 80); });
-        slider.addEventListener('change', function() { if (t) { clearTimeout(t); t = null; } apply(this.value); });
+        slider.addEventListener('input', function() {
+            var scale = parseInt(this.value, 10) || _selectedSkinScale;
+            _selectedSkinScale = scale;
+            updateSkinsOracleSizeLabel(scale);
+            if ((_selectedSkin || _loadedSkin) === _loadedSkin) {
+                fetch('/api/oracle/size', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ sphere_size: scale })
+                }).then(function(resp) {
+                    if (resp.ok) _loadedSkinScale = scale;
+                }).catch(function(e) { console.error(e); });
+            }
+        });
+        slider.addEventListener('change', function() {
+            var scale = parseInt(this.value, 10) || _selectedSkinScale;
+            _selectedSkinScale = scale;
+            updateSkinsOracleSizeLabel(scale);
+        });
     }
 }
 
@@ -587,10 +743,18 @@ function setupSkinsSliders() {
 // ---------------------------------------------------------------------------
 
 function _initSkins() {
-    if (!document.getElementById('skins_grid')) return;
+    var grid = document.getElementById('skins_grid');
+    if (!grid || grid.dataset.initialized === '1') return;
+    grid.dataset.initialized = '1';
     loadSkinsSettings(); setupSkinsSliders();
-    var saveBtn = document.getElementById('skin_editor_save');
-    if (saveBtn) saveBtn.addEventListener('click', saveAvatarConfig);
+    var saveBtn = document.getElementById('skin_detail_save');
+    if (saveBtn) saveBtn.addEventListener('click', function() { _saveSkinEditorState(true); });
+    var loadBtn = document.getElementById('skin_detail_load');
+    if (loadBtn) loadBtn.addEventListener('click', saveSkinsSettings);
+    var backBtn = document.getElementById('skin_detail_back');
+    if (backBtn) backBtn.addEventListener('click', closeSkinEditor);
+    _initCreateSkinCard();
+    _setupCreateSkinModalClose();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initSkins);
@@ -1018,15 +1182,4 @@ function _setupCreateSkinModalClose() {
             if (e.target === modal) closeCreateSkinModal();
         });
     }
-}
-
-// Override _initSkins to include Create Skin card init
-var _origInitSkins = _initSkins;
-function _initSkins() {
-    if (!document.getElementById('skins_grid')) return;
-    loadSkinsSettings(); setupSkinsSliders();
-    var saveBtn = document.getElementById('skin_editor_save');
-    if (saveBtn) saveBtn.addEventListener('click', saveAvatarConfig);
-    _initCreateSkinCard();
-    _setupCreateSkinModalClose();
 }

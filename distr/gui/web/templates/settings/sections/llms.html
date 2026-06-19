@@ -23,52 +23,50 @@
         }
     </style>
 
-    <div class="mb-6 pb-4 border-b border-[#565869] text-center">
+    <div class="mb-6 pb-4 border-b border-[#565869]">
         <h2 class="text-xl font-semibold text-white mb-1">LLMs</h2>
         <p class="text-sm text-gray-400">Configure LLM providers and models</p>
     </div>
 
-    <div class="space-y-4">
-        <!-- Speech to Text (STT) -->
-        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
-            <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-                <h3 class="mb-3 text-center text-base font-semibold text-white">Speech to Text (STT)</h3>
-                <div class="flex items-center gap-4 llms-row">
-                    <label for="stt_model" class="text-sm font-medium text-[#ececf1] w-16 text-right">Model:</label>
-                    <select id="stt_model" name="stt_model"
-                            class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="vosk">Vosk (Local & Offline)</option>
-                        <option value="whisper">Whisper.cpp (Local & Offline)</option>
-                        <!-- Online/local optional providers are populated only when available. -->
-                    </select>
-                </div>
-            </div>
+    <div class="llm-settings-layout">
+        <div class="llm-config-tabs" role="tablist" aria-label="LLM settings groups">
+            <button type="button" class="llm-config-tab is-active" data-llm-subtab="speech" role="tab" aria-selected="true">Speech to Text</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="conversational" role="tab" aria-selected="false">Conversational</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="coding" role="tab" aria-selected="false">Coding</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="vision" role="tab" aria-selected="false">Vision</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="image" role="tab" aria-selected="false">Image Generation</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="video" role="tab" aria-selected="false">Video Generation</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="workflow" role="tab" aria-selected="false">Workflow</button>
+            <button type="button" class="llm-config-tab" data-llm-subtab="computer_use" role="tab" aria-selected="false">Computer Use</button>
+        </div>
 
-            <!-- Instant Dictation -->
-            <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-                <label class="flex items-start cursor-pointer group">
+        <!-- Speech to Text -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel is-active" data-llm-panel="speech">
+            <h3 class="mb-3 text-center text-base font-semibold text-white">Speech to Text</h3>
+            <div class="flex items-center gap-4 llms-row llms-row--stt">
+                <label for="stt_model" class="text-sm font-medium text-[#ececf1] w-16 text-right">Model:</label>
+                <select id="stt_model" name="stt_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="vosk">Vosk (Local & Offline)</option>
+                    <option value="whisper">Whisper.cpp (Local & Offline)</option>
+                    <!-- Online/local optional providers are populated only when available. -->
+                </select>
+                <label for="instant_dictation" class="llms-inline-checkbox">
                     <input type="checkbox" id="instant_dictation" name="instant_dictation"
-                            class="w-4 h-4 mt-0.5 bg-[#1a1f3a] border border-[#565869] rounded
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
                                     checked:bg-[#10a37f] checked:border-[#10a37f]
                                     focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
                                     transition-colors cursor-pointer">
-                    <span class="ml-3 min-w-0">
-                        <span class="block text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                            Instant dictation
-                        </span>
-                        <span class="block text-xs text-gray-400 mt-1 leading-5">
-                            Insert dictated text in one fast pass without using the clipboard.
-                        </span>
-                    </span>
+                    <span>Instant dictation</span>
                 </label>
             </div>
         </div>
 
-        <!-- Conversational LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-3 text-center text-base font-semibold text-white">Conversational LLM</h3>
+        <!-- Conversational -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="conversational">
+            <h3 class="mb-3 text-center text-base font-semibold text-white">Conversational</h3>
             <div class="flex items-center gap-4 llms-row">
                 <label for="conversational_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
                 <div class="flex-1">
@@ -94,9 +92,9 @@
             </div>
         </div>
 
-        <!-- Coding LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-3 text-center text-base font-semibold text-white">Coding LLM</h3>
+        <!-- Coding -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="coding">
+            <h3 class="mb-3 text-center text-base font-semibold text-white">Coding</h3>
             <div class="flex items-center gap-4 llms-row">
                 <label for="coding_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
                 <div class="flex-1">
@@ -122,9 +120,9 @@
             </div>
         </div>
 
-        <!-- Vision LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-3 text-center text-base font-semibold text-white">Vision LLM</h3>
+        <!-- Vision -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="vision">
+            <h3 class="mb-3 text-center text-base font-semibold text-white">Vision</h3>
             <div class="flex items-center gap-4 llms-row">
                 <label for="vision_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
                 <div class="flex-1">
@@ -150,9 +148,9 @@
             </div>
         </div>
 
-        <!-- Image LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-3 text-center text-base font-semibold text-white">Image LLM</h3>
+        <!-- Image Generation -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="image">
+            <h3 class="mb-3 text-center text-base font-semibold text-white">Image Generation</h3>
             <div class="flex items-center gap-4 llms-row">
                 <label for="image_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
                 <div class="flex-1">
@@ -179,8 +177,8 @@
         </div>
 
         <!-- Video generation -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-3 text-center text-base font-semibold text-white">Video generation</h3>
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="video">
+            <h3 class="mb-3 text-center text-base font-semibold text-white">Video Generation</h3>
             <p class="mb-3 text-center text-xs text-gray-500">Text/image-to-video via Pixazo when configured in API Keys.</p>
             <div class="flex items-center gap-4 llms-row">
                 <label for="video_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
@@ -204,8 +202,8 @@
             </div>
         </div>
 
-        <!-- Workflow LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+        <!-- Workflow -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="workflow">
             <h3 class="mb-1 text-center text-base font-semibold text-white">Workflow</h3>
             <p class="mb-3 text-center text-xs text-gray-500">Dedicated model for workflow execution. Falls back to Conversational if empty.</p>
             <div class="flex items-center gap-4 llms-row">
@@ -233,8 +231,8 @@
             </div>
         </div>
 
-        <!-- Computer Use LLM -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+        <!-- Computer Use -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-config-panel" data-llm-panel="computer_use">
             <h3 class="mb-1 text-center text-base font-semibold text-white">Computer Use</h3>
             <p class="mb-3 text-center text-xs text-gray-500">Pixel-precise screen element location for desktop and browser automation. Requires Computer Use support (e.g. Claude Sonnet/Opus). Leave empty to use accessibility tree only.</p>
             <div class="flex items-center gap-4 llms-row">
@@ -263,26 +261,24 @@
         </div>
 
         <!-- Project Ticket Routing -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] llm-settings-routing">
             <h3 class="mb-1 text-center text-base font-semibold text-white">Project Ticket Routing</h3>
             <p class="mb-4 text-center text-xs text-gray-500">Global backend and model used when tickets are sent to project implementation agents.</p>
             <div id="project_cli_routes" class="space-y-3">
                 {% for level, label in [("low", "Low"), ("medium", "Medium"), ("high", "High")] %}
                 <div class="project-cli-route-row">
                     <div class="project-cli-route-label text-sm font-medium text-[#ececf1]">{{ label }}</div>
-                    <select id="project_cli_{{ level }}_backend" class="project-cli-backend bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
-                        <option value="pi">Pi</option>
-                        <option value="opencode">OpenCode</option>
-                        <option value="cursor">Cursor CLI</option>
-                        <option value="cursor_ide">Cursor IDE</option>
-                        <option value="codex">Codex CLI</option>
-                        <option value="codex_ide">Codex IDE</option>
-                        <option value="claude_code">Claude Code</option>
-                        <option value="cline">Cline</option>
-                    </select>
-                    <select id="project_cli_{{ level }}_model" class="project-cli-model bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
-                        <option value="">Select model...</option>
-                    </select>
+                    <div class="project-cli-select-wrap project-cli-select-wrap--backend">
+                        <select id="project_cli_{{ level }}_backend" class="project-cli-backend bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}" aria-label="{{ label }} CLI backend">
+                            <option value="">Loading CLI backends...</option>
+                        </select>
+                        <span id="project_cli_{{ level }}_backend_status" class="project-cli-status-dot project-cli-status-dot--idle" aria-hidden="true"></span>
+                    </div>
+                    <div class="project-cli-select-wrap">
+                        <select id="project_cli_{{ level }}_model" class="project-cli-model bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}" aria-label="{{ label }} CLI model">
+                            <option value="">Loading models...</option>
+                        </select>
+                    </div>
                 </div>
                 {% endfor %}
             </div>

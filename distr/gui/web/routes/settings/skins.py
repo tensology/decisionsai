@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, Field
 
 from ._shared import route_handler, SkinSelectRequest
 
@@ -15,6 +16,10 @@ from ._shared import route_handler, SkinSelectRequest
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+class SkinSizeUpdateRequest(BaseModel):
+    sphere_size: int = Field(ge=4, le=10)
 
 
 def register_routes(router, templates):
@@ -86,6 +91,44 @@ def register_routes(router, templates):
         _folder, config = result
         # Return the config as a parsed JSON object (not a string)
         return JSONResponse(json.loads(to_json(config)))
+
+    @router.get("/skins/{name}/size")
+    @route_handler("get skin size")
+    async def get_skin_size_route(name: str):
+        """Return the saved per-skin size as scale and pixels."""
+        from distr.core.paths import AVATARS_DIR
+        from distr.core.skin_discovery import get_skin_by_name
+        from distr.core.db.skin_sizes import get_skin_size
+
+        result = get_skin_by_name(AVATARS_DIR, name)
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Skin '{name}' not found or has invalid config",
+            )
+
+        size_px = int(get_skin_size(name) or 180)
+        scale = max(4, min(10, round(size_px / 20)))
+        return JSONResponse({"skin_name": name, "sphere_size": scale, "pixels": size_px})
+
+    @router.post("/skins/{name}/size")
+    @route_handler("update skin size")
+    async def update_skin_size_route(name: str, data: SkinSizeUpdateRequest):
+        """Persist per-skin size without forcing a live skin switch."""
+        from distr.core.paths import AVATARS_DIR
+        from distr.core.skin_discovery import get_skin_by_name
+        from distr.core.db.skin_sizes import set_skin_size
+
+        result = get_skin_by_name(AVATARS_DIR, name)
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Skin '{name}' not found or has invalid config",
+            )
+
+        size_px = int(data.sphere_size) * 20
+        set_skin_size(name, size_px)
+        return JSONResponse({"success": True, "skin_name": name, "sphere_size": data.sphere_size, "pixels": size_px})
 
     @router.put("/skins/{name}/config")
     @route_handler("update skin config")

@@ -1,5 +1,39 @@
 // LLMs Settings JavaScript
 
+function _getLLMActionButtons() {
+    return {
+        saveBtn: document.getElementById('btn_save'),
+        reloadBtn: document.getElementById('btn_cancel'),
+    };
+}
+
+function _setActionBusy(button, busy, busyLabel, idleLabel) {
+    if (!button) return;
+    if (busy) {
+        if (!button.dataset.defaultLabel) {
+            button.dataset.defaultLabel = idleLabel || button.textContent || '';
+        }
+        button.dataset.busy = '1';
+        button.disabled = true;
+        button.textContent = busyLabel;
+        return;
+    }
+    delete button.dataset.busy;
+    button.disabled = false;
+    button.textContent = idleLabel || button.dataset.defaultLabel || button.textContent;
+}
+
+const LLM_TYPES = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+const PROJECT_CLI_LEVELS = ['low', 'medium', 'high'];
+let llmProviderStatusById = {};
+let projectCliBackendsById = {};
+let projectCliModelStateByLevel = {};
+let benchmarkModalState = null;
+const llmModelRequestCache = new Map();
+const projectCliModelRequestCache = new Map();
+let projectCliBackendsRequest = null;
+let activeLlmSubtab = 'speech';
+
 // Populate provider dropdowns from available providers (Third-Party configured only)
 async function populateProviderDropdowns() {
     try {
@@ -11,7 +45,7 @@ async function populateProviderDropdowns() {
         const mediaData = mediaRes.ok ? await mediaRes.json() : { providers: [] };
         const baseProviders = llmData.providers || [];
         const mediaProviders = mediaData.providers || [];
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+        const llmTypes = LLM_TYPES;
         const optionalTypes = ['workflow', 'computer_use', 'video'];
         const emptyLabels = {
             'workflow': 'Inherit from Conversational',
@@ -44,6 +78,51 @@ async function populateProviderDropdowns() {
     }
 }
 
+function ensureProviderStatusPills() {
+    // Provider pills on the main LLM rows turned out to be visually noisy and
+    // competed with the restored info icon. Keep the richer status badges for
+    // project routing instead.
+}
+
+function _providerStatusClassName(row) {
+    if (!row) return 'llm-provider-pill llm-provider-pill--idle';
+    if (row.state === 'local') return 'llm-provider-pill llm-provider-pill--local';
+    if (row.ready) return 'llm-provider-pill llm-provider-pill--ready';
+    return 'llm-provider-pill llm-provider-pill--missing';
+}
+
+function updateProviderStatusPill(type) {
+    const select = document.getElementById(`${type}_provider`);
+    const pill = document.getElementById(`${type}_provider_status`);
+    if (!select || !pill) return;
+    const provider = (select.value || '').toLowerCase();
+    if (!provider) {
+        pill.className = 'llm-provider-pill llm-provider-pill--idle';
+        pill.textContent = type === 'workflow' ? 'Inherit' : 'Disabled';
+        pill.title = '';
+        return;
+    }
+    const row = llmProviderStatusById[provider];
+    pill.className = _providerStatusClassName(row);
+    pill.textContent = row ? (row.balance_label || row.name || provider) : 'Unknown';
+    pill.title = row && row.detail ? row.detail : '';
+}
+
+async function loadProviderStatusPills() {
+    ensureProviderStatusPills();
+    try {
+        const response = await fetch('/api/llms/provider-status');
+        const data = response.ok ? await response.json() : { providers: [] };
+        llmProviderStatusById = {};
+        (data.providers || []).forEach(row => {
+            llmProviderStatusById[(row.id || '').toLowerCase()] = row;
+        });
+    } catch (e) {
+        console.error('Error loading provider status pills:', e);
+    }
+    LLM_TYPES.forEach(updateProviderStatusPill);
+}
+
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -73,13 +152,26 @@ function populateSttOptions(settings) {
 
 async function populateProjectCliBackends() {
     try {
-        const response = await fetch('/api/projects/cli-backends');
-        const data = response.ok ? await response.json() : { backends: [] };
-        const backends = data.backends || [];
-        ['low', 'medium', 'high'].forEach(level => {
+        if (!projectCliBackendsRequest) {
+            projectCliBackendsRequest = fetch('/api/projects/cli-backends')
+                .then(async response => (response.ok ? response.json() : { backends: [] }))
+                .catch(() => ({ backends: [] }));
+        }
+        const data = await projectCliBackendsRequest;
+        const backends = (data.backends || []).slice().sort((a, b) => {
+            return String(a.name || '').localeCompare(String(b.name || ''));
+        });
+        projectCliBackendsById = {};
+        backends.forEach(row => {
+            projectCliBackendsById[(row.id || '').toLowerCase()] = row;
+        });
+        PROJECT_CLI_LEVELS.forEach(level => {
             const sel = document.getElementById(`project_cli_${level}_backend`);
             if (!sel || !backends.length) return;
-            sel.innerHTML = backends.map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('');
+            sel.innerHTML = backends.map(b => {
+                const displayName = String(b.name || '').replace(/\s+CLI$/i, '').trim() || b.id;
+                return `<option value="${escapeHtml(b.id)}">${escapeHtml(displayName)}</option>`;
+            }).join('');
         });
     } catch (e) {
         console.error('Error loading project CLI backends:', e);
@@ -93,59 +185,141 @@ async function loadProjectCliRouteModels(level, backend, selectedModel) {
     selectedModel = (selectedModel || '').trim();
     try {
         sel.innerHTML = '<option value="">Loading models...</option>';
-        const response = await fetch(`/api/projects/cli-models?backend_id=${encodeURIComponent(backend)}`);
-        const data = response.ok ? await response.json() : { models: [] };
-        const models = data.models || [];
-        sel.innerHTML = '';
-        const auto = document.createElement('option');
-        auto.value = 'auto';
-        auto.textContent = 'Auto';
-        sel.appendChild(auto);
-        models.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = (m && typeof m === 'object') ? (m.id || '') : m;
-            opt.textContent = (m && typeof m === 'object') ? (m.name || m.id || '') : (m || '');
-            sel.appendChild(opt);
-        });
-        if (selectedModel && !Array.prototype.some.call(sel.options, o => o.value === selectedModel)) {
-            const opt = document.createElement('option');
-            opt.value = selectedModel;
-            opt.textContent = selectedModel;
-            sel.appendChild(opt);
+        sel.disabled = true;
+        const cacheKey = backend.toLowerCase();
+        let request = projectCliModelRequestCache.get(cacheKey);
+        if (!request) {
+            request = fetch(`/api/projects/cli-models?backend_id=${encodeURIComponent(backend)}`)
+                .then(async response => (response.ok ? response.json() : { models: [], recommended_model: { id: 'auto' } }))
+                .catch(() => ({ models: [], recommended_model: { id: 'auto' } }));
+            projectCliModelRequestCache.set(cacheKey, request);
         }
-        sel.value = selectedModel || 'auto';
+        const data = await request;
+        const models = data.models || [];
+        projectCliModelStateByLevel[level] = data;
+        sel.innerHTML = '';
+        if (data.supports_model_picker === false || data.backend_kind === 'ide') {
+            const opt = document.createElement('option');
+            opt.value = 'auto';
+            opt.textContent = 'Model chosen inside the IDE';
+            sel.appendChild(opt);
+            sel.value = 'auto';
+            sel.disabled = true;
+        } else {
+            const auto = document.createElement('option');
+            auto.value = 'auto';
+            auto.textContent = 'Auto';
+            sel.appendChild(auto);
+
+            const recommendedId = ((data.recommended_model || {}).id || '').trim();
+            const orderedModels = models.slice().sort((a, b) => {
+                const aId = (a && typeof a === 'object') ? (a.id || '') : (a || '');
+                const bId = (b && typeof b === 'object') ? (b.id || '') : (b || '');
+                if (aId === recommendedId) return -1;
+                if (bId === recommendedId) return 1;
+                return String((a && typeof a === 'object') ? (a.name || aId) : aId)
+                    .localeCompare(String((b && typeof b === 'object') ? (b.name || bId) : bId));
+            });
+            orderedModels.forEach(m => {
+                const opt = document.createElement('option');
+                const rawId = (m && typeof m === 'object') ? (m.id || '') : m;
+                const rawName = (m && typeof m === 'object') ? (m.name || m.id || '') : (m || '');
+                opt.value = rawId;
+                opt.textContent = rawId === recommendedId ? `${rawName} (Recommended)` : rawName;
+                sel.appendChild(opt);
+            });
+            if (selectedModel && !Array.prototype.some.call(sel.options, o => o.value === selectedModel)) {
+                const opt = document.createElement('option');
+                opt.value = selectedModel;
+                opt.textContent = selectedModel;
+                sel.appendChild(opt);
+            }
+            sel.value = selectedModel || (recommendedId || 'auto');
+            sel.disabled = false;
+        }
+        updateProjectCliRouteStatus(level);
     } catch (e) {
         console.error(`Error loading project CLI route models for ${level}:`, e);
+        projectCliModelStateByLevel[level] = null;
         sel.innerHTML = '<option value="auto">Auto</option>';
         sel.value = selectedModel || 'auto';
+        sel.disabled = false;
+        updateProjectCliRouteStatus(level);
+    } finally {
+        if (!sel.disabled) {
+            sel.disabled = false;
+        }
     }
 }
 
 async function populateProjectCliRoutes(settings) {
     await populateProjectCliBackends();
-    for (const level of ['low', 'medium', 'high']) {
+    await Promise.all(PROJECT_CLI_LEVELS.map(async level => {
         const backend = settings[`project_cli_${level}_backend`] || (level === 'low' ? 'cursor' : 'codex');
         const model = settings[`project_cli_${level}_model`] || (level === 'high' ? 'gpt-5.3-codex' : 'auto');
         const backendSel = document.getElementById(`project_cli_${level}_backend`);
         if (backendSel) backendSel.value = backend;
         await loadProjectCliRouteModels(level, backend, model);
-    }
+        updateProjectCliRouteStatus(level);
+    }));
 }
 
 function bindProjectCliRouteControls() {
-    ['low', 'medium', 'high'].forEach(level => {
+    PROJECT_CLI_LEVELS.forEach(level => {
         const backendSel = document.getElementById(`project_cli_${level}_backend`);
         if (!backendSel || backendSel.dataset.bound === '1') return;
         backendSel.dataset.bound = '1';
         backendSel.addEventListener('change', function() {
             loadProjectCliRouteModels(level, this.value, 'auto');
+            updateProjectCliRouteStatus(level);
         });
     });
 }
 
+function ensureProjectCliStatusPills() {
+    // Status dots are rendered directly in the template beside each backend select.
+}
+
+function updateProjectCliRouteStatus(level) {
+    const backendSel = document.getElementById(`project_cli_${level}_backend`);
+    const backendDot = document.getElementById(`project_cli_${level}_backend_status`);
+    if (!backendSel || !backendDot) return;
+    const backend = projectCliBackendsById[(backendSel.value || '').toLowerCase()];
+    if (!backend) {
+        backendDot.className = 'project-cli-status-dot project-cli-status-dot--idle';
+        backendDot.title = 'Loading backend status';
+    } else if (backend.ready) {
+        backendDot.className = 'project-cli-status-dot project-cli-status-dot--ready';
+        backendDot.title = (backend.message || 'CLI ready');
+    } else {
+        backendDot.className = 'project-cli-status-dot project-cli-status-dot--warning';
+        backendDot.title = (backend.message || 'Needs setup');
+    }
+}
+
 // Load LLMs settings from backend
-async function loadLLMsSettings() {
+async function loadLLMsSettings(opts) {
+    opts = opts || {};
     try {
+        if (opts.forceModelReload) {
+            llmModelRequestCache.clear();
+            projectCliModelRequestCache.clear();
+            projectCliBackendsRequest = null;
+            const { reloadBtn } = _getLLMActionButtons();
+            _setActionBusy(reloadBtn, true, 'Reloading...', 'Reload');
+            if (typeof window.showNotification === 'function') {
+                window.showNotification('Reloading model catalogs...', 'info');
+            }
+            const reloadResponse = await fetch('/api/llms/models/reload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            });
+            if (!reloadResponse.ok) {
+                throw new Error('Failed to flush model cache');
+            }
+        }
+
         await populateProviderDropdowns();
 
         const response = await fetch('/api/llms');
@@ -160,9 +334,9 @@ async function loadLLMsSettings() {
             instantDictation.checked = settings.instant_dictation !== undefined ? settings.instant_dictation : true;
         }
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+        const llmTypes = LLM_TYPES;
         const optionalTypes = ['workflow', 'computer_use', 'video'];
-        for (const type of llmTypes) {
+        const modelLoadTasks = llmTypes.map(async type => {
             const provider = (settings[`${type}_provider`] || '').toLowerCase();
             const model = (settings[`${type}_model`] || '').trim();
 
@@ -203,20 +377,34 @@ async function loadLLMsSettings() {
                     modelSelect.value = model;
                 }
             }
-        }
+        });
+        await Promise.all(modelLoadTasks);
 
         await populateProjectCliRoutes(settings);
         updateDownloadButtonVisibility();
+        if (opts.forceModelReload && typeof window.showNotification === 'function') {
+            window.showNotification('Model catalogs reloaded', 'success');
+        }
         console.log('LLMs settings loaded');
     } catch (error) {
         console.error('Error loading LLMs settings:', error);
         showNotification('Failed to load LLMs settings: ' + error.message, 'error');
+    } finally {
+        if (opts.forceModelReload) {
+            const { reloadBtn } = _getLLMActionButtons();
+            _setActionBusy(reloadBtn, false, '', 'Reload');
+        }
     }
 }
 
 // Save LLMs settings to backend
 async function saveLLMsSettings() {
+    const { saveBtn } = _getLLMActionButtons();
     try {
+        _setActionBusy(saveBtn, true, 'Saving...', 'Save');
+        if (typeof window.showNotification === 'function') {
+            window.showNotification('Saving LLM settings...', 'info');
+        }
         const settings = {
             stt_model: document.getElementById('stt_model').value,
             conversational_provider: document.getElementById('conversational_provider').value,
@@ -267,7 +455,13 @@ async function saveLLMsSettings() {
         } else {
             console.error('Failed to save LLMs settings:', error.message);
         }
+    } finally {
+        _setActionBusy(saveBtn, false, '', 'Save');
     }
+}
+
+async function reloadLLMsSettings() {
+    return loadLLMsSettings({ forceModelReload: true });
 }
 
 // Load available models for a specific LLM type and provider (API returns [{id, name}])
@@ -281,11 +475,19 @@ async function loadLLMModels(type, provider, opts) {
         modelSelect.innerHTML = '<option value="">Loading models...</option>';
         modelSelect.disabled = true;
 
-        const response = await fetch(`/api/llms/models?type=${encodeURIComponent(type)}&provider=${encodeURIComponent(provider)}`);
-        if (!response.ok) {
-            throw new Error('Failed to load models');
+        const cacheKey = `${String(type || '').toLowerCase()}::${String(provider || '').toLowerCase()}`;
+        let request = llmModelRequestCache.get(cacheKey);
+        if (!request) {
+            request = fetch(`/api/llms/models?type=${encodeURIComponent(type)}&provider=${encodeURIComponent(provider)}`)
+                .then(async response => {
+                    if (!response.ok) {
+                        throw new Error('Failed to load models');
+                    }
+                    return response.json();
+                });
+            llmModelRequestCache.set(cacheKey, request);
         }
-        const data = await response.json();
+        const data = await request;
         const models = data.models || [];
 
         modelSelect.innerHTML = '<option value="">Select model...</option>';
@@ -462,6 +664,11 @@ async function ollamaBrowserPull(modelName, size) {
                 resultEl.classList.add('text-[#10a37f]');
             }
             document.getElementById('ollama_download_modal_title').textContent = 'Download complete';
+            await fetch('/api/llms/models/reload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider: 'ollama' })
+            });
             await fetchOllamaLibraryAndRender();
             if (ollamaBrowserCurrentType) {
                 await loadLLMModels(ollamaBrowserCurrentType, 'ollama');
@@ -510,6 +717,342 @@ function updateDownloadButtonVisibility() {
     });
 }
 
+function ensureBenchmarkButtons() {
+    // Comparison is launched from the info icon beside the provider select.
+}
+
+function ensureBenchmarkModal() {
+    if (document.getElementById('llm_benchmark_modal')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'llm_benchmark_modal';
+    overlay.className = 'llm-benchmark-modal hidden';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = '<div class="llm-benchmark-modal__backdrop" data-benchmark-close="1"></div>' +
+        '<div class="llm-benchmark-modal__dialog">' +
+        '<div class="llm-benchmark-modal__content" id="llm_benchmark_modal_content"></div>' +
+        '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function (event) {
+        if (event.target && event.target.getAttribute('data-benchmark-close') === '1') {
+            closeBenchmarkModal();
+        }
+        const tabBtn = event.target.closest('[data-benchmark-tab]');
+        if (tabBtn && benchmarkModalState) {
+            benchmarkModalState.tab = tabBtn.getAttribute('data-benchmark-tab') || 'leaderboard';
+            const currentPayload = benchmarkModalState.payload;
+            if (currentPayload) renderBenchmarkModal(currentPayload);
+            return;
+        }
+        const sortBtn = event.target.closest('[data-benchmark-sort]');
+        if (sortBtn && benchmarkModalState) {
+            openBenchmarkModal(benchmarkModalState.type, {
+                model: benchmarkModalState.model,
+                compareModel: benchmarkModalState.compareModel,
+                sort: sortBtn.getAttribute('data-benchmark-sort'),
+                tab: benchmarkModalState.tab,
+            });
+        }
+        const leaderboardRow = event.target.closest('[data-benchmark-compare]');
+        if (leaderboardRow && benchmarkModalState) {
+            openBenchmarkModal(benchmarkModalState.type, {
+                model: benchmarkModalState.model,
+                compareProvider: leaderboardRow.getAttribute('data-benchmark-provider') || benchmarkModalState.compareProvider || benchmarkModalState.provider,
+                compareModel: leaderboardRow.getAttribute('data-benchmark-compare') || '',
+                sort: benchmarkModalState.sort,
+                tab: 'compare',
+            });
+        }
+    });
+}
+
+function closeBenchmarkModal() {
+    const modal = document.getElementById('llm_benchmark_modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function benchmarkSelectOptions(payload, selectedId, fallbackRow) {
+    const seen = new Set();
+    const items = [];
+    (payload.model_options || []).forEach(function (row) {
+        if (!row || !row.id || seen.has(row.id)) return;
+        seen.add(row.id);
+        items.push(row);
+    });
+    if (fallbackRow && fallbackRow.id && !seen.has(fallbackRow.id)) {
+        items.push(fallbackRow);
+    }
+    return items.map(function (row) {
+        const selected = row.id === selectedId ? ' selected' : '';
+        return '<option value="' + escapeHtml(row.id) + '"' + selected + '>' + escapeHtml(row.label || row.id) + '</option>';
+    }).join('');
+}
+
+function benchmarkProviderOptions(type, selectedProvider) {
+    const sourceSelect = document.getElementById(type + '_provider');
+    if (!sourceSelect) return '';
+    return Array.prototype.map.call(sourceSelect.options || [], function (option) {
+        const selected = option.value === selectedProvider ? ' selected' : '';
+        return '<option value="' + escapeHtml(option.value || '') + '"' + selected + '>' + escapeHtml(option.textContent || option.value || '') + '</option>';
+    }).join('');
+}
+
+function benchmarkProfileCapabilities(profile) {
+    const items = (profile && profile.capabilities) || [];
+    if (!items.length) return '<span class="llm-benchmark-card__muted">No extra capability metadata</span>';
+    return items.map(function (item) {
+        return '<span class="llm-benchmark-card__capability">' + escapeHtml(item) + '</span>';
+    }).join('');
+}
+
+function renderBenchmarkCard(title, profile, accentClass, cardKey, type, modelOptionsHtml, providerOptionsHtml) {
+    profile = profile || {};
+    const providerId = cardKey === 'primary' ? 'llm_benchmark_primary_provider' : 'llm_benchmark_compare_provider';
+    const modelId = cardKey === 'primary' ? 'llm_benchmark_primary_model' : 'llm_benchmark_compare_model';
+    return '<article class="llm-benchmark-card ' + accentClass + '">' +
+        '<div class="llm-benchmark-card__row">' +
+        '<div class="llm-benchmark-card__select-stack">' +
+        '<label class="llm-benchmark-card__select-label">' +
+        '<span>' + escapeHtml(title + ' provider') + '</span>' +
+        '<select class="llm-benchmark-card__select" id="' + providerId + '" data-benchmark-card="' + escapeHtml(cardKey) + '" data-benchmark-field="provider">' +
+        providerOptionsHtml +
+        '</select>' +
+        '</label>' +
+        '<label class="llm-benchmark-card__select-label">' +
+        '<span>' + escapeHtml(title + ' model') + '</span>' +
+        '<select class="llm-benchmark-card__select" id="' + modelId + '" data-benchmark-card="' + escapeHtml(cardKey) + '" data-benchmark-field="model">' +
+        modelOptionsHtml +
+        '</select>' +
+        '</label>' +
+        '</div>' +
+        '</div>' +
+        '<div class="llm-benchmark-card__body">' +
+        '<p class="llm-benchmark-card__model-name">' + escapeHtml(profile.model_label || profile.model_id || 'Select a model') + '</p>' +
+        '<p class="llm-benchmark-card__provider">' + escapeHtml((profile.provider_label || profile.provider || '').toString()) + '</p>' +
+        '<p class="llm-benchmark-card__summary">' + escapeHtml(profile.summary || '') + '</p>' +
+        '<dl class="llm-benchmark-card__stats">' +
+        '<div><dt>Performance score</dt><dd>' + escapeHtml(String(profile.performance_score || 0)) + '</dd></div>' +
+        '<div><dt>Value score</dt><dd>' + escapeHtml(String(profile.value_score || 0)) + '</dd></div>' +
+        '<div><dt>Benchmark count</dt><dd>' + escapeHtml(String(profile.benchmark_count || 0)) + '</dd></div>' +
+        '<div><dt>Context</dt><dd>' + escapeHtml(profile.context_window ? String(profile.context_window) : 'n/a') + '</dd></div>' +
+        '</dl>' +
+        '<p class="llm-benchmark-card__metric-note">Performance is the benchmark result. Value is the price-adjusted score.</p>' +
+        '<p class="llm-benchmark-card__use-case"><strong>Best for:</strong> ' + escapeHtml(profile.best_for || 'No recommendation available yet') + '</p>' +
+        '<div class="llm-benchmark-card__capabilities"><strong>Tooling:</strong> ' + benchmarkProfileCapabilities(profile) + '</div>' +
+        '<p class="llm-benchmark-card__footnote">Released: ' + escapeHtml(profile.released || 'n/a') + ' · Last benchmark: ' + escapeHtml(profile.last_benchmark_date || 'n/a') + '</p>' +
+        '</div>' +
+        '</article>';
+}
+
+async function loadBenchmarkModelProfile(type, provider, model) {
+    const response = await fetch('/api/llms/model-profile?type=' + encodeURIComponent(type) +
+        '&provider=' + encodeURIComponent(provider || '') +
+        '&model=' + encodeURIComponent(model || ''));
+    const payload = response.ok ? await response.json() : null;
+    if (!payload || !payload.profile) throw new Error('Failed to load model profile');
+    return payload.profile;
+}
+
+function renderBenchmarkModal(payload) {
+    ensureBenchmarkModal();
+    const content = document.getElementById('llm_benchmark_modal_content');
+    if (!content) return;
+    const selected = payload.selected_model || {};
+    const comparison = payload.comparison_model || {};
+    const primaryProvider = (benchmarkModalState && benchmarkModalState.primaryProvider) || payload.primary_provider || '';
+    const compareProvider = (benchmarkModalState && benchmarkModalState.compareProvider) || payload.compare_provider || '';
+    const primaryProfile = payload.primary_profile || {};
+    const compareProfile = payload.compare_profile || {};
+    const sort = payload.sort || 'performance';
+    const activeTab = (benchmarkModalState && benchmarkModalState.tab) || 'leaderboard';
+    const optionsHtml = benchmarkSelectOptions(payload, selected.id, { id: primaryProfile.model_id || selected.id, label: primaryProfile.model_label || selected.label });
+    const comparePayload = Object.assign({}, payload, { model_options: payload.compare_model_options || [] });
+    const compareOptionsHtml = benchmarkSelectOptions(comparePayload, comparison.id, { id: compareProfile.model_id || comparison.id, label: compareProfile.model_label || comparison.label });
+    const primaryProviderOptions = benchmarkProviderOptions(payload.type, primaryProvider);
+    const compareProviderOptions = benchmarkProviderOptions(payload.type, compareProvider);
+    const leaderboard = (payload.leaderboard || []).map(function (row, index) {
+        const active = benchmarkModalState && benchmarkModalState.compareModel === row.id ? ' is-active' : '';
+        return '<tr class="llm-benchmark-leaderboard__row' + active + '" data-benchmark-compare="' + escapeHtml(row.id || '') + '" data-benchmark-provider="' + escapeHtml(row.provider || '') + '">' +
+            '<td class="llm-benchmark-leaderboard__rank">#' + (index + 1) + '</td>' +
+            '<td class="llm-benchmark-leaderboard__model">' + escapeHtml(row.label || row.id || '') + '</td>' +
+            '<td class="llm-benchmark-leaderboard__score">' + escapeHtml(String(row.performance_score || 0)) + '</td>' +
+            '<td class="llm-benchmark-leaderboard__score">' + escapeHtml(String(row.value_score || 0)) + '</td>' +
+            '</tr>';
+    }).join('');
+    content.innerHTML = '<header class="llm-benchmark-modal__header">' +
+        '<h3 class="llm-benchmark-modal__title">Comparison models</h3>' +
+        '<button type="button" class="llm-benchmark-modal__close" data-benchmark-close="1">×</button>' +
+        '</header>' +
+        '<div class="llm-benchmark-modal__tabs">' +
+        '<button type="button" class="llm-benchmark-modal__tab' + (activeTab === 'leaderboard' ? ' is-active' : '') + '" data-benchmark-tab="leaderboard">Leaderboard</button>' +
+        '<button type="button" class="llm-benchmark-modal__tab' + (activeTab === 'compare' ? ' is-active' : '') + '" data-benchmark-tab="compare">Compare</button>' +
+        '</div>' +
+        '<section class="llm-benchmark-modal__panel' + (activeTab === 'leaderboard' ? ' is-active' : '') + '">' +
+        '<p class="llm-benchmark-modal__helper">Performance is the benchmark score. Value is the score adjusted for cost. Click a row to compare it.</p>' +
+        '<aside class="llm-benchmark-modal__leaderboard llm-benchmark-modal__leaderboard--full">' +
+        '<table class="llm-benchmark-leaderboard__table">' +
+        '<thead><tr>' +
+        '<th>#</th>' +
+        '<th>Model</th>' +
+        '<th><button type="button" class="llm-benchmark-leaderboard__sort-button' + (sort === 'performance' ? ' is-active' : '') + '" data-benchmark-sort="performance">Performance</button></th>' +
+        '<th><button type="button" class="llm-benchmark-leaderboard__sort-button' + (sort === 'value' ? ' is-active' : '') + '" data-benchmark-sort="value">Value</button></th>' +
+        '</tr></thead>' +
+        '<tbody>' + leaderboard + '</tbody>' +
+        '</table>' +
+        '</aside>' +
+        '</section>' +
+        '<section class="llm-benchmark-modal__panel' + (activeTab === 'compare' ? ' is-active' : '') + '">' +
+        '<div class="llm-benchmark-modal__grid">' +
+        '<section class="llm-benchmark-modal__compare-column">' +
+        renderBenchmarkCard('Primary', primaryProfile, 'llm-benchmark-card--primary', 'primary', payload.type, optionsHtml, primaryProviderOptions) +
+        '</section>' +
+        '<section class="llm-benchmark-modal__compare-column">' +
+        renderBenchmarkCard('Compare', compareProfile, 'llm-benchmark-card--comparison', 'compare', payload.type, compareOptionsHtml, compareProviderOptions) +
+        '</section>' +
+        '</div>' +
+        '</section>';
+    const modal = document.getElementById('llm_benchmark_modal');
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    const primaryModelSelect = document.getElementById('llm_benchmark_primary_model');
+    const compareModelSelect = document.getElementById('llm_benchmark_compare_model');
+    const primaryProviderSelect = document.getElementById('llm_benchmark_primary_provider');
+    const compareProviderSelect = document.getElementById('llm_benchmark_compare_provider');
+    if (primaryModelSelect) {
+        primaryModelSelect.addEventListener('change', function () {
+            openBenchmarkModal(payload.type, {
+                provider: primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
+                model: this.value,
+                compareProvider: compareProviderSelect ? compareProviderSelect.value : compareProvider,
+                compareModel: compareModelSelect ? compareModelSelect.value : '',
+                sort: sort,
+                tab: 'compare',
+            });
+        });
+    }
+    if (compareModelSelect) {
+        compareModelSelect.addEventListener('change', function () {
+            openBenchmarkModal(payload.type, {
+                provider: primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
+                model: primaryModelSelect ? primaryModelSelect.value : (selected.id || ''),
+                compareProvider: compareProviderSelect ? compareProviderSelect.value : compareProvider,
+                compareModel: this.value,
+                sort: sort,
+                tab: 'compare',
+            });
+        });
+    }
+    if (primaryProviderSelect) {
+        primaryProviderSelect.addEventListener('change', function () {
+            openBenchmarkModal(payload.type, {
+                provider: this.value,
+                model: '',
+                compareProvider: compareProviderSelect ? compareProviderSelect.value : compareProvider,
+                compareModel: compareModelSelect ? compareModelSelect.value : '',
+                sort: sort,
+                tab: 'compare',
+            });
+        });
+    }
+    if (compareProviderSelect) {
+        compareProviderSelect.addEventListener('change', function () {
+            openBenchmarkModal(payload.type, {
+                provider: primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
+                model: primaryModelSelect ? primaryModelSelect.value : (selected.id || ''),
+                compareProvider: this.value,
+                compareModel: '',
+                sort: sort,
+                tab: 'compare',
+            });
+        });
+    }
+}
+
+async function openBenchmarkModal(type, opts) {
+    opts = opts || {};
+    ensureBenchmarkModal();
+    const modal = document.getElementById('llm_benchmark_modal');
+    const content = document.getElementById('llm_benchmark_modal_content');
+    const providerSelect = document.getElementById(type + '_provider');
+    const modelSelect = document.getElementById(type + '_model');
+    const model = opts.model || (modelSelect ? modelSelect.value : '');
+    const provider = opts.provider || (providerSelect ? providerSelect.value : '');
+    const compareProvider = opts.compareProvider || provider;
+    const compareModel = opts.compareModel || '';
+    const sort = opts.sort || (benchmarkModalState && benchmarkModalState.type === type ? benchmarkModalState.sort : 'performance');
+    const tab = opts.tab || (benchmarkModalState && benchmarkModalState.type === type ? benchmarkModalState.tab : 'leaderboard');
+    benchmarkModalState = {
+        type: type,
+        provider: provider,
+        primaryProvider: provider,
+        compareProvider: compareProvider,
+        model: model,
+        compareModel: compareModel,
+        sort: sort,
+        tab: tab,
+        payload: null
+    };
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    content.innerHTML = '<div class="llm-benchmark-modal__loading">' +
+        '<div class="llm-benchmark-modal__spinner" aria-hidden="true"></div>' +
+        '<div>Loading benchmark data...</div>' +
+        '</div>';
+    try {
+        const [benchmarkResponse, primaryModelsResponse, compareModelsResponse, primaryProfileResponse, compareProfileResponse] = await Promise.all([
+            fetch('/api/llms/benchmark?type=' + encodeURIComponent(type) +
+                '&provider=' + encodeURIComponent(provider || '') +
+                '&model=' + encodeURIComponent(model || '') +
+                '&compare_model=' + encodeURIComponent(compareModel || '') +
+                '&sort=' + encodeURIComponent(sort) +
+                '&limit=40'),
+            fetch('/api/llms/models?type=' + encodeURIComponent(type) +
+                '&provider=' + encodeURIComponent(provider || '')),
+            fetch('/api/llms/models?type=' + encodeURIComponent(type) +
+                '&provider=' + encodeURIComponent(compareProvider || '')),
+            fetch('/api/llms/model-profile?type=' + encodeURIComponent(type) +
+                '&provider=' + encodeURIComponent(provider || '') +
+                '&model=' + encodeURIComponent(model || '')),
+            fetch('/api/llms/model-profile?type=' + encodeURIComponent(type) +
+                '&provider=' + encodeURIComponent(compareProvider || '') +
+                '&model=' + encodeURIComponent(compareModel || ''))
+        ]);
+        const payload = benchmarkResponse.ok ? await benchmarkResponse.json() : null;
+        const primaryCatalogPayload = primaryModelsResponse.ok ? await primaryModelsResponse.json() : { models: [] };
+        const compareCatalogPayload = compareModelsResponse.ok ? await compareModelsResponse.json() : { models: [] };
+        const primaryProfilePayload = primaryProfileResponse.ok ? await primaryProfileResponse.json() : { profile: null };
+        const compareProfilePayload = compareProfileResponse.ok ? await compareProfileResponse.json() : { profile: null };
+        if (!payload) throw new Error('Failed to load benchmark data');
+        payload.model_options = (primaryCatalogPayload.models || []).map(function (row) {
+            return {
+                id: (typeof row === 'object' && row != null && row.id != null) ? row.id : row,
+                label: (typeof row === 'object' && row != null && row.name != null) ? row.name : (row || '')
+            };
+        });
+        payload.compare_model_options = (compareCatalogPayload.models || []).map(function (row) {
+            return {
+                id: (typeof row === 'object' && row != null && row.id != null) ? row.id : row,
+                label: (typeof row === 'object' && row != null && row.name != null) ? row.name : (row || '')
+            };
+        });
+        payload.primary_profile = primaryProfilePayload.profile || payload.selected_model || {};
+        payload.compare_profile = compareProfilePayload.profile || payload.comparison_model || {};
+        payload.primary_provider = provider;
+        payload.compare_provider = compareProvider;
+        benchmarkModalState.model = (payload.selected_model || {}).id || model;
+        benchmarkModalState.compareModel = (payload.comparison_model || {}).id || compareModel;
+        benchmarkModalState.primaryProvider = provider;
+        benchmarkModalState.compareProvider = compareProvider;
+        benchmarkModalState.sort = payload.sort || sort;
+        benchmarkModalState.payload = payload;
+        renderBenchmarkModal(payload);
+    } catch (error) {
+        console.error('Error loading benchmark modal:', error);
+        content.innerHTML = '<div class="llm-benchmark-modal__loading llm-benchmark-modal__loading--error">Failed to load benchmark data.</div>';
+    }
+}
+
 function initOllamaBrowserModal() {
     const modal = document.getElementById('ollama_browser_modal');
     if (!modal) return;
@@ -539,15 +1082,49 @@ function initOllamaBrowserModal() {
     });
 }
 
+function initLLMEnhancements() {
+    initLLMSubtabs();
+    ensureProviderStatusPills();
+    ensureProjectCliStatusPills();
+    ensureBenchmarkButtons();
+    ensureBenchmarkModal();
+}
+
+function setActiveLLMSubtab(tabName) {
+    activeLlmSubtab = tabName || 'speech';
+    document.querySelectorAll('[data-llm-subtab]').forEach(function (button) {
+        const isActive = button.getAttribute('data-llm-subtab') === activeLlmSubtab;
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-llm-panel]').forEach(function (panel) {
+        panel.classList.toggle('is-active', panel.getAttribute('data-llm-panel') === activeLlmSubtab);
+    });
+}
+
+function initLLMSubtabs() {
+    const buttons = document.querySelectorAll('[data-llm-subtab]');
+    if (!buttons.length) return;
+    buttons.forEach(function (button) {
+        if (button.dataset.llmTabBound === '1') return;
+        button.dataset.llmTabBound = '1';
+        button.addEventListener('click', function () {
+            setActiveLLMSubtab(button.getAttribute('data-llm-subtab') || 'speech');
+        });
+    });
+    setActiveLLMSubtab(activeLlmSubtab);
+}
+
 // Initialize LLMs settings when DOM is loaded
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function() {
         if (document.getElementById('tab-llms')) {
+            initLLMEnhancements();
             loadLLMsSettings();
             updateDownloadButtonVisibility();
             initOllamaBrowserModal();
 
-            const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+            const llmTypes = LLM_TYPES;
             llmTypes.forEach(type => {
                 const providerSelect = document.getElementById(`${type}_provider`);
                 if (providerSelect) {
@@ -575,11 +1152,12 @@ if (document.readyState === 'loading') {
     });
 } else {
     if (document.getElementById('tab-llms')) {
+        initLLMEnhancements();
         loadLLMsSettings();
         updateDownloadButtonVisibility();
         initOllamaBrowserModal();
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'video', 'workflow', 'computer_use'];
+        const llmTypes = LLM_TYPES;
         llmTypes.forEach(type => {
             const providerSelect = document.getElementById(`${type}_provider`);
             if (providerSelect) {
@@ -607,6 +1185,8 @@ if (document.readyState === 'loading') {
 
 // Export functions for use in other files
 window.loadLLMsSettings = loadLLMsSettings;
+window.reloadLLMsSettings = reloadLLMsSettings;
+window.openLLMBenchmarkModal = openBenchmarkModal;
 
 // Auto-refresh provider dropdowns when third-party keys are saved (same page)
 window.addEventListener('thirdparty-providers-changed', function() {
@@ -630,6 +1210,12 @@ window.addEventListener('pageshow', function (ev) {
     if (!ev.persisted || !document.getElementById('tab-llms')) return;
     var panel = document.getElementById('tab-llms');
     if (panel && panel.classList.contains('active-tab-panel')) loadLLMsSettings();
+});
+
+window.addEventListener('open-llm-benchmark', function (event) {
+    const type = event && event.detail ? event.detail.type : '';
+    if (!type) return;
+    openBenchmarkModal(type);
 });
 
 window.saveLLMsSettings = saveLLMsSettings;

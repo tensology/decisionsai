@@ -6,7 +6,7 @@
     'use strict';
 
     var PROVIDER_SELECT_IDS = [
-        'conversational_provider', 'coding_provider', 'vision_provider', 'image_provider',
+        'conversational_provider', 'coding_provider', 'vision_provider', 'image_provider', 'video_provider', 'workflow_provider', 'computer_use_provider',
         'emptyStateLlmProvider', 'llmProvider',
         'kb-agent-orch-provider', 'kb-agent-coder-provider', 'kb-agent-sub-provider'
     ];
@@ -111,6 +111,19 @@
         btn.title = 'Model recommendations';
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
         btn.addEventListener('click', function () {
+            var selectId = selectEl.id || '';
+            if (/_provider$/.test(selectId) && typeof window.openLLMBenchmarkModal === 'function') {
+                window.openLLMBenchmarkModal(selectId.replace(/_provider$/, ''));
+                return;
+            }
+            if (/_provider$/.test(selectId)) {
+                try {
+                    window.dispatchEvent(new CustomEvent('open-llm-benchmark', {
+                        detail: { type: selectId.replace(/_provider$/, '') }
+                    }));
+                    return;
+                } catch (err) {}
+            }
             openRecommendationModal(selectEl.value);
         });
         return btn;

@@ -2,6 +2,11 @@
 
 {% block title %}Preferences{% endblock %}
 
+{% block head_styles %}
+{{ super() }}
+<link rel="stylesheet" href="/settings/static/css/settings.css">
+{% endblock %}
+
 {% block body_scripts %}
 <script src="/settings/static/js/settings.js"></script>
 <script src="/settings/static/js/general.js"></script>

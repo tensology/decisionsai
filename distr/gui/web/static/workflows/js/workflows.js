@@ -1878,6 +1878,10 @@
         return ["low", "medium", "high"];
     }
 
+    function workflowCliBackendLabel(label) {
+        return String(label || "").replace(/\s+CLI$/i, "").trim();
+    }
+
     function workflowExecRoutePrefix(root) {
         if (root && (root.id === "sr-llm-modal" || (root.closest && root.closest("#sr-llm-modal")))) {
             return "wf-global-exec";
@@ -1980,7 +1984,7 @@
         var html = '<option value="">Use workflow route</option>';
         WORKFLOW_EXEC_BACKEND_OPTIONS.forEach(function (opt) {
             if (opt.id === "cursor_ide" || opt.id === "codex_ide") return;
-            html += '<option value="' + esc(opt.id) + '"' + (selected === opt.id ? " selected" : "") + '>' + esc(opt.label) + '</option>';
+            html += '<option value="' + esc(opt.id) + '"' + (selected === opt.id ? " selected" : "") + '>' + esc(workflowCliBackendLabel(opt.label)) + '</option>';
         });
         return html;
     }
@@ -2034,7 +2038,7 @@
         }).map(function (item) {
             var ready = readyMap[item.id];
             var suffix = ready === false ? " (setup required)" : "";
-            return '<option value="' + esc(item.id) + '">' + esc(item.label + suffix) + "</option>";
+            return '<option value="' + esc(item.id) + '">' + esc(workflowCliBackendLabel(item.label) + suffix) + "</option>";
         }).join("");
     }
 
@@ -2045,7 +2049,7 @@
             if (workflowExecBackendIsIde(item.id)) return;
             var ready = readyMap[item.id];
             var suffix = ready === false ? " (setup required)" : "";
-            html += '<option value="' + esc(item.id) + '">' + esc(item.label + suffix) + "</option>";
+            html += '<option value="' + esc(item.id) + '">' + esc(workflowCliBackendLabel(item.label) + suffix) + "</option>";
         });
         return html;
     }
@@ -2553,6 +2557,12 @@
     var _wfCliConnectPromise = null;
     var _wfCliBoundTicket = null;
     var _wfCliTicketTimerStartedAt = null;
+    var _wfCliRecoveryActions = [];
+    var _wfCliInventoryById = {};
+    var _wfCliChosenModels = [];
+    var _wfCliDraggedModelId = "";
+    var _wfCliDraggedChosenIndex = -1;
+    var WF_CLI_LOCKED_MODEL_STORAGE_KEY = "wf_cli_locked_pi_model_v1";
     var WF_CLI_DISCONNECTED_PLACEHOLDER = "Choose a CLI and click Connect to load models and send prompts.";
     var WF_CLI_CONNECTED_PLACEHOLDER = "Send a prompt...";
 
@@ -2659,7 +2669,147 @@
         if (!select) return;
         select.innerHTML = '<option value="">' + esc(message || "Connect CLI first") + "</option>";
         select.disabled = true;
+        _wfCliInventoryById = {};
         renderWorkflowCliModelInventory({ models: [] }, message || "Connect a CLI to load its models.");
+    }
+
+    function workflowCliChosenModelKey(model) {
+        if (!model) return "";
+        return [
+            String(model.backend_id || workflowCliActiveBackend() || "").trim(),
+            String(model.provider || "").trim(),
+            String(model.id || model.model || "").trim()
+        ].join("|");
+    }
+
+    function workflowCliSnapshotModelMeta(model, backendId) {
+        if (!model) return null;
+        var id = String(model.id || model.model || "").trim();
+        if (!id) return null;
+        return {
+            id: id,
+            model: id,
+            name: String(model.name || id).trim() || id,
+            provider: String(model.provider || "").trim(),
+            backend_id: String(backendId || model.backend_id || workflowCliActiveBackend() || "").trim() || "pi",
+            scope: String(model.scope || "").trim(),
+            tier: String(model.tier || "").trim(),
+            free: !!model.free,
+            local: !!model.local,
+            usable: model.usable !== false,
+            supports_chat: model.supports_chat !== false,
+            reason: String(model.reason || "").trim(),
+            selected_at: model.selected_at || new Date().toISOString()
+        };
+    }
+
+    function workflowCliNormalizeChosenModels(models) {
+        var seen = {};
+        return (Array.isArray(models) ? models : []).map(function (model) {
+            return workflowCliSnapshotModelMeta(model, model && model.backend_id);
+        }).filter(function (model) {
+            if (!model) return false;
+            var key = workflowCliChosenModelKey(model);
+            if (!key || seen[key]) return false;
+            seen[key] = true;
+            return true;
+        });
+    }
+
+    function workflowCliChosenDropzoneHtml(hasItems) {
+        return '<div id="wf-cli-chosen-dropzone" class="wf-cli-chosen-dropzone">' +
+            (hasItems ? "Drag another model here to add it." : "Drag models here to remember the CLI, provider, model, and metadata for this workflow.") +
+            '</div>';
+    }
+
+    function renderWorkflowCliChosenModels() {
+        var list = document.getElementById("wf-cli-chosen-list");
+        var count = document.getElementById("wf-cli-chosen-count");
+        if (!list) return;
+        var chosen = workflowCliNormalizeChosenModels(_wfCliChosenModels);
+        _wfCliChosenModels = chosen;
+        if (count) count.textContent = String(chosen.length);
+        if (!chosen.length) {
+            list.innerHTML = workflowCliChosenDropzoneHtml(false);
+            return;
+        }
+        list.innerHTML = chosen.map(function (model, index) {
+            var flags = [];
+            if (model.backend_id) flags.push(model.backend_id);
+            if (model.provider) flags.push(model.provider);
+            if (model.scope) flags.push(model.scope);
+            if (model.free) flags.push("free");
+            if (model.local) flags.push("local");
+            if (model.tier) flags.push(model.tier);
+            if (model.supports_chat === false) flags.push("no chat");
+            return '<div class="wf-cli-chosen-item" draggable="true" data-wf-cli-chosen-index="' + index + '">' +
+                '<div class="wf-cli-chosen-item-main">' +
+                    '<div class="wf-cli-chosen-item-head">' +
+                        '<span class="wf-cli-chosen-item-name truncate" title="' + esc(model.name || model.id) + '">' + esc(model.name || model.id) + '</span>' +
+                    '</div>' +
+                    '<div class="wf-cli-chosen-item-meta">' +
+                        '<div>CLI: ' + esc(model.backend_id || "pi") + '</div>' +
+                        '<div>Provider: ' + esc(model.provider || "unknown") + '</div>' +
+                        '<div>Model: ' + esc(model.id || model.model || "") + '</div>' +
+                    '</div>' +
+                    '<div class="wf-cli-chosen-item-flags">' +
+                        flags.map(function (flag) {
+                            return '<span class="wf-cli-chosen-chip">' + esc(flag) + '</span>';
+                        }).join("") +
+                    '</div>' +
+                '</div>' +
+                '<div class="wf-cli-chosen-item-actions">' +
+                    '<button type="button" class="wf-cli-chosen-grip" title="Drag to reorder" aria-label="Drag to reorder">::</button>' +
+                    '<button type="button" class="wf-cli-chosen-remove" data-wf-cli-chosen-remove="' + index + '" title="Remove model" aria-label="Remove model">&times;</button>' +
+                '</div>' +
+            '</div>';
+        }).join("") + workflowCliChosenDropzoneHtml(true);
+    }
+
+    function workflowCliChosenModelsFromSettings(data) {
+        var settings = normalizedRunSettings(data || currentWorkflow || {});
+        _wfCliChosenModels = workflowCliNormalizeChosenModels(settings.chosen_models || []);
+        renderWorkflowCliChosenModels();
+    }
+
+    function persistWorkflowCliChosenModels() {
+        _wfCliChosenModels = workflowCliNormalizeChosenModels(_wfCliChosenModels);
+        renderWorkflowCliChosenModels();
+        if (!currentWorkflow) currentWorkflow = {};
+        currentWorkflow.run_settings = collectRunSettings();
+        return saveWorkflowRunSettings().catch(function () {});
+    }
+
+    function workflowCliAddChosenModel(model) {
+        var snapshot = workflowCliSnapshotModelMeta(model, model && model.backend_id);
+        if (!snapshot) return;
+        var key = workflowCliChosenModelKey(snapshot);
+        _wfCliChosenModels = workflowCliNormalizeChosenModels(
+            [snapshot].concat(_wfCliChosenModels.filter(function (entry) {
+                return workflowCliChosenModelKey(entry) !== key;
+            }))
+        );
+        persistWorkflowCliChosenModels();
+    }
+
+    function workflowCliMoveChosenModel(fromIndex, toIndex) {
+        fromIndex = parseInt(fromIndex, 10);
+        toIndex = parseInt(toIndex, 10);
+        if (!Number.isFinite(fromIndex) || !Number.isFinite(toIndex)) return;
+        if (fromIndex < 0 || toIndex < 0 || fromIndex >= _wfCliChosenModels.length || toIndex >= _wfCliChosenModels.length) return;
+        if (fromIndex === toIndex) return;
+        var next = _wfCliChosenModels.slice();
+        var moved = next.splice(fromIndex, 1)[0];
+        next.splice(toIndex, 0, moved);
+        _wfCliChosenModels = next;
+        persistWorkflowCliChosenModels();
+    }
+
+    function workflowCliRemoveChosenModel(index) {
+        index = parseInt(index, 10);
+        if (!Number.isFinite(index) || index < 0 || index >= _wfCliChosenModels.length) return;
+        _wfCliChosenModels = _wfCliChosenModels.filter(function (_entry, i) { return i !== index; });
+        persistWorkflowCliChosenModels();
     }
 
     function renderWorkflowCliModelInventory(data, emptyMessage) {
@@ -2669,6 +2819,11 @@
         var activeModel = select ? String(select.value || "") : "";
         if (!list) return;
         var models = Array.isArray(data && data.models) ? data.models : [];
+        _wfCliInventoryById = {};
+        models.forEach(function (model) {
+            var snapshot = workflowCliSnapshotModelMeta(model, workflowCliActiveBackend());
+            if (snapshot) _wfCliInventoryById[snapshot.id] = snapshot;
+        });
         if (count) count.textContent = String(models.length || 0);
         if (!models.length) {
             list.innerHTML = '<p class="text-xs text-gray-500 italic">' + esc(emptyMessage || "No models returned for this CLI.") + "</p>";
@@ -2683,7 +2838,7 @@
             var name = model.name || model.id || model.model || "Model";
             var disabled = model.supports_chat === false;
             var id = model.id || model.model || "";
-            return '<div class="wf-cli-model-item' + (disabled ? " is-disabled" : "") + (activeModel === id ? " is-active" : "") + '" role="button" tabindex="' + (disabled ? "-1" : "0") + '" data-model-id="' + esc(id) + '" data-provider="' + esc(model.provider || "") + '">' +
+            return '<div class="wf-cli-model-item' + (disabled ? " is-disabled" : "") + (activeModel === id ? " is-active" : "") + '" role="button" tabindex="' + (disabled ? "-1" : "0") + '" draggable="' + (disabled ? "false" : "true") + '" data-model-id="' + esc(id) + '" data-provider="' + esc(model.provider || "") + '">' +
                 '<span class="truncate" title="' + esc(name) + '">' + esc(name) + "</span>" +
                 '<span class="wf-cli-model-flags">' + esc(flags.join(" / ")) + "</span>" +
             "</div>";
@@ -2718,7 +2873,9 @@
         var panel = document.getElementById("wf-cli-panel");
         var dot = document.getElementById("wf-cli-status-dot");
         var label = document.getElementById("wf-cli-status-text");
-        var color = state === "connected" || state === "running" ? "#22c55e" : (state === "connecting" ? "#3b82f6" : "#6b7280");
+        var color = state === "connected" || state === "running"
+            ? "#22c55e"
+            : (state === "connecting" ? "#3b82f6" : (state === "error" ? "#ef4444" : "#6b7280"));
         if (panel) {
             panel.classList.toggle("is-connected", state === "connected");
             panel.classList.toggle("is-running", state === "running");
@@ -2737,6 +2894,234 @@
         div.textContent = text;
         transcript.appendChild(div);
         transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    function workflowCliRecoveryElements() {
+        return {
+            panel: document.getElementById("wf-cli-recovery-panel"),
+            title: document.getElementById("wf-cli-recovery-title"),
+            summary: document.getElementById("wf-cli-recovery-summary"),
+            checks: document.getElementById("wf-cli-recovery-checks"),
+            actions: document.getElementById("wf-cli-recovery-actions"),
+            dismiss: document.getElementById("wf-cli-recovery-dismiss")
+        };
+    }
+
+    function clearWorkflowCliRecovery() {
+        var els = workflowCliRecoveryElements();
+        _wfCliRecoveryActions = [];
+        if (!els.panel) return;
+        els.panel.classList.remove("is-open");
+        if (els.summary) els.summary.textContent = "";
+        if (els.checks) els.checks.innerHTML = "";
+        if (els.actions) els.actions.innerHTML = "";
+    }
+
+    function showWorkflowCliRecovery(config) {
+        var els = workflowCliRecoveryElements();
+        if (!els.panel) return;
+        _wfCliRecoveryActions = Array.isArray(config && config.actions) ? config.actions.slice() : [];
+        if (els.title) els.title.textContent = (config && config.title) || "CLI setup needs attention";
+        if (els.summary) els.summary.textContent = (config && config.summary) || "The CLI needs a little help before it can connect.";
+        if (els.checks) {
+            var checks = Array.isArray(config && config.checks) ? config.checks : [];
+            els.checks.innerHTML = checks.map(function (check) {
+                var ok = !!check.ok;
+                return '<div class="wf-cli-recovery-check' + (ok ? ' is-ok' : '') + '">' +
+                    '<span class="wf-cli-recovery-check-mark">' + (ok ? '\u2713' : '\u2717') + '</span>' +
+                    '<span>' + esc(check.label || check.message || "") + (check.message && check.label ? ': ' + esc(check.message) : "") + '</span>' +
+                '</div>';
+            }).join("");
+        }
+        if (els.actions) {
+            els.actions.innerHTML = _wfCliRecoveryActions.map(function (action, idx) {
+                return '<button type="button" class="wf-cli-recovery-action" data-wf-cli-recovery-action="' + idx + '">' + esc(action.label || "Fix") + '</button>';
+            }).join("");
+        }
+        els.panel.classList.add("is-open");
+    }
+
+    function workflowCliCopyText(text, successMsg) {
+        if (!text) return Promise.reject(new Error("Nothing to copy"));
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+            return Promise.reject(new Error("Clipboard is unavailable in this browser"));
+        }
+        return navigator.clipboard.writeText(text).then(function () {
+            snack(successMsg || "Copied", "success");
+        });
+    }
+
+    function workflowCliLockedModelMap() {
+        try {
+            var raw = localStorage.getItem(WF_CLI_LOCKED_MODEL_STORAGE_KEY);
+            var parsed = raw ? JSON.parse(raw) : {};
+            return parsed && typeof parsed === "object" ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function workflowCliRememberLockedModel(projectId, candidate) {
+        if (!projectId || !candidate || !candidate.model) return;
+        try {
+            var map = workflowCliLockedModelMap();
+            map[String(projectId)] = {
+                provider: String(candidate.provider || "ollama"),
+                model: String(candidate.model || ""),
+                saved_at: Date.now()
+            };
+            localStorage.setItem(WF_CLI_LOCKED_MODEL_STORAGE_KEY, JSON.stringify(map));
+        } catch (e) {}
+    }
+
+    function workflowCliLockedModel(projectId) {
+        if (!projectId) return null;
+        var map = workflowCliLockedModelMap();
+        var entry = map[String(projectId)];
+        if (!entry || !entry.model) return null;
+        return {
+            provider: String(entry.provider || "ollama"),
+            model: String(entry.model || "")
+        };
+    }
+
+    function workflowCliForgetLockedModel(projectId) {
+        if (!projectId) return;
+        try {
+            var map = workflowCliLockedModelMap();
+            delete map[String(projectId)];
+            localStorage.setItem(WF_CLI_LOCKED_MODEL_STORAGE_KEY, JSON.stringify(map));
+        } catch (e) {}
+    }
+
+    function workflowCliPreflightRecovery(pf) {
+        var checks = Array.isArray(pf && pf.checks) ? pf.checks : [];
+        var actions = [];
+        var piMissing = checks.some(function (check) { return check && check.id === "pi_binary" && !check.ok; });
+        if (workflowCliActiveBackend() === "pi" && !piMissing) {
+            actions.push({ action: "pi_login", label: "Start Pi login" });
+        }
+        (Array.isArray(pf && pf.fixes) ? pf.fixes : []).forEach(function (fix) {
+            actions.push({
+                action: fix.action,
+                label: fix.label || "Fix",
+                payload: fix.payload || {}
+            });
+        });
+        return {
+            title: workflowCliActiveBackend() === "pi" ? "Pi connection needs attention" : "CLI setup needs attention",
+            summary: (pf && pf.user_message) || "The CLI is blocked by setup or account issues.",
+            checks: checks.map(function (check) {
+                return {
+                    ok: !!check.ok,
+                    label: check.id ? String(check.id).replace(/_/g, " ") : "Check",
+                    message: check.message || ""
+                };
+            }),
+            actions: actions
+        };
+    }
+
+    function workflowCliBackendRecovery(row) {
+        row = row || {};
+        var summary = row.message || row.setup_instructions || ((row.name || "This CLI") + " is not ready yet.");
+        var actions = [];
+        var piMissing = row.id === "pi" && /not installed|npm install -g/i.test(summary);
+        if (row.id === "pi" && /npm install -g/i.test(summary)) {
+            actions.push({
+                action: "copy_command",
+                label: "Copy install command",
+                payload: { command: "npm install -g @mariozechner/pi-coding-agent" }
+            });
+        }
+        if (row.id === "pi" && !piMissing) {
+            actions.push({ action: "pi_login", label: "Start Pi login" });
+        }
+        if (row.id === "cursor" || row.id === "codex" || row.id === "claude_code" || row.id === "opencode" || row.id === "cline") {
+            actions.push({ action: "open_key_panel", label: "Open key / provider panel" });
+        }
+        actions.push({ action: "reconnect", label: "Try Connect again" });
+        return {
+            title: (row.name || "CLI") + " needs setup",
+            summary: summary,
+            checks: [{ ok: false, label: row.state || "status", message: summary }],
+            actions: actions
+        };
+    }
+
+    function workflowCliHandleRecoveryAction(action) {
+        action = action || {};
+        var payload = action.payload || {};
+        if (action.action === "open_url" && payload.url) {
+            window.open(payload.url, "_blank", "noopener,noreferrer");
+            return;
+        }
+        if (action.action === "copy_command" && payload.command) {
+            workflowCliCopyText(payload.command, "Command copied").catch(function (e) {
+                snack(e.message || "Could not copy command", "error");
+            });
+            return;
+        }
+        if (action.action === "focus_model") {
+            var modelSel = document.getElementById("wf-cli-model-select");
+            if (modelSel) {
+                modelSel.focus();
+                modelSel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+            return;
+        }
+        if (action.action === "open_key_panel") {
+            setWorkflowCliKeyPanelOpen(true);
+            return;
+        }
+        if (action.action === "pi_login") {
+            api("POST", "/pi/login", {}).then(function (resp) {
+                snack((resp && resp.message) || "Pi login started", "success");
+            }).catch(function (e) {
+                snack(workflowCliErrorMessage(e, "Could not start Pi login"), "error");
+            });
+            return;
+        }
+        if (action.action === "use_model" && payload.model) {
+            var projectId = workflowBoardProjectId();
+            if (!projectId) {
+                snack("Link the board to a project first", "error");
+                return;
+            }
+            api("POST", "/projects/cli-model", {
+                project_id: projectId,
+                backend_id: "pi",
+                provider: payload.provider || "ollama",
+                model: payload.model
+            }).then(function () {
+                snack("Switched Pi to " + (payload.provider || "ollama") + "/" + payload.model, "success");
+                return startWorkflowCliSession();
+            }).catch(function (e) {
+                snack(workflowCliErrorMessage(e, "Could not switch Pi model"), "error");
+            });
+            return;
+        }
+        if (action.action === "recheck" || action.action === "reconnect") {
+            startWorkflowCliSession().catch(function () {});
+        }
+    }
+
+    function bindWorkflowCliRecoveryPanel() {
+        var els = workflowCliRecoveryElements();
+        if (els.dismiss && els.dismiss.dataset.bound !== "1") {
+            els.dismiss.dataset.bound = "1";
+            els.dismiss.addEventListener("click", clearWorkflowCliRecovery);
+        }
+        if (els.actions && els.actions.dataset.bound !== "1") {
+            els.actions.dataset.bound = "1";
+            els.actions.addEventListener("click", function (evt) {
+                var btn = evt.target.closest("[data-wf-cli-recovery-action]");
+                if (!btn) return;
+                var idx = parseInt(btn.getAttribute("data-wf-cli-recovery-action"), 10);
+                if (isNaN(idx) || !_wfCliRecoveryActions[idx]) return;
+                workflowCliHandleRecoveryAction(_wfCliRecoveryActions[idx]);
+            });
+        }
     }
 
     function workflowCliErrorMessage(err, fallback) {
@@ -2762,18 +3147,21 @@
     function handleWorkflowCliWsMessage(msg) {
         if (!msg || !msg.type) return;
         if (msg.type === "connected") {
+            clearWorkflowCliRecovery();
             setWorkflowCliStatus("connected", workflowCliReadyLabel());
             setWorkflowCliActivity("ready", "Connected. Ready for a prompt.");
             return;
         }
         if (msg.type === "preflight") {
             if (msg.ok) {
+                clearWorkflowCliRecovery();
                 markWorkflowCliSessionReady();
             } else {
                 _wfCliSessionReady = false;
                 setWorkflowCliSessionReady(false);
                 resetWorkflowCliModelSelect("Fix CLI setup first");
                 appendWorkflowCliLine("system", msg.user_message || "CLI setup check failed.");
+                showWorkflowCliRecovery(workflowCliPreflightRecovery(msg));
                 setWorkflowCliStatus("error", "Setup required");
                 setWorkflowCliActivity("ready", "Setup needs attention before this CLI can work.");
             }
@@ -2838,6 +3226,7 @@
         _wfCliSessionReady = false;
         setWorkflowCliSessionReady(false);
         resetWorkflowCliModelSelect("Connect CLI first");
+        clearWorkflowCliRecovery();
         setWorkflowCliStatus("idle", "Not connected");
         setWorkflowCliActivity("ready", "Idle. Connect a CLI, then send a prompt.");
         workflowCliInputPlaceholder(false);
@@ -2954,8 +3343,17 @@
             if (!retryPf || retryPf.ok === false) {
                 throw new Error((retryPf && retryPf.user_message) || "Pi CLI is not ready.");
             }
+            workflowCliRememberLockedModel(projectId, fix);
             appendWorkflowCliLine("system", "Pi is now using " + (fix.provider || "ollama") + "/" + fix.model + ".");
-            return loadWorkflowCliModels("pi", { force: true }).then(function () { return retryPf; });
+            return loadWorkflowCliModels("pi", { force: true }).then(function () {
+                var modelSel = document.getElementById("wf-cli-model-select");
+                if (modelSel && fix.model) {
+                    modelSel.value = fix.model;
+                    refreshWorkflowCliModelCardSelection();
+                    refreshWorkflowCliKeyPanel();
+                }
+                return retryPf;
+            });
         }).catch(function (err) {
             appendWorkflowCliLine("system", "Pi model " + fix.model + " did not work: " + workflowCliErrorMessage(err, "model failed"));
             return tryWorkflowCliPiModelCandidates(projectId, candidates, index + 1, originalPf);
@@ -2970,7 +3368,9 @@
             return { models: [] };
         }).then(function (catalog) {
             renderWorkflowCliModelInventory(catalog, catalog.message || "No models returned for Pi.");
+            var remembered = workflowCliLockedModel(projectId);
             var candidates = workflowCliMergeModelCandidates(
+                remembered ? [remembered] : [],
                 workflowCliPiModelCandidatesFromPreflight(pf),
                 workflowCliPiModelCandidatesFromCatalog(catalog)
             ).slice(0, 10);
@@ -2989,6 +3389,7 @@
         return loadWorkflowCliModels(backendId, { force: true }).then(function () {
             _wfCliSessionReady = true;
             setWorkflowCliSessionReady(true);
+            clearWorkflowCliRecovery();
             setWorkflowCliStatus("connected", workflowCliReadyLabel());
         });
     }
@@ -2998,7 +3399,12 @@
         if (backendId === "pi") {
             return api("GET", "/projects/" + encodeURIComponent(projectId) + "/cli/preflight?probe=true").then(function (pf) {
                 if (!pf || pf.ok === false) {
-                    return retryWorkflowCliPiPreflightWithSuggestedModel(projectId, pf);
+                    return retryWorkflowCliPiPreflightWithSuggestedModel(projectId, pf).catch(function (err) {
+                        var msg = (pf && pf.user_message) || workflowCliErrorMessage(err, "Pi CLI is not ready");
+                        var wrapped = new Error(msg);
+                        wrapped.workflowCliRecovery = workflowCliPreflightRecovery(pf || { user_message: msg, checks: [] });
+                        throw wrapped;
+                    });
                 }
                 return pf;
             });
@@ -3006,7 +3412,9 @@
         return fetchWorkflowProjectCliBackends(projectId).then(function (data) {
             var row = workflowCliBackendRow(data.backends || [], backendId);
             if (row && row.ready === false) {
-                throw new Error(row.message || row.setup_instructions || (backendId + " is not ready"));
+                var err = new Error(row.message || row.setup_instructions || (backendId + " is not ready"));
+                err.workflowCliRecovery = workflowCliBackendRecovery(row);
+                throw err;
             }
             return row;
         });
@@ -3079,6 +3487,7 @@
         }
         _wfCliConnectPromise = null;
         clearWorkflowCliTranscript();
+        clearWorkflowCliRecovery();
         if (connectBtn) connectBtn.disabled = true;
         _wfCliSessionReady = false;
         setWorkflowCliSessionReady(false);
@@ -3087,7 +3496,9 @@
         return fetchWorkflowProjectCliBackends(projectId).then(function (data) {
             var row = workflowCliBackendRow(data.backends || [], backendId);
             if (row && row.ready === false) {
-                throw new Error(row.message || row.setup_instructions || (backendId + " is not installed or configured"));
+                var err = new Error(row.message || row.setup_instructions || (backendId + " is not installed or configured"));
+                err.workflowCliRecovery = workflowCliBackendRecovery(row);
+                throw err;
             }
             return syncWorkflowCliProjectBackend(projectId, backendId);
         }).then(function () {
@@ -3102,6 +3513,7 @@
             var msg = workflowCliErrorMessage(e, "Could not start CLI");
             disconnectWorkflowCliWs();
             appendWorkflowCliLine("system", msg);
+            if (e && e.workflowCliRecovery) showWorkflowCliRecovery(e.workflowCliRecovery);
             setWorkflowCliStatus("error", "Not ready");
             snack(msg, "error");
             throw e;
@@ -3443,6 +3855,7 @@
     }
 
     function bindWorkflowCliTabControls() {
+        bindWorkflowCliRecoveryPanel();
         var connectBtn = document.getElementById("wf-cli-connect");
         if (connectBtn && connectBtn.dataset.bound !== "1") {
             connectBtn.dataset.bound = "1";
@@ -3497,6 +3910,85 @@
                 evt.preventDefault();
                 item.click();
             });
+            modelList.addEventListener("dragstart", function (evt) {
+                var item = evt.target.closest(".wf-cli-model-item");
+                if (!item || item.classList.contains("is-disabled")) return;
+                _wfCliDraggedModelId = String(item.dataset.modelId || "");
+                _wfCliDraggedChosenIndex = -1;
+                item.classList.add("is-dragging");
+                if (evt.dataTransfer) {
+                    evt.dataTransfer.effectAllowed = "copyMove";
+                    evt.dataTransfer.setData("text/plain", _wfCliDraggedModelId);
+                    evt.dataTransfer.setData("application/x-wf-cli-model", _wfCliDraggedModelId);
+                }
+            });
+            modelList.addEventListener("dragend", function (evt) {
+                var item = evt.target.closest(".wf-cli-model-item");
+                if (item) item.classList.remove("is-dragging");
+                _wfCliDraggedModelId = "";
+            });
+        }
+        var chosenList = document.getElementById("wf-cli-chosen-list");
+        if (chosenList && chosenList.dataset.bound !== "1") {
+            chosenList.dataset.bound = "1";
+            chosenList.addEventListener("click", function (evt) {
+                var removeBtn = evt.target.closest("[data-wf-cli-chosen-remove]");
+                if (!removeBtn) return;
+                workflowCliRemoveChosenModel(removeBtn.getAttribute("data-wf-cli-chosen-remove"));
+            });
+            chosenList.addEventListener("dragstart", function (evt) {
+                var item = evt.target.closest("[data-wf-cli-chosen-index]");
+                if (!item) return;
+                _wfCliDraggedChosenIndex = parseInt(item.getAttribute("data-wf-cli-chosen-index"), 10);
+                _wfCliDraggedModelId = "";
+                if (evt.dataTransfer) {
+                    evt.dataTransfer.effectAllowed = "move";
+                    evt.dataTransfer.setData("application/x-wf-cli-chosen-index", String(_wfCliDraggedChosenIndex));
+                }
+            });
+            chosenList.addEventListener("dragover", function (evt) {
+                var targetItem = evt.target.closest("[data-wf-cli-chosen-index]");
+                var dropzone = evt.target.closest("#wf-cli-chosen-dropzone");
+                if (_wfCliDraggedModelId || _wfCliDraggedChosenIndex >= 0) {
+                    evt.preventDefault();
+                    if (evt.dataTransfer) evt.dataTransfer.dropEffect = _wfCliDraggedModelId ? "copy" : "move";
+                }
+                chosenList.querySelectorAll(".is-over").forEach(function (el) { el.classList.remove("is-over"); });
+                if (targetItem) targetItem.classList.add("is-over");
+                if (dropzone) dropzone.classList.add("is-over");
+            });
+            chosenList.addEventListener("dragleave", function (evt) {
+                var targetItem = evt.target.closest("[data-wf-cli-chosen-index]");
+                var dropzone = evt.target.closest("#wf-cli-chosen-dropzone");
+                if (targetItem) targetItem.classList.remove("is-over");
+                if (dropzone) dropzone.classList.remove("is-over");
+            });
+            chosenList.addEventListener("drop", function (evt) {
+                var targetItem = evt.target.closest("[data-wf-cli-chosen-index]");
+                var dropzone = evt.target.closest("#wf-cli-chosen-dropzone");
+                if (!_wfCliDraggedModelId && _wfCliDraggedChosenIndex < 0) return;
+                evt.preventDefault();
+                chosenList.querySelectorAll(".is-over").forEach(function (el) { el.classList.remove("is-over"); });
+                if (_wfCliDraggedModelId) {
+                    var model = _wfCliInventoryById[_wfCliDraggedModelId];
+                    if (model) workflowCliAddChosenModel(model);
+                    _wfCliDraggedModelId = "";
+                    return;
+                }
+                if (_wfCliDraggedChosenIndex >= 0) {
+                    if (targetItem) {
+                        workflowCliMoveChosenModel(_wfCliDraggedChosenIndex, parseInt(targetItem.getAttribute("data-wf-cli-chosen-index"), 10));
+                    } else if (dropzone) {
+                        workflowCliMoveChosenModel(_wfCliDraggedChosenIndex, Math.max(0, _wfCliChosenModels.length - 1));
+                    }
+                }
+                _wfCliDraggedChosenIndex = -1;
+            });
+            chosenList.addEventListener("dragend", function () {
+                chosenList.querySelectorAll(".is-over").forEach(function (el) { el.classList.remove("is-over"); });
+                _wfCliDraggedChosenIndex = -1;
+                _wfCliDraggedModelId = "";
+            });
         }
         var sendBtn = document.getElementById("wf-cli-send");
         var input = document.getElementById("wf-cli-input");
@@ -3519,8 +4011,18 @@
             modelSel.addEventListener("change", function () {
                 refreshWorkflowCliModelCardSelection();
                 refreshWorkflowCliKeyPanel();
-                if (!_wfCliSessionReady) return;
                 var projectId = workflowBoardProjectId();
+                if (workflowCliActiveBackend() === "pi") {
+                    if (modelSel.value && modelSel.value !== "auto") {
+                        workflowCliRememberLockedModel(projectId, {
+                            provider: selectedCliModelProvider(modelSel) || "ollama",
+                            model: modelSel.value
+                        });
+                    } else {
+                        workflowCliForgetLockedModel(projectId);
+                    }
+                }
+                if (!_wfCliSessionReady) return;
                 if (!projectId) return;
                 syncWorkflowCliProjectModel(
                     projectId,
@@ -5387,7 +5889,8 @@
             branch_per_ticket: settings.branch_per_ticket !== false,
             auto_route_models: settings.auto_route_models !== false,
             free_only: !!settings.free_only,
-            prefer_local: settings.prefer_local !== false
+            prefer_local: settings.prefer_local !== false,
+            chosen_models: workflowCliNormalizeChosenModels(settings.chosen_models || [])
         };
     }
 
@@ -5399,7 +5902,8 @@
             branch_per_ticket: !!((document.getElementById("wf-config-run-branch-per-ticket") || {}).checked),
             auto_route_models: !!((document.getElementById("wf-config-run-auto-route-models") || {}).checked),
             free_only: !!((document.getElementById("wf-config-run-free-only") || {}).checked),
-            prefer_local: !!((document.getElementById("wf-config-run-prefer-local") || {}).checked)
+            prefer_local: !!((document.getElementById("wf-config-run-prefer-local") || {}).checked),
+            chosen_models: workflowCliNormalizeChosenModels(_wfCliChosenModels)
         };
     }
 
@@ -5422,6 +5926,8 @@
         if (autoRouteEl) autoRouteEl.checked = !!settings.auto_route_models;
         if (freeOnlyEl) freeOnlyEl.checked = !!settings.free_only;
         if (preferLocalEl) preferLocalEl.checked = !!settings.prefer_local;
+        _wfCliChosenModels = workflowCliNormalizeChosenModels(settings.chosen_models || []);
+        renderWorkflowCliChosenModels();
         var locked = workflowHasActiveRuns();
         if (panelEl) {
             panelEl.classList.toggle("is-locked", locked);

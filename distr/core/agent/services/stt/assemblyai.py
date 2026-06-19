@@ -10,6 +10,7 @@ import asyncio
 import logging
 import time
 import io
+import string
 import wave
 import numpy as np
 from typing import Optional
@@ -17,7 +18,8 @@ from typing import Optional
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE,
     AudioRawFrame, InputAudioRawFrame, TranscriptionFrame, ErrorFrame,
-    EndFrame, StartFrame, CancelFrame,
+    EndFrame, StartFrame, CancelFrame, InterruptionFrame,
+    UserStoppedSpeakingFrame,
     SpeakingStartedFrames, SpeakingStoppedFrames,
 )
 from distr.core.agent.services.stt.base import BaseSTTService

@@ -35,12 +35,20 @@
 
         <!-- Bonus Audio Setup Helper Group -->
         <div class="border border-white/20 rounded-lg p-6 bg-[#1a1f3a]">
-            <h3 class="text-lg font-semibold text-white mb-4">Bonus Audio Setup Helper</h3>
+            <div class="audio-helper-header mb-4">
+                <h3 class="text-lg font-semibold text-white">Bonus Audio Setup Helper</h3>
+                <div class="audio-helper-info">
+                    <button type="button" class="audio-helper-info__button" aria-label="Audio helper info">i</button>
+                    <div class="audio-helper-info__tooltip" role="tooltip">
+                        When your audio device reconnects e.g. Bluetooth, USB, we'll automatically restore your previously saved input and output settings.
+                    </div>
+                </div>
+            </div>
 
             <!-- Remember checkbox and explanation -->
-            <label class="flex items-start cursor-pointer group mb-3">
+            <label class="audio-remember-row cursor-pointer group mb-3">
                 <input type="checkbox" id="remember_audio_settings" name="remember_audio_settings"
-                        class="mt-1 w-4 h-4 bg-[#1a1f3a] border border-white/20 rounded
+                        class="w-4 h-4 bg-[#1a1f3a] border border-white/20 rounded
                                 checked:bg-[#f97316] checked:border-[#f97316]
                                 focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:ring-offset-0
                                 transition-colors cursor-pointer">
@@ -48,10 +56,6 @@
                     Remember my Audio Settings
                 </span>
             </label>
-
-            <p class="text-sm text-white italic mb-4 pl-7">
-                When your audio devices reconnect (e.g., Bluetooth, USB), we'll automatically restore your previously saved input and output settings.
-            </p>
 
             <!-- Tabs and Buttons Layout -->
             <div class="flex gap-4">

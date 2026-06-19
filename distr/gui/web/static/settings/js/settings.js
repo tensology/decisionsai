@@ -46,6 +46,20 @@ function switchTab(tabName) {
         if (tab === 'logs') wrapper.classList.add('logs-tab-active');
         else wrapper.classList.remove('logs-tab-active');
     }
+    var actions = document.querySelector('.settings-actions-float');
+    if (actions) {
+        actions.classList.toggle('llms-actions-active', tab === 'llms');
+    }
+    var saveBtn = document.getElementById('btn_save');
+    if (saveBtn && !saveBtn.dataset.busy) {
+        saveBtn.textContent = 'Save';
+        saveBtn.style.display = tab === 'skins' ? 'none' : '';
+    }
+    var reloadBtn = document.getElementById('btn_cancel');
+    if (reloadBtn && !reloadBtn.dataset.busy) {
+        reloadBtn.textContent = 'Reload';
+        reloadBtn.style.display = tab === 'skins' ? 'none' : '';
+    }
     window.location.hash = tab;
     // Avoid double-fetch on first paint: llms.js loads the LLMs tab on DOMContentLoaded.
     if (window._settingsUiReady) {
@@ -119,7 +133,6 @@ function setupActionButtons() {
                 else if (active.id === 'tab-thirdparty' && typeof window.saveThirdPartySettings === 'function') window.saveThirdPartySettings();
                 else if (active.id === 'tab-llms' && typeof window.saveLLMsSettings === 'function') window.saveLLMsSettings();
                 else if (active.id === 'tab-skins' && typeof window.saveSkinsSettings === 'function') window.saveSkinsSettings();
-                else if (active.id === 'tab-skins') showNotification('Use the Save button in the Skin Editor', 'info');
                 else if (active.id === 'tab-shortcuts' && typeof window.saveShortcutSettings === 'function') window.saveShortcutSettings();
                 else if (active.id === 'tab-advanced' && typeof window.saveAdvancedSettings === 'function') window.saveAdvancedSettings();
                 else if (active.id === 'tab-initiative' && typeof window.saveInitiativeSettings === 'function') window.saveInitiativeSettings();
@@ -145,14 +158,16 @@ function setupActionButtons() {
                 if (active.id === 'tab-general' && typeof window.loadGeneralSettings === 'function') window.loadGeneralSettings();
                 else if (active.id === 'tab-audio' && typeof window.loadAudioSettings === 'function') window.loadAudioSettings();
                 else if (active.id === 'tab-thirdparty' && typeof window.loadThirdPartySettings === 'function') window.loadThirdPartySettings();
-                else if (active.id === 'tab-llms' && typeof window.loadLLMsSettings === 'function') window.loadLLMsSettings();
+                else if (active.id === 'tab-llms' && typeof window.reloadLLMsSettings === 'function') window.reloadLLMsSettings();
                 else if (active.id === 'tab-skins' && typeof window.loadSkinsSettings === 'function') window.loadSkinsSettings();
                 else if (active.id === 'tab-shortcuts' && typeof window.loadShortcutSettings === 'function') window.loadShortcutSettings();
                 else if (active.id === 'tab-advanced' && typeof window.loadAdvancedSettings === 'function') window.loadAdvancedSettings();
                 else if (active.id === 'tab-initiative' && typeof window.loadInitiativeSettings === 'function') window.loadInitiativeSettings();
                 else if (active.id === 'tab-mcp' && typeof window.loadMCPSettings === 'function') window.loadMCPSettings();
             }
-            showNotification('Settings reloaded', 'info');
+            if (!active || active.id !== 'tab-llms') {
+                showNotification('Settings reloaded', 'info');
+            }
         }, true);
     }
     var clearCache = document.getElementById('clear_cache');

@@ -3,6 +3,7 @@ LLMs routes — /llms, /llms/*, /ollama/*
 """
 import asyncio
 import logging
+from typing import Callable
 from fastapi.responses import JSONResponse
 
 from ._shared import OllamaPullRequest, LLMSettings, route_handler
@@ -34,6 +35,66 @@ def _is_available_model_entry(model) -> bool:
         return False
 
     return True
+
+
+def _supports_llm_type(model, llm_type: str, provider_key: str) -> bool:
+    """Return True when a catalog model is suitable for the requested LLM type."""
+    if not isinstance(model, dict):
+        return llm_type != "image"
+
+    model_id = str(model.get("id") or model.get("name") or "").strip().lower()
+    input_modalities = [str(x).lower() for x in (model.get("input_modalities") or [])]
+    output_modalities = [str(x).lower() for x in (model.get("output_modalities") or [])]
+    supports_tools = bool(model.get("supports_tools", not (provider_key == "ollama")))
+
+    if llm_type in {"conversational", "coding", "workflow", "step_runner", "kanban"}:
+        return supports_tools
+    if llm_type == "vision":
+        return "image" in input_modalities
+    if llm_type == "video":
+        return "video" in output_modalities
+    if llm_type == "computer_use":
+        return True
+    if llm_type != "image":
+        return True
+
+    if "image" in output_modalities:
+        return True
+
+    # Provider-specific fallbacks for image generation when catalog metadata is incomplete.
+    if provider_key == "openai":
+        return (
+            model_id.startswith("gpt-image-")
+            or model_id in {"dall-e-2", "dall-e-3"}
+        )
+    if provider_key == "openrouter":
+        return (
+            "-image" in model_id
+            or model_id.endswith("/image")
+            or "image-gen" in model_id
+            or "imagen" in model_id
+        )
+    if provider_key == "ollama":
+        return any(token in model_id for token in (
+            "flux",
+            "sdxl",
+            "stable-diffusion",
+            "dreamshaper",
+            "playground",
+        ))
+
+    return False
+
+
+def _category_for_llm_type(llm_type: str) -> str:
+    llm_type = (llm_type or "").strip().lower()
+    if llm_type in {"coding"}:
+        return "coding"
+    if llm_type in {"vision"}:
+        return "vision"
+    if llm_type in {"image"}:
+        return "image_generation"
+    return "tool_calling"
 
 
 def register_routes(router, templates):
@@ -289,6 +350,85 @@ def register_routes(router, templates):
                 providers.append({"id": pid, "name": pname})
         return JSONResponse({"providers": providers})
 
+    @router.get("/llms/provider-status")
+    @route_handler("get provider status pills", fallback={"providers": []})
+    async def get_llm_provider_status():
+        from distr.core.settings import load_settings_from_db
+        from distr.core.services.settings_service import thirdparty_llm_provider_ready
+
+        settings = load_settings_from_db()
+        checks = [
+            ("ollama", "Ollama", True, "Local", "Runs on this machine"),
+            (
+                "openai",
+                "OpenAI",
+                thirdparty_llm_provider_ready(settings, "openai_enabled", "openai_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "openai_enabled", "openai_key") else "Key missing",
+                "API-backed provider",
+            ),
+            (
+                "anthropic",
+                "Anthropic",
+                thirdparty_llm_provider_ready(settings, "anthropic_enabled", "anthropic_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "anthropic_enabled", "anthropic_key") else "Key missing",
+                "API-backed provider",
+            ),
+            (
+                "groq",
+                "Groq",
+                thirdparty_llm_provider_ready(settings, "groq_enabled", "groq_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "groq_enabled", "groq_key") else "Key missing",
+                "API-backed provider",
+            ),
+            (
+                "openrouter",
+                "OpenRouter",
+                thirdparty_llm_provider_ready(settings, "openrouter_enabled", "openrouter_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "openrouter_enabled", "openrouter_key") else "Key missing",
+                "Aggregator / price-aware provider",
+            ),
+            (
+                "kilocode",
+                "KiloCode",
+                thirdparty_llm_provider_ready(settings, "kilo_enabled", "kilo_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "kilo_enabled", "kilo_key") else "Key missing",
+                "Kilo gateway provider",
+            ),
+            (
+                "gemini",
+                "Google Gemini",
+                thirdparty_llm_provider_ready(settings, "gemini_enabled", "gemini_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "gemini_enabled", "gemini_key") else "Key missing",
+                "API-backed provider",
+            ),
+            (
+                "nvidia",
+                "NVIDIA",
+                thirdparty_llm_provider_ready(settings, "nvidia_enabled", "nvidia_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "nvidia_enabled", "nvidia_key") else "Key missing",
+                "API-backed provider",
+            ),
+            (
+                "pixazo",
+                "Pixazo",
+                thirdparty_llm_provider_ready(settings, "pixazo_enabled", "pixazo_key"),
+                "Connected" if thirdparty_llm_provider_ready(settings, "pixazo_enabled", "pixazo_key") else "Key missing",
+                "Media provider",
+            ),
+        ]
+        providers = [
+            {
+                "id": provider_id,
+                "name": provider_name,
+                "ready": bool(ready),
+                "balance_label": balance_label,
+                "detail": detail,
+                "state": "ready" if ready else ("local" if provider_id == "ollama" else "missing"),
+            }
+            for provider_id, provider_name, ready, balance_label, detail in checks
+        ]
+        return JSONResponse({"providers": providers})
+
     @router.get("/llms/available-media-providers")
     @route_handler("get available media providers", fallback={"providers": []})
     async def get_available_media_providers():
@@ -307,6 +447,10 @@ def register_routes(router, templates):
     async def get_llm_models(type: str, provider: str):
         """Get available models for a specific LLM type and provider."""
         from distr.core.chat import provider_slug
+        from distr.core.services.model_catalog_cache import (
+            get_or_fetch_model_catalog,
+            normalize_auth_fingerprint,
+        )
         from distr.core.settings import load_settings_from_db
         from distr.gui.utils.get_ollama_models import (
             get_installed_ollama_models,
@@ -318,34 +462,57 @@ def register_routes(router, templates):
             get_nvidia_models,
         )
         from distr.gui.utils.get_pixazo_models import get_pixazo_models
-        from distr.gui.utils.get_openrouter_models import get_openrouter_models
+        from distr.gui.utils.get_openrouter_models import _fetch_openrouter_models_from_api
 
         settings = load_settings_from_db()
         models = []
         provider_key = provider_slug(provider)
 
-        _fetchers = {
-            "ollama": lambda: get_installed_ollama_models(),
-            "openai": lambda: get_openai_models((settings.get("openai_key") or "").strip())
-                if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip() else [],
-            "anthropic": lambda: get_anthropic_models((settings.get("anthropic_key") or "").strip())
-                if settings.get("anthropic_enabled") and (settings.get("anthropic_key") or "").strip() else [],
-            "groq": lambda: get_groq_models((settings.get("groq_key") or "").strip())
-                if settings.get("groq_enabled") and (settings.get("groq_key") or "").strip() else [],
-            "openrouter": lambda: get_openrouter_models((settings.get("openrouter_key") or "").strip())
-                if settings.get("openrouter_enabled") and (settings.get("openrouter_key") or "").strip() else [],
-            "kilocode": lambda: get_kilo_models((settings.get("kilo_key") or "").strip())
-                if settings.get("kilo_enabled") and (settings.get("kilo_key") or "").strip() else [],
-            "gemini": lambda: get_gemini_models((settings.get("gemini_key") or "").strip())
-                if settings.get("gemini_enabled") and (settings.get("gemini_key") or "").strip() else [],
-            "nvidia": lambda: get_nvidia_models((settings.get("nvidia_key") or "").strip())
-                if settings.get("nvidia_enabled") and (settings.get("nvidia_key") or "").strip() else [],
-            "pixazo": lambda: get_pixazo_models("image" if type == "image" else "video" if type == "video" else None)
-                if settings.get("pixazo_enabled") and (settings.get("pixazo_key") or "").strip() else [],
-        }
-        fetcher = _fetchers.get(provider_key)
+        def _provider_fetcher_and_fingerprint() -> tuple[Callable[[], list], str | None] | tuple[None, None]:
+            if provider_key == "ollama":
+                return (lambda: get_installed_ollama_models(), None)
+            if provider_key == "openai" and settings.get("openai_enabled"):
+                api_key = (settings.get("openai_key") or "").strip()
+                if api_key:
+                    return (lambda: get_openai_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "anthropic" and settings.get("anthropic_enabled"):
+                api_key = (settings.get("anthropic_key") or "").strip()
+                if api_key:
+                    return (lambda: get_anthropic_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "groq" and settings.get("groq_enabled"):
+                api_key = (settings.get("groq_key") or "").strip()
+                if api_key:
+                    return (lambda: get_groq_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "openrouter" and settings.get("openrouter_enabled"):
+                api_key = (settings.get("openrouter_key") or "").strip()
+                if api_key:
+                    return (lambda: _fetch_openrouter_models_from_api(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "kilocode" and settings.get("kilo_enabled"):
+                api_key = (settings.get("kilo_key") or "").strip()
+                if api_key:
+                    return (lambda: get_kilo_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "gemini" and settings.get("gemini_enabled"):
+                api_key = (settings.get("gemini_key") or "").strip()
+                if api_key:
+                    return (lambda: get_gemini_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "nvidia" and settings.get("nvidia_enabled"):
+                api_key = (settings.get("nvidia_key") or "").strip()
+                if api_key:
+                    return (lambda: get_nvidia_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "pixazo" and settings.get("pixazo_enabled"):
+                api_key = (settings.get("pixazo_key") or "").strip()
+                if api_key:
+                    media_type = "image" if type == "image" else "video" if type == "video" else None
+                    return (lambda: get_pixazo_models(media_type), normalize_auth_fingerprint(api_key))
+            return (None, None)
+
+        fetcher, auth_fingerprint = _provider_fetcher_and_fingerprint()
         if fetcher:
-            models = fetcher()
+            models = get_or_fetch_model_catalog(
+                provider_key,
+                fetcher=fetcher,
+                auth_fingerprint=auth_fingerprint,
+            )
         elif provider_key:
             logger.warning("No model fetcher for provider=%r (slug=%r)", provider, provider_key)
 
@@ -357,23 +524,11 @@ def register_routes(router, templates):
             def _is_dict(m):
                 return isinstance(m, dict)
 
-            # Filter by type capability
-            _type_filters = {
-                "conversational": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
-                "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
-                "vision": lambda m: not _is_dict(m) or "image" in (m.get("input_modalities") or []),
-                "image": lambda m: not _is_dict(m) or "image" in (m.get("output_modalities") or []),
-                "video": lambda m: not _is_dict(m) or "video" in (m.get("output_modalities") or []),
-                "workflow": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
-                "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),  # legacy alias
-                "computer_use": lambda m: True,
-                "kanban": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider_key == "ollama")),
-            }
-            filt = _type_filters.get(type)
-            if filt:
-                filtered = [m for m in models if filt(m)]
-                if filtered:
-                    models = filtered
+            filtered = [m for m in models if _supports_llm_type(m, type, provider_key)]
+            if type == "image":
+                models = filtered
+            elif filtered:
+                models = filtered
 
             # Clean display names and attach context window metadata for UI.
             from distr.core.services.context_window import context_window_for_model
@@ -398,6 +553,197 @@ def register_routes(router, templates):
 
         return JSONResponse({"models": models})
 
+    @router.get("/llms/model-profile")
+    @route_handler("get model profile", fallback={"profile": None})
+    async def get_llm_model_profile(type: str, provider: str, model: str):
+        from distr.core.chat import provider_slug
+        from distr.core.services.context_window import context_window_for_model
+        from distr.core.services.llm_benchmark_service import (
+            _fallback_profile,
+            _profile_from_row,
+            load_terminal_bench_leaderboard,
+            normalize_model_key,
+        )
+        from distr.core.services.model_catalog_cache import (
+            get_or_fetch_model_catalog,
+            normalize_auth_fingerprint,
+        )
+        from distr.core.services.model_recommendations import load_recommendations
+        from distr.core.settings import load_settings_from_db
+        from distr.gui.utils.get_ollama_models import (
+            get_installed_ollama_models,
+            get_openai_models,
+            get_anthropic_models,
+            get_groq_models,
+            get_kilo_models,
+            get_gemini_models,
+            get_nvidia_models,
+        )
+        from distr.gui.utils.get_pixazo_models import get_pixazo_models
+        from distr.gui.utils.get_openrouter_models import _fetch_openrouter_models_from_api
+
+        settings = load_settings_from_db()
+        provider_key = provider_slug(provider)
+        llm_type = (type or "").strip().lower()
+        model_name = (model or "").strip()
+
+        def _provider_fetcher_and_fingerprint():
+            if provider_key == "ollama":
+                return (lambda: get_installed_ollama_models(), None)
+            if provider_key == "openai" and settings.get("openai_enabled"):
+                api_key = (settings.get("openai_key") or "").strip()
+                if api_key:
+                    return (lambda: get_openai_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "anthropic" and settings.get("anthropic_enabled"):
+                api_key = (settings.get("anthropic_key") or "").strip()
+                if api_key:
+                    return (lambda: get_anthropic_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "groq" and settings.get("groq_enabled"):
+                api_key = (settings.get("groq_key") or "").strip()
+                if api_key:
+                    return (lambda: get_groq_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "openrouter" and settings.get("openrouter_enabled"):
+                api_key = (settings.get("openrouter_key") or "").strip()
+                if api_key:
+                    return (lambda: _fetch_openrouter_models_from_api(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "kilocode" and settings.get("kilo_enabled"):
+                api_key = (settings.get("kilo_key") or "").strip()
+                if api_key:
+                    return (lambda: get_kilo_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "gemini" and settings.get("gemini_enabled"):
+                api_key = (settings.get("gemini_key") or "").strip()
+                if api_key:
+                    return (lambda: get_gemini_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "nvidia" and settings.get("nvidia_enabled"):
+                api_key = (settings.get("nvidia_key") or "").strip()
+                if api_key:
+                    return (lambda: get_nvidia_models(api_key), normalize_auth_fingerprint(api_key))
+            if provider_key == "pixazo" and settings.get("pixazo_enabled"):
+                api_key = (settings.get("pixazo_key") or "").strip()
+                if api_key:
+                    media_type = "image" if llm_type == "image" else "video" if llm_type == "video" else None
+                    return (lambda: get_pixazo_models(media_type), normalize_auth_fingerprint(api_key))
+            return (None, None)
+
+        fetcher, auth_fingerprint = _provider_fetcher_and_fingerprint()
+        catalog_models = []
+        if fetcher:
+            try:
+                catalog_models = get_or_fetch_model_catalog(
+                    provider_key,
+                    fetcher=fetcher,
+                    auth_fingerprint=auth_fingerprint,
+                )
+            except Exception:
+                catalog_models = []
+
+        benchmark_rows = load_terminal_bench_leaderboard()
+        benchmark_by_id = {str(row.get("id") or ""): row for row in benchmark_rows}
+        benchmark_key = normalize_model_key(model_name)
+        benchmark_profile = (
+            _profile_from_row(benchmark_by_id[benchmark_key], llm_type=llm_type, requested_provider=provider)
+            if benchmark_key in benchmark_by_id
+            else _fallback_profile(model_name, provider, llm_type)
+        )
+
+        catalog_match = None
+        for row in catalog_models:
+            if not isinstance(row, dict):
+                continue
+            row_id = str(row.get("id") or "").strip()
+            row_name = str(row.get("name") or "").strip()
+            if row_id == model_name or normalize_model_key(row_id) == benchmark_key or normalize_model_key(row_name) == benchmark_key:
+                catalog_match = row
+                break
+
+        rec_data = load_recommendations(provider_key)
+        provider_rec = (rec_data.get("providers") or {}).get(provider_key) or {}
+        categories = provider_rec.get("categories") or {}
+        preferred_category = _category_for_llm_type(llm_type)
+
+        def _find_recommendation_lane():
+            search_categories = [preferred_category] + [k for k in categories.keys() if k != preferred_category]
+            for cat_key in search_categories:
+                entry = categories.get(cat_key) or {}
+                for lane_name in ("paid", "free"):
+                    lane = entry.get(lane_name)
+                    if not isinstance(lane, dict):
+                        continue
+                    lane_id = normalize_model_key(lane.get("model_id"))
+                    lane_name_key = normalize_model_key(lane.get("model_name"))
+                    if benchmark_key and benchmark_key in {lane_id, lane_name_key}:
+                        return lane, cat_key
+            return None, ""
+
+        recommendation_lane, matched_category = _find_recommendation_lane()
+
+        input_modalities = []
+        output_modalities = []
+        supports_tools = False
+        if isinstance(catalog_match, dict):
+            input_modalities = [str(x) for x in (catalog_match.get("input_modalities") or [])]
+            output_modalities = [str(x) for x in (catalog_match.get("output_modalities") or [])]
+            supports_tools = bool(catalog_match.get("supports_tools"))
+
+        capabilities = []
+        if supports_tools:
+            capabilities.append("Tool calling")
+        if "image" in [x.lower() for x in input_modalities]:
+            capabilities.append("Vision input")
+        if "image" in [x.lower() for x in output_modalities]:
+            capabilities.append("Image generation")
+        if "video" in [x.lower() for x in output_modalities]:
+            capabilities.append("Video generation")
+        if matched_category == "coding" or any(token in benchmark_key for token in ("code", "coder", "codex")):
+            capabilities.append("Coding")
+        if llm_type in {"workflow", "computer_use"}:
+            capabilities.append("Workflow")
+
+        pricing = (recommendation_lane or {}).get("pricing") or {}
+        quality = (recommendation_lane or {}).get("quality") or {}
+        context_window = (recommendation_lane or {}).get("context_window") or 0
+        if not context_window and model_name:
+            context_window = context_window_for_model(provider_key, model_name)
+
+        profile = {
+            "id": benchmark_profile.get("id") or benchmark_key or model_name.lower(),
+            "provider": provider_key,
+            "provider_label": provider or provider_key,
+            "model_id": (catalog_match or {}).get("id") or (recommendation_lane or {}).get("model_id") or model_name,
+            "model_label": (catalog_match or {}).get("name") or benchmark_profile.get("label") or (recommendation_lane or {}).get("model_name") or model_name,
+            "performance_score": benchmark_profile.get("performance_score", 0),
+            "value_score": benchmark_profile.get("value_score", 0),
+            "benchmark_count": benchmark_profile.get("submission_count", 0),
+            "last_benchmark_date": benchmark_profile.get("latest_date") or "",
+            "best_for": (recommendation_lane or {}).get("description") or benchmark_profile.get("best_use_case") or benchmark_profile.get("summary") or "",
+            "summary": benchmark_profile.get("summary") or (recommendation_lane or {}).get("description") or "",
+            "context_window": int(context_window or 0),
+            "released": (recommendation_lane or {}).get("released") or "",
+            "pricing": pricing,
+            "quality": quality,
+            "capabilities": capabilities,
+            "supports_tools": supports_tools,
+            "input_modalities": input_modalities,
+            "output_modalities": output_modalities,
+            "sources": (recommendation_lane or {}).get("sources") or [],
+        }
+        return JSONResponse({"profile": profile})
+
+    @router.post("/llms/models/reload")
+    @route_handler("reload model catalog cache", fallback={"success": False})
+    async def reload_llm_models_cache(payload: dict | None = None):
+        from distr.core.chat import provider_slug
+        from distr.core.services.model_catalog_cache import flush_model_catalog_cache
+
+        provider = provider_slug((payload or {}).get("provider") or "")
+        removed = flush_model_catalog_cache(provider or None)
+        return JSONResponse({
+            "success": True,
+            "provider": provider or "",
+            "removed": removed,
+            "message": "Model catalog cache flushed",
+        })
+
     @router.get("/llms/recommendations")
     @route_handler("load model recommendations", fallback={"providers": {}, "last_updated": None})
     async def get_model_recommendations(provider: str = None):
@@ -405,6 +751,28 @@ def register_routes(router, templates):
         from distr.core.services.model_recommendations import load_recommendations
         data = load_recommendations(provider)
         return JSONResponse(data)
+
+    @router.get("/llms/benchmark")
+    @route_handler("load LLM benchmark modal payload", fallback={"leaderboard": [], "selected_model": None, "comparison_model": None})
+    async def get_llm_benchmark(
+        type: str,
+        provider: str = "",
+        model: str = "",
+        compare_model: str = "",
+        sort: str = "performance",
+        limit: int = 40,
+    ):
+        from distr.core.services.llm_benchmark_service import build_llm_benchmark_payload
+
+        payload = build_llm_benchmark_payload(
+            llm_type=type,
+            provider=provider,
+            model=model,
+            compare_model=compare_model,
+            sort=sort,
+            limit=limit,
+        )
+        return JSONResponse(payload)
 
     @router.post("/llms/recommendations/refresh")
     @route_handler("start recommendations refresh")

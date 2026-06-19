@@ -185,8 +185,14 @@ class ImageGeneratorTool(BaseTool):
             logger.warning(f"ImageGeneratorTool: Error loading image LLM settings: {e}")
             return (None, None)
     
-    def _generate_with_openai(self, prompt: str, reference_images: Optional[List[str]] = None, style: Optional[str] = None) -> Optional[str]:
-        """Generate image using OpenAI DALL-E."""
+    def _generate_with_openai(
+        self,
+        prompt: str,
+        model: str,
+        reference_images: Optional[List[str]] = None,
+        style: Optional[str] = None,
+    ) -> Optional[str]:
+        """Generate image using the selected OpenAI image model."""
         try:
             from openai import OpenAI
             from distr.core.settings import load_settings_from_db
@@ -210,11 +216,11 @@ class ImageGeneratorTool(BaseTool):
                 # Note: DALL-E 3 doesn't support direct image input, so we describe the reference
                 # For true image-to-image, would need DALL-E 2 or other models
             
-            logger.info(f"Generating image with OpenAI DALL-E: {enhanced_prompt[:100]}...")
-            
-            # Use DALL-E 3 (or DALL-E 2 if specified)
+            model_id = (model or "gpt-image-1").strip() or "gpt-image-1"
+            logger.info(f"Generating image with OpenAI {model_id}: {enhanced_prompt[:100]}...")
+
             response = client.images.generate(
-                model="dall-e-3",  # or "dall-e-2"
+                model=model_id,
                 prompt=enhanced_prompt,
                 n=1,
                 size="1024x1024",  # Options: "1024x1024", "1024x1792", "1792x1024"
@@ -550,7 +556,7 @@ class ImageGeneratorTool(BaseTool):
         image_b64 = None
 
         if provider_key == "openai":
-            image_b64 = self._generate_with_openai(prompt, valid_ref_images, style)
+            image_b64 = self._generate_with_openai(prompt, image_model, valid_ref_images, style)
         elif provider_key == "ollama":
             image_b64 = self._generate_with_ollama(prompt, image_model, valid_ref_images, style)
         elif provider_key == "openrouter":
@@ -658,4 +664,3 @@ class ImageGeneratorTool(BaseTool):
             return result_message
         else:
             return f"Error: Image was generated but failed to save to {final_output_path}. Please check file permissions."
-

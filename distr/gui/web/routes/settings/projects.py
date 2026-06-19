@@ -603,33 +603,60 @@ def register_routes(router, templates):
                 "models": [],
                 "source": "ide",
                 "message": "IDE backends choose the model inside the editor.",
+                "kind": "ide",
+                "supports_model_picker": False,
             }
         model_backend = backend_id
         if model_backend == "cursor":
             models, source, message = _cursor_api_models(settings)
             for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message}
+            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
         if model_backend == "claude_code":
             models, source, message = _anthropic_models(settings)
             for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message}
+            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
         if model_backend == "codex":
             models, source, message = _codex_models(settings)
             for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message}
+            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
         if model_backend == "cline":
             return {
                 "models": [{"id": "auto", "name": "Auto", "provider": "cline", "backend_id": backend_id}],
                 "source": "cline-config",
                 "message": "Default model comes from cline auth; override per task with -m.",
+                "kind": "cli",
+                "supports_model_picker": True,
             }
         if model_backend == "opencode":
             models, source, message = _opencode_models(settings)
             for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message}
+            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
         models = _pi_cli_models(settings)
         for model in models: model["backend_id"] = backend_id
-        return {"models": models, "source": "pi-models", "message": ""}
+        return {"models": models, "source": "pi-models", "message": "", "kind": "cli", "supports_model_picker": True}
+
+    def _enrich_backend_rows(backends: list[dict], settings: dict | None = None) -> list[dict]:
+        from distr.core.project_cli_backends import normalize_backend_id
+        from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+
+        allowed_cli_backend_ids = {"pi", "cursor", "claude_code", "codex", "cline", "opencode"}
+        settings = settings or {}
+        rows: list[dict] = []
+        for backend in backends or []:
+            row = dict(backend or {})
+            backend_id = normalize_backend_id(row.get("id"))
+            if is_ide_backend(backend_id):
+                continue
+            if backend_id not in allowed_cli_backend_ids:
+                continue
+            model_result = _models_for_cli_backend(backend_id, settings)
+            row["id"] = backend_id
+            row["kind"] = "cli"
+            row["supports_model_picker"] = bool(model_result.get("supports_model_picker", True))
+            row["models_source"] = model_result.get("source") or ""
+            row["model_message"] = model_result.get("message") or ""
+            rows.append(row)
+        return rows
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
         if project_id:
@@ -902,6 +929,8 @@ def register_routes(router, templates):
             "message": model_result.get("message") or "",
             "current_provider": current_provider,
             "current_model": current_model,
+            "backend_kind": model_result.get("kind") or "cli",
+            "supports_model_picker": bool(model_result.get("supports_model_picker", True)),
         })
 
     @router.get("/projects/{project_id}/cli/preflight")
@@ -995,8 +1024,11 @@ def register_routes(router, templates):
     async def get_cli_backends():
         """Return all supported project coding CLI backends and setup state."""
         from distr.core.project_cli_backends import get_backend_statuses
+        from distr.core.settings import load_settings_from_db
 
-        return JSONResponse(get_backend_statuses())
+        payload = get_backend_statuses()
+        payload["backends"] = _enrich_backend_rows(payload.get("backends") or [], load_settings_from_db())
+        return JSONResponse(payload)
 
     @router.get("/projects/{project_id}/cli-backends")
     async def get_project_cli_backends(project_id: int):
@@ -1004,12 +1036,15 @@ def register_routes(router, templates):
         from distr.core.db import get_session
         from distr.core.db.projects import Project
         from distr.core.project_cli_backends import get_backend_statuses
+        from distr.core.settings import load_settings_from_db
 
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
-            return JSONResponse(get_backend_statuses(_backend_id_for_project(project)))
+            payload = get_backend_statuses(_backend_id_for_project(project))
+            payload["backends"] = _enrich_backend_rows(payload.get("backends") or [], load_settings_from_db())
+            return JSONResponse(payload)
 
     @router.post("/projects/{project_id}/cli-backends/{backend_id}/setup")
     async def setup_project_cli_backend(project_id: int, backend_id: str):

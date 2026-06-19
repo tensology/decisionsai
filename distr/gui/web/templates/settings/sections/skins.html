@@ -4,17 +4,18 @@
         <p class="text-sm text-gray-400">Select and customize your oracle skin</p>
     </div>
 
-    <div class="space-y-6">
-        <!-- Size slider (universal) -->
-        <div class="flex items-center justify-center gap-3 max-w-sm mx-auto">
-            <label class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Size</label>
-            <input type="range" id="skins_oracle_size" min="4" max="10" value="9" step="1"
-                   class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-            <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
+    <div id="skins_content_wrap" class="relative space-y-6">
+        <div id="skins_loading_overlay" class="hidden absolute inset-0 z-20 rounded-lg bg-[#1a1f3a]/92 backdrop-blur-sm">
+            <div class="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-center">
+                <svg class="animate-spin h-8 w-8 text-[#f97316]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                    <path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8V1a11 11 0 00-11 11h3zm2 5.3A8 8 0 014 12H1a11 11 0 003.4 7.9l1.6-2.6z"></path>
+                </svg>
+                <div id="skins_loading_text" class="text-sm font-medium text-white">Loading skins...</div>
+            </div>
         </div>
-
         <!-- Oracle Settings -->
-        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <div class="hidden border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
             <h3 class="text-lg font-semibold text-white mb-4">Oracle Settings</h3>
             <div class="grid grid-cols-2 gap-6">
                 <div>
@@ -181,6 +182,32 @@
 
         <!-- Skin Detail Panel (shown when a skin is clicked) -->
         <div id="skin_detail_panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden">
+            <div class="mb-4 flex flex-nowrap items-center gap-4">
+                <div class="flex w-[120px] flex-shrink-0 justify-start">
+                    <button type="button" id="skin_detail_back"
+                            class="px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
+                        ← Back
+                    </button>
+                </div>
+                <div class="flex min-w-0 flex-1 items-center justify-center gap-3">
+                    <label for="skins_oracle_size" class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Size</label>
+                    <input type="range" id="skins_oracle_size" min="4" max="10" value="9" step="1"
+                           class="h-1 min-w-0 flex-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                    <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
+                </div>
+                <div class="flex w-[76px] flex-shrink-0 justify-end">
+                    <button type="button" id="skin_detail_save"
+                            class="px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
+                        Save
+                    </button>
+                </div>
+                <div class="flex w-[76px] flex-shrink-0 justify-end">
+                    <button type="button" id="skin_detail_load"
+                            class="px-3 py-1.5 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">
+                        Load
+                    </button>
+                </div>
+            </div>
             <!-- Oracle detail: GIF picker -->
             <div id="oracle_detail" class="hidden">
                 <div class="flex items-center gap-4 mb-4">
@@ -245,12 +272,6 @@
                             <p id="skin_preview_filename" class="text-xs text-gray-500 mt-1 truncate text-center"></p>
                         </div>
                     </div>
-                </div>
-                <div class="mt-4 flex justify-end">
-                    <button type="button" id="skin_editor_save"
-                            class="px-5 py-2 rounded-md text-sm font-medium bg-[#10a37f] text-white hover:bg-[#0d8c6d] transition-colors">
-                        Save
-                    </button>
                 </div>
             </div>
         </div>

@@ -616,6 +616,28 @@ class FileDropMixin:
                         # Don't emit chat_message_added signal for hidden messages (UI shouldn't show them)
                         signal_manager.chat_updated.emit(current_chat)
                         logger.info(f"✅ Saved file drop notification to chat {current_chat} (hidden from UI, visible to LLM)")
+
+                        # Also surface a compact visible activity item in the chat timeline
+                        # so the user can see that the drop was accepted without exposing the
+                        # full hidden LLM context block.
+                        try:
+                            from distr.core.workflow.chat_trace import record_chat_workflow_event
+
+                            record_chat_workflow_event(
+                                int(current_chat),
+                                "file_drop",
+                                status="completed",
+                                workflow_name="Oracle",
+                                phase="attachments",
+                                summary=(
+                                    f"Oracle received {len(items_to_show)} dropped item(s): "
+                                    + ", ".join(os.path.basename(path) or path for path in items_to_show[:5])
+                                    + (f" and {len(items_to_show) - 5} more" if len(items_to_show) > 5 else "")
+                                ),
+                            )
+                            logger.info(f"✅ Recorded visible file drop activity for chat {current_chat}")
+                        except Exception as activity_error:
+                            logger.warning(f"Could not record visible file drop activity: {activity_error}")
                     else:
                         logger.warning("No current chat available for file drop notification")
                 except Exception as e:
@@ -654,4 +676,3 @@ class FileDropMixin:
                 
         except Exception as e:
             logger.error(f"Error notifying agent about dropped files: {e}", exc_info=True)
-

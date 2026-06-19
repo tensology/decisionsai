@@ -42,7 +42,25 @@ class OpenAICompatibleLLMService(BaseLLMService):
     """
 
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
+    _TOOL_EXECUTION_TIMEOUT_SEC = 90.0
     _tool_execution_in_progress = False
+
+    async def _run_tool_with_timeout(self, tool, func_args: dict, func_name: str):
+        """Run a blocking tool in the executor with a hard timeout."""
+        loop = asyncio.get_running_loop()
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, lambda t=tool, a=func_args: t._run(**a)),
+                timeout=self._TOOL_EXECUTION_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"Tool '{func_name}' timed out after {self._TOOL_EXECUTION_TIMEOUT_SEC:.0f} seconds"
+            ) from exc
+
+    async def _push_pipeline_frame(self, frame):
+        """Push a frame through the active pipeline direction."""
+        await self.push_frame(frame, getattr(self, "_pipeline_direction", None))
 
     async def _generate_response(self):
         """Orchestrator: stream → tool calls → feed results back → repeat until done.
@@ -74,7 +92,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 if await self._execute_fast_action(fast_action, current_chat_id):
                     return
 
-            await self.push_frame(LLMFullResponseStartFrame())
+            await self._push_pipeline_frame(LLMFullResponseStartFrame())
             current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
@@ -117,15 +135,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     from distr.core.agent.tool_audio_timing import wait_before_tool_side_effects
 
                     ack = "Working on it."
-                    await self.push_frame(TextFrame(text=ack))
-                    await self.push_frame(LLMFullResponseEndFrame())
+                    await self._push_pipeline_frame(TextFrame(text=ack))
+                    await self._push_pipeline_frame(LLMFullResponseEndFrame())
                     await wait_before_tool_side_effects(self, ack, end_current_utterance=False)
                 else:
                     self._speak_acknowledgment(last_user_msg, tool_calls)
                 # The acknowledgment's EndFrame closes the TTS transport session.
                 # Push a new StartFrame so follow-up text (after tool execution)
                 # is recognized as a new response by the transport/pipeline.
-                await self.push_frame(LLMFullResponseStartFrame())
+                await self._push_pipeline_frame(LLMFullResponseStartFrame())
             elif tool_calls and full_content.strip():
                 from distr.core.agent.tool_audio_timing import wait_before_tool_side_effects
 
@@ -230,7 +248,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             self._emit_telegram_response(full_content, follow_up_content)
             needs_end_frame = self._cleanup_generation(end_frame_sent, full_content, follow_up_content)
             if needs_end_frame:
-                await self.push_frame(LLMFullResponseEndFrame())
+                await self._push_pipeline_frame(LLMFullResponseEndFrame())
 
     def _refresh_system_prompt_for_generation(self):
         """Rebuild the first system message with latest dropped-files context."""
@@ -430,7 +448,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         # can merge words across chunks (e.g. "step " + "one" -> "stepone").
                         tts_chunk = clean_text_for_tts(delta.content, strip_whitespace=False)
                         if tts_chunk:
-                            await self.push_frame(TextFrame(text=tts_chunk))
+                            await self._push_pipeline_frame(TextFrame(text=tts_chunk))
                     if self.event_queue and not tool_call_detected and display_chunk:
                         self.event_queue.put(('chat_stream_token', {'token': display_chunk}), block=False)
 
@@ -578,10 +596,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 tool = self._tools_dict[func_name]
                 status = "completed"
                 try:
-                    loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
-                        None, lambda t=tool, a=func_args: t._run(**a)
-                    )
+                    result = await self._run_tool_with_timeout(tool, func_args, func_name)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -736,10 +751,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if func_name in self._tools_dict:
                 tool = self._tools_dict[func_name]
                 try:
-                    loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
-                        None, lambda t=tool, a=func_args: t._run(**a)
-                    )
+                    result = await self._run_tool_with_timeout(tool, func_args, func_name)
                     result_str = str(result)
 
                     if hasattr(threading.current_thread(), 'suppress_tts_for_tool_chain'):
@@ -966,9 +978,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
             cleaned = clean_text_for_tts(content)
             if cleaned and cleaned.strip():
                 try:
-                    asyncio.ensure_future(self.push_frame(LLMFullResponseStartFrame()))
-                    asyncio.ensure_future(self.push_frame(TextFrame(text=cleaned)))
-                    asyncio.ensure_future(self.push_frame(LLMFullResponseEndFrame()))
+                    asyncio.ensure_future(self._push_pipeline_frame(LLMFullResponseStartFrame()))
+                    asyncio.ensure_future(self._push_pipeline_frame(TextFrame(text=cleaned)))
+                    asyncio.ensure_future(self._push_pipeline_frame(LLMFullResponseEndFrame()))
                 except Exception as e:
                     logger.debug("Could not push follow-up TTS frame: %s", e)
 
@@ -1032,8 +1044,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
             for msg in reversed(self._messages):
                 role = msg.get("role")
                 if role == "assistant" and (msg.get("content") or "").strip():
-                    await self.push_frame(LLMFullResponseStartFrame())
-                    await self.push_frame(LLMFullResponseEndFrame())
+                    await self._push_pipeline_frame(LLMFullResponseStartFrame())
+                    await self._push_pipeline_frame(LLMFullResponseEndFrame())
                     return True
                 if role == "tool":
                     break
@@ -1055,8 +1067,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
             return True
         elif is_silent:
             # Tool asked for no voice UI — close the segment without speaking \"Done\".
-            await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(LLMFullResponseEndFrame())
+            await self._push_pipeline_frame(LLMFullResponseStartFrame())
+            await self._push_pipeline_frame(LLMFullResponseEndFrame())
             return True
         elif tool_result_text:
             # We have a meaningful tool result — use it as the response instead of "Done"
@@ -1071,15 +1083,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 else:
                     line_count = tts_text.count('\n') + 1
                     tts_text = f"{first_line} ... and {line_count - 1} more lines."
-            await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(TextFrame(text=tts_text))
+            await self._push_pipeline_frame(LLMFullResponseStartFrame())
+            await self._push_pipeline_frame(TextFrame(text=tts_text))
             fallback = tool_result_text
         else:
-            await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(TextFrame(text=generic_ack))
+            await self._push_pipeline_frame(LLMFullResponseStartFrame())
+            await self._push_pipeline_frame(TextFrame(text=generic_ack))
             fallback = generic_ack
 
-        await self.push_frame(LLMFullResponseEndFrame())
+        await self._push_pipeline_frame(LLMFullResponseEndFrame())
 
         if self.chat_manager:
             chat = self.chat_manager.get_current_chat()
@@ -1095,10 +1107,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
             return False
 
         fallback = "I'm sorry, I didn't understand that. Could you please rephrase your question?"
-        await self.push_frame(LLMFullResponseStartFrame())
+        await self._push_pipeline_frame(LLMFullResponseStartFrame())
         if not getattr(self, '_is_telegram_request', False):
-            await self.push_frame(TextFrame(text=fallback))
-        await self.push_frame(LLMFullResponseEndFrame())
+            await self._push_pipeline_frame(TextFrame(text=fallback))
+        await self._push_pipeline_frame(LLMFullResponseEndFrame())
 
         self._save_assistant_message(fallback)
         self._telegram_fallback_text = fallback
