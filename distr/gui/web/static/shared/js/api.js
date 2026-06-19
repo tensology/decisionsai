@@ -53,7 +53,7 @@
      * @param {string} [type]   - "success" (default), "error", "warning", or "info"
      * @param {object} [opts]   - Optional overrides: { id, duration }
      */
-    function showSnackbar(message, type, opts) {
+function showSnackbar(message, type, opts) {
         type = type || "success";
         opts = opts || {};
         var id = opts.id || "shared-snackbar";
@@ -69,7 +69,7 @@
         el.id = id;
         el.style.cssText =
             "position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);" +
-            "z-index:9999;padding:0.75rem 1.25rem;border-radius:0.5rem;" +
+            "z-index:2147483647;padding:0.75rem 1.25rem;border-radius:0.5rem;" +
             "color:#fff;font-size:0.875rem;font-weight:500;" +
             "box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity 0.3s;";
         if (opts.multiline) {

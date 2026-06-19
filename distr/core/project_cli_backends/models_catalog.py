@@ -12,12 +12,141 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def model_entry(model_id: str, provider: str, name: str | None = None) -> dict[str, str]:
+def model_entry(
+    model_id: str,
+    provider: str,
+    name: str | None = None,
+    *,
+    free: bool | None = None,
+    tier: str = "",
+    scope: str = "available",
+    supports_chat: bool | None = None,
+    reason: str = "",
+) -> dict[str, Any]:
     model_id = (model_id or "").strip()
-    return {
+    row: dict[str, Any] = {
         "id": model_id,
         "name": (name or model_id).strip() or model_id,
         "provider": provider,
+        "scope": scope,
+        "tier": tier,
+        "reason": reason,
+    }
+    if free is not None:
+        row["free"] = bool(free)
+    if supports_chat is not None:
+        row["supports_chat"] = bool(supports_chat)
+    return row
+
+
+def enrich_model_entry(item: dict[str, Any], *, default_free: bool | None = None) -> dict[str, Any]:
+    """Attach stable catalog metadata used by CLI pickers."""
+    out = dict(item or {})
+    model_id = (out.get("id") or "").strip().lower()
+    provider = (out.get("provider") or "").strip().lower()
+    if "free" not in out and "is_free" in out:
+        out["free"] = bool(out.get("is_free"))
+    if "free" not in out and "(free)" in str(out.get("name") or "").lower():
+        out["free"] = True
+    if "scope" not in out or not out.get("scope"):
+        out["scope"] = "available"
+    if "free" not in out and default_free is not None:
+        out["free"] = bool(default_free)
+    if "free" not in out:
+        out["free"] = provider in {"ollama", "local", "pi"} or model_id.endswith(":latest")
+    if "tier" not in out or not out.get("tier"):
+        if any(token in model_id for token in ("pro", "opus", "max", "large", "70b")):
+            out["tier"] = "high"
+        elif any(token in model_id for token in ("mini", "nano", "fast", "small", "0.5b", "0.6b", "1.7b")):
+            out["tier"] = "low"
+        else:
+            out["tier"] = "standard"
+    if "supports_chat" not in out:
+        out["supports_chat"] = not any(token in model_id for token in ("embed", "embedding", "whisper", "tts", "vision-only"))
+    if "local" not in out:
+        out["local"] = provider in {"ollama", "local", "pi"}
+    if "usable" not in out:
+        out["usable"] = bool(out.get("supports_chat", True)) and str(out.get("id") or "").strip() != ""
+    return out
+
+
+def model_catalog_summary(models: list[dict]) -> dict[str, int]:
+    rows = [enrich_model_entry(m) for m in (models or [])]
+    return {
+        "total": len(rows),
+        "usable": sum(1 for m in rows if m.get("usable")),
+        "scoped": sum(1 for m in rows if m.get("scope") == "scoped"),
+        "free": sum(1 for m in rows if m.get("free")),
+        "local": sum(1 for m in rows if m.get("local")),
+        "chat": sum(1 for m in rows if m.get("supports_chat", True)),
+    }
+
+
+def recommend_cli_model(
+    models: list[dict],
+    *,
+    prefer_free: bool = True,
+    prefer_local: bool = True,
+    prefer_scoped: bool = True,
+    complexity: str = "medium",
+) -> dict[str, Any]:
+    rows = [enrich_model_entry(m) for m in (models or [])]
+    usable = [
+        m for m in rows
+        if m.get("usable") and str(m.get("id") or "").strip() and str(m.get("id")) != "auto"
+    ]
+    if not usable:
+        return {
+            "id": "auto",
+            "provider": "",
+            "reason": "No concrete chat-capable models were available, so Auto is safest.",
+            "score": 0,
+        }
+
+    wanted_tier = "high" if str(complexity or "").lower() == "high" else ("low" if str(complexity or "").lower() == "low" else "standard")
+
+    def score(model: dict[str, Any]) -> int:
+        model_id = str(model.get("id") or "").lower()
+        tier = str(model.get("tier") or "standard").lower()
+        value = 0
+        if prefer_scoped and model.get("scope") == "scoped":
+            value += 80
+        if prefer_free and model.get("free"):
+            value += 60
+        if prefer_local and model.get("local"):
+            value += 50
+        if tier == wanted_tier:
+            value += 25
+        if "coder" in model_id or "codex" in model_id or "code" in model_id:
+            value += 20
+        if wanted_tier == "high" and tier == "high":
+            value += 20
+        if wanted_tier == "low" and tier == "low":
+            value += 15
+        if tier == "high" and wanted_tier == "low":
+            value -= 15
+        return value
+
+    selected = sorted(usable, key=score, reverse=True)[0]
+    reasons: list[str] = []
+    if selected.get("scope") == "scoped":
+        reasons.append("scoped/enabled")
+    if selected.get("free"):
+        reasons.append("free")
+    if selected.get("local"):
+        reasons.append("local")
+    if selected.get("supports_chat", True):
+        reasons.append("chat-capable")
+    if selected.get("tier"):
+        reasons.append(f"{selected.get('tier')} tier")
+    return {
+        "id": selected.get("id") or "",
+        "name": selected.get("name") or selected.get("id") or "",
+        "provider": selected.get("provider") or "",
+        "backend_id": selected.get("backend_id") or "",
+        "reason": "Selected because it is " + ", ".join(reasons) + ".",
+        "score": score(selected),
+        "model": selected,
     }
 
 
@@ -29,7 +158,7 @@ def dedupe_model_entries(models: list[dict]) -> list[dict]:
         if not mid or mid in seen:
             continue
         seen.add(mid)
-        out.append(item)
+        out.append(enrich_model_entry(item))
     return out
 
 
@@ -46,7 +175,7 @@ def models_from_pi_json() -> list[dict]:
                     mid = (m.get("id") or "").strip()
                     mname = (m.get("name") or mid).strip()
                     if mid:
-                        models.append(model_entry(mid, prov_name, mname))
+                        models.append(model_entry(mid, prov_name, mname, scope="scoped"))
     except Exception as exc:
         logger.debug("Failed to load models.json: %s", exc)
 
@@ -60,7 +189,7 @@ def models_from_pi_json() -> list[dict]:
     ]
     for mid in builtin_openai:
         if not any(m["id"] == mid for m in models):
-            models.append(model_entry(mid, "openai"))
+            models.append(model_entry(mid, "openai", free=False, scope="available"))
     return models
 
 
@@ -100,7 +229,13 @@ def settings_backed_cloud_models(settings: dict) -> list[dict]:
                 mid = str(item).strip()
                 name = mid
             if mid:
-                rows.append(model_entry(mid, provider, name))
+                rows.append(model_entry(
+                    mid,
+                    provider,
+                    name,
+                    free=bool(item.get("is_free")) if isinstance(item, dict) and "is_free" in item else False,
+                    scope="available",
+                ))
     return rows
 
 
@@ -115,7 +250,7 @@ def pi_cli_models(settings: dict | None = None) -> list[dict]:
 
 
 def opencode_models(settings: dict) -> tuple[list[dict], str, str]:
-    fallback = [model_entry("auto", "opencode", "Auto")]
+    fallback = [model_entry("auto", "opencode", "Auto", scope="scoped")]
     executable = shutil.which("opencode")
     if not executable:
         merged = dedupe_model_entries(fallback + pi_cli_models(settings))

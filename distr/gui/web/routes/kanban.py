@@ -1538,6 +1538,7 @@ class TicketCreate(BaseModel):
     source_contact: Optional[str] = None
     source_url: Optional[str] = None
     source_label: Optional[str] = None
+    context_notes: Optional[str] = None
 
 class TicketUpdate(BaseModel):
     title: Optional[str] = None
@@ -1604,6 +1605,8 @@ class LaneTicketCopyItem(BaseModel):
     time_estimate: Optional[str] = None
     time_spent: Optional[str] = None
     complexity: Optional[str] = None
+    media: Optional[List[dict]] = None
+    todos: Optional[List[dict]] = None
 
 
 class BulkCopyLaneToBoard(BaseModel):
@@ -1641,6 +1644,8 @@ class CopyExternalTicket(BaseModel):
     # the project link lives on the external board config — set this to attach + .tickets export.
     linked_project_id: Optional[int] = None
     linked_workflow_id: Optional[int] = None
+    media: Optional[List[dict]] = None
+    todos: Optional[List[dict]] = None
 
 
 class SendToWorkflowRequest(BaseModel):
@@ -1665,6 +1670,11 @@ class SendToCliRequest(BaseModel):
     instruction: Optional[str] = None
     codex_reasoning_effort: Optional[str] = None
     codex_service_tier: Optional[str] = None
+
+
+class TicketTimeSpentAddRequest(BaseModel):
+    seconds: int
+    source: Optional[str] = None
 
 
 class ExternalTicketCreate(BaseModel):
@@ -1729,11 +1739,28 @@ def _resolve_local_destination_lane(session, board_id: int, lane_id: Optional[in
     return board, lane
 
 
-def _find_existing_external_copy(session, external_source: Optional[str], external_id: Optional[str]):
+def _find_existing_external_copy(
+    session,
+    external_source: Optional[str],
+    external_id: Optional[str],
+    *,
+    board_id: Optional[int] = None,
+    workflow_id: Optional[int] = None,
+):
     if not external_source or not external_id:
         return None
+    def _scope(query):
+        if board_id is not None:
+            query = (
+                query.join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
+                .filter(KanbanLane.board_id == int(board_id))
+            )
+        if workflow_id is not None:
+            query = query.filter(KanbanTicket.linked_workflow_id == int(workflow_id))
+        return query
+
     existing = (
-        session.query(KanbanTicket)
+        _scope(session.query(KanbanTicket))
         .filter(
             KanbanTicket.external_source == external_source,
             KanbanTicket.external_id == external_id,
@@ -1744,7 +1771,7 @@ def _find_existing_external_copy(session, external_source: Optional[str], extern
     if existing:
         return existing
     return (
-        session.query(KanbanTicket)
+        _scope(session.query(KanbanTicket))
         .filter(
             KanbanTicket.source_provider == normalize_source_provider(external_source),
             KanbanTicket.source_external_id == external_id,
@@ -1771,15 +1798,27 @@ def _copy_external_ticket_into_lane(
     linked_project_id: Optional[int] = None,
     linked_workflow_id: Optional[int] = None,
     source_chat_id: Optional[int] = None,
+    media: Optional[List[dict]] = None,
+    todos: Optional[List[dict]] = None,
     position: Optional[int] = None,
     skip_workflow_linked: bool = False,
 ) -> dict:
     """Insert or reuse a copied external ticket on a local lane."""
     effective_project_id = linked_project_id if linked_project_id is not None else board.default_project_id
     effective_workflow_id = linked_workflow_id if linked_workflow_id is not None else board.default_workflow_id
-    existing_external_ticket = _find_existing_external_copy(session, external_source, external_id)
+    existing_external_ticket = _find_existing_external_copy(
+        session,
+        external_source,
+        external_id,
+        board_id=board.id,
+        workflow_id=effective_workflow_id,
+    )
     if existing_external_ticket:
-        if existing_external_ticket.linked_workflow_id:
+        if (
+            existing_external_ticket.linked_workflow_id
+            and effective_workflow_id
+            and int(existing_external_ticket.linked_workflow_id) != int(effective_workflow_id)
+        ):
             if skip_workflow_linked:
                 return {
                     "id": existing_external_ticket.id,
@@ -1802,6 +1841,8 @@ def _copy_external_ticket_into_lane(
             existing_external_ticket.workflow_queue_position = (
                 (max_queue_pos[0] if max_queue_pos and max_queue_pos[0] is not None else -1) + 1
             )
+        _attach_external_media_links(session, existing_external_ticket.id, external_source, media or [])
+        _attach_external_todos(session, existing_external_ticket.id, todos or [])
         return {"id": existing_external_ticket.id, "reused": True, "skipped": False}
     if position is None:
         max_pos = max([t.position for t in dest_lane.tickets], default=-1)
@@ -1828,7 +1869,115 @@ def _copy_external_ticket_into_lane(
     )
     session.add(ticket)
     session.flush()
+    _attach_external_media_links(session, ticket.id, external_source, media or [])
+    _attach_external_todos(session, ticket.id, todos or [])
     return {"id": ticket.id, "reused": False, "skipped": False}
+
+
+def _external_media_link_url(source: Optional[str], media: dict) -> str:
+    url = str((media or {}).get("url") or (media or {}).get("download_url") or (media or {}).get("content") or "").strip()
+    thumb = str((media or {}).get("thumbnail") or "").strip()
+    link = url or thumb
+    if (source or "").lower().strip() == "jira" and link and _jira_url_should_proxy(link):
+        return _jira_proxy_src_attr(link)
+    return link
+
+
+def _attach_external_media_links(session, ticket_id: int, source: Optional[str], media_rows: List[dict]) -> None:
+    seen: set[str] = {
+        str(row[0] or "").strip()
+        for row in session.query(KanbanTicketLink.url).filter(KanbanTicketLink.ticket_id == ticket_id).all()
+        if str(row[0] or "").strip()
+    }
+    for idx, media in enumerate(media_rows or [], start=1):
+        if not isinstance(media, dict):
+            continue
+        url = _external_media_link_url(source, media)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        name = (
+            str(media.get("name") or media.get("filename") or media.get("title") or "").strip()
+            or f"Attachment {idx}"
+        )
+        session.add(KanbanTicketLink(ticket_id=ticket_id, title=f"Attachment: {name}", url=url))
+
+
+def _attach_external_todos(session, ticket_id: int, todo_rows: List[dict]) -> None:
+    existing: set[str] = {
+        str(row[0] or "").strip().lower()
+        for row in session.query(KanbanTicketTodo.text).filter(KanbanTicketTodo.ticket_id == ticket_id).all()
+        if str(row[0] or "").strip()
+    }
+    max_pos_row = (
+        session.query(KanbanTicketTodo.position)
+        .filter(KanbanTicketTodo.ticket_id == ticket_id)
+        .order_by(KanbanTicketTodo.position.desc())
+        .first()
+    )
+    next_pos = (max_pos_row[0] if max_pos_row and max_pos_row[0] is not None else -1) + 1
+    for todo in todo_rows or []:
+        if not isinstance(todo, dict):
+            continue
+        text = str(todo.get("text") or todo.get("title") or todo.get("name") or "").strip()
+        if not text or text.lower() in existing:
+            continue
+        existing.add(text.lower())
+        session.add(KanbanTicketTodo(
+            ticket_id=ticket_id,
+            text=text,
+            done=bool(todo.get("done") or todo.get("completed") or False),
+            position=next_pos,
+        ))
+        next_pos += 1
+
+
+def _overlay_external_board_local_ticket_cache(provider: str, lanes: list[dict]) -> None:
+    external_ids: set[str] = set()
+    for lane in lanes or []:
+        if not isinstance(lane, dict):
+            continue
+        for card in lane.get("tickets", []):
+            if isinstance(card, dict) and card.get("id"):
+                external_ids.add(str(card.get("id")))
+    if not external_ids:
+        return
+    with get_session() as s:
+        rows = (
+            s.query(KanbanTicket)
+            .filter(
+                KanbanTicket.external_source == provider,
+                KanbanTicket.external_id.in_(external_ids),
+            )
+            .order_by(KanbanTicket.modified_date.desc(), KanbanTicket.id.desc())
+            .all()
+        )
+        by_external_id: dict[str, KanbanTicket] = {}
+        for row in rows:
+            key = str(row.external_id or "")
+            if key and key not in by_external_id:
+                by_external_id[key] = row
+        for lane in lanes or []:
+            if not isinstance(lane, dict):
+                continue
+            for card in lane.get("tickets", []):
+                if not isinstance(card, dict):
+                    continue
+                cached = by_external_id.get(str(card.get("id") or ""))
+                if not cached:
+                    continue
+                local_todos = [
+                    {"id": td.id, "text": td.text, "done": td.done, "position": td.position}
+                    for td in cached.todos
+                ]
+                card["local_cache_id"] = cached.id
+                card["context_notes"] = cached.context_notes or ""
+                card["priority"] = cached.priority or card.get("priority") or "medium"
+                card["complexity"] = normalize_ticket_complexity(cached.complexity)
+                card["links"] = [{"id": l.id, "title": l.title, "url": l.url} for l in cached.links]
+                card["files"] = [_ticket_file_payload(cached.id, f) for f in cached.files]
+                if local_todos:
+                    card["todos"] = local_todos
 
 
 def _external_board_detail_fetch_worker(provider: str, board_id: str, key: str) -> None:
@@ -2283,6 +2432,7 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                     break
     except Exception as e:
         logger.warning("External board detail fetch error: %s", e)
+    _overlay_external_board_local_ticket_cache(provider, lanes)
     response_data = {"name": board_name, "url": board_url, "lanes": lanes, "can_create_ticket": True}
     if active_sprint:
         response_data["active_sprint_id"] = active_sprint.get("id")
@@ -2912,6 +3062,31 @@ def create_routes():
                 }
             )
 
+    @router.post("/tickets/tickets/{ticket_id}/time-spent/add")
+    async def add_ticket_time_spent(ticket_id: int, payload: TicketTimeSpentAddRequest):
+        from distr.core.kanban.ticket_time_tracking import add_time_spent_seconds
+
+        seconds = max(0, int(payload.seconds or 0))
+        if seconds <= 0:
+            raise HTTPException(422, "seconds must be greater than 0")
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+            t.time_spent = add_time_spent_seconds(t.time_spent, seconds)
+            try:
+                s.add(KanbanTicketAuditEntry(
+                    ticket_id=t.id,
+                    execution_lane="cli",
+                    status="completed",
+                    summary=f"Added CLI time: {seconds}s",
+                    details=payload.source or "workflow_cli",
+                ))
+            except Exception:
+                pass
+            s.commit()
+            return JSONResponse({"success": True, "id": t.id, "time_spent": t.time_spent or ""})
+
     @router.get("/tickets/tickets/{ticket_id}/execution-sessions")
     async def get_ticket_execution_sessions(ticket_id: int):
         with get_session() as s:
@@ -3113,12 +3288,54 @@ def create_routes():
                     t.description or "",
                     requested=payload.complexity,
                 )
+            response_ticket_id = ticket_id
             if "linked_workflow_id" in fields_set or "linked_project_id" in fields_set:
                 lane = orm_get_by_id(s, KanbanLane,t.lane_id) if t.lane_id else None
                 board = orm_get_by_id(s, KanbanBoard,lane.board_id) if lane else None
                 if "linked_workflow_id" in fields_set:
                     if payload.linked_workflow_id and t.linked_workflow_id and t.linked_workflow_id != payload.linked_workflow_id:
-                        raise HTTPException(409, "Ticket is already linked to a workflow")
+                        from distr.core.db.workflow import AutoWorkflow
+
+                        linked_workflow_exists = (
+                            s.query(AutoWorkflow.id)
+                            .filter(AutoWorkflow.id == int(t.linked_workflow_id))
+                            .first()
+                        )
+                        if linked_workflow_exists:
+                            existing_queue_copy = _find_existing_external_copy(
+                                s,
+                                "database",
+                                str(t.id),
+                                board_id=board.id if board else None,
+                                workflow_id=payload.linked_workflow_id,
+                            )
+                            if existing_queue_copy:
+                                return JSONResponse({"success": True, "id": existing_queue_copy.id, "reused": True})
+                            max_lane_position = max([item.position for item in lane.tickets], default=-1) if lane else (t.position or 0)
+                            queue_copy = KanbanTicket(
+                                lane_id=t.lane_id,
+                                title=t.title or "",
+                                description=t.description or "",
+                                priority=t.priority or "medium",
+                                complexity=resolve_ticket_complexity(t.title or "", t.description or "", requested=t.complexity),
+                                time_estimate=t.time_estimate or "",
+                                time_spent=t.time_spent or "",
+                                position=max_lane_position + 1,
+                                external_source="database",
+                                external_id=str(t.id),
+                                source_provider="database",
+                                source_external_id=str(t.id),
+                                source_label="database",
+                                linked_workflow_id=payload.linked_workflow_id,
+                                linked_project_id=payload.linked_project_id or t.linked_project_id or (board.default_project_id if board else None),
+                                source_chat_id=t.source_chat_id,
+                            )
+                            s.add(queue_copy)
+                            s.flush()
+                            response_ticket_id = queue_copy.id
+                            t = queue_copy
+                        else:
+                            t.workflow_queue_position = 0
                     # Empty selection in UI means "inherit from board default".
                     t.linked_workflow_id = (
                         payload.linked_workflow_id
@@ -3156,23 +3373,26 @@ def create_routes():
                 t.workflow_queue_position = payload.workflow_queue_position
             if "source_chat_id" in fields_set:
                 t.source_chat_id = payload.source_chat_id
+            if "context_notes" in fields_set:
+                t.context_notes = payload.context_notes or ""
             _apply_ticket_source_fields(t, payload)
             # For local tickets linked to external providers, keep external card/issue in sync immediately on save.
-            _sync_local_ticket_to_external(
-                source=t.external_source,
-                external_id=t.external_id,
-                title=t.title or "",
-                description=t.description or "",
-                time_estimate=t.time_estimate,
-                time_spent=t.time_spent,
-            )
+            if payload.title is not None or payload.description is not None or payload.time_estimate is not None or payload.time_spent is not None:
+                _sync_local_ticket_to_external(
+                    source=t.external_source,
+                    external_id=t.external_id,
+                    title=t.title or "",
+                    description=t.description or "",
+                    time_estimate=t.time_estimate,
+                    time_spent=t.time_spent,
+                )
             try:
                 from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
 
                 hook_ensure_workspace("tickets", ticket_id, reason="update_ticket")
             except Exception:
                 pass
-            return JSONResponse({"success": True})
+            return JSONResponse({"success": True, "id": response_ticket_id})
 
     @router.put("/tickets/tickets/{ticket_id}/move")
     async def move_ticket(ticket_id: int, payload: TicketMove):
@@ -3545,6 +3765,8 @@ def create_routes():
                 linked_project_id=payload.linked_project_id,
                 linked_workflow_id=payload.linked_workflow_id,
                 source_chat_id=payload.source_chat_id,
+                media=payload.media or [],
+                todos=payload.todos or [],
             )
             ticket = s.query(KanbanTicket).filter_by(id=copy_result["id"]).first()
             result = {
@@ -3726,6 +3948,8 @@ def create_routes():
                         external_url=item.external_url,
                         linked_project_id=payload.linked_project_id,
                         linked_workflow_id=payload.linked_workflow_id,
+                        media=item.media or [],
+                        todos=item.todos or [],
                         position=max_pos + 1 + idx,
                         skip_workflow_linked=True,
                     )

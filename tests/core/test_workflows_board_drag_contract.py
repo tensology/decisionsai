@@ -182,6 +182,20 @@ def test_workflows_detail_tabs_use_loop_and_conditional_runs():
     assert "function syncWorkflowRunsTabVisibility()" in js
 
 
+def test_workflow_queue_row_exposes_loop_then_play_with_visible_loop_ticket_context():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+
+    assert 'id="wf-tab-run-timer"' in html
+    assert "wf-workflow-ticket-loop" in js
+    assert "wf-workflow-ticket-run" in js
+    assert js.index("wf-workflow-ticket-loop") < js.index("wf-workflow-ticket-run")
+    assert "openWorkflowTicketLoop(ticketId, rowEl)" in js
+    assert 'id="wf-loop-run-ticket-context"' in html
+    assert "Ticket in run" in js
+    assert 'mainEl.innerHTML = loopRunTicketContextHtml(contextRun, "main");' in js
+
+
 def test_workflow_lane_add_all_disables_when_nothing_left_to_add():
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
     target_block = js.split("function hasWorkflowQueueTarget()", 1)[1].split(

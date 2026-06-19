@@ -204,6 +204,16 @@ class IntegrationMessageBus:
         except Exception:
             logger.exception("IntegrationMessageBus: text sink raised (%s)", platform)
 
+    @staticmethod
+    def _with_recent_reply_context(text: str, platform: str) -> str:
+        try:
+            from distr.core.human_engagement import build_remote_reply_context_preamble
+
+            return build_remote_reply_context_preamble(text, platform=platform)
+        except Exception:
+            logger.debug("IntegrationMessageBus: failed to attach remote reply context", exc_info=True)
+            return text
+
     def deliver_telegram_user_input(
         self,
         *,
@@ -215,6 +225,7 @@ class IntegrationMessageBus:
     ) -> None:
         """Locked mapping update + delegate to Qt/agent sink (outside lock)."""
         sink: AgentTextSink | None
+        routed_text = self._with_recent_reply_context(text, "telegram")
         metadata = self._telegram_metadata(speak, input_type)
         queued = False
         with self._route_lock:
@@ -231,7 +242,7 @@ class IntegrationMessageBus:
             sink = self._text_sink
             if sink is None:
                 self._queue_pending_sink_call_unlocked(
-                    text=text,
+                    text=routed_text,
                     is_telegram=True,
                     image_path=image_path,
                     speak=metadata,
@@ -243,7 +254,7 @@ class IntegrationMessageBus:
                 "IntegrationMessageBus: text sink not configured — Telegram input queued"
             )
             return
-        self._deliver_to_sink(sink, text, True, image_path, metadata, "telegram")
+        self._deliver_to_sink(sink, routed_text, True, image_path, metadata, "telegram")
 
     def ingest_incoming(self, msg: IncomingMessage) -> None:
         """Route normalized inbound text to the agent (Discord / Slack / WhatsApp / etc.).
@@ -253,6 +264,7 @@ class IntegrationMessageBus:
         """
         sink: AgentTextSink | None
         img = msg.attachments[0] if msg.attachments else None
+        routed_text = self._with_recent_reply_context(msg.text, msg.platform)
         metadata = self._connector_metadata(msg.platform, msg.speak)
         queued = False
         with self._route_lock:
@@ -269,7 +281,7 @@ class IntegrationMessageBus:
             sink = self._text_sink
             if sink is None:
                 self._queue_pending_sink_call_unlocked(
-                    text=msg.text,
+                    text=routed_text,
                     is_telegram=True,
                     image_path=img,
                     speak=metadata,
@@ -279,7 +291,7 @@ class IntegrationMessageBus:
         if queued:
             logger.warning("IntegrationMessageBus: text sink not configured — %s input queued", msg.platform)
             return
-        self._deliver_to_sink(sink, msg.text, True, img, metadata, msg.platform)
+        self._deliver_to_sink(sink, routed_text, True, img, metadata, msg.platform)
 
 
 def get_integration_message_bus() -> IntegrationMessageBus:

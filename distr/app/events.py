@@ -28,6 +28,7 @@ from distr.core.human_engagement import (
     EngagementIntent,
     HumanEngagementService,
     is_low_value_status_text,
+    record_remote_reply_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,9 +229,9 @@ class EventHandlerMixin:
             self._tts_player_generation = 0
         if event == 'tts_started':
             source = data.get("source") if isinstance(data, dict) else None
-            if source not in ("transport", "direct_desktop"):
+            if source != "transport":
                 logger.info(
-                    "[EVENT QUEUE] Provider tts_started received before confirmed audio output; "
+                    "[EVENT QUEUE] Non-transport tts_started received before confirmed audio output; "
                     "deferring player open until transport audio starts (source=%s)",
                     source or "provider",
                 )
@@ -978,6 +979,7 @@ class EventHandlerMixin:
             )
             return
 
+        self._record_remote_reply_context(data, text, channel="remote")
         deliver_remote_tts(
             self.telegram_manager,
             text,
@@ -987,6 +989,34 @@ class EventHandlerMixin:
             cleanup_files=self._telegram_cleanup_temp_files,
             send_text_first=True,
         )
+
+    def _record_remote_reply_context(self, data: dict, outbound_text: str, *, channel: str) -> None:
+        try:
+            record_remote_reply_context(
+                platform="telegram",
+                channel=channel,
+                workflow_id=data.get("workflow_id"),
+                run_id=data.get("run_id"),
+                step_id=data.get("step_id"),
+                ticket_id=data.get("ticket_id"),
+                board_id=data.get("board_id"),
+                project_id=data.get("project_id"),
+                execution_session_id=data.get("execution_session_id"),
+                ticket_title=str(data.get("ticket_title") or data.get("engagement_ticket_title") or ""),
+                workflow_title=str(data.get("workflow_title") or data.get("engagement_workflow_title") or ""),
+                step_title=str(data.get("step_title") or data.get("engagement_step_title") or ""),
+                state_fingerprint=str(data.get("state_fingerprint") or data.get("engagement_state_fingerprint") or ""),
+                outbound_text=outbound_text or str(data.get("text") or data.get("voice_note_message") or ""),
+                metadata={
+                    "engagement_kind": data.get("engagement_kind"),
+                    "engagement_source": data.get("engagement_source"),
+                    "engagement_priority": data.get("engagement_priority"),
+                    "input_type": data.get("input_type"),
+                    "provider": data.get("provider"),
+                },
+            )
+        except Exception:
+            logger.debug("[Telegram] Failed to record remote reply context", exc_info=True)
 
     def _integration_reply_chat_id(self):
         """Internal chat id for routing connector replies (Discord / Slack)."""
@@ -1198,6 +1228,11 @@ class EventHandlerMixin:
                 text=text_to_send,
                 audio_file_path=str(audio_file) if audio_file and audio_file.exists() else None,
                 screenshot_path=str(screenshot_file) if screenshot_file and screenshot_file.exists() else None,
+            )
+            self._record_remote_reply_context(
+                data,
+                text_to_send or data.get("text") or data.get("voice_note_message") or "",
+                channel="telegram",
             )
 
         # Cleanup temp files

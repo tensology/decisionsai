@@ -169,7 +169,7 @@
 .chevron.open { transform: rotate(90deg); }
 .wf-live-run { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
 @keyframes wf-spin { to { transform: rotate(360deg); } }
-.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; }
+.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100000; align-items: center; justify-content: center; }
 .kb-modal-overlay:not(.hidden) { display: flex; }
 #wf-board-edit-modal {
     position: fixed;
@@ -198,6 +198,9 @@
     flex-wrap: wrap;
     gap: 12px 20px;
     align-items: flex-start;
+}
+#kb-modal-external-meta:empty {
+    display: none !important;
 }
 
 .kb-ticket-meta-grid--two-col {
@@ -280,6 +283,8 @@
 }
 .kb-modal-action-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.375rem; }
 .kb-modal-action-btn:hover { background: rgba(255,255,255,0.08); }
+.kb-modal-source-icon { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.375rem; color: #f97316; border: 1px solid transparent; }
+.kb-modal-source-icon:hover { color: #fdba74; background: rgba(249,115,22,0.1); border-color: rgba(249,115,22,0.35); }
 .wf-wa-media-preview-btn { cursor: pointer; }
 .wf-wa-media-preview-btn:hover { border-color: rgba(249,115,22,0.55); background: rgba(249,115,22,0.08); }
 /* Ticket board list view (shared with Ticket Boards page) */
@@ -421,7 +426,7 @@ body.wf-board-pointer-dragging * {
     top: 0;
     left: 0;
     margin: 0;
-    z-index: 99999;
+    z-index: 99990;
     pointer-events: none;
     filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.42));
 }
@@ -653,6 +658,18 @@ body.wf-board-pointer-dragging * {
     margin-left: auto;
 }
 .wf-ticket-list-surface .kb-card-action-tip { position: relative; display: inline-flex; }
+.wf-ticket-list-surface .wf-ticket-time-display {
+    min-width: 4.9rem;
+    justify-content: center;
+    align-items: center;
+    min-height: 1.55rem;
+    padding: 0 0.55rem;
+    border-radius: 0.42rem;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(109, 95, 140, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    letter-spacing: 0.02em;
+}
 .wf-ticket-list-surface .kb-card-action-btn {
     position: relative;
     color: #ffffff;
@@ -671,6 +688,8 @@ body.wf-board-pointer-dragging * {
 .wf-ticket-list-surface .kb-card-action-btn:hover { color: #ffffff; filter: brightness(1.08); }
 .wf-ticket-list-surface .kb-act-copy { background: rgba(59,130,246,0.28); }
 .wf-ticket-list-surface .kb-act-agent { background: rgba(249,115,22,0.32); border-color: rgba(249,115,22,0.55); }
+.wf-ticket-list-surface .kb-act-loop { background: rgba(251,146,60,0.22); border-color: rgba(249,115,22,0.7); color: #fdba74; }
+.wf-ticket-list-surface .kb-act-play { background: rgba(249,115,22,0.34); border-color: rgba(249,115,22,0.7); color: #fff7ed; }
 .wf-ticket-list-surface .kb-act-add-workflow { background: rgba(34,197,94,0.30); border-color: rgba(34,197,94,0.55); }
 .wf-ticket-list-surface .kb-act-workflow { background: rgba(14,165,233,0.30); }
 .wf-loop-list-row-wrap .wf-loop-step-drag-handle { cursor: grab; color: #9ca3af; padding: 0 2px; }
@@ -777,7 +796,7 @@ body.wf-board-pointer-dragging * {
 #wf-detail-tab-scroll.wf-tab-scroll--loop {
     overflow: hidden;
     min-height: 0;
-    padding: 0 0 0 1.5rem;
+    padding: 0;
 }
 #wf-detail-tab-scroll.wf-tab-scroll--loop.wf-tab-scroll--feed-expanded {
     padding-left: 0;
@@ -802,6 +821,7 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
     display: flex;
     flex-direction: column;
+    padding-left: 1.5rem;
     padding-right: 0.75rem;
     padding-top: 0.75rem;
     padding-bottom: 0.75rem;
@@ -821,6 +841,30 @@ body.wf-board-pointer-dragging * {
 }
 #wf-loop-list-view:not(.hidden) {
     overflow-y: auto;
+}
+.wf-loop-run-ticket-context {
+    flex-shrink: 0;
+    margin: 0;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+}
+.wf-loop-ticket-kicker {
+    display: inline-flex;
+    align-items: center;
+    margin-bottom: 0.45rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #fdba74;
+}
+.wf-loop-ticket-title {
+    font-size: 0.98rem;
+    line-height: 1.35;
+    font-weight: 700;
+    color: #f8fafc;
 }
 .wf-loop-feed-panel {
     flex: 0 0 min(300px, 32%);
@@ -894,14 +938,13 @@ body.wf-board-pointer-dragging * {
 .wf-loop-run-ticket-context,
 .wf-loop-feed-ticket-context {
     flex-shrink: 0;
-    border: 1px solid rgba(34, 197, 94, 0.42);
-    background: rgba(34, 197, 94, 0.08);
-    color: #d1fae5;
+    color: inherit;
 }
 .wf-loop-run-ticket-context {
-    margin-top: 0.75rem;
-    padding: 0.55rem 0.7rem;
-    border-radius: 0.375rem;
+    margin: 0;
+    width: 100%;
+    padding: 0;
+    border-radius: 0;
 }
 .wf-loop-feed-ticket-context {
     margin: 0 0.65rem 0.45rem;
@@ -963,6 +1006,113 @@ body.wf-board-pointer-dragging * {
     padding: 0.12rem 0.35rem;
     border-radius: 0.25rem;
     background: rgba(255, 255, 255, 0.07);
+}
+.wf-loop-ticket-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    min-height: 3.15rem;
+    padding: 0.45rem 0.55rem 0.45rem 0.35rem;
+    border-bottom: 1px solid rgba(249, 115, 22, 0.45);
+    background: linear-gradient(90deg, rgba(249, 115, 22, 0.12), rgba(249, 115, 22, 0.035));
+    box-shadow: inset 0 -1px 0 rgba(249, 115, 22, 0.18);
+}
+.wf-loop-ticket-banner-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 0 0 auto;
+}
+.wf-loop-ticket-banner-badges .kb-metric-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 1.1rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    text-transform: lowercase;
+    white-space: nowrap;
+}
+.wf-loop-ticket-banner-badges .kb-pri-critical { background: #dc2626; border-color: #991b1b; }
+.wf-loop-ticket-banner-badges .kb-pri-high { background: #ea580c; border-color: #c2410c; }
+.wf-loop-ticket-banner-badges .kb-pri-medium { background: #ca8a04; border-color: #a16207; }
+.wf-loop-ticket-banner-badges .kb-pri-low { background: #16a34a; border-color: #15803d; }
+.wf-loop-ticket-banner-badges .kb-cx-low { background: #1e40af; border-color: #1e3a8a; color: #eff6ff; }
+.wf-loop-ticket-banner-badges .kb-cx-medium { background: #9a3412; border-color: #7c2d12; color: #fff7ed; }
+.wf-loop-ticket-banner-badges .kb-cx-high { background: #7f1d1d; border-color: #991b1b; color: #fef2f2; }
+.wf-loop-ticket-banner-badges .kb-metric-badge:not(.kb-complexity-numeral) {
+    flex: 0 0 auto;
+    min-width: 2.35rem;
+    max-width: none;
+    padding: 0 0.35rem;
+}
+.wf-loop-ticket-banner-badges .kb-metric-badge.kb-complexity-numeral {
+    flex: 0 0 1.65rem;
+    min-width: 1.65rem;
+    width: 1.65rem;
+}
+.wf-loop-ticket-banner-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.wf-loop-ticket-banner-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: #fff;
+    font-size: 0.84rem;
+    font-weight: 650;
+    line-height: 1.2;
+}
+.wf-loop-ticket-banner-desc {
+    max-width: 100%;
+    overflow: hidden;
+    color: rgba(209, 213, 219, 0.72);
+    font-size: 0.72rem;
+    line-height: 1.2;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.wf-loop-ticket-banner-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex: 0 0 auto;
+    min-width: 9.5rem;
+    gap: 0.25rem;
+}
+.wf-loop-ticket-banner-actions .kb-card-action-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    min-width: 1.5rem;
+    padding: 0;
+    border-radius: 0.32rem;
+    border: 1px solid rgba(255,255,255,0.22);
+    color: #fff;
+    opacity: 1;
+    line-height: 1;
+}
+.wf-loop-ticket-banner-actions .kb-card-action-btn:hover {
+    color: #fff;
+    filter: brightness(1.08);
+}
+.wf-loop-ticket-banner-actions .kb-act-copy { background: rgba(59,130,246,0.28); }
+.wf-loop-ticket-banner-actions .kb-act-agent { background: rgba(249,115,22,0.32); border-color: rgba(249,115,22,0.55); }
+.wf-loop-ticket-banner-actions .kb-act-loop { background: rgba(251,146,60,0.22); border-color: rgba(249,115,22,0.7); color: #fdba74; }
+.wf-loop-ticket-banner-actions .kb-act-play { background: rgba(249,115,22,0.34); border-color: rgba(249,115,22,0.7); color: #fff7ed; }
+.wf-loop-ticket-banner-actions .kb-card-action-btn svg {
+    width: 12px;
+    height: 12px;
 }
 .wf-loop-feed-messages {
     flex: 1 1 auto;
@@ -1041,6 +1191,107 @@ body.wf-board-pointer-dragging * {
     margin-top: 0.25rem;
     font-size: 0.6875rem;
     color: #9ca3af;
+}
+.wf-loop-feed-step {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.6rem;
+    background: rgba(15, 23, 42, 0.62);
+    overflow: hidden;
+}
+.wf-loop-feed-step[open] {
+    border-color: rgba(249, 115, 22, 0.34);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+.wf-loop-feed-step-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.65rem;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.wf-loop-feed-step-summary::-webkit-details-marker {
+    display: none;
+}
+.wf-loop-feed-step-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 1.35rem;
+    width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 9999px;
+    background: rgba(249, 115, 22, 0.16);
+    color: #fdba74;
+    font-size: 0.68rem;
+    font-weight: 800;
+}
+.wf-loop-feed-step-title {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    color: #f8fafc;
+    font-size: 0.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wf-loop-feed-step-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 0 0 auto;
+    color: #9ca3af;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.wf-loop-feed-step-state::before {
+    content: "";
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 9999px;
+    background: #6b7280;
+}
+.wf-loop-feed-step--running .wf-loop-feed-step-state {
+    color: #93c5fd;
+}
+.wf-loop-feed-step--running .wf-loop-feed-step-state::before {
+    background: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+.wf-loop-feed-step--waiting .wf-loop-feed-step-state {
+    color: #fcd34d;
+}
+.wf-loop-feed-step--waiting .wf-loop-feed-step-state::before {
+    background: #f59e0b;
+}
+.wf-loop-feed-step--passed .wf-loop-feed-step-state {
+    color: #86efac;
+}
+.wf-loop-feed-step--passed .wf-loop-feed-step-state::before {
+    background: #22c55e;
+}
+.wf-loop-feed-step--failed .wf-loop-feed-step-state {
+    color: #fca5a5;
+}
+.wf-loop-feed-step--failed .wf-loop-feed-step-state::before {
+    background: #ef4444;
+}
+.wf-loop-feed-step-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0 0.55rem 0.6rem;
+}
+.wf-loop-feed-step-empty {
+    margin: 0;
+    padding: 0.45rem 0.15rem 0.1rem;
+    color: #6b7280;
+    font-size: 0.7rem;
+    line-height: 1.35;
 }
 .wf-loop-feed-compose {
     flex-shrink: 0;
@@ -1172,13 +1423,14 @@ body.wf-board-pointer-dragging * {
 .wf-cli-panel {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    min-height: 420px;
-    height: calc(100vh - 17rem);
+    gap: 0;
+    min-height: 0;
+    height: 100%;
 }
 .wf-cli-terminal-wrap {
+    position: relative;
     flex: 1 1 auto;
-    min-height: 280px;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1186,9 +1438,74 @@ body.wf-board-pointer-dragging * {
     background: #0d1117;
     overflow: hidden;
 }
-.wf-cli-transcript {
-    flex: 1;
+.wf-cli-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem);
+    gap: 0.75rem;
+    align-items: stretch;
+    flex: 1 1 auto;
     min-height: 0;
+    padding-top: 0.75rem;
+}
+.wf-cli-model-inventory {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.5rem;
+    background: #0d1117;
+    padding: 0.75rem;
+}
+.wf-cli-model-inventory-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #9ca3af;
+}
+.wf-cli-model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.wf-cli-model-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.4rem;
+    padding: 0.45rem 0.5rem;
+    background: rgba(21, 32, 84, 0.45);
+    color: #e5e7eb;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+.wf-cli-model-item:hover {
+    border-color: rgba(249, 115, 22, 0.45);
+    background: rgba(249, 115, 22, 0.12);
+}
+.wf-cli-model-item.is-active {
+    border-color: rgba(249, 115, 22, 0.8);
+    box-shadow: inset 3px 0 0 #f97316;
+}
+.wf-cli-model-item.is-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.wf-cli-model-flags {
+    flex-shrink: 0;
+    color: #fdba74;
+    font-size: 0.65rem;
+}
+.wf-cli-transcript {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     overflow-y: auto;
     padding: 0.75rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -1199,13 +1516,148 @@ body.wf-board-pointer-dragging * {
 .wf-cli-transcript .wf-cli-line-user { color: #fdba74; margin-bottom: 0.5rem; white-space: pre-wrap; }
 .wf-cli-transcript .wf-cli-line-assistant { color: #d1d5db; margin-bottom: 0.75rem; white-space: pre-wrap; }
 .wf-cli-transcript .wf-cli-line-system { color: #6b7280; margin-bottom: 0.5rem; font-style: italic; }
-.wf-cli-input-row {
+.wf-cli-activity {
     display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: #9ca3af;
+    font-size: 0.72rem;
+}
+.wf-cli-activity-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 9999px;
+    background: #6b7280;
+}
+.wf-cli-activity.is-busy .wf-cli-activity-dot {
+    background: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14);
+}
+.wf-cli-activity.is-editing .wf-cli-activity-dot {
+    background: #f97316;
+    box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.14);
+}
+.wf-cli-activity.is-ready .wf-cli-activity-dot {
+    background: #22c55e;
+}
+.wf-cli-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem);
     gap: 0.5rem;
     padding: 0.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.5rem;
     background: rgba(21, 32, 84, 0.5);
     flex-shrink: 0;
+    align-items: center;
+}
+.wf-cli-input-main,
+.wf-cli-input-models {
+    display: flex;
+    min-width: 0;
+    gap: 0.5rem;
+    align-items: center;
+}
+.wf-cli-backend-select {
+    width: 6.5rem;
+    flex: 0 0 6.5rem;
+}
+.wf-cli-connect-btn {
+    width: 5.75rem;
+    flex: 0 0 5.75rem;
+}
+.wf-cli-model-select {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.wf-cli-key-toggle {
+    width: 3rem;
+    flex: 0 0 3rem;
+}
+.wf-cli-send-btn {
+    width: 3.75rem;
+    flex: 0 0 3.75rem;
+}
+.wf-cli-key-panel {
+    display: none;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.5rem;
+    border: 1px solid rgba(249, 115, 22, 0.28);
+    border-top: 0;
+    border-radius: 0 0 0.5rem 0.5rem;
+    background: rgba(15, 23, 42, 0.86);
+}
+.wf-cli-key-panel.is-open {
+    display: flex;
+}
+.wf-cli-key-meta {
+    min-width: 12rem;
+    color: #d1d5db;
+    font-size: 0.72rem;
+    line-height: 1.25;
+}
+.wf-cli-key-meta strong {
+    display: block;
+    color: #fff;
+    font-size: 0.75rem;
+}
+.wf-cli-key-meta span {
+    color: #9ca3af;
+}
+.wf-cli-key-input {
+    flex: 1 1 auto;
+    min-width: 12rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.375rem;
+    background: #152054;
+    color: #fff;
+    font-size: 0.8rem;
+}
+.wf-cli-key-input:focus {
+    border-color: #f97316;
+    outline: none;
+}
+.wf-cli-status-pill {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0;
+    align-self: center;
+}
+@media (max-width: 1100px) {
+    .wf-cli-input-row,
+    .wf-cli-workspace {
+        grid-template-columns: 1fr;
+    }
+    .wf-cli-model-inventory {
+        max-height: 12rem;
+    }
+    .wf-cli-key-panel {
+        flex-wrap: wrap;
+    }
+}
+.wf-cli-status-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 9999px;
+    background: #6b7280;
+    box-shadow: 0 0 0 3px rgba(107, 114, 128, 0.12);
+}
+.wf-cli-panel.is-connected .wf-cli-status-dot,
+.wf-cli-panel.is-running .wf-cli-status-dot {
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
+}
+.wf-cli-panel.is-error .wf-cli-status-dot {
+    background: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
 }
 .wf-loop-view-toggle {
     padding: 0.35rem 0.75rem;
@@ -1726,7 +2178,7 @@ body.wf-split-dragging * {
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                             <span>Stop</span>
                         </button>
-                        <button type="button" id="wf-harness-handoff-btn" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10" title="Copy workflow memory instructions for your IDE or CLI harness">Work in your IDE</button>
+                        <button type="button" id="wf-harness-handoff-btn" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10" title="Open the agent handoff package for this workflow">Open agent handoff</button>
                         <button type="button" id="wf-run-all-btn" class="px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Run all</button>
                     </div>
                 </div>
@@ -1742,6 +2194,7 @@ body.wf-split-dragging * {
                     </div>
                     <!-- Loop tab -->
                     <div id="wf-tab-loop" class="wf-tab-content hidden" hidden>
+                        <div id="wf-loop-run-ticket-context" class="wf-loop-run-ticket-context hidden" aria-live="polite"></div>
                         <div class="wf-loop-layout">
                             <div class="wf-loop-main">
                                 <div class="wf-loop-toolbar">
@@ -1759,7 +2212,6 @@ body.wf-split-dragging * {
                                 <div id="wf-loop-list-view" class="wf-loop-view hidden">
                                     <div id="wf-steps-list" class="space-y-2"></div>
                                 </div>
-                                <div id="wf-loop-run-ticket-context" class="wf-loop-run-ticket-context hidden" aria-live="polite"></div>
                             </div>
                             <aside id="wf-loop-feed-panel" class="wf-loop-feed-panel" aria-label="Run activity feed">
                                 <div class="wf-loop-feed-compose">
@@ -1784,26 +2236,54 @@ body.wf-split-dragging * {
                     </div>
                     <!-- CLI tab (project terminal) -->
                     <div id="wf-tab-cli" class="wf-tab-content hidden" hidden>
-                        <div class="wf-cli-panel">
-                            <div class="flex flex-wrap items-center justify-end gap-2 mb-2">
-                                <select id="wf-cli-backend-select" class="px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs min-w-[10rem]" title="Coding backend" disabled>
-                                    <option value="pi">Pi</option>
-                                </select>
-                                <button type="button" id="wf-cli-connect" class="px-2.5 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Connect</button>
-                                <span id="wf-cli-status-dot" class="w-2 h-2 rounded-full bg-gray-500" title="Not connected"></span>
-                                <span id="wf-cli-status-text" class="text-xs text-gray-400">Not connected</span>
-                            </div>
-                            <div class="wf-cli-terminal-wrap">
-                                <div class="wf-cli-input-row">
-                                    <input type="text" id="wf-cli-input" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Choose a CLI and click Connect to load models and send prompts." disabled>
-                                    <select id="wf-cli-model-select" class="px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs min-w-[12rem]" disabled title="Available after Connect">
+                        <div id="wf-cli-panel" class="wf-cli-panel">
+                            <div class="wf-cli-input-row">
+                                <div class="wf-cli-input-main">
+                                    <select id="wf-cli-backend-select" class="wf-cli-backend-select px-2 py-2 bg-[#152054] border border-white/20 rounded text-white text-xs" title="Coding backend" disabled>
+                                        <option value="pi">Pi</option>
+                                    </select>
+                                    <button type="button" id="wf-cli-connect" class="wf-cli-connect-btn px-2.5 py-2 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Connect</button>
+                                    <input type="text" id="wf-cli-input" class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Choose a CLI and click Connect to load models and send prompts." disabled>
+                                </div>
+                                <div class="wf-cli-input-models">
+                                    <select id="wf-cli-model-select" class="wf-cli-model-select px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs" disabled title="Available after Connect">
                                         <option value="">Connect CLI first</option>
                                     </select>
-                                    <button type="button" id="wf-cli-send" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c] disabled:opacity-40" disabled>Send</button>
+                                    <button type="button" id="wf-cli-key-toggle" class="wf-cli-key-toggle px-2.5 py-2 rounded border border-white/20 text-gray-200 text-xs font-medium hover:border-[#f97316]/60 hover:text-[#fdba74]" title="Swap API key or local endpoint for this CLI/model">Key</button>
+                                    <button type="button" id="wf-cli-send" class="wf-cli-send-btn px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c] disabled:opacity-40" disabled>Send</button>
                                 </div>
-                                <div id="wf-cli-transcript" class="wf-cli-transcript">
-                                    <div class="wf-cli-line-system">Output appears here when you send a prompt or when a workflow run dispatches work.</div>
+                            </div>
+                            <div id="wf-cli-key-panel" class="wf-cli-key-panel" hidden>
+                                <div class="wf-cli-key-meta">
+                                    <strong id="wf-cli-key-title">CLI key</strong>
+                                    <span id="wf-cli-key-status">Choose a CLI or model.</span>
                                 </div>
+                                <input id="wf-cli-key-input" class="wf-cli-key-input" type="password" autocomplete="off" placeholder="Paste replacement key or endpoint">
+                                <button type="button" id="wf-cli-key-save" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]">Save & reconnect</button>
+                            </div>
+                            <div class="wf-cli-workspace">
+                                <div class="wf-cli-terminal-wrap">
+                                    <div class="wf-cli-status-pill" aria-live="polite" title="CLI connection status">
+                                        <span id="wf-cli-status-dot" class="wf-cli-status-dot" title="Not connected"></span>
+                                        <span id="wf-cli-status-text" class="sr-only">Not connected</span>
+                                    </div>
+                                    <div id="wf-cli-activity" class="wf-cli-activity is-ready">
+                                        <span class="wf-cli-activity-dot" aria-hidden="true"></span>
+                                        <span id="wf-cli-activity-text">Idle. Connect a CLI, then send a prompt.</span>
+                                    </div>
+                                    <div id="wf-cli-transcript" class="wf-cli-transcript">
+                                        <div class="wf-cli-line-system">Output appears here when you send a prompt or when a workflow run dispatches work.</div>
+                                    </div>
+                                </div>
+                                <aside id="wf-cli-model-inventory" class="wf-cli-model-inventory" aria-label="CLI model inventory">
+                                    <div class="wf-cli-model-inventory-title">
+                                        <span>Models</span>
+                                        <span id="wf-cli-model-count">0</span>
+                                    </div>
+                                    <div id="wf-cli-model-list" class="wf-cli-model-list">
+                                        <p class="text-xs text-gray-500 italic">Connect a CLI to load its models.</p>
+                                    </div>
+                                </aside>
                             </div>
                         </div>
                     </div>
@@ -1911,21 +2391,24 @@ body.wf-split-dragging * {
     <div class="kb-modal p-0">
         <div class="flex items-start justify-between gap-4 px-5 pt-4 pb-0">
             <h3 id="kb-modal-title" class="text-lg font-semibold text-white leading-snug line-clamp-2">Ticket</h3>
-            <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+            <div class="flex items-center gap-3">
+                <a id="kb-modal-url-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden kb-modal-source-icon" title="Open source ticket" aria-label="Open source ticket">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                        <path d="M15 3h6v6"></path>
+                        <path d="M10 14 21 3"></path>
+                    </svg>
+                </a>
+                <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+            </div>
         </div>
         <div class="flex gap-1 border-b border-white/20 px-5 mt-3">
             <button type="button" class="kb-tm-tab active px-3 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-ttab="details">Details</button>
             <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="links">Links</button>
             <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="todo">To-do</button>
-            <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="report">Report</button>
-            <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="advanced">Advanced</button>
         </div>
         <div class="kb-ticket-modal-body">
             <div id="kb-tm-tab-details" class="kb-tm-pane p-5 space-y-3">
-                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30 kb-ticket-meta-grid kb-ticket-meta-grid--four-col"></div>
-                <div id="kb-modal-source-meta" class="hidden mb-3 p-3 bg-[#152054] border border-white/10 rounded">
-                    <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid kb-ticket-meta-grid--four-col"></div>
-                </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Title</label>
                     <textarea id="kb-modal-ticket-title" rows="2" class="w-full min-h-[3.25rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
@@ -1945,6 +2428,27 @@ body.wf-split-dragging * {
                     </div>
                 </div>
                 <p class="text-xs text-gray-500">Use duration values like <code>30m</code>, <code>2h</code>, or <code>1d 3h</code>.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 border-t border-white/10 pt-3">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                        <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
+                            <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                            <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
+                            <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                            <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Complexity</label>
+                        <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="auto" selected>Auto - Orchestrator assesses</option>
+                            <option value="low">I - Low</option>
+                            <option value="medium">II - Medium</option>
+                            <option value="high">III - High</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Used by workflow and CLI routing.</p>
+                    </div>
+                </div>
             </div>
             <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-5 space-y-4">
                 <div>
@@ -1975,56 +2479,9 @@ body.wf-split-dragging * {
                     </div>
                 </div>
             </div>
-            <div id="kb-tm-tab-report" class="kb-tm-pane hidden p-5 space-y-4">
-                <div class="flex items-center justify-between gap-3">
-                    <div class="text-sm text-gray-400">Ticket Execution Report</div>
-                    <button type="button" id="kb-modal-clear-report" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Clear Report</button>
-                </div>
-                <div id="kb-modal-audit-summary" class="grid grid-cols-3 gap-2"></div>
-                <div id="kb-modal-audit-runs" class="space-y-3"></div>
-                <div class="text-xs text-gray-500">Full audit trail</div>
-                <div id="kb-modal-audit-entries" class="space-y-2"></div>
-            </div>
-            <div id="kb-tm-tab-advanced" class="kb-tm-pane hidden p-5 space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                        <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
-                            <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
-                            <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
-                            <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
-                            <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-1">Complexity</label>
-                        <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="auto" selected>Auto - Orchestrator assesses</option>
-                            <option value="low">I - Low</option>
-                            <option value="medium">II - Medium</option>
-                            <option value="high">III - High</option>
-                        </select>
-                        <p class="text-xs text-gray-500 mt-1">Used by workflow and CLI routing.</p>
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">Link to</label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="text-xs text-gray-500">Workflow</label>
-                            <select id="kb-modal-link-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none"></select>
-                        </div>
-                        <div>
-                            <label class="text-xs text-gray-500">Project</label>
-                            <select id="kb-modal-link-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none"></select>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
         <div class="flex justify-end items-center gap-4 px-5 py-3 border-t border-white/20">
             <div class="flex gap-2">
-                <button type="button" id="kb-modal-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
                 <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
                 <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
             </div>
@@ -2307,8 +2764,21 @@ body.wf-split-dragging * {
         '<p class="wf-config-section-label">Executors</p>',
         '<p class="wf-config-section-hint">Green badges are ready. Click an orange badge for install help.</p>',
         '<div id="wf-global-exec-backend-pills" class="flex flex-wrap gap-1"></div>',
+        '<p class="wf-config-section-label mt-2">Model selection</p>',
+        '<p class="wf-config-section-hint">These options apply when a workflow step leaves its model set to Auto.</p>',
+        '<div class="space-y-2 rounded border border-white/10 bg-[#0d1333]/45 p-3">',
+        '<div class="wf-config-field-row wf-config-field-row-checkbox"><span class="wf-config-field-label">Auto model routing</span>',
+        '<label class="wf-config-checkbox"><input id="wf-config-run-auto-route-models" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
+        '<span>Let workflow steps choose an eligible model when set to Auto</span></label></div>',
+        '<div class="wf-config-field-row wf-config-field-row-checkbox"><span class="wf-config-field-label">Free models</span>',
+        '<label class="wf-config-checkbox"><input id="wf-config-run-free-only" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
+        '<span>Use free models unless the step explicitly picks a model</span></label></div>',
+        '<div class="wf-config-field-row wf-config-field-row-checkbox"><span class="wf-config-field-label">Local first</span>',
+        '<label class="wf-config-checkbox"><input id="wf-config-run-prefer-local" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
+        '<span>Prefer local models for Auto routes</span></label></div>',
+        '</div>',
         '<p class="wf-config-section-label mt-1">Ticket complexity routing</p>',
-        '<p class="wf-config-section-hint">Low / medium / high routes for every workflow run. IDE executors can set a CLI fallback below.</p>',
+        '<p class="wf-config-section-hint">Low / medium / high CLI routes for every workflow run.</p>',
         '<div id="wf-global-exec-routes" class="space-y-3"></div>',
         '</div>',
         '</div>',

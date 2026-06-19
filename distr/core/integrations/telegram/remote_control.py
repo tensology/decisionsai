@@ -253,9 +253,24 @@ class TelegramRemoteControlMixin:
                             self._cancelled_remote_audio_requests = set(
                                 list(self._cancelled_remote_audio_requests)[-50:]
                             )
-                    pending = getattr(self, "_pending_remote_agent_response", None) or {}
-                    if audio_request_id and pending.get("request_id") == audio_request_id:
-                        self._pending_remote_agent_response = None
+                    if audio_request_id:
+                        pending_queue = list(
+                            getattr(self, "_pending_remote_agent_responses", []) or []
+                        )
+                        if pending_queue:
+                            pending_queue = [
+                                item
+                                for item in pending_queue
+                                if str((item or {}).get("request_id") or "") != audio_request_id
+                            ]
+                            self._pending_remote_agent_responses = pending_queue
+                            self._pending_remote_agent_response = (
+                                pending_queue[-1] if pending_queue else None
+                            )
+                        else:
+                            pending = getattr(self, "_pending_remote_agent_response", None) or {}
+                            if pending.get("request_id") == audio_request_id:
+                                self._pending_remote_agent_response = None
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -1319,17 +1334,26 @@ class TelegramRemoteControlMixin:
     ) -> None:
         """Store context for routing the next agent response back to remote-app."""
         try:
-            self._pending_remote_agent_response = {
+            ctx = {
                 "request_id": request_id,
                 "source_command": source_command,
                 "mode": mode,
                 "created_at": time.time(),
             }
+            pending_queue = list(
+                getattr(self, "_pending_remote_agent_responses", []) or []
+            )
+            pending_queue.append(ctx)
+            if len(pending_queue) > 25:
+                pending_queue = pending_queue[-25:]
+            self._pending_remote_agent_responses = pending_queue
+            self._pending_remote_agent_response = ctx
             logger.info(
-                "Remote response context set: request_id=%s source=%s mode=%s",
+                "Remote response context queued: request_id=%s source=%s mode=%s depth=%s",
                 request_id,
                 source_command,
                 mode,
+                len(pending_queue),
             )
         except Exception:
             logger.exception("Failed to set remote response context")

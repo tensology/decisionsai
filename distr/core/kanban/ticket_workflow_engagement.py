@@ -49,13 +49,18 @@ def _brief_failure(result_text: str) -> str:
     return sentence or "Check the activity feed for details."
 
 
+def _ticket_subject(ticket_title: str, fallback: str = "the ticket") -> str:
+    clean = re.sub(r"\s+", " ", (ticket_title or "").strip())
+    return clean or fallback
+
+
 def build_run_start_message(
     *,
     ticket_title: str,
     step_name: str,
     step_index: int | None = None,
 ) -> str:
-    return f"{_step_label(step_index, step_name)} has started."
+    return f"{_ticket_subject(ticket_title)}: {_step_label(step_index, step_name)} has started."
 
 
 def build_step_start_message(
@@ -82,8 +87,8 @@ def build_step_done_message(
 ) -> str:
     label = _step_label(step_index, step_name)
     if passed:
-        return f"{label} passed."
-    return f"{label} failed. {_brief_failure(result_text)}"
+        return f"{_ticket_subject(ticket_title)}: {label} passed."
+    return f"{_ticket_subject(ticket_title)}: {label} failed. {_brief_failure(result_text)}"
 
 
 def build_run_done_message(
@@ -97,11 +102,11 @@ def build_run_done_message(
     if warning and "loop" in warning.lower():
         base = "Run stopped in a loop."
     elif normalized == "completed":
-        base = "Run finished."
+        base = f"{_ticket_subject(ticket_title)}: Run finished."
     elif normalized == "cancelled":
-        base = "Run stopped."
+        base = f"{_ticket_subject(ticket_title)}: Run stopped."
     else:
-        base = "Run failed."
+        base = f"{_ticket_subject(ticket_title)}: Run failed."
     if elapsed_label:
         base = f"{base} Elapsed {elapsed_label}."
     return base
@@ -332,6 +337,10 @@ def notify_ticket_workflow_progress(
                     "run_id": run_id,
                     "step_id": step_id,
                     "state_fingerprint": state_fingerprint,
+                    "workflow_id": ctx.get("workflow_id"),
+                    "ticket_id": ctx.get("ticket_id"),
+                    "board_id": ctx.get("board_id"),
+                    "ticket_title": ctx.get("ticket_title"),
                     "explicit_notification_intent": True,
                 },
             ):
@@ -356,6 +365,10 @@ def notify_ticket_workflow_progress(
                             "run_id": run_id,
                             "step_id": step_id,
                             "state_fingerprint": state_fingerprint,
+                            "workflow_id": ctx.get("workflow_id"),
+                            "ticket_id": ctx.get("ticket_id"),
+                            "board_id": ctx.get("board_id"),
+                            "ticket_title": ctx.get("ticket_title"),
                             "allow_voice": decision.format in {"voice", "desktop_tts", "remote_audio"},
                         },
                     ),
@@ -383,7 +396,11 @@ def notify_ticket_workflow_progress(
             step_id=step_id,
             ticket_id=ctx.get("ticket_id"),
             board_id=ctx.get("board_id"),
-            payload={"engagement_kind": "workflow_progress"},
+            payload={
+                "engagement_kind": "workflow_progress",
+                "ticket_title": ctx.get("ticket_title"),
+                "state_fingerprint": state_fingerprint,
+            },
         )
     except Exception:
         logger.debug("ticket workflow engagement ledger write failed", exc_info=True)

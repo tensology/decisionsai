@@ -17,7 +17,7 @@ WORKFLOW_TOOL_REGISTRY: tuple[WorkflowTool, ...] = (
     WorkflowTool("playwright", "Playwright", "Browser automation with Playwright."),
     WorkflowTool("browser_use", "Browser use", "Browser-use agent/tooling for web flows."),
     WorkflowTool("computer_use", "Computer use", "Visual desktop or screen control."),
-    WorkflowTool("cli", "CLI / IDE", "Project CLI, Codex, Cursor, or IDE handoff."),
+    WorkflowTool("cli", "CLI", "Project CLI execution through Pi, Codex, Cursor, Claude Code, or another configured CLI."),
     WorkflowTool("python", "Python", "Python script execution for data, files, or computation."),
     WorkflowTool("shell", "Shell", "Shell command execution."),
     WorkflowTool("http", "HTTP", "HTTP request execution."),
@@ -81,4 +81,3 @@ def normalize_tool_list(tools: object) -> list[str]:
 def tools_for_action(action_type: str) -> list[str]:
     action = str(action_type or "").strip()
     return list(_ACTION_TOOLS.get(action, ()))
-

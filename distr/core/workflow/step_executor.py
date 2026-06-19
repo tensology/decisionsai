@@ -626,6 +626,19 @@ class StepExecutorMixin:
                         except Exception:
                             route = {}
                     route = self._apply_step_harness_overrides(route, config)
+                    wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
+                    try:
+                        from distr.core.project_cli_backends.model_policy import apply_workflow_model_policy
+                        from distr.core.settings import load_settings_from_db
+
+                        route = apply_workflow_model_policy(
+                            route,
+                            workflow=wf,
+                            config=config,
+                            settings=load_settings_from_db(),
+                        )
+                    except Exception:
+                        logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
                     backend_id = route.get("backend") or "pi"
                     from distr.core.project_cli_backends.ide_handoff import is_ide_backend
                     from distr.core.workflow.step_iteration import build_ide_step_instruction
@@ -1091,6 +1104,211 @@ class StepExecutorMixin:
 
     # ── Helpers ──────────────────────────────────────────────────────
 
+    def _build_workflow_execution_packet_context(
+        self,
+        step_data: Dict[str, Any],
+        run_id: Optional[int],
+        workflow_id: Optional[int],
+    ) -> str:
+        """Build the durable DecisionsAI execution packet for project CLI steps."""
+        if run_id is None:
+            return ""
+        try:
+            from distr.core.workspace_memory.paths import (
+                AGENTS_FILE,
+                ACTIVE_FILE,
+                CONTEXT_FILE,
+                HANDOFF_FILE,
+                REFERENCES_DIRNAME,
+                ROUTER_FILE,
+                companion_memory_file,
+                companion_root,
+                projection_memory_file,
+                projection_root,
+            )
+            from distr.core.workspace_memory.reader import load_workspace_context
+            from distr.core.workflow.step_iteration import HARNESS_REPORT_TEMPLATE
+
+            step_id = step_data.get("id")
+            step_name = (step_data.get("name") or f"Step {step_id or ''}").strip()
+            action_type = (step_data.get("action_type") or step_data.get("step_type") or "").strip()
+            project_id: Optional[int] = None
+            board_id: Optional[int] = None
+            ticket_id: Optional[int] = None
+            project_folder = ""
+            project_name = ""
+            run_data: dict[str, Any] = {}
+            workflow_name = ""
+            ticket_title = ""
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if run:
+                    workflow_id = int(run.workflow_id) if run.workflow_id else workflow_id
+                    ticket_id = int(run.ticket_id) if run.ticket_id else None
+                    board_id = int(run.board_id) if getattr(run, "board_id", None) else None
+                    if run.run_data:
+                        try:
+                            run_data = json.loads(run.run_data or "{}") or {}
+                        except Exception:
+                            run_data = {}
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
+                if wf:
+                    workflow_name = (wf.name or "").strip()
+                if not ticket_id and run_data.get("ticket_id") is not None:
+                    try:
+                        ticket_id = int(run_data.get("ticket_id"))
+                    except Exception:
+                        ticket_id = None
+                if run_data.get("project_id") is not None:
+                    try:
+                        project_id = int(run_data.get("project_id"))
+                    except Exception:
+                        project_id = None
+                if ticket_id:
+                    try:
+                        from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+                        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                        if ticket:
+                            ticket_title = (ticket.title or "").strip()
+                            if ticket.linked_project_id and not project_id:
+                                project_id = int(ticket.linked_project_id)
+                            if ticket.lane_id:
+                                lane = db.query(KanbanLane).filter(KanbanLane.id == int(ticket.lane_id)).first()
+                                if lane:
+                                    board_id = board_id or int(lane.board_id)
+                                    if lane.board and lane.board.default_project_id and not project_id:
+                                        project_id = int(lane.board.default_project_id)
+                    except Exception:
+                        logger.debug("_build_workflow_execution_packet_context: ticket lookup failed", exc_info=True)
+                if project_id:
+                    try:
+                        from distr.core.db.projects import Project
+
+                        project = db.query(Project).filter(Project.id == int(project_id)).first()
+                        if project:
+                            project_name = (project.name or "").strip()
+                            project_folder = (project.folder_location or "").strip()
+                    except Exception:
+                        logger.debug("_build_workflow_execution_packet_context: project lookup failed", exc_info=True)
+
+            ctx = load_workspace_context(
+                project_id=project_id,
+                board_id=board_id,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                ticket_id=ticket_id,
+                folder_location=project_folder,
+                ensure=True,
+                include_pickup_brief=True,
+            )
+
+            def _path_line(label: str, value: str) -> str:
+                return f"- {label}: `{value}`" if value else ""
+
+            context_paths: list[str] = []
+            if workflow_id:
+                root = companion_root("workflows", int(workflow_id))
+                context_paths.extend([
+                    _path_line("Workflow agents", str(root / AGENTS_FILE)),
+                    _path_line("Workflow router", str(root / ROUTER_FILE)),
+                    _path_line("Workflow context", str(root / CONTEXT_FILE)),
+                    _path_line("Workflow handoff", str(companion_memory_file("workflows", int(workflow_id), HANDOFF_FILE))),
+                    _path_line("Workflow active memory", str(companion_memory_file("workflows", int(workflow_id), ACTIVE_FILE))),
+                    _path_line("Workflow learned references", str(root / REFERENCES_DIRNAME)),
+                ])
+            if project_id:
+                root = companion_root("projects", int(project_id))
+                context_paths.extend([
+                    _path_line("Project agents", str(root / AGENTS_FILE)),
+                    _path_line("Project handoff", str(companion_memory_file("projects", int(project_id), HANDOFF_FILE))),
+                    _path_line("Project active memory", str(companion_memory_file("projects", int(project_id), ACTIVE_FILE))),
+                    _path_line("Project learned references", str(root / REFERENCES_DIRNAME)),
+                ])
+            if ticket_id:
+                root = companion_root("tickets", int(ticket_id))
+                context_paths.extend([
+                    _path_line("Ticket agents", str(root / AGENTS_FILE)),
+                    _path_line("Ticket handoff", str(companion_memory_file("tickets", int(ticket_id), HANDOFF_FILE))),
+                    _path_line("Ticket active memory", str(companion_memory_file("tickets", int(ticket_id), ACTIVE_FILE))),
+                    _path_line("Ticket learned references", str(root / REFERENCES_DIRNAME)),
+                ])
+            if run_id:
+                root = companion_root("runs", int(run_id))
+                context_paths.extend([
+                    _path_line("Run agents", str(root / AGENTS_FILE)),
+                    _path_line("Run handoff", str(companion_memory_file("runs", int(run_id), HANDOFF_FILE))),
+                    _path_line("Run active memory", str(companion_memory_file("runs", int(run_id), ACTIVE_FILE))),
+                ])
+            if project_folder:
+                repo_root = Path(project_folder).expanduser()
+                context_paths.extend([
+                    _path_line("Projected DecisionsAI agents", str(projection_root(project_folder) / AGENTS_FILE)),
+                    _path_line("Projected DecisionsAI handoff", str(projection_memory_file(project_folder, HANDOFF_FILE))),
+                    _path_line("Repo AGENTS.md", str(repo_root / "AGENTS.md")),
+                ])
+
+            context_paths = [line for line in context_paths if line]
+            router_chain = []
+            for row in ctx.router_chain or []:
+                label = row.get("label") or row.get("entity_type") or "router"
+                path = row.get("path") or ""
+                if path:
+                    router_chain.append(f"- {label}: `{path}`")
+
+            parts = [
+                "# DecisionsAI execution packet",
+                "",
+                "Treat this packet plus the referenced memory files as the source of truth for this workflow step.",
+                "Do not execute this step as a standalone prompt. First load the workflow/project/ticket/run context that applies, then do only the current step.",
+                "",
+                "## Execution identity",
+                "",
+                f"- Workflow: {workflow_name or workflow_id or 'unknown'}",
+                f"- Run ID: {run_id}",
+                f"- Step: {step_name} (id={step_id or 'unknown'}, action={action_type or 'unknown'})",
+                f"- Ticket: {ticket_title or ticket_id or 'none'}",
+                f"- Project: {project_name or project_id or 'unknown'}",
+                f"- Project folder: `{project_folder or 'not set'}`",
+                "",
+                "## Read this context before acting",
+                "",
+            ]
+            parts.extend(context_paths or ["- No filesystem memory paths were resolved. Use the ticket and step context below."])
+            if router_chain:
+                parts.extend(["", "## Router chain", ""])
+                parts.extend(router_chain)
+            if ctx.pickup_brief:
+                parts.extend(["", "## Pickup brief", "", ctx.pickup_brief.strip()[:4000]])
+            if ctx.handoff_preview:
+                parts.extend(["", "## Latest handoff preview", "", ctx.handoff_preview.strip()[:2500]])
+            if ctx.active_notes:
+                parts.extend(["", "## Active memory notes", "", ctx.active_notes.strip()[:2500]])
+            if ctx.references_index:
+                parts.extend(["", "## Reference index", ""])
+                parts.extend(f"- {item}" for item in ctx.references_index[:40])
+            parts.extend([
+                "",
+                "## Execution rules",
+                "",
+                "- Stay on the linked ticket and current workflow step; do not wander into unrelated refactors.",
+                "- Use project-local rules and repo instructions before generic assumptions.",
+                "- If context conflicts, prefer the most specific source in this order: run -> ticket -> workflow -> project -> board -> org -> repo.",
+                "- If required files or attachments are missing, report `needs_input` instead of inventing context.",
+                "- Keep changes minimal, evidence-backed, and reversible.",
+                "",
+                "## Return contract",
+                "",
+                "When this step is complete, report back using exactly these fields:",
+                "",
+                HARNESS_REPORT_TEMPLATE,
+            ])
+            return "\n".join(parts).strip()
+        except Exception:
+            logger.debug("_build_workflow_execution_packet_context failed", exc_info=True)
+            return ""
+
     def _build_agent_prompt(self, step_data: Dict[str, Any], run_id: Optional[int]) -> str:
         """Build the prompt for the WorkflowAgent, enriched with full context.
 
@@ -1397,6 +1615,14 @@ class StepExecutorMixin:
         )
         if steering_context:
             prompt = f"{prompt}\n\n{steering_context}"
+
+        execution_packet_context = self._build_workflow_execution_packet_context(
+            step_data,
+            run_id,
+            workflow_id,
+        )
+        if execution_packet_context:
+            prompt = f"{execution_packet_context}\n\n---\n\n{prompt}"
 
         logger.info(
             "_build_agent_prompt: step_id=%s run_id=%s prior_results=%d context_rules_len=%d workflow_input_len=%d feedback_len=%d",

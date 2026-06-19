@@ -447,9 +447,9 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends.models_catalog import models_from_pi_json
         return models_from_pi_json()
 
-    def _model_entry(model_id: str, provider: str, name: str | None = None) -> dict:
+    def _model_entry(model_id: str, provider: str, name: str | None = None, **meta) -> dict:
         from distr.core.project_cli_backends.models_catalog import model_entry
-        return model_entry(model_id, provider, name)
+        return model_entry(model_id, provider, name, **meta)
 
     def _dedupe_model_entries(models: list[dict]) -> list[dict]:
         from distr.core.project_cli_backends.models_catalog import dedupe_model_entries
@@ -467,15 +467,23 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends.models_catalog import opencode_models
         return opencode_models(settings)
 
+    def _cli_model_metadata(models: list[dict], *, complexity: str = "medium") -> dict:
+        from distr.core.project_cli_backends.models_catalog import model_catalog_summary, recommend_cli_model
+
+        return {
+            "summary": model_catalog_summary(models),
+            "recommended_model": recommend_cli_model(models, complexity=complexity),
+        }
+
     def _cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
         from distr.core.project_cli_backends.registry import _cursor_api_key
 
         fallback = [
-            _model_entry("auto", "cursor", "Auto"),
-            _model_entry("composer-2.5", "cursor"),
-            _model_entry("composer-2.5-fast", "cursor"),
-            _model_entry("gpt-5.3-codex", "cursor"),
-            _model_entry("gpt-5.5-medium", "cursor"),
+            _model_entry("auto", "cursor", "Auto", scope="scoped"),
+            _model_entry("composer-2.5", "cursor", scope="scoped"),
+            _model_entry("composer-2.5-fast", "cursor", scope="scoped", tier="low"),
+            _model_entry("gpt-5.3-codex", "cursor", scope="available", free=False),
+            _model_entry("gpt-5.5-medium", "cursor", scope="available", free=False),
         ]
         api_key = _cursor_api_key()
         if not api_key:
@@ -494,7 +502,21 @@ def register_routes(router, templates):
             return fallback, "cursor-defaults", f"Cursor models API returned HTTP {exc.code}; showing defaults."
         except Exception as exc:
             return fallback, "cursor-defaults", f"Could not fetch Cursor models API: {exc}; showing defaults."
-        models = [_model_entry(mid, "cursor") for mid in payload.get("models") or []]
+        raw_models = payload.get("models") or payload.get("data") or []
+        models = []
+        for raw in raw_models:
+            if isinstance(raw, str):
+                mid = raw
+                name = raw
+                scoped = True
+            elif isinstance(raw, dict):
+                mid = raw.get("id") or raw.get("name") or raw.get("model") or ""
+                name = raw.get("display_name") or raw.get("name") or mid
+                scoped = bool(raw.get("scoped") or raw.get("enabled") or raw.get("selected"))
+            else:
+                continue
+            if mid:
+                models.append(_model_entry(mid, "cursor", name, scope="scoped" if scoped else "available", free=False))
         if not models:
             return fallback, "cursor-defaults", "Cursor models API returned no models; showing defaults."
         return _dedupe_model_entries([fallback[0]] + models), "cursor-api", ""
@@ -502,12 +524,12 @@ def register_routes(router, templates):
     def _anthropic_models(settings: dict) -> tuple[list[dict], str, str]:
         api_key = (os.environ.get("ANTHROPIC_API_KEY") or settings.get("anthropic_key") or "").strip()
         aliases = [
-            _model_entry("default", "claude_code", "Default"),
-            _model_entry("sonnet", "claude_code", "Sonnet"),
-            _model_entry("opus", "claude_code", "Opus"),
-            _model_entry("haiku", "claude_code", "Haiku"),
-            _model_entry("sonnet[1m]", "claude_code", "Sonnet 1M"),
-            _model_entry("opusplan", "claude_code", "Opus plan"),
+            _model_entry("default", "claude_code", "Default", scope="scoped"),
+            _model_entry("sonnet", "claude_code", "Sonnet", scope="scoped"),
+            _model_entry("opus", "claude_code", "Opus", scope="scoped", tier="high"),
+            _model_entry("haiku", "claude_code", "Haiku", scope="scoped", tier="low"),
+            _model_entry("sonnet[1m]", "claude_code", "Sonnet 1M", scope="scoped", tier="high"),
+            _model_entry("opusplan", "claude_code", "Opus plan", scope="scoped", tier="high"),
         ]
         if not api_key:
             return aliases, "claude-code-aliases", "No Anthropic API key configured; showing Claude Code aliases only."
@@ -526,7 +548,7 @@ def register_routes(router, templates):
         except Exception as exc:
             return aliases, "claude-code-aliases", f"Could not fetch Anthropic models: {exc}; showing aliases."
         models = [
-            _model_entry(item.get("id") or "", "anthropic", item.get("display_name"))
+            _model_entry(item.get("id") or "", "anthropic", item.get("display_name"), free=False, scope="available")
             for item in payload.get("data") or []
             if item.get("id")
         ]
@@ -561,14 +583,14 @@ def register_routes(router, templates):
             or ""
         ).strip()
         fallback = [
-            _model_entry("auto", "codex", "Auto"),
-            _model_entry("gpt-5.3-codex", "openai"),
-            _model_entry("gpt-5.3-codex-spark", "openai"),
-            _model_entry("gpt-5.2-codex", "openai"),
+            _model_entry("auto", "codex", "Auto", scope="scoped"),
+            _model_entry("gpt-5.3-codex", "openai", free=False, scope="available"),
+            _model_entry("gpt-5.3-codex-spark", "openai", free=False, scope="available"),
+            _model_entry("gpt-5.2-codex", "openai", free=False, scope="available"),
         ]
         if not api_key:
-            return fallback, "codex-defaults", "Codex CLI did not report models; showing safe defaults."
-        return fallback, "codex-defaults", "Codex CLI did not report models; showing OpenAI Codex defaults."
+            return fallback, "codex-defaults", "Using Codex default models. Add an OpenAI key to unlock configured Codex models."
+        return fallback, "codex-defaults", "Using Codex default models because the Codex CLI did not return a model list."
 
     def _models_for_cli_backend(backend_id: str, settings: dict | None = None):
         from distr.core.project_cli_backends import normalize_backend_id
@@ -585,23 +607,29 @@ def register_routes(router, templates):
         model_backend = backend_id
         if model_backend == "cursor":
             models, source, message = _cursor_api_models(settings)
+            for model in models: model["backend_id"] = backend_id
             return {"models": models, "source": source, "message": message}
         if model_backend == "claude_code":
             models, source, message = _anthropic_models(settings)
+            for model in models: model["backend_id"] = backend_id
             return {"models": models, "source": source, "message": message}
         if model_backend == "codex":
             models, source, message = _codex_models(settings)
+            for model in models: model["backend_id"] = backend_id
             return {"models": models, "source": source, "message": message}
         if model_backend == "cline":
             return {
-                "models": [{"id": "auto", "name": "Auto", "provider": "cline"}],
+                "models": [{"id": "auto", "name": "Auto", "provider": "cline", "backend_id": backend_id}],
                 "source": "cline-config",
                 "message": "Default model comes from cline auth; override per task with -m.",
             }
         if model_backend == "opencode":
             models, source, message = _opencode_models(settings)
+            for model in models: model["backend_id"] = backend_id
             return {"models": models, "source": source, "message": message}
-        return {"models": _pi_cli_models(settings), "source": "pi-models", "message": ""}
+        models = _pi_cli_models(settings)
+        for model in models: model["backend_id"] = backend_id
+        return {"models": models, "source": "pi-models", "message": ""}
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
         if project_id:
@@ -616,6 +644,210 @@ def register_routes(router, templates):
             except Exception:
                 pass
         return fallback_model
+
+    def _cli_setup_rows(settings: dict, active_backend: str = "") -> list[dict]:
+        from distr.core.project_cli_backends import get_backend_statuses, normalize_backend_id
+        from distr.gui.web.security import mask_secret
+
+        statuses = {
+            row.get("id"): row
+            for row in get_backend_statuses(normalize_backend_id(active_backend) if active_backend else None).get("backends", [])
+        }
+        rows = [
+            {
+                "id": "pi",
+                "name": "Pi",
+                "credential_label": "Ollama URL",
+                "credential_field": "ollama_url",
+                "credential_type": "url",
+                "enabled_field": "ollama_enabled",
+                "enabled": bool(settings.get("ollama_enabled", True)),
+                "key_set": bool((settings.get("ollama_url") or "").strip()),
+                "masked": settings.get("ollama_url") or "http://localhost:11434/",
+                "notes": "Local/free-first model runner. Models are scoped by Pi config and installed Ollama models.",
+            },
+            {
+                "id": "cursor",
+                "name": "Cursor CLI",
+                "credential_label": "Cursor API key",
+                "credential_field": "cursor_key",
+                "credential_type": "secret",
+                "enabled_field": "cursor_enabled",
+                "enabled": bool(settings.get("cursor_enabled", False)),
+                "key_set": bool((settings.get("cursor_key") or os.environ.get("CURSOR_API_KEY") or "").strip()),
+                "masked": mask_secret(settings.get("cursor_key") or os.environ.get("CURSOR_API_KEY") or ""),
+                "notes": "Use Cursor's CLI directly; scoped models come from Cursor when the API is reachable.",
+            },
+            {
+                "id": "codex",
+                "name": "Codex CLI",
+                "credential_label": "OpenAI API key",
+                "credential_field": "openai_key",
+                "credential_type": "secret",
+                "enabled_field": "openai_enabled",
+                "enabled": bool(settings.get("openai_enabled", False)),
+                "key_set": bool((settings.get("openai_key") or os.environ.get("OPENAI_API_KEY") or "").strip()),
+                "masked": mask_secret(settings.get("openai_key") or os.environ.get("OPENAI_API_KEY") or ""),
+                "notes": "Use Codex CLI for implementation steps; model list falls back to Codex defaults if the CLI cannot list models.",
+            },
+            {
+                "id": "claude_code",
+                "name": "Claude Code",
+                "credential_label": "Anthropic API key",
+                "credential_field": "anthropic_key",
+                "credential_type": "secret",
+                "enabled_field": "anthropic_enabled",
+                "enabled": bool(settings.get("anthropic_enabled", False)),
+                "key_set": bool((settings.get("anthropic_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
+                "masked": mask_secret(settings.get("anthropic_key") or os.environ.get("ANTHROPIC_API_KEY") or ""),
+                "notes": "Claude Code supports aliases such as Sonnet, Opus, and Haiku plus API-listed models when available.",
+            },
+            {
+                "id": "openrouter",
+                "name": "OpenRouter",
+                "credential_label": "OpenRouter API key",
+                "credential_field": "openrouter_key",
+                "credential_type": "secret",
+                "enabled_field": "openrouter_enabled",
+                "enabled": bool(settings.get("openrouter_enabled", False)),
+                "key_set": bool((settings.get("openrouter_key") or "").strip()),
+                "masked": mask_secret(settings.get("openrouter_key") or ""),
+                "notes": "Cloud provider used by Pi/OpenCode routed models.",
+            },
+            {
+                "id": "groq",
+                "name": "Groq",
+                "credential_label": "Groq API key",
+                "credential_field": "groq_key",
+                "credential_type": "secret",
+                "enabled_field": "groq_enabled",
+                "enabled": bool(settings.get("groq_enabled", False)),
+                "key_set": bool((settings.get("groq_key") or "").strip()),
+                "masked": mask_secret(settings.get("groq_key") or ""),
+                "notes": "Cloud provider used by Pi/OpenCode routed models.",
+            },
+            {
+                "id": "kilocode",
+                "name": "KiloCode",
+                "credential_label": "KiloCode API key",
+                "credential_field": "kilo_key",
+                "credential_type": "secret",
+                "enabled_field": "kilo_enabled",
+                "enabled": bool(settings.get("kilo_enabled", False)),
+                "key_set": bool((settings.get("kilo_key") or "").strip()),
+                "masked": mask_secret(settings.get("kilo_key") or ""),
+                "notes": "Cloud provider used by Pi/OpenCode routed models.",
+            },
+            {
+                "id": "gemini",
+                "name": "Google Gemini",
+                "credential_label": "Gemini API key",
+                "credential_field": "gemini_key",
+                "credential_type": "secret",
+                "enabled_field": "gemini_enabled",
+                "enabled": bool(settings.get("gemini_enabled", False)),
+                "key_set": bool((settings.get("gemini_key") or "").strip()),
+                "masked": mask_secret(settings.get("gemini_key") or ""),
+                "notes": "Cloud provider used by Pi/OpenCode routed models.",
+            },
+            {
+                "id": "nvidia",
+                "name": "NVIDIA",
+                "credential_label": "NVIDIA API key",
+                "credential_field": "nvidia_key",
+                "credential_type": "secret",
+                "enabled_field": "nvidia_enabled",
+                "enabled": bool(settings.get("nvidia_enabled", False)),
+                "key_set": bool((settings.get("nvidia_key") or "").strip()),
+                "masked": mask_secret(settings.get("nvidia_key") or ""),
+                "notes": "Cloud provider used by Pi/OpenCode routed models.",
+            },
+        ]
+        for row in rows:
+            status = statuses.get(row["id"]) or {}
+            model_result = _models_for_cli_backend(row["id"], settings)
+            model_meta = _cli_model_metadata(model_result.get("models") or [])
+            row["status"] = status
+            row["ready"] = bool(status.get("ready"))
+            row["state"] = status.get("state") or ("ready" if row["ready"] else "not_ready")
+            row["message"] = status.get("message") or ""
+            row["model_summary"] = model_meta["summary"]
+            row["recommended_model"] = model_meta["recommended_model"]
+            row["models_source"] = model_result.get("source") or ""
+        return rows
+
+    @router.get("/projects/cli-setup")
+    async def get_cli_setup(request: Request):
+        """Return CLI credential/setup state plus backend readiness."""
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
+        return JSONResponse({
+            "success": True,
+            "active_backend": request.query_params.get("backend_id") or "",
+            "clis": _cli_setup_rows(settings, request.query_params.get("backend_id") or ""),
+        })
+
+    @router.post("/projects/cli-setup")
+    async def save_cli_setup(request: Request):
+        """Save one CLI setup row. Blank secret values keep the existing secret."""
+        body = await request.json()
+        cli_id = (body.get("id") or "").strip().lower()
+        enabled = bool(body.get("enabled", True))
+        value = (body.get("value") or "").strip()
+        field_map = {
+            "pi": ("ollama_enabled", "ollama_url", "http://localhost:11434/"),
+            "cursor": ("cursor_enabled", "cursor_key", ""),
+            "codex": ("openai_enabled", "openai_key", ""),
+            "claude_code": ("anthropic_enabled", "anthropic_key", ""),
+            "openrouter": ("openrouter_enabled", "openrouter_key", ""),
+            "groq": ("groq_enabled", "groq_key", ""),
+            "kilocode": ("kilo_enabled", "kilo_key", ""),
+            "gemini": ("gemini_enabled", "gemini_key", ""),
+            "nvidia": ("nvidia_enabled", "nvidia_key", ""),
+        }
+        if cli_id not in field_map:
+            return JSONResponse({"success": False, "error": "Unsupported CLI"}, status_code=400)
+
+        from distr.core.settings import load_settings_from_db
+        from distr.core.utils import save_settings_to_db
+        from ._shared import resolve_secret_update
+
+        enabled_field, value_field, default_value = field_map[cli_id]
+        settings = load_settings_from_db()
+        update = {enabled_field: enabled}
+        if value_field == "ollama_url":
+            update[value_field] = value or settings.get(value_field) or default_value
+        else:
+            update[value_field] = resolve_secret_update(settings.get(value_field) or "", value)
+        save_settings_to_db(update)
+        updated = load_settings_from_db()
+        return JSONResponse({
+            "success": True,
+            "cli": next((row for row in _cli_setup_rows(updated, cli_id) if row["id"] == cli_id), None),
+        })
+
+    @router.post("/projects/cli-setup/{backend_id}/test")
+    async def test_cli_setup(backend_id: str):
+        """Check backend readiness and return the current model catalog."""
+        from distr.core.project_cli_backends import get_backend, normalize_backend_id
+        from distr.core.settings import load_settings_from_db
+
+        normalized = normalize_backend_id(backend_id)
+        settings = load_settings_from_db()
+        status = get_backend(normalized).setup_status().to_dict()
+        model_result = _models_for_cli_backend(normalized, settings)
+        model_meta = _cli_model_metadata(model_result.get("models") or [])
+        return JSONResponse({
+            "success": bool(status.get("ready")),
+            "backend_id": normalized,
+            "status": status,
+            "models": model_result.get("models") or [],
+            "model_summary": model_meta["summary"],
+            "recommended_model": model_meta["recommended_model"],
+            "source": model_result.get("source") or "",
+            "message": model_result.get("message") or status.get("message") or "",
+        })
 
     @router.get("/projects/cli-models")
     async def get_cli_models(request: Request):
@@ -637,6 +869,7 @@ def register_routes(router, templates):
             logger.exception("cli-models failed for backend=%s", backend_id)
             model_result = {"models": [], "source": "error", "message": str(exc)}
             models = []
+        model_meta = _cli_model_metadata(models)
         from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
         # Get current Pi model from settings as the legacy/global fallback.
@@ -663,6 +896,8 @@ def register_routes(router, templates):
         return JSONResponse({
             "backend_id": backend_id,
             "models": models,
+            "model_summary": model_meta["summary"],
+            "recommended_model": model_meta["recommended_model"],
             "source": model_result.get("source") or "",
             "message": model_result.get("message") or "",
             "current_provider": current_provider,
@@ -687,8 +922,7 @@ def register_routes(router, templates):
             return JSONResponse({"ok": False, "user_message": str(e)}, status_code=500)
 
         pf = preflight_pi_coding_cli(project_id=project_id, cwd=cwd, probe_model=bool(probe))
-        status = 200 if pf.ok else 400
-        return JSONResponse(pf.to_dict(), status_code=status)
+        return JSONResponse(pf.to_dict())
 
     @router.post("/projects/cli-model")
     async def set_cli_model(request: Request):
@@ -836,15 +1070,6 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import get_backend_statuses, normalize_backend_id
 
         backend_id = normalize_backend_id(body.get("coding_backend") or body.get("backend_id"))
-        plugin_install = None
-        try:
-            if backend_id == "codex":
-                plugin_install = _install_local_codex_plugin()
-            elif backend_id == "cursor":
-                plugin_install = _install_local_cursor_plugin()
-        except Exception as exc:
-            logger.exception("Plugin install failed while setting coding backend %s", backend_id)
-            plugin_install = {"installed": False, "error": str(exc)}
 
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
@@ -854,8 +1079,6 @@ def register_routes(router, templates):
             project.coding_backend_model = ""
             session.commit()
         payload = {"success": True, **get_backend_statuses(backend_id)}
-        if plugin_install is not None:
-            payload["plugin_install"] = plugin_install
         return JSONResponse(payload)
 
     @router.get("/projects/{project_id}/codex-sync")

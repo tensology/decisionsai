@@ -17,6 +17,26 @@ logger = logging.getLogger(__name__)
 DEFAULT_REMOTE_ACTIVE_WINDOW_S = 1800.0
 
 
+def _pending_remote_contexts(manager: Any) -> list[dict]:
+    if manager is None:
+        return []
+    pending_queue = getattr(manager, "_pending_remote_agent_responses", None)
+    if isinstance(pending_queue, list):
+        return [item for item in pending_queue if isinstance(item, dict)]
+    legacy = getattr(manager, "_pending_remote_agent_response", None)
+    if isinstance(legacy, dict) and legacy.get("request_id"):
+        return [legacy]
+    return []
+
+
+def _store_pending_remote_contexts(manager: Any, pending_queue: list[dict]) -> None:
+    if manager is None:
+        return
+    clean_queue = [item for item in pending_queue if isinstance(item, dict)]
+    setattr(manager, "_pending_remote_agent_responses", clean_queue)
+    setattr(manager, "_pending_remote_agent_response", clean_queue[-1] if clean_queue else None)
+
+
 def _manager_connected(manager: Any) -> bool:
     if manager is None:
         return False
@@ -45,8 +65,7 @@ def is_remote_delivery_available(
     except Exception:
         pass
 
-    ctx = getattr(manager, "_pending_remote_agent_response", None)
-    if isinstance(ctx, dict):
+    for ctx in _pending_remote_contexts(manager):
         created = float(ctx.get("created_at") or 0)
         if created and now - created <= max(window_s, 180.0):
             return True
@@ -87,22 +106,21 @@ def resolve_remote_delivery_context(
         or payload.get("explicit_notification_intent")
     )
 
-    pending = getattr(manager, "_pending_remote_agent_response", None) if manager is not None else None
+    pending_queue = _pending_remote_contexts(manager)
+    pending = pending_queue[0] if pending_queue else None
     if isinstance(pending, dict) and pending.get("request_id"):
         if proactive:
             if is_remote_delivery_available(manager):
                 return build_synthetic_remote_context(payload)
             return None
         if consume_pending:
-            try:
-                setattr(manager, "_pending_remote_agent_response", None)
-            except Exception:
-                pass
+            _store_pending_remote_contexts(manager, pending_queue[1:])
             logger.info(
-                "[REMOTE TTS] Consumed remote context: request_id=%s source=%s mode=%s",
+                "[REMOTE TTS] Consumed remote context: request_id=%s source=%s mode=%s remaining=%s",
                 pending.get("request_id"),
                 pending.get("source_command"),
                 pending.get("mode"),
+                len(pending_queue[1:]),
             )
             return pending
         return pending

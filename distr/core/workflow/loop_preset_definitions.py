@@ -3,7 +3,7 @@ Hand-authored loop preset definitions.
 
 Active presets follow workflows-by-intent:
 - Ideation: requirements → brief → board tickets (no Cursor)
-- Development: ticket → plan → harness implementation (Cursor only here)
+- Development: ticket → plan → CLI harness implementation
 - Polish: security, UI drift, regression, release evidence
 """
 
@@ -139,7 +139,7 @@ _IDEATION_KICKOFF = _kickoff(
 Max iterations: 3
 Exit when: the brief is written, the board exists with tickets and acceptance criteria, and dev-ready tickets are queued
 Step 1: Read the linked requirements document and extract scope, constraints, and delivery slices.
-This workflow never hands off to Cursor or any IDE harness.
+This workflow stays inside the configured CLI harness.
 """
     + SELF_PACE_FOOTER
     + "\n\n"
@@ -200,8 +200,8 @@ _DEVELOPMENT_KICKOFF = _kickoff(
     "Development: Ticket to Implementation",
     """Goal: one linked ticket is implemented on the project with harness iteration
 Max iterations: 6
-Exit when: plan.md is attached, the slice is implemented and self-tested, and development evidence is on the ticket
-Step 1: Ingest the ticket and project context. This is the only workflow allowed to hand off to Cursor.
+Exit when: plan.md is attached, the slice is implemented, browser evidence is captured or explicitly marked N/A, checks are green, and development evidence is on the ticket
+Step 1: Ingest the ticket, project memory, linked files, and acceptance context before changing code.
 """
     + SELF_PACE_FOOTER
     + "\n\n"
@@ -210,50 +210,80 @@ Step 1: Ingest the ticket and project context. This is the only workflow allowed
 
 _DEVELOPMENT_STEPS = [
     _step(
-        "Ingest ticket and project context",
-        "Read the linked ticket, board, lane, project, acceptance criteria, and brief. Restate the slice, "
-        "constraints, and project route. Report using the harness return contract.",
+        "Ingest ticket, memory, and acceptance context",
+        "Read the linked ticket, board, lane, project, acceptance criteria, AGENTS.md/context files, active memory, "
+        "handoff notes, and linked media/files. Restate the slice, constraints, project route, and unknowns before planning.",
         skills=["product-lens", "brainstorming", "systematic-debugging"],
         tools=["cli", "other"],
-        other_tool="Kanban ticket context + project repository",
+        other_tool="Ticket context, project repository, workspace memory, and linked attachments",
         action_type="send_to_project_cli",
         guardrail=_guardrail(_SCOPE, "- Do not write code before plan.md exists"),
-        validation_prompt="Ticket brief, acceptance criteria, and project route are explicit.",
+        validation_prompt="Ticket brief, acceptance criteria, linked files/media, memory files, unknowns, and project route are explicit.",
     ),
     _step(
-        "Write plan.md and attach to ticket",
-        "Create ticket-specific plan.md with implementation slices, affected files, tests, and rollback notes. "
-        "Attach plan.md to the ticket before implementation.",
+        "Plan the smallest implementation slice",
+        "Create ticket-specific plan.md with the smallest shippable slice, affected files, commands to run, browser/evidence plan, "
+        "rollback notes, and explicit skip conditions for non-applicable checks. Attach plan.md to the ticket before implementation.",
         skills=["writing-plans", "executing-plans", "doc-coauthoring"],
         tools=["cli", "other"],
         other_tool="Ticket file attachment",
         action_type="send_to_project_cli",
         guardrail=_guardrail(_SCOPE, "- Plan must match this ticket only"),
-        validation_prompt="plan.md exists, is linked to the ticket, and includes tests and rollback.",
+        validation_prompt="plan.md exists, is linked to the ticket, and includes implementation slice, checks, browser evidence plan, rollback, and skip rules.",
     ),
     _step(
-        "Implement, test, and self-correct",
-        "Implement the slice. Iterate inside this step: develop → run project lint/test commands → self-assess "
-        "for drift and regressions → correct → report with the harness return contract.",
+        "Implement the slice with project checks",
+        "Implement only the planned slice. Detect the actual project commands from repo config, run the relevant checks, "
+        "capture command output, and report files changed. Do not broaden scope without updating the ticket and plan.",
         skills=["executing-plans", "tdd-workflow", "verification-loop", "systematic-debugging"],
-        tools=["cli"],
+        tools=["cli", "shell"],
         action_type="send_to_project_cli",
         guardrail=_guardrail(_SCOPE, _DEV_CHECKS),
-        validation_prompt="Slice is implemented, tested, and reported with a complete harness return contract.",
+        validation_prompt="Slice is implemented, relevant project checks were run or explicitly blocked, and changed files are reported.",
         on_fail_goto_position=2,
     ),
     _step(
-        "Close development slice with evidence",
-        "Update the ticket with files changed, commands run, and a development summary. Do not run polish or "
-        "release gates here — those belong to the polish workflow.",
-        skills=["internal-comms", "finishing-a-development-branch"],
-        tools=["other"],
-        other_tool="Ticket update + result packet",
-        action_type="agent_instruction",
-        validation_prompt="Ticket contains development evidence and a clear slice completion summary.",
-        validation_pass_action="end_loop",
-        validation_fail_action="end_loop",
+        "Capture browser evidence and self-assess",
+        "If the change affects UI, run the app/browser flow, capture screenshots or Playwright evidence, compare the result against "
+        "the ticket, and list visual/behavior issues. If the change is not UI-facing, mark browser evidence N/A with a concrete reason.",
+        skills=["qa-tester", "verification-loop", "visual-regression-review", "systematic-debugging"],
+        tools=["cli", "playwright", "browser_use"],
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Do not fake browser evidence; if the app cannot run, report the blocker and exact command/output",
+            "- Current step remains open until UI evidence is captured or explicitly marked N/A",
+        ),
+        validation_prompt="Browser evidence is attached for UI changes, or N/A is justified for non-UI changes, with self-assessment notes.",
         on_fail_goto_position=2,
+    ),
+    _step(
+        "Correct, re-run, or skip with reason",
+        "Use the evidence from checks and browser review to decide the next move: correct defects and re-run, skip a non-applicable "
+        "step with reason, or stop for a human decision. The orchestrator must know why the loop continues or exits.",
+        skills=["verification-loop", "systematic-debugging", "executing-plans"],
+        tools=["cli", "shell", "playwright"],
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(
+            _SCOPE,
+            "- Do not advance on red checks, unresolved visual issues, or missing evidence",
+            "- Skipped work needs a concrete reason tied to the ticket scope",
+        ),
+        validation_prompt="All known defects are corrected or explicitly blocked/skipped with evidence, and rerun results are recorded.",
+        on_fail_goto_position=2,
+    ),
+    _step(
+        "Report, update ticket, and compact memory",
+        "Update the ticket with files changed, commands run, screenshots/evidence, remaining risks, and the final development summary. "
+        "Write the harness return contract so DecisionsAI can persist a compact memory delta for future runs.",
+        skills=["internal-comms", "finishing-a-development-branch"],
+        tools=["cli", "other"],
+        other_tool="Ticket update, result packet, and compact workspace memory",
+        action_type="send_to_project_cli",
+        validation_prompt="Ticket contains evidence, commands, changed files, risks, and a complete harness return contract for memory compounding.",
+        validation_pass_action="end_loop",
+        validation_fail_action="retry",
+        on_fail_goto_position=4,
     ),
 ]
 
@@ -409,7 +439,7 @@ LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
         category="Engineering",
         archetype="incremental_ship",
         description=(
-            "Ingest a ticket, write plan.md, implement with in-step harness iteration, and close the "
+            "Ingest a ticket, write plan.md, implement with in-step CLI harness iteration, and close the "
             "development slice. The only workflow that may hand off to Cursor."
         ),
         kickoff=_DEVELOPMENT_KICKOFF,

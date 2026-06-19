@@ -129,7 +129,7 @@ def suggest_step_harness(
     backend_id = BACKEND_BY_ACTION.get(action_type) or ""
     if action_type == "send_to_project_cli":
         if any(w in lower for w in ("cursor", "ide")):
-            backend_id = "cursor_ide"
+            backend_id = "cursor"
         elif "claude" in lower:
             backend_id = "claude_code"
         elif "hermes agent" in lower or "hermes operator" in lower:
@@ -157,7 +157,7 @@ def suggest_step_harness(
         clarify_questions = [
             "What project or repo should this step target?",
             "What does done look like for this step?",
-            "Which executor should run it (CLI, IDE, browser, or external agent)?",
+            "Which executor should run it (CLI, browser, or external agent)?",
         ]
 
     tools: list[str] = []

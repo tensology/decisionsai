@@ -213,6 +213,7 @@
         if (terminalBackendSel) terminalBackendSel.value = project.coding_backend || "pi";
         loadProjectCliBackends(project.id, project.coding_backend || "pi");
         loadCliModels(project.coding_backend || "pi");
+        loadCliSetup(project.coding_backend || "pi");
         loadProjectBoardSelect(project);
 
         var useBtn = document.getElementById("project-use");
@@ -709,6 +710,7 @@
         if (detailSel) detailSel.value = backend;
         if (terminalSel) terminalSel.value = backend;
         loadCliModels(backend);
+        loadCliSetup(backend);
         apiFetch("/api/projects/" + currentProjectId + "/coding-backend", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
@@ -973,6 +975,8 @@
         if (codingBackend) codingBackend.addEventListener("change", setProjectCodingBackend);
         var terminalCodingBackend = document.getElementById("terminal-backend-select");
         if (terminalCodingBackend) terminalCodingBackend.addEventListener("change", setProjectCodingBackend);
+        var cliSetupRefresh = document.getElementById("terminal-cli-setup-refresh");
+        if (cliSetupRefresh) cliSetupRefresh.addEventListener("click", function() { loadCliSetup(activeCodingBackend()); });
         var codexSyncBtn = document.getElementById("codex-sync-btn");
         if (codexSyncBtn) codexSyncBtn.addEventListener("click", syncProjectToCodex);
 
@@ -1038,6 +1042,7 @@
 
         // Load CLI models into dropdown
         loadCliModels();
+        loadCliSetup(activeCodingBackend());
         wireCliPreflightPanel();
 
         // Shell terminal tab
@@ -2098,6 +2103,150 @@
     // ?? CLI Model Dropdown ???????????????????????????????????????????
 
     var _cliModelsRequestId = 0;
+    var _cliSetupRequestId = 0;
+
+    function _cliStatusClasses(row) {
+        if (row && row.ready) return "border-emerald-500/35 bg-emerald-950/20";
+        if (row && row.key_set) return "border-amber-500/35 bg-amber-950/20";
+        return "border-white/10 bg-white/[0.03]";
+    }
+
+    function _cliStatusText(row) {
+        if (!row) return "Unknown";
+        if (row.ready) return "Ready";
+        if (row.key_set) return "Needs test";
+        return "Not configured";
+    }
+
+    function loadCliSetup(backend) {
+        var list = document.getElementById("terminal-cli-setup-list");
+        if (!list) return;
+        backend = (backend || activeCodingBackend() || "pi").trim();
+        var requestId = ++_cliSetupRequestId;
+        list.innerHTML = '<div class="text-xs text-gray-400">Loading CLI setup...</div>';
+        var params = new URLSearchParams({ backend_id: backend });
+        apiFetch("/api/projects/cli-setup?" + params.toString())
+            .then(function(data) {
+                if (requestId !== _cliSetupRequestId) return;
+                renderCliSetup(data.clis || []);
+            })
+            .catch(function() {
+                if (requestId !== _cliSetupRequestId) return;
+                list.innerHTML = '<div class="text-xs text-amber-300">Could not load CLI setup.</div>';
+            });
+    }
+
+    function renderCliSetup(rows) {
+        var list = document.getElementById("terminal-cli-setup-list");
+        if (!list) return;
+        if (!rows.length) {
+            list.innerHTML = '<div class="text-xs text-gray-400">No CLI providers configured.</div>';
+            return;
+        }
+        list.innerHTML = rows.map(function(row) {
+            var active = activeCodingBackend() === row.id;
+            var inputType = row.credential_type === "url" ? "url" : "password";
+            var placeholder = row.credential_type === "url" ? (row.masked || "http://localhost:11434/") : (row.key_set ? "Saved key - paste a new key to replace" : row.credential_label);
+            var value = row.credential_type === "url" ? escapeAttr(row.masked || "") : "";
+            var statusText = _cliStatusText(row);
+            var message = row.message || (row.status && row.status.setup_instructions) || row.notes || "";
+            var summary = row.model_summary || {};
+            var rec = row.recommended_model || {};
+            var recLabel = rec.name || rec.id || "Auto";
+            var recReason = rec.reason || "";
+            return '' +
+                '<article class="rounded border p-3 text-xs ' + _cliStatusClasses(row) + '" data-cli-setup-card="' + escapeAttr(row.id) + '">' +
+                    '<div class="flex items-start justify-between gap-2">' +
+                        '<div class="min-w-0">' +
+                            '<div class="flex flex-wrap items-center gap-2">' +
+                                '<strong class="text-white">' + escapeAttr(row.name) + '</strong>' +
+                                (active ? '<span class="rounded bg-orange-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-orange-200">Active</span>' : '') +
+                            '</div>' +
+                            '<p class="mt-1 text-[11px] text-gray-400 leading-snug">' + escapeAttr(message) + '</p>' +
+                        '</div>' +
+                        '<span class="shrink-0 rounded border border-white/10 px-2 py-1 text-[10px] text-gray-200">' + escapeAttr(statusText) + '</span>' +
+                    '</div>' +
+                    '<div class="mt-3 grid gap-2 rounded border border-white/10 bg-white/[0.03] p-2">' +
+                        '<div class="flex flex-wrap items-center gap-1.5">' +
+                            '<span class="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-gray-200">' + escapeAttr(summary.usable || 0) + ' usable</span>' +
+                            '<span class="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-gray-200">' + escapeAttr(summary.scoped || 0) + ' scoped</span>' +
+                            '<span class="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-200">' + escapeAttr(summary.free || 0) + ' free</span>' +
+                            '<span class="rounded bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-200">' + escapeAttr(summary.local || 0) + ' local</span>' +
+                        '</div>' +
+                        '<p class="text-[11px] text-gray-300"><span class="text-gray-500">Recommended:</span> ' + escapeAttr(recLabel) + '</p>' +
+                        (recReason ? '<p class="text-[10px] leading-snug text-gray-500">' + escapeAttr(recReason) + '</p>' : '') +
+                    '</div>' +
+                    '<div class="mt-3 grid gap-2">' +
+                        '<label class="flex items-center gap-2 text-gray-300">' +
+                            '<input type="checkbox" class="cli-setup-enabled accent-[#f97316]" data-cli-id="' + escapeAttr(row.id) + '"' + (row.enabled ? ' checked' : '') + '>' +
+                            '<span>Enable ' + escapeAttr(row.name) + '</span>' +
+                        '</label>' +
+                        '<label class="grid gap-1 text-gray-300">' +
+                            '<span class="text-[10px] uppercase tracking-wide text-gray-500">' + escapeAttr(row.credential_label) + '</span>' +
+                            '<input type="' + inputType + '" class="cli-setup-value rounded border border-white/15 bg-[#0d1117] px-2 py-1.5 text-gray-100 placeholder-gray-500 focus:border-[#f97316] focus:outline-none" data-cli-id="' + escapeAttr(row.id) + '" value="' + value + '" placeholder="' + escapeAttr(placeholder) + '">' +
+                        '</label>' +
+                        '<div class="flex flex-wrap gap-2">' +
+                            '<button type="button" class="cli-setup-save rounded bg-[#f97316] px-2.5 py-1.5 text-white hover:bg-[#ea580c]" data-cli-id="' + escapeAttr(row.id) + '">Save</button>' +
+                            '<button type="button" class="cli-setup-test rounded border border-white/20 px-2.5 py-1.5 text-gray-200 hover:bg-white/10" data-cli-id="' + escapeAttr(row.id) + '">Test & list models</button>' +
+                        '</div>' +
+                    '</div>' +
+                '</article>';
+        }).join("");
+        list.querySelectorAll(".cli-setup-save").forEach(function(btn) {
+            btn.addEventListener("click", function() { saveCliSetup(btn.dataset.cliId); });
+        });
+        list.querySelectorAll(".cli-setup-test").forEach(function(btn) {
+            btn.addEventListener("click", function() { testCliSetup(btn.dataset.cliId); });
+        });
+    }
+
+    function _cliSetupCard(cliId) {
+        return document.querySelector('[data-cli-setup-card="' + escapeAttr(cliId) + '"]');
+    }
+
+    function saveCliSetup(cliId) {
+        var card = _cliSetupCard(cliId);
+        if (!card) return;
+        var enabled = card.querySelector(".cli-setup-enabled");
+        var value = card.querySelector(".cli-setup-value");
+        apiFetch("/api/projects/cli-setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                id: cliId,
+                enabled: enabled ? enabled.checked : true,
+                value: value ? value.value.trim() : ""
+            })
+        }).then(function(resp) {
+            if (!resp.success) throw new Error(resp.error || "Could not save CLI setup");
+            showSnackbar("CLI setup saved", "success");
+            loadCliSetup(activeCodingBackend());
+            loadProjectCliBackends(currentProjectId, activeCodingBackend());
+            loadCliModels(activeCodingBackend());
+        }).catch(function(err) {
+            showSnackbar(err.message || "Could not save CLI setup", "error");
+        });
+    }
+
+    function testCliSetup(cliId) {
+        apiFetch("/api/projects/cli-setup/" + encodeURIComponent(cliId) + "/test", { method: "POST" })
+            .then(function(resp) {
+                var msg = resp.message || (resp.status && resp.status.message) || "";
+                var rec = resp.recommended_model || {};
+                var summary = resp.model_summary || {};
+                if (resp.success) {
+                    showSnackbar("Connected: " + (summary.usable || (resp.models || []).length) + " usable models. Recommended: " + (rec.name || rec.id || "Auto"), "success");
+                } else {
+                    showSnackbar(msg || "CLI is not ready", "error", { duration: 14000 });
+                }
+                loadCliSetup(activeCodingBackend());
+                loadProjectCliBackends(currentProjectId, activeCodingBackend());
+                loadCliModels(activeCodingBackend());
+            })
+            .catch(function(err) {
+                showSnackbar((err && err.message) || "CLI test failed", "error");
+            });
+    }
 
     function loadCliModels(backend) {
         var sel = document.getElementById("terminal-model-select");
@@ -2122,7 +2271,7 @@
                     sel.appendChild(opt);
                     return;
                 }
-                // Group by provider
+                // Group by provider and keep scoped/available/free status visible.
                 var groups = {};
                 models.forEach(function(m) {
                     var p = m.provider || "other";
@@ -2136,7 +2285,14 @@
                         var opt = document.createElement("option");
                         opt.value = m.id;
                         opt.dataset.provider = m.provider || "";
-                        opt.textContent = m.name || m.id;
+                        opt.dataset.scope = m.scope || "available";
+                        opt.dataset.free = m.free ? "true" : "false";
+                        var flags = [];
+                        if (m.scope === "scoped") flags.push("scoped");
+                        if (m.free) flags.push("free");
+                        if (m.tier) flags.push(m.tier);
+                        opt.textContent = (m.name || m.id) + (flags.length ? " - " + flags.join(", ") : "");
+                        if (m.supports_chat === false) opt.disabled = true;
                         if (m.id === current) opt.selected = true;
                         og.appendChild(opt);
                     });

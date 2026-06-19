@@ -20,6 +20,7 @@ class DummyManager:
         self.connected = connected
         self.sent = []
         self._pending_remote_agent_response = None
+        self._pending_remote_agent_responses = []
         self._cancelled_remote_audio_requests = set()
 
     def is_connected(self):
@@ -59,6 +60,33 @@ def test_resolve_remote_delivery_context_uses_synthetic_for_proactive():
     assert ctx.get("synthetic") is True
     assert ctx.get("request_id") != "agent-1"
     assert manager._pending_remote_agent_response["request_id"] == "agent-1"
+
+
+def test_resolve_remote_delivery_context_consumes_fifo_queue():
+    manager = DummyManager()
+    now = time.time()
+    manager._pending_remote_agent_responses = [
+        {
+            "request_id": "agent-1",
+            "created_at": now,
+            "source_command": "instruction",
+            "mode": "command",
+        },
+        {
+            "request_id": "agent-2",
+            "created_at": now + 1,
+            "source_command": "voice_text_input",
+            "mode": "command",
+        },
+    ]
+    manager._pending_remote_agent_response = manager._pending_remote_agent_responses[-1]
+
+    ctx = resolve_remote_delivery_context(manager, consume_pending=True)
+
+    assert ctx is not None
+    assert ctx["request_id"] == "agent-1"
+    assert [item["request_id"] for item in manager._pending_remote_agent_responses] == ["agent-2"]
+    assert manager._pending_remote_agent_response["request_id"] == "agent-2"
 
 
 def test_deliver_remote_tts_sends_text_before_audio(tmp_path):

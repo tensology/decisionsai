@@ -21,6 +21,184 @@ logger = logging.getLogger(__name__)
 class PostExecutionMixin:
     """Provides post-execution logic: recording results, routing, waiting, audit."""
 
+    def _compact_step_memory_delta(
+        self,
+        *,
+        step_id: int,
+        run_id: int,
+        result_text: str,
+        passed: bool,
+    ) -> dict[str, Any]:
+        """Create a bounded memory delta from a step result.
+
+        This deliberately avoids carrying full transcripts forward. Durable
+        memory compounds through compact handoff/active/ledger updates; the next
+        prompt only reads previews and current active notes.
+        """
+        try:
+            from distr.core.workflow.step_iteration import parse_harness_step_report
+        except Exception:
+            parse_harness_step_report = None  # type: ignore[assignment]
+
+        raw = (result_text or "").strip()
+        parsed = parse_harness_step_report(raw) if parse_harness_step_report else {}
+
+        def _clip(value: Any, limit: int = 600) -> str:
+            text = str(value or "").strip()
+            if len(text) <= limit:
+                return text
+            return text[: limit - 3].rstrip() + "..."
+
+        status = _clip(parsed.get("status") or ("completed" if passed else "failed"), 120)
+        summary = _clip(parsed.get("summary") or raw.replace("\n", " "), 900)
+        if not summary:
+            summary = "Step completed." if passed else "Step failed."
+
+        with get_session() as db:
+            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(step.workflow_id)).first() if step else None
+            run_data: dict[str, Any] = {}
+            if run and run.run_data:
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+            ticket_id = int(run.ticket_id) if run and run.ticket_id else run_data.get("ticket_id")
+            project_id = run_data.get("project_id")
+            board_id = int(run.board_id) if run and getattr(run, "board_id", None) else run_data.get("board_id")
+            if ticket_id and not project_id:
+                try:
+                    from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+                    ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                    if ticket:
+                        if ticket.linked_project_id:
+                            project_id = int(ticket.linked_project_id)
+                        if ticket.lane_id and not board_id:
+                            lane = db.query(KanbanLane).filter(KanbanLane.id == int(ticket.lane_id)).first()
+                            if lane:
+                                board_id = int(lane.board_id)
+                                if lane.board and lane.board.default_project_id and not project_id:
+                                    project_id = int(lane.board.default_project_id)
+                except Exception:
+                    logger.debug("_compact_step_memory_delta: project resolution failed", exc_info=True)
+            return {
+                "status": status,
+                "summary": summary,
+                "tests_run": _clip(parsed.get("tests_run"), 700),
+                "drift_check": _clip(parsed.get("drift_check"), 500),
+                "security": _clip(parsed.get("security"), 500),
+                "ui_assessment": _clip(parsed.get("ui_assessment"), 500),
+                "self_corrections": _clip(parsed.get("self_corrections"), 500),
+                "files_changed": _clip(parsed.get("files_changed"), 700),
+                "blockers": _clip(parsed.get("blockers") or ("none" if passed else ""), 500),
+                "step_id": int(step_id),
+                "step_name": (step.name or f"Step {step_id}") if step else f"Step {step_id}",
+                "workflow_id": int(step.workflow_id) if step and step.workflow_id else None,
+                "workflow_name": (wf.name or "") if wf else "",
+                "run_id": int(run_id),
+                "ticket_id": ticket_id,
+                "board_id": board_id,
+                "project_id": project_id,
+                "passed": bool(passed),
+            }
+
+    def _persist_compact_step_memory(
+        self,
+        *,
+        step_id: int,
+        run_id: Optional[int],
+        result_text: str,
+        passed: bool,
+    ) -> None:
+        """Compound workflow memory with a compact step delta."""
+        if run_id is None:
+            return
+        try:
+            from distr.core.workspace_memory.pickup_handoff import append_ledger, perform_handoff, write_active
+
+            delta = self._compact_step_memory_delta(
+                step_id=step_id,
+                run_id=int(run_id),
+                result_text=result_text,
+                passed=passed,
+            )
+            lines = [
+                f"Step: {delta.get('step_name')} (id={delta.get('step_id')})",
+                f"Status: {delta.get('status')}",
+                f"Summary: {delta.get('summary')}",
+            ]
+            for label, key in (
+                ("Tests", "tests_run"),
+                ("Drift", "drift_check"),
+                ("Security", "security"),
+                ("UI", "ui_assessment"),
+                ("Self-corrections", "self_corrections"),
+                ("Files", "files_changed"),
+                ("Blockers", "blockers"),
+            ):
+                value = (delta.get(key) or "").strip()
+                if value:
+                    lines.append(f"{label}: {value}")
+            body = "\n".join(lines).strip()
+            ledger_extra = {
+                "run_id": delta.get("run_id"),
+                "step_id": delta.get("step_id"),
+                "workflow_id": delta.get("workflow_id"),
+                "ticket_id": delta.get("ticket_id"),
+                "project_id": delta.get("project_id"),
+                "board_id": delta.get("board_id"),
+                "passed": delta.get("passed"),
+            }
+
+            perform_handoff(
+                "runs",
+                int(run_id),
+                summary=body,
+                source="workflow_step_delta",
+                extra=ledger_extra,
+            )
+            write_active(
+                "runs",
+                int(run_id),
+                "Current workflow run state:\n" + body,
+            )
+            ticket_id = delta.get("ticket_id")
+            if ticket_id:
+                perform_handoff(
+                    "tickets",
+                    int(ticket_id),
+                    summary=body,
+                    source="workflow_step_delta",
+                    extra=ledger_extra,
+                )
+                write_active(
+                    "tickets",
+                    int(ticket_id),
+                    "Current ticket execution state:\n" + body,
+                )
+            workflow_id = delta.get("workflow_id")
+            if workflow_id:
+                append_ledger(
+                    "workflows",
+                    int(workflow_id),
+                    event_type="workflow_step_delta",
+                    message=body[:1000],
+                    extra=ledger_extra,
+                )
+            project_id = delta.get("project_id")
+            if project_id:
+                append_ledger(
+                    "projects",
+                    int(project_id),
+                    event_type="workflow_step_delta",
+                    message=body[:1000],
+                    extra=ledger_extra,
+                )
+        except Exception:
+            logger.debug("compact workflow memory delta failed", exc_info=True)
+
     def _record_result(
         self,
         step_id: int,
@@ -47,6 +225,12 @@ class PostExecutionMixin:
                 agent_response=result_text, status=status,
             ))
             db.commit()
+        self._persist_compact_step_memory(
+            step_id=step_id,
+            run_id=run_id,
+            result_text=result_text,
+            passed=passed,
+        )
         increment_workflow_updated()
 
     # ── Post-execution: routing, recording, notifications ────────────
@@ -80,6 +264,12 @@ class PostExecutionMixin:
             try:
                 from distr.core.workflow.router import StepRouter
                 from distr.core.workflow.dispatcher import StepDispatcher, complete_run, _update_workflow_thread_step
+                self._persist_compact_step_memory(
+                    step_id=step_id,
+                    run_id=run_id,
+                    result_text=result_text,
+                    passed=passed,
+                )
                 router = StepRouter()
                 decision = router.route(step_id, result_text, passed, run_id, skip_wait=skip_wait)
                 self._append_workflow_step_audit(step_id, run_id, result_text, passed)

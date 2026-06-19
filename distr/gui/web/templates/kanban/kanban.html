@@ -233,6 +233,28 @@
 .kb-src-db { background: #f97316; }
 .kb-src-trello { background: #0079bf; }
 .kb-src-jira { background: #0052cc; }
+.kb-external-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(249, 115, 22, 0.28);
+    background: rgba(249, 115, 22, 0.08);
+    color: #f97316;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.kb-external-link:hover {
+    background: rgba(249, 115, 22, 0.16);
+    border-color: rgba(249, 115, 22, 0.45);
+    color: #fdba74;
+}
+.kb-external-link svg {
+    width: 1rem;
+    height: 1rem;
+    display: block;
+}
 /* Copy button on external cards */
 .kb-copy-btn { opacity: 0; transition: opacity 0.15s; }
 .kb-card:hover .kb-copy-btn { opacity: 1; }
@@ -1035,24 +1057,22 @@
     <div class="kb-modal p-0" style="width: 700px;">
         <div class="flex items-center justify-between px-6 pt-5 pb-0">
             <h3 id="kb-modal-title" class="text-lg font-semibold text-white">Ticket</h3>
-            <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+            <div class="flex items-center gap-3">
+                <a id="kb-modal-url-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden kb-external-link" title="Open source ticket" aria-label="Open source ticket"></a>
+                <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+            </div>
         </div>
         <!-- Ticket tabs -->
         <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-ttab="details">Details</button>
-            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="notes">Notes</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="links">Links</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="todo">To-do</button>
-            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="report">Report</button>
-            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="advanced">Advanced</button>
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="notes">Notes</button>
         </div>
         <!-- Tab content area with fixed min-height -->
         <div class="kb-ticket-modal-body">
             <!-- Details tab -->
             <div id="kb-tm-tab-details" class="kb-tm-pane p-6 space-y-4">
-                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30 kb-ticket-meta-grid kb-ticket-meta-grid--two-col">
-                    <!-- Populated dynamically for external tickets -->
-                </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Title</label>
                     <textarea id="kb-modal-ticket-title" rows="3" class="w-full min-h-[4.5rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
@@ -1072,14 +1092,38 @@
                     </div>
                 </div>
                 <p class="text-xs text-gray-500">Format: Jira-style duration values like <code>30m</code>, <code>2h</code>, <code>1d 3h</code>, or <code>1w 2d 4h 30m</code>.</p>
-                <div id="kb-modal-source-meta" class="hidden mb-3 p-3 bg-[#152054] border border-white/10 rounded">
-                    <div id="kb-modal-source-meta-body" class="kb-ticket-meta-grid kb-ticket-meta-grid--two-col"></div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                        <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
+                            <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                            <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
+                            <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                            <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Complexity</label>
+                        <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="auto" selected>Auto - Orchestrator assesses</option>
+                            <option value="low">I - Low</option>
+                            <option value="medium">II - Medium</option>
+                            <option value="high">III - High</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Used by workflow and CLI routing.</p>
+                    </div>
+                </div>
+                <div class="flex justify-end pt-2">
+                    <button type="button" class="kb-modal-save-action px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save local changes</button>
                 </div>
             </div>
             <!-- Notes tab (orchestrator context — read-only) -->
-            <div id="kb-tm-tab-notes" class="kb-tm-pane hidden p-6 space-y-3">
-                <p class="text-xs text-gray-500">Compact notes from orchestrator discussions on this ticket. These travel with the ticket into workflow runs.</p>
-                <div id="kb-modal-context-notes" class="text-sm text-gray-200 whitespace-pre-wrap rounded border border-white/10 bg-[#152054] p-3 min-h-[8rem] max-h-[16rem] overflow-y-auto text-xs leading-relaxed"></div>
+            <div id="kb-tm-tab-notes" class="kb-tm-pane hidden p-6 flex flex-col gap-4">
+                <p class="text-xs text-gray-500">Local notes for the agent and workflow runs. These stay in DecisionsAI and do not overwrite Jira or Trello.</p>
+                <textarea id="kb-modal-context-notes" class="w-full min-h-[14rem] max-h-[18rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y" placeholder="Add local context, agent notes, constraints, or decisions here..."></textarea>
+                <div class="mt-auto flex justify-end border-t border-white/10 pt-4">
+                    <button type="button" class="kb-modal-save-action px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save notes</button>
+                </div>
             </div>
             <!-- Links tab -->
             <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-6 space-y-4">
@@ -1112,64 +1156,8 @@
                     </div>
                 </div>
             </div>
-            <!-- Report tab -->
-            <div id="kb-tm-tab-report" class="kb-tm-pane hidden p-6 space-y-4">
-                <div class="flex items-center justify-between gap-3">
-                    <div class="text-sm text-gray-400">Ticket Execution Report</div>
-                    <button type="button" id="kb-modal-clear-report" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Clear Report</button>
-                </div>
-                <div id="kb-modal-audit-summary" class="grid grid-cols-3 gap-2"></div>
-                <div id="kb-modal-audit-runs" class="space-y-3"></div>
-                <div class="text-xs text-gray-500">Full audit trail</div>
-                <div id="kb-modal-audit-entries" class="space-y-2"></div>
-            </div>
-            <!-- Advanced tab -->
-            <div id="kb-tm-tab-advanced" class="kb-tm-pane hidden p-6 space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                        <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
-                            <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
-                            <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
-                            <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
-                            <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-1">Complexity</label>
-                        <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="auto" selected>Auto - Orchestrator assesses</option>
-                            <option value="low">I - Low</option>
-                            <option value="medium">II - Medium</option>
-                            <option value="high">III - High</option>
-                        </select>
-                        <p class="text-xs text-gray-500 mt-1">Used by workflow and CLI routing.</p>
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">Link to</label>
-                    <div class="grid grid-cols-2 gap-2">
-                        <div>
-                            <label class="text-xs text-gray-500">Workflow</label>
-                            <select id="kb-modal-link-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                <option value="">Inherit from board default</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="text-xs text-gray-500">Project</label>
-                            <select id="kb-modal-link-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                <option value="">Inherit from board default</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
-        <!-- Modal footer (local tickets only) -->
-        <div id="kb-modal-footer" class="flex justify-end items-center gap-2 px-6 pb-5 pt-2 border-t border-white/20">
-            <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
-            <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
-        </div>
+        <button type="button" id="kb-modal-delete" class="hidden">Delete local copy</button>
     </div>
 </div>
 

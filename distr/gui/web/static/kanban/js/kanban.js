@@ -9,6 +9,7 @@
     var modalTicketId = null;
     /** Loaded ticket's source_chat_id (null = unset); used to avoid overwriting on save. */
     var modalTicketSourceChatId = null;
+    var modalTicketReadOnlyDetails = false;
     var kanbanTicketModalDetailsHeight = 0;
     var sendWorkflowContext = null;
     var copyModalState = null;     // { mode: 'single'|'lane', ... } for copy modal
@@ -562,6 +563,7 @@
     function prepareExternalTicketModal() {
         modalTicketId = null;
         modalTicketSourceChatId = null;
+        modalTicketReadOnlyDetails = true;
     }
 
     var ticketUi = window.KanbanTicketUi.create({
@@ -571,9 +573,15 @@
         setPriorityButtons: setPriorityButtons,
         setTicketComplexity: setTicketComplexity,
         renderModalLinks: renderModalLinks,
+        renderModalFiles: renderModalFiles,
+        renderModalTodos: renderModalTodos,
         switchTicketTab: switchTicketTab,
         showSnackbar: showSnackbar,
         prepareExternalTicketModal: prepareExternalTicketModal,
+        setExternalModalTicketId: function(id) {
+            modalTicketId = id || null;
+            modalTicketReadOnlyDetails = true;
+        },
         openTicketModal: openTicketModal,
         copyAndPushExternalTicket: copyAndPushExternalTicket,
         openSendWorkflowModal: openSendWorkflowModal,
@@ -595,6 +603,9 @@
         apiFetch: apiFetch,
         showSnackbar: showSnackbar,
         getModalTicketId: function() { return modalTicketId; },
+        ensureModalTicketId: function() {
+            return modalTicketId ? Promise.resolve(modalTicketId) : persistExternalTicketLocalCopy();
+        },
         renderModalAuditEntries: renderModalAuditEntries,
         loadModalAuditReport: loadModalAuditReport,
     });
@@ -2242,6 +2253,8 @@
             time_estimate: estEl ? estEl.value : "",
             time_spent: durEl ? durEl.value : "",
             priority: getSelectedPriority(),
+            complexity: getTicketComplexity(),
+            context_notes: (document.getElementById("kb-modal-context-notes").value || "").trim(),
             linked_project_id: linkedProjectId,
             linked_project_name: linkedProjectId ? linkedProjectName : "",
             url: ""
@@ -2374,7 +2387,85 @@
         var el = document.getElementById("kb-modal-context-notes");
         if (!el) return;
         var text = (notes || "").trim();
-        el.textContent = text || "No notes yet. Send this ticket to the orchestrator to build context here.";
+        el.value = text;
+    }
+
+    function ticketSourceLinkMarkup(label) {
+        var normalized = String(label || "").toLowerCase();
+        if (normalized.indexOf("jira") !== -1) {
+            return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.64 1.17a1.42 1.42 0 0 0 1.38 1.7h2.02v1.94a1.42 1.42 0 0 0 1.42 1.42h1.9v1.84a1.42 1.42 0 0 1-1.42 1.42h-2v1.95a1.42 1.42 0 0 1-1.42 1.42H7.64V11.9a1.42 1.42 0 0 0-1.42-1.42H4.28V8.53a1.42 1.42 0 0 0-1.42-1.42H.94V5.27a1.42 1.42 0 0 1 1.42-1.42h2V1.93A1.42 1.42 0 0 1 5.78.51h1.86Z"/></svg>';
+        }
+        if (normalized.indexOf("trello") !== -1) {
+            return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.8 1h10.4A1.8 1.8 0 0 1 15 2.8v10.4a1.8 1.8 0 0 1-1.8 1.8H2.8A1.8 1.8 0 0 1 1 13.2V2.8A1.8 1.8 0 0 1 2.8 1Zm.82 2.2A.62.62 0 0 0 3 3.82v4.96c0 .34.28.62.62.62h2.56c.34 0 .62-.28.62-.62V3.82a.62.62 0 0 0-.62-.62H3.62Zm6.2 0a.62.62 0 0 0-.62.62v3.16c0 .34.28.62.62.62h2.56c.34 0 .62-.28.62-.62V3.82a.62.62 0 0 0-.62-.62H9.82Z"/></svg>';
+        }
+        return '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M11.5 3H16a1 1 0 0 1 1 1v4.5m-1-4.5L9 11m-2 6H4a1 1 0 0 1-1-1v-3"/></svg>';
+    }
+
+    function setTicketModalSourceUrl(url, label) {
+        var link = document.getElementById("kb-modal-url-link");
+        if (!link) return;
+        var value = (url || "").trim();
+        if (!value) {
+            link.classList.add("hidden");
+            link.removeAttribute("href");
+            link.innerHTML = "";
+            return;
+        }
+        var sourceLabel = label || "Open source";
+        link.href = value;
+        link.innerHTML = ticketSourceLinkMarkup(sourceLabel);
+        link.title = sourceLabel;
+        link.setAttribute("aria-label", sourceLabel);
+        link.classList.remove("hidden");
+    }
+
+    function preferredLocalBoardForExternalCache() {
+        var extProjectId = currentBoardData && currentBoardData.default_project_id ? currentBoardData.default_project_id : null;
+        if (extProjectId) {
+            for (var i = 0; i < dbBoards.length; i++) {
+                if (dbBoards[i].default_project_id === extProjectId) return dbBoards[i];
+            }
+        }
+        return dbBoards.length ? dbBoards[0] : null;
+    }
+
+    function persistExternalTicketLocalCopy() {
+        var ticket = window._extTicketData || null;
+        var source = window._extTicketSource || (currentBoard && currentBoard.source) || "";
+        var board = preferredLocalBoardForExternalCache();
+        if (!ticket || !source) {
+            return Promise.reject(new Error("No external ticket loaded"));
+        }
+        if (!board || !board.id) {
+            return Promise.reject(new Error("No local board available for the ticket cache"));
+        }
+        var payload = {
+            board_id: board.id,
+            title: ticket.title || "Untitled ticket",
+            description: ticket.description || "",
+            priority: getSelectedPriority(),
+            complexity: getTicketComplexity(),
+            time_estimate: ticket.time_estimate || "",
+            time_spent: ticket.time_spent || "",
+            external_source: source,
+            external_id: String(ticket.id || ticket.external_id || ""),
+            external_url: ticket.url || ticket.external_url || "",
+            media: Array.isArray(ticket.media) ? ticket.media : [],
+            todos: Array.isArray(ticket.todos) ? ticket.todos : [],
+        };
+        if (currentBoardData && currentBoardData.default_project_id) {
+            payload.linked_project_id = currentBoardData.default_project_id;
+        }
+        commonUtils.mergeSourceChatIntoPayload(payload);
+        return apiFetch("/api/tickets/tickets/copy-external-to-board", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        }).then(function(res) {
+            if (!res || !res.id) throw new Error("Local ticket cache was not created");
+            modalTicketId = res.id;
+            return res.id;
+        });
     }
 
     function openTicketModal(ticketId) {
@@ -2398,12 +2489,9 @@
             renderModalFiles(t.files || []);
             renderModalTodos(t.todos || []);
             renderModalContextNotes(t.context_notes || "");
-            loadModalAuditReport(ticketId, t.audit_entries || []);
-            loadLinkableEntities(t);
+            var providerLabel = t.source_provider || t.external_source || "";
+            setTicketModalSourceUrl(t.source_url || t.external_url || "", providerLabel ? ("Go to " + providerLabel.charAt(0).toUpperCase() + providerLabel.slice(1)) : "Open source");
             modalTicketSourceChatId = t.source_chat_id != null ? t.source_chat_id : null;
-            // Hide external metadata section for local tickets
-            var extMeta = document.getElementById("kb-modal-external-meta");
-            if (extMeta) extMeta.classList.add("hidden");
             document.getElementById("kb-ticket-modal").classList.remove("hidden");
             requestAnimationFrame(function () { syncKanbanTicketModalHeights(); });
         }).catch(function(e) { showSnackbar("Failed to load ticket: " + e.message, "error"); });
@@ -2545,6 +2633,7 @@
         document.getElementById("kb-ticket-modal").classList.add("hidden");
         modalTicketId = null;
         modalTicketSourceChatId = null;
+        modalTicketReadOnlyDetails = false;
         window._extTicketData = null;
         window._extTicketSource = null;
         var descArea = document.getElementById("kb-modal-ticket-desc");
@@ -2581,6 +2670,12 @@
             complexitySelect.disabled = false;
             complexitySelect.classList.remove("opacity-50", "cursor-not-allowed");
         }
+        var notesEl = document.getElementById("kb-modal-context-notes");
+        if (notesEl) {
+            notesEl.readOnly = false;
+            notesEl.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
+        }
+        modalTicketReadOnlyDetails = false;
         renderTicketSourceMeta(null);
         var richDiv = descArea.parentElement.querySelector(".kb-ext-rich-desc");
         if (richDiv) richDiv.remove();
@@ -2590,6 +2685,9 @@
         });
         var modalFooter = document.getElementById("kb-modal-footer");
         if (modalFooter) modalFooter.classList.remove("hidden");
+        var modalActions = document.getElementById("kb-modal-actions");
+        if (modalActions) modalActions.classList.remove("hidden");
+        setTicketModalSourceUrl("");
         // Clear todos input
         var todoInput = document.getElementById("kb-modal-todo-input");
         if (todoInput) todoInput.readOnly = false;
@@ -2656,7 +2754,6 @@
     var isValidTimeTrackingValue = commonUtils.isValidTimeTrackingValue;
 
     function saveTicket() {
-        if (!modalTicketId) return;
         var estimate = document.getElementById("kb-modal-ticket-estimate").value.trim();
         var duration = document.getElementById("kb-modal-ticket-duration").value.trim();
         if (!isValidTimeTrackingValue(estimate)) {
@@ -2668,28 +2765,36 @@
             return;
         }
         var payload = {
-            title: document.getElementById("kb-modal-ticket-title").value.trim(),
-            description: document.getElementById("kb-modal-ticket-desc").value.trim(),
             priority: getSelectedPriority(),
             complexity: getTicketComplexity(),
-            time_estimate: estimate,
-            time_spent: duration,
-            linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value) || null,
-            linked_project_id: parseInt(document.getElementById("kb-modal-link-project").value) || null,
             linked_snippet_id: null,
             linked_action_id: null,
+            context_notes: (document.getElementById("kb-modal-context-notes").value || "").trim(),
         };
+        if (!modalTicketReadOnlyDetails) {
+            payload.title = document.getElementById("kb-modal-ticket-title").value.trim();
+            payload.description = document.getElementById("kb-modal-ticket-desc").value.trim();
+            payload.time_estimate = estimate;
+            payload.time_spent = duration;
+        }
         if (modalTicketSourceChatId == null && typeof commonUtils.getSourceChatIdForTickets === "function") {
             var linkCid = commonUtils.getSourceChatIdForTickets();
             if (linkCid != null) payload.source_chat_id = linkCid;
         }
-        if (!payload.title) { showSnackbar("Title is required", "error"); return; }
-        apiFetch("/api/tickets/tickets/" + modalTicketId, {
-            method: "PUT", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
+        if (!modalTicketReadOnlyDetails && !payload.title) { showSnackbar("Title is required", "error"); return; }
+        var wasExternalOnly = !modalTicketId && window._extTicketData;
+        var ensureLocal = modalTicketId ? Promise.resolve(modalTicketId) : persistExternalTicketLocalCopy();
+        ensureLocal.then(function(ticketId) {
+            return apiFetch("/api/tickets/tickets/" + ticketId, {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
         }).then(function() {
-            showSnackbar("Ticket saved"); closeTicketModal();
-            selectBoard("database", currentBoard.id);
+            showSnackbar(wasExternalOnly ? "Ticket cached locally and saved" : "Ticket saved");
+            if (!modalTicketReadOnlyDetails) {
+                closeTicketModal();
+                selectBoard("database", currentBoard.id);
+            }
         }).catch(function(e) { showSnackbar("Save failed: " + e.message, "error"); });
     }
 
@@ -2697,9 +2802,9 @@
         if (!modalTicketId) return;
         var tid = modalTicketId;
         showKanbanConfirm({
-            title: "Delete ticket",
-            message: "Delete this ticket? This cannot be undone.",
-            confirmLabel: "Delete",
+            title: "Delete local copy",
+            message: "Delete the local DecisionsAI copy/cache of this ticket? This will not delete the Jira or Trello source item.",
+            confirmLabel: "Delete local copy",
             danger: true,
             onConfirm: function() {
                 hideKanbanConfirm();
@@ -3638,7 +3743,9 @@
 
         // Ticket modal
         document.getElementById("kb-modal-close").addEventListener("click", closeTicketModal);
-        document.getElementById("kb-modal-save").addEventListener("click", saveTicket);
+        document.querySelectorAll(".kb-modal-save-action").forEach(function(btn) {
+            btn.addEventListener("click", saveTicket);
+        });
         document.getElementById("kb-modal-delete").addEventListener("click", deleteTicket);
         var clearReportBtn = document.getElementById("kb-modal-clear-report");
         if (clearReportBtn) clearReportBtn.addEventListener("click", clearModalAuditReport);

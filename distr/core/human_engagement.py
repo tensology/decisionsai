@@ -164,6 +164,192 @@ def reset_engagement_ledger() -> None:
         return
 
 
+def _ensure_remote_reply_context_table() -> None:
+    try:
+        from sqlalchemy import text
+        from distr.core.db import engine
+
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS remote_reply_context (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform VARCHAR,
+                    channel VARCHAR,
+                    workflow_id INTEGER,
+                    run_id INTEGER,
+                    step_id INTEGER,
+                    ticket_id INTEGER,
+                    board_id INTEGER,
+                    project_id INTEGER,
+                    execution_session_id INTEGER,
+                    ticket_title TEXT,
+                    workflow_title TEXT,
+                    step_title TEXT,
+                    state_fingerprint VARCHAR,
+                    outbound_text TEXT,
+                    sent_at FLOAT NOT NULL,
+                    metadata TEXT
+                )
+            """))
+            conn.commit()
+    except Exception:
+        return
+
+
+def reset_remote_reply_context() -> None:
+    try:
+        from sqlalchemy import text
+        from distr.core.db import engine
+
+        _ensure_remote_reply_context_table()
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM remote_reply_context"))
+            conn.commit()
+    except Exception:
+        return
+
+
+def record_remote_reply_context(
+    *,
+    platform: str,
+    channel: str = "",
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+    step_id: int | None = None,
+    ticket_id: int | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    execution_session_id: int | None = None,
+    ticket_title: str = "",
+    workflow_title: str = "",
+    step_title: str = "",
+    state_fingerprint: str = "",
+    outbound_text: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Remember what the user most recently heard/saw so remote replies stay grounded."""
+    if not any([workflow_id, run_id, step_id, ticket_id, board_id, project_id, execution_session_id, ticket_title, workflow_title, step_title, outbound_text]):
+        return
+    try:
+        from sqlalchemy import text
+        from distr.core.db import engine
+
+        _ensure_remote_reply_context_table()
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO remote_reply_context(
+                        platform, channel, workflow_id, run_id, step_id, ticket_id,
+                        board_id, project_id, execution_session_id, ticket_title,
+                        workflow_title, step_title, state_fingerprint, outbound_text,
+                        sent_at, metadata
+                    )
+                    VALUES (
+                        :platform, :channel, :workflow_id, :run_id, :step_id,
+                        :ticket_id, :board_id, :project_id, :execution_session_id,
+                        :ticket_title, :workflow_title, :step_title,
+                        :state_fingerprint, :outbound_text, :sent_at, :metadata
+                    )
+                """),
+                {
+                    "platform": platform,
+                    "channel": channel,
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "ticket_id": ticket_id,
+                    "board_id": board_id,
+                    "project_id": project_id,
+                    "execution_session_id": execution_session_id,
+                    "ticket_title": ticket_title,
+                    "workflow_title": workflow_title,
+                    "step_title": step_title,
+                    "state_fingerprint": state_fingerprint,
+                    "outbound_text": outbound_text,
+                    "sent_at": time.time(),
+                    "metadata": json.dumps(metadata or {}, ensure_ascii=False, default=str),
+                },
+            )
+            conn.commit()
+    except Exception:
+        return
+
+
+def latest_remote_reply_context(*, platform: str = "", max_age_s: int = 3600) -> dict[str, Any] | None:
+    try:
+        from sqlalchemy import text
+        from distr.core.db import engine
+
+        _ensure_remote_reply_context_table()
+        params: dict[str, Any] = {"cutoff": time.time() - max(1, int(max_age_s))}
+        where = "sent_at >= :cutoff"
+        if platform:
+            where += " AND platform = :platform"
+            params["platform"] = platform
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(f"""
+                    SELECT *
+                    FROM remote_reply_context
+                    WHERE {where}
+                    ORDER BY sent_at DESC, id DESC
+                    LIMIT 1
+                """),
+                params,
+            ).mappings().first()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def build_remote_reply_context_preamble(
+    text: str,
+    *,
+    platform: str = "telegram",
+    max_age_s: int = 3600,
+) -> str:
+    """Prefix inbound remote text with hidden operational context for the agent."""
+    clean = str(text or "").strip()
+    if not clean or "[Remote reply context]" in clean:
+        return clean
+    ctx = latest_remote_reply_context(platform=platform, max_age_s=max_age_s)
+    if not ctx and platform:
+        ctx = latest_remote_reply_context(max_age_s=max_age_s)
+    if not ctx:
+        return clean
+
+    lines = [
+        "[Remote reply context]",
+        f"The user is replying from {platform or 'a remote integration'} to the most recent DecisionsAI update.",
+    ]
+    if ctx.get("ticket_title"):
+        lines.append(f"Ticket: {ctx.get('ticket_title')}")
+    if ctx.get("ticket_id"):
+        lines.append(f"Ticket ID: {ctx.get('ticket_id')}")
+    if ctx.get("workflow_title"):
+        lines.append(f"Workflow: {ctx.get('workflow_title')}")
+    if ctx.get("workflow_id"):
+        lines.append(f"Workflow ID: {ctx.get('workflow_id')}")
+    if ctx.get("run_id"):
+        lines.append(f"Run: #{ctx.get('run_id')}")
+    if ctx.get("step_title"):
+        lines.append(f"Step: {ctx.get('step_title')}")
+    if ctx.get("step_id"):
+        lines.append(f"Step ID: {ctx.get('step_id')}")
+    if ctx.get("outbound_text"):
+        outbound = re.sub(r"\s+", " ", str(ctx.get("outbound_text") or "")).strip()
+        if len(outbound) > 280:
+            outbound = outbound[:277].rstrip() + "..."
+        lines.append(f"Last update sent to user: {outbound}")
+    lines.extend([
+        "Treat the reply as steering or feedback for this ticket/workflow unless the user clearly changes subject.",
+        "",
+        "User reply:",
+        clean,
+    ])
+    return "\n".join(lines)
+
+
 def _ledger_row(dedupe_key: str) -> dict[str, Any] | None:
     try:
         from sqlalchemy import text
@@ -262,7 +448,11 @@ def _dedupe_key(intent: EngagementIntent) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def sanitize_engagement_text(text: str, *, preserve_links: bool = False) -> str:
+def sanitize_engagement_text(
+    text: str,
+    *,
+    preserve_links: bool = False,
+) -> str:
     clean = str(text or "").strip()
     if not clean:
         return ""
@@ -305,8 +495,6 @@ def sanitize_engagement_text(text: str, *, preserve_links: bool = False) -> str:
     clean = re.sub(r"(?i)^quick update:\s*", "", clean)
     clean = re.sub(r"\s+([.,;:])", r"\1", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
-    if len(clean) > 900:
-        clean = clean[:890].rsplit(" ", 1)[0].rstrip() + "\nMore detail is in the app."
     return clean
 
 

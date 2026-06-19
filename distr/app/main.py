@@ -494,6 +494,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logging.getLogger(__name__).debug("agent event queue registration skipped: %s", exc)
         self._splash_sound_played = False  # Flag to prevent double-playing splash sound
         self._startup_splash = None
+        self._splash_sound_lock = threading.Lock()
+        self._splash_sound_process = None
 
         # Create shared manager for cross-process screen info cache
         self.screen_info_manager = self.mp_context.Manager()
@@ -1172,6 +1174,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     def _play_splash_sound(self):
         """Play the splash sound file in a separate thread."""
         def play_sound():
+            process = None
             try:
                 # Get the path to the sound file — main.py is at distr/app/main.py,
                 # assets are at project_root/assets/
@@ -1181,39 +1184,64 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 if not os.path.exists(sound_path):
                     logger.warning(f"Splash sound file not found: {sound_path}")
                     return
-                
+
                 logger.info(f"Playing splash sound: {sound_path}")
-                
-                # Play sound using system player (non-blocking)
-                if sys.platform == "darwin":  # macOS
-                    subprocess.Popen(['afplay', sound_path], 
-                                    stdout=subprocess.DEVNULL, 
-                                    stderr=subprocess.DEVNULL)
-                elif sys.platform.startswith("linux"):
-                    # Try common Linux audio players
-                    players = [['paplay', sound_path], ['aplay', sound_path], 
-                              ['mpg123', sound_path], ['ffplay', '-nodisp', '-autoexit', sound_path]]
-                    for player_cmd in players:
-                        try:
-                            subprocess.Popen(player_cmd, 
-                                            stdout=subprocess.DEVNULL, 
-                                            stderr=subprocess.DEVNULL)
-                            break
-                        except FileNotFoundError:
-                            continue
-                elif sys.platform == "win32":
-                    # Use ffplay (bundled with ffmpeg) — runs as a separate process
-                    # so it won't conflict with the app's sounddevice audio pipeline
-                    subprocess.Popen(
-                        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', sound_path],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                else:
-                    logger.warning(f"Unsupported platform for audio playback: {sys.platform}")
+                with self._splash_sound_lock:
+                    current_process = self._splash_sound_process
+                    if current_process is not None and current_process.poll() is None:
+                        logger.debug("Splash sound already playing; skipping duplicate request")
+                        return
+
+                    # Play sound using system player (non-blocking)
+                    if sys.platform == "darwin":  # macOS
+                        process = subprocess.Popen(
+                            ['afplay', sound_path],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    elif sys.platform.startswith("linux"):
+                        # Try common Linux audio players
+                        players = [['paplay', sound_path], ['aplay', sound_path],
+                                  ['mpg123', sound_path], ['ffplay', '-nodisp', '-autoexit', sound_path]]
+                        for player_cmd in players:
+                            try:
+                                process = subprocess.Popen(
+                                    player_cmd,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                )
+                                break
+                            except FileNotFoundError:
+                                continue
+                    elif sys.platform == "win32":
+                        # Use ffplay (bundled with ffmpeg) — runs as a separate process
+                        # so it won't conflict with the app's sounddevice audio pipeline
+                        process = subprocess.Popen(
+                            ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', sound_path],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    else:
+                        logger.warning(f"Unsupported platform for audio playback: {sys.platform}")
+                        return
+
+                    if process is None:
+                        logger.warning("No splash sound player available on this platform")
+                        return
+                    self._splash_sound_process = process
             except Exception as e:
                 logger.error(f"Error playing splash sound: {e}")
-        
+                return
+
+            try:
+                process.wait()
+            except Exception:
+                pass
+            finally:
+                with self._splash_sound_lock:
+                    if self._splash_sound_process is process:
+                        self._splash_sound_process = None
+
         # Play in a separate thread to avoid blocking
         sound_thread = threading.Thread(target=play_sound, daemon=True)
         sound_thread.start()

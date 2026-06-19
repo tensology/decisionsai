@@ -1,3 +1,4 @@
+import asyncio
 import numpy as np
 from types import SimpleNamespace
 
@@ -114,3 +115,27 @@ def test_transport_refreshes_when_system_default_name_changes_at_same_index():
 
     assert reopened == [2]
 
+
+def test_transport_defers_confirmed_tts_started_until_output_stream_is_active():
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    transport._out_stream = _FakeStream(active=False)
+
+    refresh_reasons = []
+
+    async def fake_ensure_output_stream_ready_async(*, reason):
+        refresh_reasons.append(reason)
+
+    transport._ensure_output_stream_ready_async = fake_ensure_output_stream_ready_async
+
+    assert asyncio.run(transport._ready_to_emit_confirmed_tts_started()) is False
+    assert refresh_reasons == ["audible audio before tts_started"]
+
+    transport._out_stream = _FakeStream(active=False)
+
+    async def fake_recovering_ensure_output_stream_ready_async(*, reason):
+        refresh_reasons.append(reason)
+        transport._out_stream = _FakeStream(active=True)
+
+    transport._ensure_output_stream_ready_async = fake_recovering_ensure_output_stream_ready_async
+
+    assert asyncio.run(transport._ready_to_emit_confirmed_tts_started()) is True

@@ -27,7 +27,10 @@ def _audit_outbound_telegram_text(text: Optional[str]) -> Optional[str]:
     try:
         from distr.core.human_engagement import sanitize_engagement_text
 
-        return sanitize_engagement_text(clean, preserve_links="/api/remote/" in clean)
+        return sanitize_engagement_text(
+            clean,
+            preserve_links="/api/remote/" in clean,
+        )
     except Exception:
         pass
 
@@ -51,8 +54,6 @@ def _audit_outbound_telegram_text(text: Optional[str]) -> Optional[str]:
     clean = re.sub(r"(?i)^quick update:\s*", "", clean)
     clean = re.sub(r"\s+([.,;:])", r"\1", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
-    if len(clean) > 900:
-        clean = clean[:890].rsplit(" ", 1)[0].rstrip() + "\nMore detail is in the app."
     return clean
 
 

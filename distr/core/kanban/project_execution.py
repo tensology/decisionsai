@@ -103,6 +103,12 @@ def create_execution_session(
             )
         except Exception:
             pass
+        try:
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            increment_workflow_updated()
+        except Exception:
+            pass
         return int(row.id)
 
 
@@ -148,6 +154,12 @@ def append_execution_event(
                 summary=message or "",
                 payload=payload or {},
             )
+        except Exception:
+            pass
+        try:
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            increment_workflow_updated()
         except Exception:
             pass
 
@@ -197,6 +209,12 @@ def complete_execution_session(
                 payload=output_packet or {},
                 evidence={"error": error} if error else {},
             )
+        except Exception:
+            pass
+        try:
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            increment_workflow_updated()
         except Exception:
             pass
 

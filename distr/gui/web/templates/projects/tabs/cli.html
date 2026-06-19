@@ -38,6 +38,16 @@
             <span id="terminal-preflight-ok-text">CLI ready — you can send prompts.</span>
             <button type="button" id="terminal-preflight-recheck-ok" class="text-[10px] uppercase tracking-wide text-emerald-300/90 hover:text-white">Re-check</button>
         </div>
+        <section id="terminal-cli-setup-panel" class="mx-3 mt-2 rounded border border-white/10 bg-[#101827]/80">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+                <div>
+                    <h3 class="text-xs font-semibold text-white">CLI setup</h3>
+                    <p class="text-[11px] text-gray-400">Enable a CLI, store its credential here, then test the connection and model list.</p>
+                </div>
+                <button type="button" id="terminal-cli-setup-refresh" class="text-[10px] uppercase tracking-wide text-orange-300 hover:text-white">Refresh</button>
+            </div>
+            <div id="terminal-cli-setup-list" class="grid gap-2 p-3 md:grid-cols-2"></div>
+        </section>
         <div id="terminal-transcript" class="flex-1 min-h-0 px-3 py-3 pb-6"></div>
     </div>
     <div class="flex gap-2 px-1 items-center">

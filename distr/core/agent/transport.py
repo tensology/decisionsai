@@ -481,6 +481,23 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             return
         self._ensure_output_stream_for_configured_device(reason=reason)
 
+    async def _ready_to_emit_confirmed_tts_started(self) -> bool:
+        """Confirm the output stream is alive before surfacing playback UI."""
+        if self._output_stream_is_active():
+            return True
+
+        logger.warning(
+            "Transport: Output stream inactive when audible audio arrived; refreshing before tts_started",
+        )
+        await self._ensure_output_stream_ready_async(reason="audible audio before tts_started")
+        if self._output_stream_is_active():
+            return True
+
+        logger.warning(
+            "Transport: Output stream still inactive after refresh; deferring confirmed tts_started",
+        )
+        return False
+
     def set_base_vad_confidence(self, confidence: float):
         """No-op — echo gate in STT service handles suppression."""
         pass
@@ -1091,12 +1108,13 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                         self._aec_ref_buf.push(processed_audio)
 
                     has_audible_samples = bool(np.max(np.abs(processed_audio)) > 1e-4)
-                    if (
+                    should_emit_tts_started = (
                         not self._tts_started_event_emitted
                         and self.event_queue
                         and has_audible_samples
                         and self._state not in (AudioPlaybackState.DRAINING, AudioPlaybackState.COMPLETED)
-                    ):
+                    )
+                    if should_emit_tts_started and await self._ready_to_emit_confirmed_tts_started():
                         try:
                             self.event_queue.put(
                                 (

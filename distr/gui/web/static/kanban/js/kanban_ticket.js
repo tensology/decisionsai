@@ -108,6 +108,17 @@
             return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300 font-medium">' + deps.esc(source) + "</span>";
         }
 
+        function externalSourceLinkMarkup(source) {
+            var normalized = String(source || "").toLowerCase();
+            if (normalized === "jira") {
+                return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.64 1.17a1.42 1.42 0 0 0 1.38 1.7h2.02v1.94a1.42 1.42 0 0 0 1.42 1.42h1.9v1.84a1.42 1.42 0 0 1-1.42 1.42h-2v1.95a1.42 1.42 0 0 1-1.42 1.42H7.64V11.9a1.42 1.42 0 0 0-1.42-1.42H4.28V8.53a1.42 1.42 0 0 0-1.42-1.42H.94V5.27a1.42 1.42 0 0 1 1.42-1.42h2V1.93A1.42 1.42 0 0 1 5.78.51h1.86Z"/></svg>';
+            }
+            if (normalized === "trello") {
+                return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.8 1h10.4A1.8 1.8 0 0 1 15 2.8v10.4a1.8 1.8 0 0 1-1.8 1.8H2.8A1.8 1.8 0 0 1 1 13.2V2.8A1.8 1.8 0 0 1 2.8 1Zm.82 2.2A.62.62 0 0 0 3 3.82v4.96c0 .34.28.62.62.62h2.56c.34 0 .62-.28.62-.62V3.82a.62.62 0 0 0-.62-.62H3.62Zm6.2 0a.62.62 0 0 0-.62.62v3.16c0 .34.28.62.62.62h2.56c.34 0 .62-.28.62-.62V3.82a.62.62 0 0 0-.62-.62H9.82Z"/></svg>';
+            }
+            return '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M11.5 3H16a1 1 0 0 1 1 1v4.5m-1-4.5L9 11m-2 6H4a1 1 0 0 1-1-1v-3"/></svg>';
+        }
+
         function metricTipHtml(tooltip, innerHtml) {
             var tip = tooltip || "";
             return '<span class="kb-card-action-tip" data-tooltip="' + deps.esc(tip) + '" tabindex="0">' + innerHtml + "</span>";
@@ -507,47 +518,45 @@
                 complexitySelect.classList.add("opacity-50", "cursor-not-allowed");
             }
             deps.renderModalLinks([]);
+            if (ticket.local_cache_id && typeof deps.setExternalModalTicketId === "function") {
+                deps.setExternalModalTicketId(ticket.local_cache_id);
+            }
+            deps.renderModalLinks(ticket.links || []);
+            if (typeof deps.renderModalFiles === "function") {
+                deps.renderModalFiles(ticket.files || []);
+            }
+            if (ticket.local_cache_id && typeof deps.renderModalTodos === "function") {
+                deps.renderModalTodos(ticket.todos || []);
+            } else {
+                renderExternalTodos(ticket.todos || []);
+            }
             renderExternalMedia(ticket.media || [], source);
-            renderExternalTodos(ticket.todos || []);
-
-            var metaContainer = document.getElementById("kb-modal-external-meta");
-            if (metaContainer) {
-                var rowParts = [];
-                if (ticket.url) {
-                    var sourceLabel = source.charAt(0).toUpperCase() + source.slice(1);
-                    rowParts.push(ticketMetaField(
-                        "Source",
-                        '<a href="' + deps.esc(ticket.url) + '" target="_blank" rel="noopener noreferrer" class="text-[#f97316] hover:underline">Open in ' +
-                        deps.esc(sourceLabel) + "</a>"
-                    ));
-                }
-                if (ticket.members && ticket.members.length) {
-                    var membersText = ticket.members.map(deps.esc).join(", ");
-                    rowParts.push(ticketMetaField(
-                        "Members",
-                        '<span class="kb-ticket-meta-value--truncate" title="' + deps.esc(ticket.members.join(", ")) + '">' +
-                        membersText + "</span>"
-                    ));
-                }
-                if (ticket.labels && ticket.labels.length) {
-                    rowParts.push(ticketMetaField(
-                        "Labels",
-                        '<span class="kb-ticket-meta-labels">' +
-                        ticket.labels.map(function(lb) {
-                            return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 whitespace-nowrap">' + deps.esc(lb) + "</span>";
-                        }).join("") +
-                        "</span>"
-                    ));
-                }
-                if (ticket.reporter) {
-                    rowParts.push(ticketMetaField("Reporter", deps.esc(ticket.reporter)));
-                }
-                metaContainer.innerHTML = rowParts.join("");
-                metaContainer.classList.toggle("hidden", !rowParts.length);
+            var notesEl = document.getElementById("kb-modal-context-notes");
+            if (notesEl) {
+                notesEl.value = ticket.context_notes || "";
+                notesEl.readOnly = false;
+                notesEl.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
             }
 
             var modalFooter = document.getElementById("kb-modal-footer");
-            if (modalFooter) modalFooter.classList.add("hidden");
+            if (modalFooter) modalFooter.classList.remove("hidden");
+            var modalActions = document.getElementById("kb-modal-actions");
+            if (modalActions) modalActions.classList.add("hidden");
+            var urlLink = document.getElementById("kb-modal-url-link");
+            if (urlLink) {
+                if (ticket.url) {
+                    urlLink.href = ticket.url;
+                    var sourceLabel = "Go to " + source.charAt(0).toUpperCase() + source.slice(1);
+                    urlLink.innerHTML = externalSourceLinkMarkup(source);
+                    urlLink.title = sourceLabel;
+                    urlLink.setAttribute("aria-label", sourceLabel);
+                    urlLink.classList.remove("hidden");
+                } else {
+                    urlLink.classList.add("hidden");
+                    urlLink.removeAttribute("href");
+                    urlLink.innerHTML = "";
+                }
+            }
             document.getElementById("kb-modal-title").textContent = ticket.title || "Ticket";
             window._extTicketData = ticket;
             window._extTicketSource = source;
@@ -756,13 +765,16 @@
         }
 
         function addLink() {
-            if (!deps.getModalTicketId()) return;
             var title = document.getElementById("kb-modal-link-title").value.trim();
             var url = document.getElementById("kb-modal-link-url").value.trim();
             if (!title || !url) { deps.showSnackbar("Title and URL required", "error"); return; }
-            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/links", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ title: title, url: url })
+            var ensure = typeof deps.ensureModalTicketId === "function" ? deps.ensureModalTicketId() : Promise.resolve(deps.getModalTicketId());
+            ensure.then(function(ticketId) {
+                if (!ticketId) throw new Error("No ticket cache available");
+                return deps.apiFetch("/api/tickets/tickets/" + ticketId + "/links", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ title: title, url: url })
+                });
             }).then(function() {
                 document.getElementById("kb-modal-link-title").value = "";
                 document.getElementById("kb-modal-link-url").value = "";
@@ -795,14 +807,18 @@
         }
 
         function uploadFiles(fileList) {
-            if (!deps.getModalTicketId() || !fileList.length) return;
-            var promises = [];
-            for (var i = 0; i < fileList.length; i++) {
-                var form = new FormData();
-                form.append("file", fileList[i]);
-                promises.push(deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/files", { method: "POST", body: form }));
-            }
-            Promise.all(promises).then(function() {
+            if (!fileList.length) return;
+            var ensure = typeof deps.ensureModalTicketId === "function" ? deps.ensureModalTicketId() : Promise.resolve(deps.getModalTicketId());
+            ensure.then(function(ticketId) {
+                if (!ticketId) throw new Error("No ticket cache available");
+                var promises = [];
+                for (var i = 0; i < fileList.length; i++) {
+                    var form = new FormData();
+                    form.append("file", fileList[i]);
+                    promises.push(deps.apiFetch("/api/tickets/tickets/" + ticketId + "/files", { method: "POST", body: form }));
+                }
+                return Promise.all(promises);
+            }).then(function() {
                 deps.showSnackbar("Files uploaded");
                 refreshModalTicket();
             }).catch(function(e) { deps.showSnackbar("Upload failed: " + e.message, "error"); });
@@ -835,9 +851,13 @@
             var input = document.getElementById("kb-modal-todo-input");
             var text = input.value.trim();
             if (!text) return;
-            deps.apiFetch("/api/tickets/tickets/" + deps.getModalTicketId() + "/todos", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: text })
+            var ensure = typeof deps.ensureModalTicketId === "function" ? deps.ensureModalTicketId() : Promise.resolve(deps.getModalTicketId());
+            ensure.then(function(ticketId) {
+                if (!ticketId) throw new Error("No ticket cache available");
+                return deps.apiFetch("/api/tickets/tickets/" + ticketId + "/todos", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: text })
+                });
             }).then(function() {
                 input.value = "";
                 refreshModalTicket();
@@ -1015,6 +1035,8 @@
                 external_id: ticketFields.external_id,
                 external_url: ticketFields.external_url,
                 complexity: ticketFields.complexity || null,
+                media: Array.isArray(ticketFields.media) ? ticketFields.media : [],
+                todos: Array.isArray(ticketFields.todos) ? ticketFields.todos : [],
             };
             if (linkedProjectId) copyPayload.linked_project_id = linkedProjectId;
             if (typeof deps.mergeSourceChatIntoPayload === "function") {
@@ -1048,6 +1070,8 @@
                     external_source: ticket.external_source || (currentBoard.source !== "database" ? currentBoard.source : null),
                     external_id: ticket.external_id || (currentBoard.source !== "database" ? String(ticket.id) : null),
                     external_url: ticket.external_url || ticket.url || "",
+                    media: Array.isArray(ticket.media) ? ticket.media : [],
+                    todos: Array.isArray(ticket.todos) ? ticket.todos : [],
                 },
             });
             showCopyModalUi(deps.getCopyModalState());
@@ -1074,6 +1098,8 @@
                         external_source: ticket.external_source || (currentBoard.source !== "database" ? currentBoard.source : null),
                         external_id: ticket.external_id || (currentBoard.source !== "database" ? String(ticket.id) : null),
                         external_url: ticket.external_url || ticket.url || "",
+                        media: Array.isArray(ticket.media) ? ticket.media : [],
+                        todos: Array.isArray(ticket.todos) ? ticket.todos : [],
                     };
                 }),
             });

@@ -56,6 +56,7 @@
     var workflowLastDragPoint = null;
     var workflowPendingTicketLinks = {};
     var workflowLinkedExternalTicketKeys = {};
+    var workflowLinkedLocalTicketKeys = {};
     var workflowLocalTicketSourceKeys = {};
     var selectedWorkflowQueueTicketId = null;
     var workflowTicketPendingRunStartedAt = {};
@@ -81,7 +82,7 @@
         { id: "playwright", label: "Playwright", emoji: "🎭" },
         { id: "browser_use", label: "Browser use", emoji: "🌐" },
         { id: "computer_use", label: "Computer use", emoji: "🖥️" },
-        { id: "cli", label: "CLI / IDE", emoji: "⌨️" },
+        { id: "cli", label: "CLI", emoji: "⌨️" },
         { id: "python", label: "Python", emoji: "Py" },
         { id: "shell", label: "Shell", emoji: "$" },
         { id: "http", label: "HTTP", emoji: "↗" },
@@ -94,11 +95,15 @@
         execution_mode: "sequential",
         concurrency_scope: "project",
         max_parallel_tickets: 3,
-        branch_per_ticket: true
+        branch_per_ticket: true,
+        auto_route_models: true,
+        free_only: false,
+        prefer_local: true
     };
 
     // Inline SVG icons (14x14, currentColor)
     var SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+    var SVG_LOOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 8.5c-2.2 0-4 1.6-4 3.5s1.8 3.5 4 3.5c4 0 5-7 9-7 2.2 0 4 1.6 4 3.5s-1.8 3.5-4 3.5c-4 0-5-7-9-7z"/></svg>';
     var SVG_FORWARD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 19 22 12 13 5 13 19"/><polygon points="2 19 11 12 2 5 2 19"/></svg>';
     var SVG_CANCEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
        var SVG_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
@@ -575,9 +580,9 @@
             },
             pushTicketToCli: function (ticketId, btnEl) {
                 if (btnEl) btnEl.disabled = true;
-                workflowApiFetch("/api/tickets/tickets/" + ticketId + "/send-to-cli", { method: "POST" })
-                    .then(function (r) { snack((r && r.message) || "Sent to CLI", "success"); })
-                    .catch(function (e) { snack(e.message || "Failed to send to CLI", "error"); })
+                openTicketInWorkflowCli(ticketId)
+                    .then(function () { snack("Ticket opened in CLI", "success"); })
+                    .catch(function (e) { snack(e.message || "Failed to open ticket in CLI", "error"); })
                     .finally(function () { if (btnEl) btnEl.disabled = false; });
             },
             reloadCurrentDatabaseBoard: function () {
@@ -981,6 +986,10 @@
             return ticket.id != null && queued.id != null && String(queued.id) === String(ticket.id);
         });
         if (queuedById) return true;
+        if (item.selected && item.selected.source === "database" && ticket.id != null) {
+            var localKey = "database:" + String(ticket.id);
+            if (workflowLinkedLocalTicketKeys[localKey]) return true;
+        }
         var externalLinkKey = workflowTicketExternalLinkKey(item.selected, ticket);
         return !!(externalLinkKey && workflowLinkedExternalTicketKeys[externalLinkKey]);
     }
@@ -1032,11 +1041,15 @@
 
     function rebuildWorkflowQueueExternalLinkIndex() {
         workflowLinkedExternalTicketKeys = {};
+        workflowLinkedLocalTicketKeys = {};
         (workflowQueueTickets || []).forEach(function (ticket) {
             var source = ticket.external_source || ticket.source_provider || "";
             var externalId = ticket.external_id || ticket.source_external_id || "";
             if (source && externalId) {
-                workflowLinkedExternalTicketKeys[String(source).toLowerCase() + ":" + String(externalId)] = true;
+                var normalizedSource = String(source).toLowerCase();
+                var linkKey = normalizedSource + ":" + String(externalId);
+                if (normalizedSource === "database") workflowLinkedLocalTicketKeys[linkKey] = true;
+                else workflowLinkedExternalTicketKeys[linkKey] = true;
             }
         });
     }
@@ -1210,6 +1223,8 @@
             external_source: isExternal ? selected.source : "",
             external_id: isExternal ? String(ticket.id || ticket.key || ticket.external_id || "") : "",
             external_url: ticket.url || ticket.external_url || "",
+            media: Array.isArray(ticket.media) ? ticket.media : [],
+            todos: Array.isArray(ticket.todos) ? ticket.todos : [],
             board_id: selected.source === "database" ? selected.id : selected.local_id,
             local_board_id: selected.local_id,
             destination_board_id: destinationBoard ? destinationBoard.id : null,
@@ -1284,6 +1299,27 @@
     function ticketMetaField(label, value, isRaw) {
         return '<div class="kb-ticket-meta-field"><div class="kb-ticket-meta-label">' + esc(label) + '</div>' +
             '<div class="kb-ticket-meta-value">' + (isRaw ? (value || "") : esc(String(value || ""))) + "</div></div>";
+    }
+
+    function ticketLinkLooksPreviewable(url) {
+        var u = String(url || "").toLowerCase();
+        return !!u && (
+            u.indexOf("/proxy-image?") >= 0 ||
+            /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/.test(u)
+        );
+    }
+
+    function ticketModalLinkRow(link, isLocal) {
+        var url = link.url || "";
+        var label = esc(link.title || url || "Link");
+        var preview = ticketLinkLooksPreviewable(url)
+            ? '<a class="flex-shrink-0" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer"><img src="' + esc(url) + '" alt="' + label + '" class="h-12 w-16 rounded object-cover border border-white/10 bg-black/20" loading="lazy" onerror="this.remove()"></a>'
+            : "";
+        return '<div class="flex items-center gap-2 text-xs rounded border border-white/10 bg-[#152054]/70 px-2 py-1.5">' +
+            preview +
+            '<a class="text-blue-300 hover:text-blue-200 truncate flex-1" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>' +
+            (isLocal && link.id ? '<button type="button" class="wf-ticket-delete-link text-red-400 hover:text-red-300 px-1" data-link-id="' + esc(link.id) + '" title="Delete link">&times;</button>' : "") +
+            '</div>';
     }
 
     function projectNameById(projectId) {
@@ -1466,8 +1502,9 @@
         if (old) old.remove();
         var el = document.createElement("div");
         el.id = "wf-snackbar";
-        el.className = "fixed bottom-6 left-1/2 -translate-x-1/2 z-[9999] px-5 py-3 rounded-lg shadow-lg text-white font-medium text-sm transition-opacity duration-300 " +
+        el.className = "fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-lg shadow-lg text-white font-medium text-sm transition-opacity duration-300 " +
             (type === "error" ? "bg-red-600" : "bg-green-600");
+        el.style.zIndex = "2147483647";
         el.textContent = msg;
         document.body.appendChild(el);
         setTimeout(function () { el.style.opacity = "0"; setTimeout(function () { el.remove(); }, 300); }, 3000);
@@ -1563,16 +1600,19 @@
         workflowTicketModalDetailsHeight = 0;
         var title = ticket.title || ticket.name || "Untitled ticket";
         var description = ticketTextValue(ticket.description || ticket.desc || "");
-        var rows = ticketMetaRows(ticket, context);
         var todos = Array.isArray(ticket.todos) ? ticket.todos : [];
         var links = Array.isArray(ticket.links) ? ticket.links : [];
         var files = Array.isArray(ticket.files) ? ticket.files : [];
         var media = Array.isArray(ticket.media) ? ticket.media : [];
         var isLocal = !!(ticket.id && (!context.selected || !context.selected.source || context.selected.source === "database"));
+        var sourceName = String(ticket.external_source || ticket.source_provider || "").trim().toLowerCase();
+        var sourceUrl = String(ticket.external_url || ticket.source_url || ticket.url || "").trim();
+        var canDeleteTicket = isLocal && !sourceName;
         workflowTicketModalState = {
             ticket: ticket,
             context: context,
             isLocal: isLocal,
+            canDelete: canDeleteTicket,
             boardValue: context.selected && context.selected.value ? context.selected.value : ""
         };
         document.getElementById("kb-modal-title").textContent = title;
@@ -1595,28 +1635,20 @@
             el.classList.toggle("opacity-60", !isLocal);
         });
         document.getElementById("kb-modal-save").classList.toggle("hidden", !isLocal);
-        document.getElementById("kb-modal-delete").classList.toggle("hidden", !isLocal);
+        document.getElementById("kb-modal-delete").classList.toggle("hidden", !canDeleteTicket);
         document.getElementById("kb-modal-upload-btn").classList.toggle("hidden", !isLocal);
         document.getElementById("kb-modal-add-link").classList.toggle("hidden", !isLocal);
         document.getElementById("kb-modal-add-todo").classList.toggle("hidden", !isLocal);
-        var sourceBox = document.getElementById("kb-modal-source-meta");
-        var sourceBody = document.getElementById("kb-modal-source-meta-body");
-        if (sourceBox && sourceBody) {
-            sourceBody.className = "kb-ticket-meta-grid kb-ticket-meta-grid--four-col";
-            sourceBody.innerHTML = rows.map(function (row) {
-                if (row[0] === "URL") {
-                    var u = String(row[1]);
-                    return ticketMetaField("URL", '<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer" class="text-[#f97316] hover:underline">Open</a>', true);
-                }
-                return ticketMetaField(row[0], row[1]);
-            }).join("");
-            sourceBox.classList.toggle("hidden", !rows.length);
+        var urlLink = document.getElementById("kb-modal-url-link");
+        if (urlLink) {
+            urlLink.classList.toggle("hidden", !sourceUrl);
+            urlLink.href = sourceUrl || "#";
+            var sourceLabel = sourceName ? ("Open " + sourceName + " ticket") : "Open source ticket";
+            urlLink.title = sourceLabel;
+            urlLink.setAttribute("aria-label", sourceLabel);
         }
         document.getElementById("kb-modal-links").innerHTML = links.length ? links.map(function (link) {
-            return '<div class="flex items-center gap-2 text-xs rounded border border-white/10 bg-[#152054]/70 px-2 py-1.5">' +
-                '<a class="text-blue-300 hover:text-blue-200 truncate flex-1" href="' + esc(link.url || "") + '" target="_blank" rel="noopener noreferrer">' + esc(link.title || link.url || "Link") + '</a>' +
-                (isLocal && link.id ? '<button type="button" class="wf-ticket-delete-link text-red-400 hover:text-red-300 px-1" data-link-id="' + esc(link.id) + '" title="Delete link">&times;</button>' : "") +
-                '</div>';
+            return ticketModalLinkRow(link, isLocal);
         }).join("") : '<p class="text-xs text-gray-500 italic">No links</p>';
         document.getElementById("kb-modal-files").innerHTML = files.concat(media).length ? files.concat(media).map(function (file) {
             var url = file.url || file.thumbnail || "";
@@ -1633,15 +1665,20 @@
                 (isLocal && todo.id ? '<button type="button" class="wf-ticket-delete-todo text-red-400 hover:text-red-300 px-1" data-todo-id="' + esc(todo.id) + '" title="Delete to-do">&times;</button>' : "") +
                 '</div>';
         }).join("") : '<p class="text-xs text-gray-500 italic">No tasks</p>';
-        document.getElementById("kb-modal-audit-summary").innerHTML = '<div class="p-2 bg-[#152054] border border-white/10 rounded"><div class="text-[11px] text-gray-400">Report</div><div class="text-sm text-white">' + (ticket.audit_entries && ticket.audit_entries.length ? esc(String(ticket.audit_entries.length)) : "0") + '</div></div>';
-        document.getElementById("kb-modal-audit-runs").innerHTML = '<div class="text-xs text-gray-500">No run report loaded here.</div>';
-        document.getElementById("kb-modal-audit-entries").innerHTML = (ticket.audit_entries || []).map(function (entry) {
-            return '<div class="p-2 bg-[#152054] border border-white/10 rounded text-xs text-gray-300">' + esc(entry.summary || entry.status || "Audit entry") + '</div>';
-        }).join("") || '<div class="text-xs text-gray-500">No audit entries yet.</div>';
-        var linkedWorkflow = document.getElementById("kb-modal-link-workflow");
-        var linkedProject = document.getElementById("kb-modal-link-project");
-        if (linkedWorkflow) linkedWorkflow.innerHTML = optionHtml(workflowLinkable.workflows || [], ticket.linked_workflow_id || (context.selected && context.selected.default_workflow_id), "title");
-        if (linkedProject) linkedProject.innerHTML = optionHtml(workflowLinkable.projects || [], ticket.linked_project_id || (context.selected && context.selected.default_project_id), "name");
+        var auditSummary = document.getElementById("kb-modal-audit-summary");
+        var auditRuns = document.getElementById("kb-modal-audit-runs");
+        var auditEntries = document.getElementById("kb-modal-audit-entries");
+        if (auditSummary) {
+            auditSummary.innerHTML = '<div class="p-2 bg-[#152054] border border-white/10 rounded"><div class="text-[11px] text-gray-400">Report</div><div class="text-sm text-white">' + (ticket.audit_entries && ticket.audit_entries.length ? esc(String(ticket.audit_entries.length)) : "0") + '</div></div>';
+        }
+        if (auditRuns) {
+            auditRuns.innerHTML = '<div class="text-xs text-gray-500">No run report loaded here.</div>';
+        }
+        if (auditEntries) {
+            auditEntries.innerHTML = (ticket.audit_entries || []).map(function (entry) {
+                return '<div class="p-2 bg-[#152054] border border-white/10 rounded text-xs text-gray-300">' + esc(entry.summary || entry.status || "Audit entry") + '</div>';
+            }).join("") || '<div class="text-xs text-gray-500">No audit entries yet.</div>';
+        }
         bindWorkflowTicketModalDynamicControls();
         switchWorkflowTicketTab("details");
         modal.classList.remove("hidden");
@@ -1820,9 +1857,7 @@
         { id: "pi", label: "Pi" },
         { id: "opencode", label: "OpenCode" },
         { id: "cursor", label: "Cursor CLI" },
-        { id: "cursor_ide", label: "Cursor IDE" },
         { id: "codex", label: "Codex CLI" },
-        { id: "codex_ide", label: "Codex IDE" },
         { id: "claude_code", label: "Claude Code" },
         { id: "cline", label: "Cline" },
         { id: "hermes_agent", label: "External agent (optional)" }
@@ -1831,6 +1866,13 @@
 
     function workflowExecBackendIsIde(backendId) {
         return !!WORKFLOW_EXEC_IDE_BACKEND_IDS[(backendId || "").trim()];
+    }
+
+    function workflowExecNormalizeCliBackend(backendId) {
+        backendId = String(backendId || "").trim();
+        if (backendId === "cursor_ide") return "cursor";
+        if (backendId === "codex_ide") return "codex";
+        return backendId;
     }
     function workflowExecRouteLevels() {
         return ["low", "medium", "high"];
@@ -1875,7 +1917,14 @@
         var opt = document.createElement("option");
         opt.value = model.id;
         opt.dataset.provider = model.provider || "";
-        opt.textContent = model.name || model.id;
+        opt.dataset.scope = model.scope || "available";
+        opt.dataset.free = model.free ? "true" : "false";
+        var flags = [];
+        if (model.scope === "scoped") flags.push("scoped");
+        if (model.free) flags.push("free");
+        if (model.tier) flags.push(model.tier);
+        opt.textContent = (model.name || model.id) + (flags.length ? " - " + flags.join(", ") : "");
+        if (model.supports_chat === false) opt.disabled = true;
         if (model.id === selectedId) opt.selected = true;
         parent.appendChild(opt);
     }
@@ -1890,7 +1939,8 @@
         if (includeAuto) {
             var autoOpt = document.createElement("option");
             autoOpt.value = "auto";
-            autoOpt.textContent = "Auto";
+            var rec = data.recommended_model || {};
+            autoOpt.textContent = rec.id ? ("Auto - recommended: " + (rec.name || rec.id)) : "Auto";
             autoOpt.dataset.provider = "";
             select.appendChild(autoOpt);
         }
@@ -1925,6 +1975,50 @@
         return opt ? String(opt.dataset.provider || "").trim() : "";
     }
 
+    function workflowStepBackendOptionsHtml(selected) {
+        selected = String(selected || "").trim();
+        var html = '<option value="">Use workflow route</option>';
+        WORKFLOW_EXEC_BACKEND_OPTIONS.forEach(function (opt) {
+            if (opt.id === "cursor_ide" || opt.id === "codex_ide") return;
+            html += '<option value="' + esc(opt.id) + '"' + (selected === opt.id ? " selected" : "") + '>' + esc(opt.label) + '</option>';
+        });
+        return html;
+    }
+
+    function loadStepCliModels(container, selectedModel) {
+        var backendSel = container.querySelector(".sf-cli-backend");
+        var modelSel = container.querySelector(".sf-cli-model");
+        var hint = container.querySelector(".sf-cli-model-hint");
+        if (!backendSel || !modelSel) return Promise.resolve();
+        var backendId = (backendSel.value || (typeof workflowCliActiveBackend === "function" ? workflowCliActiveBackend() : "") || "pi").trim();
+        if (workflowExecBackendIsIde(backendId)) {
+            modelSel.innerHTML = '<option value="">Model selected in IDE</option>';
+            modelSel.disabled = true;
+            if (hint) hint.textContent = "IDE handoff chooses the model inside the editor.";
+            return Promise.resolve();
+        }
+        modelSel.disabled = true;
+        modelSel.innerHTML = '<option value="auto">Loading...</option>';
+        var params = "backend_id=" + encodeURIComponent(backendId);
+        var projectId = workflowBoardProjectId();
+        if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
+        return api("GET", "/projects/cli-models?" + params)
+            .then(function (data) {
+                populateCliModelSelect(modelSel, {
+                    models: data.models || [],
+                    current_model: selectedModel || "auto",
+                    current_provider: data.current_provider || ""
+                }, { includeAuto: true });
+                modelSel.disabled = false;
+                if (hint) hint.textContent = data.message || "Auto follows workflow policy unless this step picks a concrete model.";
+            })
+            .catch(function (e) {
+                modelSel.innerHTML = '<option value="auto">Auto</option>';
+                modelSel.disabled = false;
+                if (hint) hint.textContent = (e && e.message) || "Could not load models for this backend.";
+            });
+    }
+
     function providerForCliModelBackend(backendId, provider) {
         backendId = String(backendId || "pi").trim();
         if (backendId === "pi" || backendId === "opencode") {
@@ -1935,7 +2029,9 @@
 
     function workflowExecRouteBackendOptionsHtml(readyMap) {
         readyMap = readyMap || {};
-        return WORKFLOW_EXEC_BACKEND_OPTIONS.map(function (item) {
+        return WORKFLOW_EXEC_BACKEND_OPTIONS.filter(function (item) {
+            return !workflowExecBackendIsIde(item.id);
+        }).map(function (item) {
             var ready = readyMap[item.id];
             var suffix = ready === false ? " (setup required)" : "";
             return '<option value="' + esc(item.id) + '">' + esc(item.label + suffix) + "</option>";
@@ -1982,7 +2078,7 @@
                         "</select>" +
                         '<span class="inline-flex h-8 w-8" aria-hidden="true"></span>' +
                     "</div>" +
-                    '<p class="text-[10px] leading-snug text-gray-500" style="margin-left: 7.75rem;">CLI executor and model used when the IDE is unavailable or not set up.</p>' +
+                    '<p class="text-[10px] leading-snug text-gray-500" style="margin-left: 7.75rem;">CLI executor and model used when the primary route is unavailable or not set up.</p>' +
                 "</div>" +
                 '<p id="' + prefix + "-" + level + '-model-hint" class="wf-exec-model-hint hidden text-[10px] leading-snug text-amber-200/90" style="margin-left: 7.75rem;"></p>' +
                 '<div id="' + prefix + "-" + level + '-codex-prefs" class="hidden ml-[7.75rem] grid grid-cols-2 gap-2 rounded border border-white/10 bg-[#10183f] p-2">' +
@@ -2080,7 +2176,7 @@
         select.innerHTML = "";
         var opt = document.createElement("option");
         opt.value = "";
-        opt.textContent = "Determined inside the IDE";
+        opt.textContent = "Determined by the CLI";
         select.appendChild(opt);
         select.value = "";
         select.disabled = true;
@@ -2219,14 +2315,10 @@
         workflowExecRouteLevels().forEach(function (level) {
             var backend = workflowExecRouteEl(root, level, "backend");
             var route = (data.routing && data.routing[level]) || {};
-            var backendValue = route.backend || llmData["project_cli_" + level + "_backend"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend;
+            var backendValue = workflowExecNormalizeCliBackend(route.backend || llmData["project_cli_" + level + "_backend"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend);
             var modelValue = route.model || llmData["project_cli_" + level + "_model"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model;
-            var fallbackBackendValue = route.fallback_backend || llmData["project_cli_" + level + "_fallback_backend"] || "";
+            var fallbackBackendValue = workflowExecNormalizeCliBackend(route.fallback_backend || llmData["project_cli_" + level + "_fallback_backend"] || "");
             var fallbackModelValue = route.fallback_model || llmData["project_cli_" + level + "_fallback_model"] || "";
-            if (workflowExecBackendIsIde(backendValue) && !fallbackBackendValue) {
-                fallbackBackendValue = backendValue === "codex_ide" ? "codex" : "cursor";
-                if (!fallbackModelValue) fallbackModelValue = "auto";
-            }
             if (backend) backend.value = backendValue;
             var fallbackBackend = workflowExecRouteEl(root, level, "fallback-backend");
             if (fallbackBackend) fallbackBackend.value = fallbackBackendValue || "";
@@ -2406,6 +2498,9 @@
             container.innerHTML = '<span class="text-[10px] text-gray-500">Checking executors...</span>';
             return;
         }
+        backends = backends.filter(function (row) {
+            return row && !workflowExecBackendIsIde(row.id);
+        });
         _wfExecutorInstallContext.backendRows = backends;
         if (optionalBackends) {
             _wfExecutorInstallContext.optionalBackends = optionalBackends;
@@ -2456,8 +2551,49 @@
     var _wfCliAssistantBuffer = "";
     var _wfCliSessionReady = false;
     var _wfCliConnectPromise = null;
+    var _wfCliBoundTicket = null;
+    var _wfCliTicketTimerStartedAt = null;
     var WF_CLI_DISCONNECTED_PLACEHOLDER = "Choose a CLI and click Connect to load models and send prompts.";
     var WF_CLI_CONNECTED_PLACEHOLDER = "Send a prompt...";
+
+    function workflowCliBoundTicketLabel() {
+        if (!_wfCliBoundTicket || !_wfCliBoundTicket.id) return "";
+        return _wfCliBoundTicket.title || ("Ticket #" + _wfCliBoundTicket.id);
+    }
+
+    function bindWorkflowCliTicket(ticket) {
+        _wfCliBoundTicket = ticket && ticket.id ? {
+            id: ticket.id,
+            title: ticket.title || "",
+            time_spent: ticket.time_spent || ""
+        } : null;
+        _wfCliTicketTimerStartedAt = null;
+        if (_wfCliBoundTicket) appendWorkflowCliLine("system", "Bound CLI session to " + workflowCliBoundTicketLabel() + ".");
+    }
+
+    function startWorkflowCliTicketTimer() {
+        if (!_wfCliBoundTicket || _wfCliTicketTimerStartedAt) return;
+        _wfCliTicketTimerStartedAt = Date.now();
+    }
+
+    function flushWorkflowCliTicketTimer() {
+        if (!_wfCliBoundTicket || !_wfCliTicketTimerStartedAt) return Promise.resolve();
+        var elapsed = Math.max(1, Math.round((Date.now() - _wfCliTicketTimerStartedAt) / 1000));
+        _wfCliTicketTimerStartedAt = null;
+        return api("POST", "/tickets/tickets/" + encodeURIComponent(_wfCliBoundTicket.id) + "/time-spent/add", {
+            seconds: elapsed,
+            source: "workflow_cli"
+        }).then(function (resp) {
+            if (resp && resp.time_spent) {
+                _wfCliBoundTicket.time_spent = resp.time_spent;
+                var idx = (workflowQueueTickets || []).findIndex(function (ticket) {
+                    return String(ticket.id) === String(_wfCliBoundTicket.id);
+                });
+                if (idx >= 0) workflowQueueTickets[idx].time_spent = resp.time_spent;
+                renderWorkflowTickets(workflowQueueTickets);
+            }
+        }).catch(function () {});
+    }
 
     function workflowCliBackendDisplayName(backend) {
         var name = ((backend && (backend.name || backend.id)) || "").trim();
@@ -2466,7 +2602,7 @@
 
     function workflowCliTabBackends(backends) {
         return (backends || []).filter(function (b) {
-            return !workflowExecBackendIsIde(b.id);
+            return !workflowExecBackendIsIde(b.id) && b.id !== "hermes_agent";
         });
     }
 
@@ -2492,6 +2628,16 @@
         return sel ? (sel.value || "pi") : "pi";
     }
 
+    function workflowCliActiveSupportsRpc() {
+        var sel = document.getElementById("wf-cli-backend-select");
+        if (!sel || !sel.selectedOptions || !sel.selectedOptions.length) return false;
+        return sel.selectedOptions[0].dataset.supportsRpc === "true";
+    }
+
+    function workflowCliReadyLabel() {
+        return workflowCliActiveSupportsRpc() ? "Connected" : "Ready";
+    }
+
     function setWorkflowCliSessionReady(ready) {
         _wfCliSessionReady = !!ready;
         var input = document.getElementById("wf-cli-input");
@@ -2503,7 +2649,7 @@
         if (modelSel) modelSel.disabled = !ready;
         workflowCliInputPlaceholder(ready);
         if (connectBtn) {
-            connectBtn.textContent = ready ? "Disconnect" : "Connect";
+            connectBtn.textContent = (ready || _wfCliWs) ? "Disconnect" : "Connect";
             connectBtn.disabled = !workflowBoardProjectId();
         }
     }
@@ -2513,23 +2659,73 @@
         if (!select) return;
         select.innerHTML = '<option value="">' + esc(message || "Connect CLI first") + "</option>";
         select.disabled = true;
+        renderWorkflowCliModelInventory({ models: [] }, message || "Connect a CLI to load its models.");
+    }
+
+    function renderWorkflowCliModelInventory(data, emptyMessage) {
+        var list = document.getElementById("wf-cli-model-list");
+        var count = document.getElementById("wf-cli-model-count");
+        var select = document.getElementById("wf-cli-model-select");
+        var activeModel = select ? String(select.value || "") : "";
+        if (!list) return;
+        var models = Array.isArray(data && data.models) ? data.models : [];
+        if (count) count.textContent = String(models.length || 0);
+        if (!models.length) {
+            list.innerHTML = '<p class="text-xs text-gray-500 italic">' + esc(emptyMessage || "No models returned for this CLI.") + "</p>";
+            return;
+        }
+        list.innerHTML = models.map(function (model) {
+            var flags = [];
+            if (model.scope) flags.push(model.scope);
+            if (model.free) flags.push("free");
+            if (model.tier) flags.push(model.tier);
+            if (model.supports_chat === false) flags.push("no chat");
+            var name = model.name || model.id || model.model || "Model";
+            var disabled = model.supports_chat === false;
+            var id = model.id || model.model || "";
+            return '<div class="wf-cli-model-item' + (disabled ? " is-disabled" : "") + (activeModel === id ? " is-active" : "") + '" role="button" tabindex="' + (disabled ? "-1" : "0") + '" data-model-id="' + esc(id) + '" data-provider="' + esc(model.provider || "") + '">' +
+                '<span class="truncate" title="' + esc(name) + '">' + esc(name) + "</span>" +
+                '<span class="wf-cli-model-flags">' + esc(flags.join(" / ")) + "</span>" +
+            "</div>";
+        }).join("");
+    }
+
+    function setWorkflowCliActivity(state, text) {
+        var box = document.getElementById("wf-cli-activity");
+        var label = document.getElementById("wf-cli-activity-text");
+        if (!box) return;
+        box.classList.toggle("is-busy", state === "busy");
+        box.classList.toggle("is-editing", state === "editing");
+        box.classList.toggle("is-ready", state === "ready");
+        if (label) label.textContent = text || "Idle.";
+    }
+
+    function refreshWorkflowCliModelCardSelection() {
+        var select = document.getElementById("wf-cli-model-select");
+        var active = select ? String(select.value || "") : "";
+        document.querySelectorAll(".wf-cli-model-item").forEach(function (item) {
+            item.classList.toggle("is-active", String(item.dataset.modelId || "") === active);
+        });
     }
 
     function setWorkflowCliBackendSetupStatus(row) {
-        if (row && row.ready === false) {
-            setWorkflowCliStatus("error", "Setup required");
-            return;
-        }
         if (!_wfCliSessionReady) {
             setWorkflowCliStatus("idle", "Not connected");
         }
     }
 
     function setWorkflowCliStatus(state, text) {
+        var panel = document.getElementById("wf-cli-panel");
         var dot = document.getElementById("wf-cli-status-dot");
         var label = document.getElementById("wf-cli-status-text");
-        var color = state === "connected" || state === "running" ? "#22c55e" : (state === "error" ? "#ef4444" : "#6b7280");
+        var color = state === "connected" || state === "running" ? "#22c55e" : (state === "connecting" ? "#3b82f6" : "#6b7280");
+        if (panel) {
+            panel.classList.toggle("is-connected", state === "connected");
+            panel.classList.toggle("is-running", state === "running");
+            panel.classList.toggle("is-error", state === "error");
+        }
         if (dot) dot.style.background = color;
+        if (dot) dot.title = text || state || "Not connected";
         if (label) label.textContent = text || state || "Idle";
     }
 
@@ -2543,6 +2739,19 @@
         transcript.scrollTop = transcript.scrollHeight;
     }
 
+    function workflowCliErrorMessage(err, fallback) {
+        var msg = (err && err.message) ? String(err.message) : String(err || fallback || "CLI error");
+        if (/failed to fetch/i.test(msg)) {
+            return "Could not reach the DecisionsAI backend API. Refresh the page after the local server reloads, then try Connect again.";
+        }
+        try {
+            var parsed = JSON.parse(msg);
+            return parsed.user_message || parsed.error || parsed.message || fallback || "CLI error";
+        } catch (e) {
+            return msg || fallback || "CLI error";
+        }
+    }
+
     function clearWorkflowCliTranscript() {
         var transcript = document.getElementById("wf-cli-transcript");
         if (!transcript) return;
@@ -2553,7 +2762,8 @@
     function handleWorkflowCliWsMessage(msg) {
         if (!msg || !msg.type) return;
         if (msg.type === "connected") {
-            setWorkflowCliStatus("connected", "Connected");
+            setWorkflowCliStatus("connected", workflowCliReadyLabel());
+            setWorkflowCliActivity("ready", "Connected. Ready for a prompt.");
             return;
         }
         if (msg.type === "preflight") {
@@ -2565,36 +2775,60 @@
                 resetWorkflowCliModelSelect("Fix CLI setup first");
                 appendWorkflowCliLine("system", msg.user_message || "CLI setup check failed.");
                 setWorkflowCliStatus("error", "Setup required");
+                setWorkflowCliActivity("ready", "Setup needs attention before this CLI can work.");
             }
             return;
         }
         if (msg.type === "error") {
             appendWorkflowCliLine("system", msg.message || "CLI error");
             setWorkflowCliStatus("error", "Error");
+            setWorkflowCliActivity("ready", "Stopped with an error.");
             return;
         }
         if (msg.type === "agent_start") {
             setWorkflowCliStatus("running", "Running");
+            setWorkflowCliActivity("busy", "Working. The CLI agent is running.");
             _wfCliAssistantBuffer = "";
+            startWorkflowCliTicketTimer();
             return;
         }
         if (msg.type === "agent_end") {
             if (_wfCliAssistantBuffer) appendWorkflowCliLine("assistant", _wfCliAssistantBuffer);
             _wfCliAssistantBuffer = "";
-            setWorkflowCliStatus("connected", "Connected");
+            setWorkflowCliStatus("connected", workflowCliReadyLabel());
+            setWorkflowCliActivity("ready", "Finished. Ready for the next prompt.");
+            flushWorkflowCliTicketTimer();
             return;
         }
         if (msg.type === "message_update" && msg.assistantMessageEvent) {
             var evt = msg.assistantMessageEvent;
-            if (evt.type === "text_delta" && evt.delta) _wfCliAssistantBuffer += evt.delta;
+            var evtType = String(evt.type || "");
+            if (/tool|command|shell|exec|browser|search|read/i.test(evtType)) {
+                setWorkflowCliActivity("busy", "Using a tool: " + evtType);
+            } else if (/file|edit|patch|write/i.test(evtType)) {
+                setWorkflowCliActivity("editing", "Editing or inspecting files.");
+            }
+            if (evt.type === "text_delta" && evt.delta) {
+                setWorkflowCliActivity("busy", "Responding.");
+                _wfCliAssistantBuffer += evt.delta;
+            }
             if (evt.type === "done" && _wfCliAssistantBuffer) {
                 appendWorkflowCliLine("assistant", _wfCliAssistantBuffer);
                 _wfCliAssistantBuffer = "";
             }
+            return;
+        }
+        if (/tool|command|shell|exec|browser|search|read/i.test(String(msg.type || ""))) {
+            setWorkflowCliActivity("busy", "Using a tool: " + msg.type);
+        } else if (/file|edit|patch|write/i.test(String(msg.type || ""))) {
+            setWorkflowCliActivity("editing", "Editing or inspecting files.");
+        } else if (msg.type !== "ping" && msg.type !== "pong") {
+            setWorkflowCliActivity("busy", "Working: " + msg.type);
         }
     }
 
     function disconnectWorkflowCliWs() {
+        flushWorkflowCliTicketTimer();
         if (_wfCliWs) {
             try { _wfCliWs.onclose = null; _wfCliWs.close(); } catch (e) {}
             _wfCliWs = null;
@@ -2605,7 +2839,149 @@
         setWorkflowCliSessionReady(false);
         resetWorkflowCliModelSelect("Connect CLI first");
         setWorkflowCliStatus("idle", "Not connected");
+        setWorkflowCliActivity("ready", "Idle. Connect a CLI, then send a prompt.");
         workflowCliInputPlaceholder(false);
+    }
+
+    function workflowCliModelId(model) {
+        if (!model) return "";
+        if (typeof model === "string") return model.trim();
+        return String(model.id || model.model || model.name || "").trim();
+    }
+
+    function workflowCliProviderId(model, fallback) {
+        if (!model || typeof model === "string") return fallback || "ollama";
+        return String(model.provider || fallback || "ollama").trim() || "ollama";
+    }
+
+    function workflowCliPiModelUsableNow(model) {
+        var id = workflowCliModelId(model);
+        if (!id || id === "auto") return false;
+        if (model && typeof model === "object" && model.supports_chat === false) return false;
+        if (model && typeof model === "object" && model.usable === false) return false;
+        return true;
+    }
+
+    function workflowCliPushUniqueModelCandidate(out, seen, model, fallbackProvider) {
+        var id = workflowCliModelId(model);
+        if (!id || seen[id] || !workflowCliPiModelUsableNow(model)) return;
+        seen[id] = true;
+        out.push({ provider: workflowCliProviderId(model, fallbackProvider), model: id });
+    }
+
+    function workflowCliPiFixModelFromPreflight(pf) {
+        var fixes = Array.isArray(pf && pf.fixes) ? pf.fixes : [];
+        for (var i = 0; i < fixes.length; i++) {
+            var payload = fixes[i] && fixes[i].payload;
+            if (payload && payload.model && payload.provider) {
+                return payload;
+            }
+        }
+        var suggested = Array.isArray(pf && pf.suggested_models) ? pf.suggested_models : [];
+        if (suggested.length) return { provider: "ollama", model: suggested[0] };
+        return null;
+    }
+
+    function workflowCliPiModelCandidatesFromPreflight(pf) {
+        var out = [];
+        var seen = {};
+        var fixes = Array.isArray(pf && pf.fixes) ? pf.fixes : [];
+        for (var i = 0; i < fixes.length; i++) {
+            var payload = fixes[i] && fixes[i].payload;
+            if (payload && payload.model) workflowCliPushUniqueModelCandidate(out, seen, payload, payload.provider || "ollama");
+        }
+        var suggested = Array.isArray(pf && pf.suggested_models) ? pf.suggested_models : [];
+        for (var j = 0; j < suggested.length; j++) {
+            workflowCliPushUniqueModelCandidate(out, seen, { provider: "ollama", model: suggested[j] }, "ollama");
+        }
+        var oldFix = workflowCliPiFixModelFromPreflight(pf);
+        if (oldFix) workflowCliPushUniqueModelCandidate(out, seen, oldFix, oldFix.provider || "ollama");
+        return out;
+    }
+
+    function workflowCliPiModelCandidatesFromCatalog(data) {
+        var out = [];
+        var seen = {};
+        var recommended = data && data.recommended_model;
+        if (recommended && recommended.model) workflowCliPushUniqueModelCandidate(out, seen, recommended.model, recommended.provider || "ollama");
+        if (recommended && recommended.id) workflowCliPushUniqueModelCandidate(out, seen, recommended, recommended.provider || "ollama");
+        var models = Array.isArray(data && data.models) ? data.models : [];
+        models
+            .slice()
+            .sort(function (a, b) {
+                function score(model) {
+                    var value = 0;
+                    if (model.scope === "scoped") value += 40;
+                    if (model.local) value += 30;
+                    if (model.free) value += 20;
+                    if (model.provider === "ollama") value += 10;
+                    if (model.supports_chat === false || model.usable === false) value -= 1000;
+                    return value;
+                }
+                return score(b) - score(a);
+            })
+            .forEach(function (model) {
+                workflowCliPushUniqueModelCandidate(out, seen, model, "ollama");
+            });
+        return out;
+    }
+
+    function workflowCliMergeModelCandidates() {
+        var out = [];
+        var seen = {};
+        Array.prototype.slice.call(arguments).forEach(function (group) {
+            (group || []).forEach(function (candidate) {
+                workflowCliPushUniqueModelCandidate(out, seen, candidate, candidate && candidate.provider || "ollama");
+            });
+        });
+        return out;
+    }
+
+    function tryWorkflowCliPiModelCandidates(projectId, candidates, index, originalPf) {
+        if (!candidates || index >= candidates.length) {
+            throw new Error((originalPf && originalPf.user_message) || "Pi CLI is not ready. No available chat-capable Pi model could be selected automatically.");
+        }
+        var fix = candidates[index];
+        appendWorkflowCliLine("system", "Trying Pi model " + fix.provider + "/" + fix.model + " because the selected model cannot chat.");
+        return api("POST", "/projects/cli-model", {
+            project_id: projectId,
+            backend_id: "pi",
+            provider: fix.provider || "ollama",
+            model: fix.model
+        }).then(function () {
+            return api("GET", "/projects/" + encodeURIComponent(projectId) + "/cli/preflight?probe=true");
+        }).then(function (retryPf) {
+            if (!retryPf || retryPf.ok === false) {
+                throw new Error((retryPf && retryPf.user_message) || "Pi CLI is not ready.");
+            }
+            appendWorkflowCliLine("system", "Pi is now using " + (fix.provider || "ollama") + "/" + fix.model + ".");
+            return loadWorkflowCliModels("pi", { force: true }).then(function () { return retryPf; });
+        }).catch(function (err) {
+            appendWorkflowCliLine("system", "Pi model " + fix.model + " did not work: " + workflowCliErrorMessage(err, "model failed"));
+            return tryWorkflowCliPiModelCandidates(projectId, candidates, index + 1, originalPf);
+        });
+    }
+
+    function retryWorkflowCliPiPreflightWithSuggestedModel(projectId, pf) {
+        var params = "backend_id=pi";
+        if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
+        return api("GET", "/projects/cli-models?" + params).catch(function (err) {
+            appendWorkflowCliLine("system", "Could not load Pi model catalog before auto-fix: " + workflowCliErrorMessage(err, "model catalog failed"));
+            return { models: [] };
+        }).then(function (catalog) {
+            renderWorkflowCliModelInventory(catalog, catalog.message || "No models returned for Pi.");
+            var candidates = workflowCliMergeModelCandidates(
+                workflowCliPiModelCandidatesFromPreflight(pf),
+                workflowCliPiModelCandidatesFromCatalog(catalog)
+            ).slice(0, 10);
+            if (!candidates.length) {
+                throw new Error((pf && pf.user_message) || "Pi CLI is not ready. No chat-capable model was available to try.");
+            }
+            return tryWorkflowCliPiModelCandidates(projectId, candidates, 0, pf);
+        }).catch(function (err) {
+            if (err && err.message && /No chat-capable model|No available chat-capable/.test(err.message)) throw err;
+            throw err;
+        });
     }
 
     function markWorkflowCliSessionReady() {
@@ -2613,7 +2989,7 @@
         return loadWorkflowCliModels(backendId, { force: true }).then(function () {
             _wfCliSessionReady = true;
             setWorkflowCliSessionReady(true);
-            setWorkflowCliStatus("connected", "Connected");
+            setWorkflowCliStatus("connected", workflowCliReadyLabel());
         });
     }
 
@@ -2622,7 +2998,7 @@
         if (backendId === "pi") {
             return api("GET", "/projects/" + encodeURIComponent(projectId) + "/cli/preflight?probe=true").then(function (pf) {
                 if (!pf || pf.ok === false) {
-                    throw new Error((pf && pf.user_message) || "Pi CLI is not ready.");
+                    return retryWorkflowCliPiPreflightWithSuggestedModel(projectId, pf);
                 }
                 return pf;
             });
@@ -2637,15 +3013,6 @@
     }
 
     function runWorkflowCliBackendSetup(projectId, backendId) {
-        if (backendId === "cursor" || backendId === "codex") {
-            return api("POST", "/projects/" + encodeURIComponent(projectId) + "/cli-backends/" + encodeURIComponent(backendId) + "/setup")
-                .then(function (resp) {
-                    if (resp && resp.message) {
-                        appendWorkflowCliLine("system", resp.message);
-                    }
-                    return resp;
-                });
-        }
         return Promise.resolve();
     }
 
@@ -2684,6 +3051,7 @@
                     _wfCliWs = null;
                     _wfCliConnectPromise = null;
                     if (_wfCliSessionReady) {
+                        flushWorkflowCliTicketTimer();
                         _wfCliSessionReady = false;
                         setWorkflowCliSessionReady(false);
                         resetWorkflowCliModelSelect("Connect CLI first");
@@ -2731,10 +3099,11 @@
         }).then(function () {
             return markWorkflowCliSessionReady();
         }).catch(function (e) {
+            var msg = workflowCliErrorMessage(e, "Could not start CLI");
             disconnectWorkflowCliWs();
-            appendWorkflowCliLine("system", e.message || "Could not start CLI");
+            appendWorkflowCliLine("system", msg);
             setWorkflowCliStatus("error", "Not ready");
-            snack(e.message || "Could not start CLI", "error");
+            snack(msg, "error");
             throw e;
         }).finally(function () {
             if (connectBtn) connectBtn.disabled = !workflowBoardProjectId();
@@ -2742,7 +3111,7 @@
     }
 
     function toggleWorkflowCliSession() {
-        if (_wfCliSessionReady && _wfCliWs && _wfCliWs.readyState === WebSocket.OPEN) {
+        if (_wfCliWs || _wfCliConnectPromise || _wfCliSessionReady) {
             disconnectWorkflowCliWs();
             return;
         }
@@ -2814,7 +3183,9 @@
             return;
         }
         if (!message) return;
+        flushWorkflowCliTicketTimer();
         appendWorkflowCliLine("user", message);
+        setWorkflowCliActivity("busy", "Thinking. Waiting for the CLI agent to respond.");
         if (input) input.value = "";
         var model = modelSel ? (modelSel.value || "auto") : "auto";
         prepareWorkflowCliSend(projectId).then(function () {
@@ -2823,15 +3194,46 @@
             }
             return _wfCliWs;
         }).then(function (ws) {
+            startWorkflowCliTicketTimer();
             ws.send(JSON.stringify({
                 type: "prompt",
                 message: message,
                 model: model && model !== "auto" ? model : ""
             }));
         }).catch(function (e) {
-            appendWorkflowCliLine("system", e.message || "Could not send to project CLI");
+            var msg = workflowCliErrorMessage(e, "Could not send to project CLI");
+            appendWorkflowCliLine("system", msg);
             setWorkflowCliStatus("error", "Not ready");
-            snack(e.message || "Could not send prompt", "error");
+            snack(msg, "error");
+        });
+    }
+
+    function setWorkflowCliBackendAndModel(backendId, model) {
+        var backendSel = document.getElementById("wf-cli-backend-select");
+        var modelSel = document.getElementById("wf-cli-model-select");
+        if (backendSel && backendId) backendSel.value = backendId;
+        if (modelSel && model) modelSel.value = model;
+    }
+
+    function openTicketInWorkflowCli(ticketId) {
+        if (!ticketId) return Promise.reject(new Error("No ticket selected"));
+        var ticketPromise = api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId));
+        var ctxPromise = api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/cli-context");
+        return Promise.all([ticketPromise, ctxPromise]).then(function (results) {
+            var ticket = results[0] || {};
+            var ctx = results[1] || {};
+            bindWorkflowCliTicket(ticket);
+            switchTab("cli", { persist: true });
+            return loadWorkflowCliBackends().then(function () {
+                setWorkflowCliBackendAndModel(ctx.backend_id || "", ctx.model || "auto");
+                return startWorkflowCliSession();
+            }).then(function () {
+                bindWorkflowCliTicket(ticket);
+                setWorkflowCliBackendAndModel(ctx.backend_id || "", ctx.model || "auto");
+                var input = document.getElementById("wf-cli-input");
+                if (input) input.value = ctx.instruction || "";
+                sendWorkflowCliPrompt();
+            });
         });
     }
 
@@ -2848,10 +3250,12 @@
         if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
         return api("GET", "/projects/cli-models?" + params).then(function (data) {
             populateCliModelSelect(select, data, { includeAuto: true });
+            renderWorkflowCliModelInventory(data, data.message || "No models returned for this CLI.");
             if (!data.models || !data.models.length) {
                 if (data.message) appendWorkflowCliLine("system", data.message);
             }
             select.disabled = false;
+            refreshWorkflowCliKeyPanel();
         }).catch(function (e) {
             select.innerHTML = "";
             var opt = document.createElement("option");
@@ -2860,7 +3264,9 @@
             select.appendChild(opt);
             select.value = "auto";
             select.disabled = false;
+            renderWorkflowCliModelInventory({ models: [] }, "Could not load models; using Auto.");
             appendWorkflowCliLine("system", (e && e.message) || "Could not load models; using Auto.");
+            refreshWorkflowCliKeyPanel();
         });
     }
 
@@ -2879,14 +3285,14 @@
         return fetchWorkflowProjectCliBackends(projectId).then(function (data) {
             var backends = data.backends || [];
             var cliBackends = workflowCliTabBackends(backends);
-            var active = workflowCliResolveActiveBackend(backends, data.active_backend || "pi");
+            var currentSelection = select && select.value ? select.value : "";
+            var active = workflowCliResolveActiveBackend(backends, currentSelection || data.active_backend || "pi");
             if (select) {
                 select.innerHTML = cliBackends.map(function (b) {
-                    var suffix = b.ready ? "" : " (setup)";
-                    return '<option value="' + esc(b.id) + '">' + esc(workflowCliBackendDisplayName(b) + suffix) + "</option>";
+                    return '<option value="' + esc(b.id) + '" data-supports-rpc="' + (b.supports_rpc ? "true" : "false") + '" data-ready="' + (b.ready ? "true" : "false") + '">' + esc(workflowCliBackendDisplayName(b)) + "</option>";
                 }).join("");
                 if (!cliBackends.length) {
-                    select.innerHTML = '<option value="pi">Pi</option>';
+                    select.innerHTML = '<option value="pi" data-supports-rpc="true">Pi</option>';
                 }
                 select.value = active;
                 select.disabled = false;
@@ -2898,12 +3304,142 @@
                 setWorkflowCliStatus("idle", "Not connected");
                 setWorkflowCliBackendSetupStatus(activeRow);
             }
+            refreshWorkflowCliKeyPanel();
             return data;
         });
     }
 
     function refreshWorkflowCliTab() {
-        return loadWorkflowCliBackends();
+        syncWorkflowCliLayoutHeight();
+        return loadWorkflowCliBackends().then(function (data) {
+            syncWorkflowCliLayoutHeight();
+            return data;
+        });
+    }
+
+    function syncWorkflowCliLayoutHeight() {
+        var tab = document.getElementById("wf-tab-cli");
+        var panel = document.getElementById("wf-cli-panel");
+        var workspace = panel ? panel.querySelector(".wf-cli-workspace") : null;
+        if (!tab || !panel || !workspace || tab.hidden || tab.classList.contains("hidden")) return;
+        var tabRect = tab.getBoundingClientRect();
+        var container = document.getElementById("wf-detail-panel") || document.getElementById("wf-detail-tab-scroll") || tab.parentElement;
+        var containerRect = container ? container.getBoundingClientRect() : null;
+        var bottom = containerRect ? containerRect.bottom : window.innerHeight;
+        var available = Math.floor(bottom - tabRect.top - 18);
+        if (!Number.isFinite(available) || available < 220) available = 360;
+        panel.style.height = available + "px";
+        workspace.style.minHeight = "0";
+    }
+
+    function workflowCliNormalizeKeyTarget(id) {
+        id = String(id || "").trim().toLowerCase();
+        if (id === "openai") return "codex";
+        if (id === "google gemini") return "gemini";
+        if (id === "kilo") return "kilocode";
+        if (id === "ollama" || id === "local" || id === "pi") return "pi";
+        return id;
+    }
+
+    function workflowCliKeyTargetId() {
+        var backend = workflowCliNormalizeKeyTarget(workflowCliActiveBackend());
+        var modelSel = document.getElementById("wf-cli-model-select");
+        var provider = workflowCliNormalizeKeyTarget(selectedCliModelProvider(modelSel));
+        if ((backend === "pi" || backend === "opencode") && provider && provider !== "opencode") {
+            return provider;
+        }
+        return backend || "pi";
+    }
+
+    function workflowCliKeyPanelElements() {
+        return {
+            panel: document.getElementById("wf-cli-key-panel"),
+            title: document.getElementById("wf-cli-key-title"),
+            status: document.getElementById("wf-cli-key-status"),
+            input: document.getElementById("wf-cli-key-input"),
+            save: document.getElementById("wf-cli-key-save")
+        };
+    }
+
+    function setWorkflowCliKeyPanelOpen(open) {
+        var els = workflowCliKeyPanelElements();
+        if (!els.panel) return;
+        els.panel.hidden = !open;
+        els.panel.classList.toggle("is-open", !!open);
+        if (open) refreshWorkflowCliKeyPanel();
+        syncWorkflowCliLayoutHeight();
+    }
+
+    function refreshWorkflowCliKeyPanel() {
+        var els = workflowCliKeyPanelElements();
+        if (!els.panel || els.panel.hidden) return Promise.resolve();
+        var target = workflowCliKeyTargetId();
+        if (els.title) els.title.textContent = "Loading key target...";
+        if (els.status) els.status.textContent = target;
+        if (els.input) {
+            els.input.value = "";
+            els.input.placeholder = "Paste replacement key or endpoint";
+        }
+        return api("GET", "/projects/cli-setup?backend_id=" + encodeURIComponent(target)).then(function (data) {
+            var rows = Array.isArray(data && data.clis) ? data.clis : [];
+            var row = rows.filter(function (item) { return String(item.id) === String(target); })[0];
+            if (!row) {
+                if (els.title) els.title.textContent = "No key target";
+                if (els.status) els.status.textContent = "This CLI/model provider does not expose a swappable key here.";
+                if (els.input) els.input.disabled = true;
+                if (els.save) els.save.disabled = true;
+                return;
+            }
+            if (els.title) els.title.textContent = row.name || target;
+            if (els.status) {
+                els.status.textContent = (row.key_set ? ("Current: " + (row.masked || "saved")) : "No key saved") + " | " + (row.credential_label || "Credential");
+            }
+            if (els.input) {
+                els.input.disabled = false;
+                els.input.placeholder = row.credential_type === "url" ? "http://localhost:11434/" : "Paste replacement API key";
+            }
+            if (els.save) {
+                els.save.disabled = false;
+                els.save.dataset.target = target;
+            }
+        }).catch(function (e) {
+            if (els.title) els.title.textContent = "Key setup unavailable";
+            if (els.status) els.status.textContent = workflowCliErrorMessage(e, "Could not load CLI key setup.");
+            if (els.input) els.input.disabled = true;
+            if (els.save) els.save.disabled = true;
+        });
+    }
+
+    function saveWorkflowCliKeyAndReconnect() {
+        var els = workflowCliKeyPanelElements();
+        var target = workflowCliKeyTargetId();
+        var value = els.input ? (els.input.value || "").trim() : "";
+        if (!value) {
+            snack("Paste the replacement key or endpoint first", "error");
+            return;
+        }
+        if (els.save) els.save.disabled = true;
+        api("POST", "/projects/cli-setup", {
+            id: target,
+            enabled: true,
+            value: value
+        }).then(function () {
+            snack("Saved " + target + " credential", "success");
+            if (els.input) els.input.value = "";
+            disconnectWorkflowCliWs();
+            return loadWorkflowCliBackends();
+        }).then(function () {
+            return loadWorkflowCliModels(workflowCliActiveBackend(), { force: true });
+        }).then(function () {
+            return startWorkflowCliSession();
+        }).catch(function (e) {
+            var msg = workflowCliErrorMessage(e, "Could not save CLI credential");
+            appendWorkflowCliLine("system", msg);
+            snack(msg, "error");
+        }).finally(function () {
+            if (els.save) els.save.disabled = false;
+            refreshWorkflowCliKeyPanel();
+        });
     }
 
     function bindWorkflowCliTabControls() {
@@ -2924,7 +3460,42 @@
                     var cliBackends = workflowCliTabBackends(data.backends || []);
                     var row = workflowCliBackendRow(cliBackends.length ? cliBackends : (data.backends || []), backend);
                     setWorkflowCliBackendSetupStatus(row);
+                    refreshWorkflowCliKeyPanel();
                 });
+            });
+        }
+        var keyToggle = document.getElementById("wf-cli-key-toggle");
+        if (keyToggle && keyToggle.dataset.bound !== "1") {
+            keyToggle.dataset.bound = "1";
+            keyToggle.addEventListener("click", function () {
+                var panel = document.getElementById("wf-cli-key-panel");
+                setWorkflowCliKeyPanelOpen(!(panel && !panel.hidden));
+            });
+        }
+        var keySave = document.getElementById("wf-cli-key-save");
+        if (keySave && keySave.dataset.bound !== "1") {
+            keySave.dataset.bound = "1";
+            keySave.addEventListener("click", saveWorkflowCliKeyAndReconnect);
+        }
+        var modelList = document.getElementById("wf-cli-model-list");
+        if (modelList && modelList.dataset.bound !== "1") {
+            modelList.dataset.bound = "1";
+            modelList.addEventListener("click", function (evt) {
+                var item = evt.target.closest(".wf-cli-model-item");
+                if (!item || item.classList.contains("is-disabled")) return;
+                var modelId = item.dataset.modelId || "";
+                var modelSel = document.getElementById("wf-cli-model-select");
+                if (!modelSel || !modelId) return;
+                modelSel.value = modelId;
+                refreshWorkflowCliModelCardSelection();
+                modelSel.dispatchEvent(new Event("change", { bubbles: true }));
+            });
+            modelList.addEventListener("keydown", function (evt) {
+                if (evt.key !== "Enter" && evt.key !== " ") return;
+                var item = evt.target.closest(".wf-cli-model-item");
+                if (!item || item.classList.contains("is-disabled")) return;
+                evt.preventDefault();
+                item.click();
             });
         }
         var sendBtn = document.getElementById("wf-cli-send");
@@ -2946,6 +3517,8 @@
         if (modelSel && modelSel.dataset.bound !== "1") {
             modelSel.dataset.bound = "1";
             modelSel.addEventListener("change", function () {
+                refreshWorkflowCliModelCardSelection();
+                refreshWorkflowCliKeyPanel();
                 if (!_wfCliSessionReady) return;
                 var projectId = workflowBoardProjectId();
                 if (!projectId) return;
@@ -4712,35 +5285,46 @@
         var mainEl = document.getElementById("wf-loop-run-ticket-context");
         var feedEl = document.getElementById("wf-loop-feed-ticket-context");
         var contextRun = loopFeedContextRun();
-        var feedHtml = contextRun ? loopRunTicketContextHtml(contextRun, "feed") : "";
         if (mainEl) {
-            if (contextRun && isRunActiveForTicketContext(contextRun)) {
-                mainEl.classList.add("hidden");
-                mainEl.innerHTML = "";
-            } else if (selectedWorkflowQueueTicketId) {
-                var ticket = workflowQueueTicketById(selectedWorkflowQueueTicketId);
-                if (ticket) {
-                    mainEl.classList.remove("hidden");
-                    mainEl.innerHTML =
-                        '<div class="wf-loop-ticket-kicker"><span>Selected for queue</span></div>' +
-                        '<div class="wf-loop-ticket-title">' + esc(ticket.title || ("Ticket #" + ticket.id)) + '</div>' +
-                        '<div class="wf-loop-ticket-meta"><span>Queued · not running</span></div>';
-                } else {
-                    mainEl.classList.add("hidden");
-                    mainEl.innerHTML = "";
-                }
-            } else if (contextRun && !isRunActiveForTicketContext(contextRun)) {
+            var bannerTicketId = selectedWorkflowQueueTicketId || (contextRun && contextRun.ticket_id);
+            var ticket = bannerTicketId ? workflowQueueTicketById(bannerTicketId) : null;
+            if (ticket) {
+                var run = activeRunByTicketId(ticket.id);
+                var locked = !!run;
+                var timeLabel = workflowQueueTicketTimeLabel(ticket);
+                var timeLive = workflowQueueTicketTimeIsLive(ticket);
+                var timeClass = timeLive ? "bg-sky-500/20 text-sky-200" : "bg-white/10 text-gray-300";
+                var badgeOpts = { interactive: false, ticketId: ticket.id, locked: true };
+                var title = ticket.title || ("Ticket #" + ticket.id);
+                var cleanDesc = stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
                 mainEl.classList.remove("hidden");
-                mainEl.innerHTML = loopRunTicketContextHtml(contextRun, "main");
+                mainEl.innerHTML =
+                    '<div class="wf-loop-ticket-banner" data-ticket-id="' + esc(ticket.id) + '">' +
+                        '<div class="wf-loop-ticket-banner-badges">' +
+                            workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
+                            workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
+                        '</div>' +
+                        '<div class="wf-loop-ticket-banner-main">' +
+                            '<div class="wf-loop-ticket-banner-title" title="' + esc(title) + '">' + esc(title) + '</div>' +
+                            (cleanDesc ? '<div class="wf-loop-ticket-banner-desc" title="' + esc(cleanDesc) + '">' + esc(cleanDesc) + '</div>' : '') +
+                        '</div>' +
+                        '<div class="wf-workflow-queue-actions wf-loop-ticket-banner-actions">' +
+                            '<span class="wf-ticket-time-display inline-flex h-6 min-w-[3.15rem] items-center justify-center whitespace-nowrap text-[9px] px-1 rounded tabular-nums leading-none ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '" title="Time spent on this ticket">' + esc(timeLabel) + '</span>' +
+                            '<button type="button" class="wf-workflow-ticket-copy kb-card-action-btn kb-act-copy" data-ticket-id="' + esc(ticket.id) + '" title="Copy title and description" aria-label="Copy title and description"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>' +
+                            '<button type="button" class="wf-workflow-ticket-orchestrator kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Send to Orchestrator" aria-label="Send to Orchestrator"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg></button>' +
+                            '<button type="button" class="wf-workflow-ticket-loop kb-card-action-btn kb-act-loop" data-ticket-id="' + esc(ticket.id) + '" title="Open this ticket in the loop tab" aria-label="Open ticket loop">' + SVG_LOOP + '</button>' +
+                            (!run ? '<button type="button" class="wf-workflow-ticket-run kb-card-action-btn kb-act-play" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow" aria-label="Run ticket">' + SVG_PLAY + '</button>' : '') +
+                        '</div>' +
+                    '</div>';
+                bindWorkflowTicketQueueRows(mainEl);
             } else {
                 mainEl.classList.add("hidden");
                 mainEl.innerHTML = "";
             }
         }
         if (feedEl) {
-            feedEl.classList.toggle("hidden", !feedHtml);
-            feedEl.innerHTML = feedHtml;
-            if (feedHtml) initLoopTicketTitleMarquees(feedEl);
+            feedEl.classList.add("hidden");
+            feedEl.innerHTML = "";
         }
     }
 
@@ -4800,7 +5384,10 @@
             execution_mode: settings.execution_mode === "parallel" ? "parallel" : DEFAULT_RUN_SETTINGS.execution_mode,
             concurrency_scope: settings.concurrency_scope === "workflow" ? "workflow" : DEFAULT_RUN_SETTINGS.concurrency_scope,
             max_parallel_tickets: Math.max(1, Math.min(12, parseInt(settings.max_parallel_tickets || DEFAULT_RUN_SETTINGS.max_parallel_tickets, 10) || DEFAULT_RUN_SETTINGS.max_parallel_tickets)),
-            branch_per_ticket: settings.branch_per_ticket !== false
+            branch_per_ticket: settings.branch_per_ticket !== false,
+            auto_route_models: settings.auto_route_models !== false,
+            free_only: !!settings.free_only,
+            prefer_local: settings.prefer_local !== false
         };
     }
 
@@ -4809,7 +5396,10 @@
             execution_mode: (document.getElementById("wf-config-run-execution-mode") || {}).value || DEFAULT_RUN_SETTINGS.execution_mode,
             concurrency_scope: (document.getElementById("wf-config-run-concurrency-scope") || {}).value || DEFAULT_RUN_SETTINGS.concurrency_scope,
             max_parallel_tickets: Math.max(1, Math.min(12, parseInt((document.getElementById("wf-config-run-max-parallel") || {}).value || DEFAULT_RUN_SETTINGS.max_parallel_tickets, 10) || DEFAULT_RUN_SETTINGS.max_parallel_tickets)),
-            branch_per_ticket: !!((document.getElementById("wf-config-run-branch-per-ticket") || {}).checked)
+            branch_per_ticket: !!((document.getElementById("wf-config-run-branch-per-ticket") || {}).checked),
+            auto_route_models: !!((document.getElementById("wf-config-run-auto-route-models") || {}).checked),
+            free_only: !!((document.getElementById("wf-config-run-free-only") || {}).checked),
+            prefer_local: !!((document.getElementById("wf-config-run-prefer-local") || {}).checked)
         };
     }
 
@@ -4819,6 +5409,9 @@
         var scopeEl = document.getElementById("wf-config-run-concurrency-scope");
         var maxEl = document.getElementById("wf-config-run-max-parallel");
         var branchEl = document.getElementById("wf-config-run-branch-per-ticket");
+        var autoRouteEl = document.getElementById("wf-config-run-auto-route-models");
+        var freeOnlyEl = document.getElementById("wf-config-run-free-only");
+        var preferLocalEl = document.getElementById("wf-config-run-prefer-local");
         var noteEl = document.getElementById("wf-config-run-lock-note");
         var panelEl = document.getElementById("wf-config-run-settings-panel");
         if (!modeEl || !scopeEl || !maxEl || !branchEl) return;
@@ -4826,6 +5419,9 @@
         scopeEl.value = settings.concurrency_scope;
         maxEl.value = settings.max_parallel_tickets;
         branchEl.checked = !!settings.branch_per_ticket;
+        if (autoRouteEl) autoRouteEl.checked = !!settings.auto_route_models;
+        if (freeOnlyEl) freeOnlyEl.checked = !!settings.free_only;
+        if (preferLocalEl) preferLocalEl.checked = !!settings.prefer_local;
         var locked = workflowHasActiveRuns();
         if (panelEl) {
             panelEl.classList.toggle("is-locked", locked);
@@ -4997,7 +5593,7 @@
                 var waitingKind = r.waiting_kind || "";
                 var hasDecision = r.approval_decision && r.approval_decision.title;
                 var continueLabel = waitingKind === "ide_handoff"
-                    ? "Report IDE complete"
+                    ? "Report CLI complete"
                     : (waitingKind === "route_approval" ? "Review route" : (hasDecision ? "Yes, go ahead" : "Continue"));
                 var decisionCard = (r.status === "waiting" && hasDecision)
                     ? '<div class="mt-2">' + renderApprovalDecisionCard(r.approval_decision, {
@@ -5323,7 +5919,7 @@
         var existing = document.getElementById("wf-ide-handoff-modal");
         if (existing) existing.remove();
         var html = '' +
-            '<div id="wf-ide-handoff-modal" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/60">' +
+            '<div id="wf-ide-handoff-modal" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2147483646;background:rgba(0,0,0,0.6);">' +
                 '<div class="w-full max-w-lg mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden">' +
                     '<div class="px-5 pt-5 pb-3">' +
                         '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">IDE handoff</p>' +
@@ -5385,17 +5981,18 @@
         var runId = _workflowActiveRunIdForHarness();
         var qs = runId ? ("?run_id=" + encodeURIComponent(String(runId))) : "";
         var html = '' +
-            '<div id="wf-harness-handoff-modal" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/60 p-4">' +
+            '<div id="wf-harness-handoff-modal" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2147483646;background:rgba(0,0,0,0.6);padding:1rem;">' +
                 '<div class="w-full max-w-2xl max-h-[90vh] flex flex-col bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden">' +
                     '<div class="px-5 pt-5 pb-3 flex-shrink-0">' +
-                        '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Development environment</p>' +
-                        '<h3 class="text-white text-lg font-semibold">Work with this workflow in your harness</h3>' +
-                        '<p class="mt-1 text-xs text-gray-400">Cursor, Codex, Claude Code, Pi, Cline, VS Code, Antigravity, Kiro, or any agent — copy instructions into your tool of choice. DecisionsAI does not need to launch it for you.</p>' +
+                        '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Agent handle</p>' +
+                        '<h3 class="text-white text-lg font-semibold">Work in your CLI or IDE</h3>' +
+                        '<p class="mt-1 text-xs text-gray-400">Copy this into your CLI or IDE. It tells the agent what to open and what to do.</p>' +
                     '</div>' +
                     '<div id="wf-harness-handoff-body" class="px-5 pb-3 flex-1 min-h-0 overflow-y-auto">' +
                         '<p class="text-sm text-gray-400">Loading workflow memory…</p>' +
                     '</div>' +
-                    '<div class="flex flex-wrap items-center justify-end gap-2 px-5 py-4 border-t border-white/10 flex-shrink-0">' +
+                    '<div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-t border-white/10 flex-shrink-0">' +
+                        '<div id="wf-harness-footer-actions" class="flex flex-wrap items-center gap-2"></div>' +
                         '<button type="button" class="wf-harness-handoff-close px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Close</button>' +
                     '</div>' +
                 '</div>' +
@@ -5412,47 +6009,57 @@
             if (!body) return;
             var entry = (data && data.entry_file) || "";
             var paste = (data && data.paste_block) || "";
-            var pickup = (data && data.pickup_prompt) || "";
-            var tree = (data && data.file_tree) || "";
             var contract = (data && data.return_contract) || "";
-            var handoff = (data && data.handoff_preview) || "";
+            var pickup = (data && data.pickup_prompt) || "";
+            var learningGuide = (data && data.learning_guide_excerpt) || "";
+            var handoffPreview = (data && data.handoff_preview) || "";
+            var stepRoutingTable = (data && data.step_routing_table) || "";
+            var repoProjection = (data && data.repo_projection) || "";
+            var boardId = data && data.linked_board_id != null ? String(data.linked_board_id) : "";
+            var projectId = data && data.linked_project_id != null ? String(data.linked_project_id) : "";
             var wfName = esc((data && data.workflow_name) || "Workflow");
             body.innerHTML =
                 '<div class="space-y-4 text-sm">' +
-                    '<div class="rounded border border-white/10 bg-[#12183a]/60 px-3 py-2">' +
-                        '<p class="text-xs text-gray-400">Workflow</p>' +
-                        '<p class="text-white font-medium">' + wfName + '</p>' +
-                        (entry ? '<p class="mt-1 text-[11px] text-gray-500 break-all">Entry: ' + esc(entry) + '</p>' : '') +
+                    '<div class="rounded-lg border border-[#f97316]/30 bg-[#f97316]/10 px-3 py-3">' +
+                        '<p class="text-xs uppercase tracking-wide text-[#fdba74] mb-1">Handle</p>' +
+                        '<p class="text-sm text-white leading-relaxed">Copy this into your CLI or IDE. It tells the agent what to open and what to do.</p>' +
                     '</div>' +
-                    '<div>' +
-                        '<p class="text-xs text-gray-300 mb-2">1. Paste full instructions into your harness (custom instructions, first message, or AGENTS rules).</p>' +
-                        '<textarea id="wf-harness-paste-block" readonly rows="8" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-gray-200 text-xs font-mono">' + esc(paste) + '</textarea>' +
-                        '<div class="mt-2 flex flex-wrap gap-2">' +
-                            '<button type="button" id="wf-harness-copy-full" class="px-2.5 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Copy full instructions</button>' +
-                            '<button type="button" id="wf-harness-copy-pickup" class="px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy short pickup prompt</button>' +
-                            '<button type="button" id="wf-harness-copy-entry" class="px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy entry path</button>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div>' +
-                        '<p class="text-xs text-gray-300 mb-2">2. Read the workspace files in order (agents → router → context → handoff → learning-guide).</p>' +
-                        '<pre class="text-[11px] text-gray-400 whitespace-pre-wrap break-all bg-[#152054]/50 border border-white/10 rounded px-3 py-2 max-h-32 overflow-y-auto">' + esc(tree) + '</pre>' +
-                        '<button type="button" id="wf-harness-copy-tree" class="mt-2 px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy file tree</button>' +
-                    '</div>' +
-                    (handoff ? '<div><p class="text-xs text-gray-300 mb-1">Current handoff</p><pre class="text-[11px] text-gray-400 whitespace-pre-wrap bg-[#152054]/50 border border-white/10 rounded px-3 py-2 max-h-24 overflow-y-auto">' + esc(handoff.slice(0, 800)) + '</pre></div>' : '') +
-                    '<div>' +
-                        '<p class="text-xs text-gray-300 mb-2">3. When done, report back using the return contract (or say <strong class="text-gray-200">handoff</strong> in DecisionsAI).</p>' +
-                        '<pre class="text-[11px] text-gray-400 whitespace-pre-wrap bg-[#152054]/50 border border-white/10 rounded px-3 py-2">' + esc(contract) + '</pre>' +
-                        '<button type="button" id="wf-harness-copy-contract" class="mt-2 px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy return contract</button>' +
-                    '</div>' +
+                    '<textarea id="wf-harness-paste-block" readonly rows="9" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-gray-200 text-xs font-mono">' + esc(paste) + '</textarea>' +
                 '</div>';
+            var footerActions = document.getElementById("wf-harness-footer-actions");
+            if (footerActions) {
+                footerActions.innerHTML =
+                    '<button type="button" id="wf-harness-copy-full" class="px-2.5 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Copy handle</button>' +
+                    (entry ? '<button type="button" id="wf-harness-copy-entry" class="px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy agent file path</button>' : '');
+            }
+            var tabs = body.querySelectorAll(".wf-harness-tab");
+            var panels = body.querySelectorAll("[data-harness-panel]");
+            function setHarnessTab(tabId) {
+                tabs.forEach(function (btn) {
+                    var isActive = btn.getAttribute("data-harness-tab") === tabId;
+                    btn.setAttribute("aria-selected", isActive ? "true" : "false");
+                    btn.classList.toggle("text-white", isActive);
+                    btn.classList.toggle("bg-white/5", isActive);
+                    btn.classList.toggle("border-[#f97316]", isActive);
+                    btn.classList.toggle("text-gray-300", !isActive);
+                });
+                panels.forEach(function (panel) {
+                    panel.classList.toggle("hidden", panel.getAttribute("data-harness-panel") !== tabId);
+                });
+            }
+            setHarnessTab("instructions");
+            tabs.forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    var next = btn.getAttribute("data-harness-tab");
+                    if (next) setHarnessTab(next);
+                });
+            });
             var copyFull = document.getElementById("wf-harness-copy-full");
-            if (copyFull) copyFull.addEventListener("click", function () { copyWorkflowHarnessText(paste, "Full instructions"); });
+            if (copyFull) copyFull.addEventListener("click", function () { copyWorkflowHarnessText(paste, "Handle"); });
             var copyPickup = document.getElementById("wf-harness-copy-pickup");
             if (copyPickup) copyPickup.addEventListener("click", function () { copyWorkflowHarnessText(pickup, "Pickup prompt"); });
             var copyEntry = document.getElementById("wf-harness-copy-entry");
             if (copyEntry) copyEntry.addEventListener("click", function () { copyWorkflowHarnessText(entry, "Entry path"); });
-            var copyTree = document.getElementById("wf-harness-copy-tree");
-            if (copyTree) copyTree.addEventListener("click", function () { copyWorkflowHarnessText(tree, "File tree"); });
             var copyContract = document.getElementById("wf-harness-copy-contract");
             if (copyContract) copyContract.addEventListener("click", function () { copyWorkflowHarnessText(contract, "Return contract"); });
         }).catch(function (e) {
@@ -5514,7 +6121,7 @@
         if (needsPermission) {
             approvalHtml = '<div class="mt-3 rounded border border-purple-500/30 bg-purple-500/10 p-3">' +
                 '<p class="text-xs text-purple-200 font-medium">Harness permission</p>' +
-                '<p class="mt-1 text-[11px] text-gray-300">This step is waiting on your harness or tool approval. Copy instructions from <strong class="text-gray-200">Work in your IDE</strong> or steer below.</p>' +
+                '<p class="mt-1 text-[11px] text-gray-300">This step is waiting on your harness or tool approval. Open the <strong class="text-gray-200">agent handoff</strong> or steer below.</p>' +
                 '<div class="mt-2 flex flex-wrap gap-2">' +
                     '<button type="button" class="wf-run-open-harness px-2 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Open harness handoff</button>' +
                 '</div>' +
@@ -5745,9 +6352,33 @@
         renderLoopRunTicketContext();
     }
 
+    function workflowLoopHasSelectedTicket() {
+        return !!selectedWorkflowQueueTicketId;
+    }
+
+    function syncWorkflowLoopTabAvailability() {
+        var canShowLoop = workflowLoopHasSelectedTicket();
+        document.querySelectorAll('.wf-tab[data-tab="loop"]').forEach(function (btn) {
+            btn.disabled = !canShowLoop;
+            btn.classList.toggle("opacity-50", !canShowLoop);
+            btn.classList.toggle("cursor-not-allowed", !canShowLoop);
+            btn.title = canShowLoop ? "View this ticket's loop activity" : "Select a queued ticket to view its loop";
+        });
+        var activeLoop = document.querySelector('.wf-tab[data-tab="loop"].active');
+        if (!canShowLoop && activeLoop) switchTab("tickets", { persist: true });
+    }
+
     function selectWorkflowQueueTicket(ticketId, rowEl) {
         selectedWorkflowQueueTicketId = ticketId ? String(ticketId) : null;
+        workflowRunsFilterTicketId = selectedWorkflowQueueTicketId;
+        if (!selectedWorkflowQueueTicketId) {
+            loopFeedRunId = null;
+            workflowMemoryRunId = null;
+        }
         syncWorkflowQueueSelectionUi();
+        syncWorkflowLoopTabAvailability();
+        syncLoopFeedRunSelect();
+        renderLoopRunTicketContext();
         if (rowEl && typeof rowEl.focus === "function") rowEl.focus();
     }
 
@@ -5815,12 +6446,13 @@
         });
     }
 
-    function createWorkflowQueueListRow(ticket, queueId) {
+    function createWorkflowQueueListRow(ticket, queueId, options) {
+        options = options || {};
         var run = activeRunByTicketId(ticket.id);
         var executionSession = activeExecutionSessionByTicketId(ticket.id);
         var locked = !!(run || executionSession);
         var loopLocked = workflowHasActiveRuns();
-        var canReorder = !locked && !loopLocked;
+        var canReorder = !options.static && !locked && !loopLocked;
         var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : "");
         var timeLabel = workflowQueueTicketTimeLabel(ticket);
         var timeLive = workflowQueueTicketTimeIsLive(ticket);
@@ -5837,6 +6469,7 @@
         var titleHtml = '<div class="kb-ticket-list-title-wrap" title="' + esc(title) + '">' + esc(title) + "</div>";
         var row = document.createElement("div");
         row.className = "kb-ticket-list-row wf-workflow-ticket-row" + (run ? " wf-workflow-ticket-row--running" : "");
+        if (options.static) row.className += " wf-workflow-ticket-row--static";
         row.dataset.ticketId = String(ticket.id);
         row.tabIndex = 0;
         row.setAttribute("role", "option");
@@ -5846,9 +6479,9 @@
         }
         row.innerHTML =
             '<div class="kb-ticket-list-prefix">' +
-                workflowListDragHandleHtml(canReorder, loopLocked ? "Loop is running — reorder locked" : "Drag to reorder queue") +
+                workflowListDragHandleHtml(canReorder, options.static ? "Selected ticket" : (loopLocked ? "Loop is running — reorder locked" : "Drag to reorder queue")) +
                 '<span class="kb-ticket-list-badges wf-workflow-queue-badges">' +
-                    '<span class="wf-queue-position-label" title="Queue position">' + esc(String(queueId) + ".") + "</span>" +
+                    (options.static ? "" : '<span class="wf-queue-position-label" title="Queue position">' + esc(String(queueId) + ".") + "</span>") +
                     workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
                     workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
                 "</span>" +
@@ -5858,14 +6491,15 @@
                 descHtml +
             "</div>" +
             '<div class="kb-ticket-list-actions wf-workflow-queue-actions">' +
-                '<span class="wf-ticket-time-display inline-flex whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded tabular-nums ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '" title="Time spent on this ticket">' + esc(timeLabel) + "</span>" +
+                '<span class="wf-ticket-time-display inline-flex h-6 min-w-[3.15rem] items-center justify-center whitespace-nowrap text-[9px] px-1 rounded tabular-nums leading-none ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '" title="Time spent on this ticket">' + esc(timeLabel) + "</span>" +
                 '<button type="button" class="wf-workflow-ticket-copy kb-card-action-btn kb-act-copy" data-ticket-id="' + esc(ticket.id) + '" title="Copy title and description" aria-label="Copy title and description">' +
                     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
                 "</button>" +
                 '<button type="button" class="wf-workflow-ticket-orchestrator kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Send to Orchestrator" aria-label="Send to Orchestrator">' +
                     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>' +
                 "</button>" +
-                (!run ? '<button type="button" class="wf-workflow-ticket-run kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow" aria-label="Run ticket">' + SVG_PLAY + "</button>" : "") +
+                '<button type="button" class="wf-workflow-ticket-loop kb-card-action-btn kb-act-loop" data-ticket-id="' + esc(ticket.id) + '" title="Open this ticket in the loop tab" aria-label="Open ticket loop">' + SVG_LOOP + "</button>" +
+                (!run ? '<button type="button" class="wf-workflow-ticket-run kb-card-action-btn kb-act-play" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow" aria-label="Run ticket">' + SVG_PLAY + "</button>" : "") +
                 (locked ? "" : '<button type="button" class="wf-workflow-ticket-remove kb-card-action-btn kb-act-delete" data-ticket-id="' + esc(ticket.id) + '" title="Remove from workflow" aria-label="Remove from workflow">' + SVG_TRASH + "</button>") +
             "</div>";
         if (canReorder) {
@@ -5956,6 +6590,18 @@
         });
         renderWorkflowBoardTimeTotal();
         refreshWorkflowCliTabIfVisible();
+    }
+
+    function openWorkflowTicketLoop(ticketId, rowEl) {
+        if (!ticketId) return;
+        selectWorkflowQueueTicket(ticketId, rowEl || null);
+        var run = activeRunByTicketId(ticketId) || runRecordById(loopFeedRunId);
+        if (run && String(run.ticket_id || "") === String(ticketId)) {
+            focusWorkflowRun(run.id, { ticketId: ticketId, switchTab: "loop" });
+            return;
+        }
+        switchTab("loop", { persist: true });
+        renderLoopRunTicketContext();
     }
 
     function normalizeComplexity(value) {
@@ -6459,12 +7105,13 @@
         return api("PUT", "/tickets/tickets/" + encodeURIComponent(ticketId), {
             linked_workflow_id: parseInt(currentWorkflowId, 10),
             workflow_queue_position: workflowQueueTickets.length
-        }).then(function () {
+        }).then(function (result) {
             delete workflowPendingTicketLinks[linkKey];
-            rememberWorkflowBoardTicketSource(ticketId, payload);
+            var queueTicketId = result && result.id ? result.id : ticketId;
+            rememberWorkflowBoardTicketSource(queueTicketId, payload);
             if (!options.silent) snack("Ticket added to workflow queue");
             if (payload && payload.ticket_key) applyWorkflowBoardTicketLinkedState(payload.ticket_key, payload);
-            return fetchWorkflowQueueTicketRecord(ticketId);
+            return fetchWorkflowQueueTicketRecord(queueTicketId);
         }).then(function (ticket) {
             if (ticket) appendWorkflowQueueTicket(ticket);
             loadActiveRuns();
@@ -6503,6 +7150,7 @@
             external_source: payload.source || payload.external_source || "",
             external_id: payload.external_id || payload.ticket_id || "",
             external_url: payload.external_url || payload.url || "",
+            media: Array.isArray(payload.media) ? payload.media : [],
             linked_project_id: payload.default_project_id || null,
             linked_workflow_id: parseInt(currentWorkflowId, 10)
         }).then(function (result) {
@@ -6737,7 +7385,8 @@
     }
 
     function bindWorkflowTicketQueueRows(listEl) {
-        listEl.querySelectorAll(".wf-workflow-ticket-row").forEach(function (row) {
+        listEl.querySelectorAll(".wf-workflow-ticket-row, .wf-loop-ticket-banner").forEach(function (row) {
+            var isStatic = row.classList.contains("wf-workflow-ticket-row--static") || row.classList.contains("wf-loop-ticket-banner");
             row.addEventListener("click", function (evt) {
                 if (evt.target.closest("button, a, input, textarea, select, .kb-ticket-list-desc, .kb-ticket-list-drag-handle")) return;
                 selectWorkflowQueueTicket(row.dataset.ticketId || "", row);
@@ -6749,6 +7398,7 @@
                 });
             });
             row.addEventListener("dragover", function (evt) {
+                if (isStatic) return;
                 evt.preventDefault();
                 row.classList.add("ring-1", "ring-[#f97316]/50");
             });
@@ -6756,6 +7406,7 @@
                 row.classList.remove("ring-1", "ring-[#f97316]/50");
             });
             row.addEventListener("drop", function (evt) {
+                if (isStatic) return;
                 evt.preventDefault();
                 evt.stopPropagation();
                 row.classList.remove("ring-1", "ring-[#f97316]/50");
@@ -6771,6 +7422,14 @@
                     evt.preventDefault();
                     evt.stopPropagation();
                     openWorkflowRunPreview(runBtn.dataset.ticketId || "");
+                });
+            }
+            var loopBtn = row.querySelector(".wf-workflow-ticket-loop");
+            if (loopBtn) {
+                loopBtn.addEventListener("click", function (evt) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    openWorkflowTicketLoop(loopBtn.dataset.ticketId || "", row);
                 });
             }
             var copyBtn = row.querySelector(".wf-workflow-ticket-copy");
@@ -6803,11 +7462,7 @@
             row.addEventListener("dblclick", function () {
                 var id = row.dataset.ticketId || "";
                 if (!id) return;
-                api("GET", "/tickets/tickets/" + encodeURIComponent(id))
-                    .then(function (ticket) {
-                        openWorkflowTicketModal(ticket, { selected: { source: "database", value: "", label: ticket.board_name || "Workflow queue" } });
-                    })
-                    .catch(function (e) { snack(e.message || "Failed to open ticket", "error"); });
+                openWorkflowTicketLoop(id, row);
             });
         });
     }
@@ -8355,6 +9010,22 @@
         html += '<div class="mt-2"><label class="flex items-center gap-2 cursor-pointer">' +
             '<input type="checkbox" class="sf-wait-for-continue rounded"' + (step.wait_for_continue ? " checked" : "") + '>' +
             '<span class="text-sm text-gray-300">Wait for continue signal after action completes</span></label></div>';
+        html += '<div class="sf-cli-override-wrap' + (step.action_type !== "send_to_project_cli" ? " hidden" : "") + ' mt-3 rounded border border-white/10 bg-[#0d1333]/70 p-3">';
+        html += '<div class="grid grid-cols-2 gap-3">';
+        html += '<div><label class="block text-xs text-gray-500 mb-1">CLI backend</label>' +
+            '<select class="sf-cli-backend w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
+            workflowStepBackendOptionsHtml(stepConfig.backend_id || "") + '</select></div>';
+        html += '<div><label class="block text-xs text-gray-500 mb-1">Model</label>' +
+            '<select class="sf-cli-model w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
+            '<option value="' + esc(stepConfig.model || "auto") + '">' + esc(stepConfig.model || "Auto") + '</option></select></div>';
+        html += '</div>';
+        html += '<p class="sf-cli-model-hint mt-1 text-xs text-gray-500">Auto follows workflow policy unless this step picks a concrete model.</p>';
+        html += '<div class="mt-2 grid gap-2 sm:grid-cols-3">';
+        html += '<label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" class="sf-cli-policy-auto accent-[#f97316]"' + (((stepConfig.model_policy || {}).auto_route_models !== false) ? " checked" : "") + '>Auto-route model</label>';
+        html += '<label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" class="sf-cli-policy-free accent-[#f97316]"' + ((stepConfig.model_policy || {}).free_only ? " checked" : "") + '>Free/local only</label>';
+        html += '<label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" class="sf-cli-policy-local accent-[#f97316]"' + (((stepConfig.model_policy || {}).prefer_local !== false) ? " checked" : "") + '>Prefer local</label>';
+        html += '</div>';
+        html += '</div>';
         html += '</div>';
         // Recording controls (only for play_recording)
         html += '<div class="sf-recording-wrap' + (!isRecording ? " hidden" : "") + '">';
@@ -8502,6 +9173,9 @@
         html += '</div></div>';
         container.innerHTML = html;
         hydrateActionSelect(container, step);
+        if (step.action_type === "send_to_project_cli") {
+            loadStepCliModels(container, stepConfig.model || "auto");
+        }
 
         // Tab switching
         container.querySelectorAll(".sf-tab").forEach(function (btn) {
@@ -8533,7 +9207,16 @@
                 container.querySelector(".sf-instruction-wrap").classList.toggle("hidden", isRec || isDecisionAction);
                 container.querySelector(".sf-recording-wrap").classList.toggle("hidden", !isRec);
                 container.querySelector(".sf-decision-action-wrap").classList.toggle("hidden", !isDecisionAction);
+                var cliWrap = container.querySelector(".sf-cli-override-wrap");
+                if (cliWrap) cliWrap.classList.toggle("hidden", actionTypeSelect.value !== "send_to_project_cli");
+                if (actionTypeSelect.value === "send_to_project_cli") loadStepCliModels(container, "auto");
                 if (isDecisionAction) hydrateActionSelect(container, step);
+            });
+        }
+        var stepCliBackend = container.querySelector(".sf-cli-backend");
+        if (stepCliBackend) {
+            stepCliBackend.addEventListener("change", function () {
+                loadStepCliModels(container, "auto");
             });
         }
         var decisionActionSelect = container.querySelector(".sf-decision-action");
@@ -8871,6 +9554,25 @@
         } else {
             delete config.visual_diff_threshold;
         }
+        if (actionType === "send_to_project_cli") {
+            var cliBackendEl = container.querySelector(".sf-cli-backend");
+            var cliModelEl = container.querySelector(".sf-cli-model");
+            var backendValue = cliBackendEl ? (cliBackendEl.value || "").trim() : "";
+            var modelValue = cliModelEl ? (cliModelEl.value || "auto").trim() : "auto";
+            if (backendValue) config.backend_id = backendValue;
+            else delete config.backend_id;
+            if (modelValue) config.model = modelValue;
+            else delete config.model;
+            config.model_policy = {
+                auto_route_models: !!((container.querySelector(".sf-cli-policy-auto") || {}).checked),
+                free_only: !!((container.querySelector(".sf-cli-policy-free") || {}).checked),
+                prefer_local: !!((container.querySelector(".sf-cli-policy-local") || {}).checked)
+            };
+        } else {
+            delete config.backend_id;
+            delete config.model;
+            delete config.model_policy;
+        }
         body.config = config;
         if (isDecisionAction) {
             var actionSelect = container.querySelector(".sf-decision-action");
@@ -9188,7 +9890,11 @@
         var history = (latestWorkflowRunHistoryAll || []).filter(function (r) {
             return r && r.id && !activeIds[String(r.id)];
         });
-        return active.concat(history);
+        var runs = active.concat(history);
+        if (!selectedWorkflowQueueTicketId) return [];
+        return runs.filter(function (r) {
+            return r && r.ticket_id && String(r.ticket_id) === String(selectedWorkflowQueueTicketId);
+        });
     }
 
     function runRecordById(runId) {
@@ -9507,7 +10213,7 @@
         var select = document.getElementById("wf-loop-feed-run-select");
         var runs = loopFeedSelectableRuns();
         if (!loopFeedRunId || !runs.some(function (r) { return String(r.id) === String(loopFeedRunId); })) {
-            var active = currentWorkflowActiveRuns();
+            var active = loopFeedSelectableRuns();
             loopFeedRunId = active.length ? active[0].id : (runs.length ? runs[0].id : null);
         }
         if (select) {
@@ -9632,26 +10338,34 @@
 
     function steeringEntryToFeedItem(entry) {
         if (!entry || !entry.message) return null;
+        var run = loopFeedActiveRun();
         return {
             id: "steer-" + String(entry.ts || entry.created_at || entry.message).slice(0, 48),
             kind: "steer",
             title: steeringSourceLabel(entry.source, entry.event_type),
             body: String(entry.message || "").trim(),
             ts: loopFeedTimestamp(entry.ts ? entry.ts * 1000 : entry.created_at),
-            detail: []
+            detail: [],
+            step_id: entry.step_id || (run && run.current_step_id) || null,
+            step_name: entry.step_name || (run && run.current_step_name) || ""
         };
     }
 
     function mergeLoopFeedItems(events, steeringLog, optimisticSteers) {
         var items = [];
         (events || []).forEach(function (event, idx) {
+            var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
             items.push({
                 id: "evt-" + String(event.id || idx),
                 kind: loopFeedKindForEvent(event),
-                title: String(event.event_type || "event").replace(/_/g, " "),
+                title: String(event.subtype || event.legacy_event_type || event.event_type || "event").replace(/_/g, " "),
                 body: loopFeedFormatEventSummary(event),
                 ts: loopFeedTimestamp(event.created_at),
-                detail: loopFeedEventDetailLines(event)
+                detail: loopFeedEventDetailLines(event),
+                event_type: String(event.event_type || ""),
+                status: String(event.status || ""),
+                step_id: event.step_id || payload.step_id || null,
+                step_name: payload.step_name || event.step_name || ""
             });
         });
         (steeringLog || []).forEach(function (entry) {
@@ -9665,6 +10379,82 @@
         return items;
     }
 
+    function loopFeedStepState(group, activeRun) {
+        var currentStepId = activeRun && activeRun.current_step_id != null ? String(activeRun.current_step_id) : "";
+        if (group.step_id && currentStepId && String(group.step_id) === currentStepId) {
+            return activeRun.status === "waiting" ? "waiting" : "running";
+        }
+        var events = group.items || [];
+        var failed = events.some(function (item) {
+            var status = String(item.status || "").toLowerCase();
+            var type = String(item.event_type || "").toLowerCase();
+            return status === "failed" || status === "error" || type === "worker_failed" || type === "workflow_step_failed";
+        });
+        if (failed) return "failed";
+        var passed = events.some(function (item) {
+            var status = String(item.status || "").toLowerCase();
+            var type = String(item.event_type || "").toLowerCase();
+            return status === "passed" || status === "completed" || status === "done" || type === "worker_completed" || type === "workflow_step_completed";
+        });
+        return passed ? "passed" : "pending";
+    }
+
+    function loopFeedBuildStepGroups(items) {
+        var activeRun = loopFeedActiveRun();
+        var workflowSteps = currentWorkflow && Array.isArray(currentWorkflow.steps) ? currentWorkflow.steps : [];
+        var groups = [];
+        var byKey = {};
+        workflowSteps.forEach(function (step, idx) {
+            var key = step && step.id != null ? String(step.id) : ("position-" + idx);
+            var group = {
+                key: key,
+                step_id: step && step.id != null ? step.id : null,
+                index: idx + 1,
+                title: (step && (step.name || step.title)) || ("Step " + (idx + 1)),
+                items: []
+            };
+            byKey[key] = group;
+            groups.push(group);
+        });
+        (items || []).forEach(function (item) {
+            var key = item && item.step_id != null ? String(item.step_id) : "run";
+            var group = byKey[key];
+            if (!group) {
+                group = {
+                    key: key,
+                    step_id: key === "run" ? null : item.step_id,
+                    index: groups.length + 1,
+                    title: item.step_name || (key === "run" ? "Run activity" : ("Step " + key)),
+                    items: []
+                };
+                byKey[key] = group;
+                groups.push(group);
+            } else if (!group.title && item.step_name) {
+                group.title = item.step_name;
+            }
+            group.items.push(item);
+        });
+        groups.forEach(function (group) {
+            group.state = loopFeedStepState(group, activeRun);
+            group.open = group.state === "running" || group.state === "waiting" || group.items.length > 0;
+            if (group.state === "pending" && group.items.length === 0) group.open = false;
+        });
+        return groups.filter(function (group) {
+            return group.items.length || group.state === "running" || group.state === "waiting" || workflowSteps.length;
+        });
+    }
+
+    function loopFeedRenderItem(item) {
+        var when = item.ts ? new Date(item.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+        var detailHtml = (item.detail || []).length
+            ? '<div class="wf-loop-feed-msg-detail">' + item.detail.map(function (line) { return esc(line); }).join("<br>") + "</div>"
+            : "";
+        return '<div class="wf-loop-feed-msg wf-loop-feed-msg--' + esc(item.kind || "event") + '">' +
+            '<div class="wf-loop-feed-msg-meta">' + esc(item.title || "Update") + (when ? " · " + esc(when) : "") + "</div>" +
+            '<div class="wf-loop-feed-msg-bubble">' + esc(item.body || "") + detailHtml + "</div>" +
+        "</div>";
+    }
+
     function renderLoopActivityFeed(items) {
         var list = document.getElementById("wf-loop-feed-messages");
         if (!list) return;
@@ -9674,15 +10464,20 @@
             list.innerHTML = '<p class="wf-loop-feed-empty">No run activity yet. Start a queued ticket.</p>';
             return;
         }
-        list.innerHTML = items.map(function (item) {
-            var when = item.ts ? new Date(item.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
-            var detailHtml = (item.detail || []).length
-                ? '<div class="wf-loop-feed-msg-detail">' + item.detail.map(function (line) { return esc(line); }).join("<br>") + "</div>"
-                : "";
-            return '<div class="wf-loop-feed-msg wf-loop-feed-msg--' + esc(item.kind || "event") + '">' +
-                '<div class="wf-loop-feed-msg-meta">' + esc(item.title || "Update") + (when ? " · " + esc(when) : "") + "</div>" +
-                '<div class="wf-loop-feed-msg-bubble">' + esc(item.body || "") + detailHtml + "</div>" +
-            "</div>";
+        var groups = loopFeedBuildStepGroups(items);
+        list.innerHTML = groups.map(function (group) {
+            var state = group.state || "pending";
+            var body = group.items.length
+                ? group.items.map(loopFeedRenderItem).join("")
+                : '<p class="wf-loop-feed-step-empty">No activity recorded for this step yet.</p>';
+            return '<details class="wf-loop-feed-step wf-loop-feed-step--' + esc(state) + '"' + (group.open ? " open" : "") + ' data-step-id="' + esc(group.step_id || "") + '">' +
+                '<summary class="wf-loop-feed-step-summary">' +
+                    '<span class="wf-loop-feed-step-index">' + esc(group.index || "") + '</span>' +
+                    '<span class="wf-loop-feed-step-title" title="' + esc(group.title || "Step") + '">' + esc(group.title || "Step") + '</span>' +
+                    '<span class="wf-loop-feed-step-state">' + esc(state) + '</span>' +
+                '</summary>' +
+                '<div class="wf-loop-feed-step-body">' + body + '</div>' +
+            '</details>';
         }).join("");
         if (loopFeedScrollPinned) {
             list.scrollTop = list.scrollHeight;
@@ -9691,22 +10486,31 @@
 
     function loadLoopActivityFeed(options) {
         options = options || {};
-        if (!currentWorkflowId) {
+        if (!currentWorkflowId || !selectedWorkflowQueueTicketId) {
             renderLoopActivityFeed([]);
             return Promise.resolve([]);
         }
         syncLoopFeedRunSelect();
         var runId = loopFeedRunId;
-        var query = "/workflows/" + currentWorkflowId + "/orchestrator-events?limit=120";
-        if (runId) query += "&run_id=" + encodeURIComponent(runId);
         var boardId = getSelectedBoardLocalId();
-        if (boardId) query += "&board_id=" + encodeURIComponent(boardId);
-        var eventsPromise = api("GET", query);
+        var rawQuery = "/workflows/" + currentWorkflowId + "/orchestrator-events?limit=120";
+        if (runId) rawQuery += "&run_id=" + encodeURIComponent(runId);
+        if (boardId) rawQuery += "&board_id=" + encodeURIComponent(boardId);
+        var eventsPromise = runId
+            ? api("GET", "/workflows/" + currentWorkflowId + "/runs/" + runId + "/timeline?limit=160").then(function (resp) {
+                return resp && Array.isArray(resp.events) ? resp.events : [];
+            }).catch(function () {
+                return api("GET", rawQuery);
+            })
+            : api("GET", rawQuery);
         var steeringPromise = runId
             ? api("GET", "/workflows/" + currentWorkflowId + "/runs/" + runId + "/steering-memory")
             : Promise.resolve(null);
         return Promise.all([eventsPromise, steeringPromise]).then(function (results) {
             var events = Array.isArray(results[0]) ? results[0] : [];
+            events = events.filter(function (event) {
+                return !event.ticket_id || String(event.ticket_id) === String(selectedWorkflowQueueTicketId);
+            });
             var snapshot = results[1];
             var steeringLog = snapshot && Array.isArray(snapshot.steering_log) ? snapshot.steering_log.slice().reverse() : [];
             var optimistic = (latestLoopFeedItems || []).filter(function (item) {
@@ -9723,6 +10527,7 @@
     }
 
     function appendLoopFeedOptimisticSteer(message) {
+        var run = loopFeedActiveRun();
         var item = {
             id: "optimistic-" + Date.now(),
             kind: "steer",
@@ -9730,6 +10535,8 @@
             body: message,
             ts: Date.now(),
             detail: [],
+            step_id: run && run.current_step_id || null,
+            step_name: run && run.current_step_name || "",
             optimistic: true
         };
         renderLoopActivityFeed((latestLoopFeedItems || []).concat([item]));
@@ -9967,6 +10774,10 @@
     // ── Tabs ──
     function switchTab(tab, options) {
         options = options || {};
+        if (tab === "loop" && !workflowLoopHasSelectedTicket()) {
+            tab = "tickets";
+            if (!options.quiet) snack("Select a queued ticket to view its loop", "info");
+        }
         if (tab === "runs") {
             var runsTabBtn = document.getElementById("wf-runs-tab-btn");
             if (runsTabBtn) runsTabBtn.classList.remove("hidden");
@@ -9988,6 +10799,7 @@
         var runAllBtn = document.getElementById("wf-run-all-btn");
         if (runAllBtn) runAllBtn.classList.toggle("hidden", tab !== "tickets");
         if (tab === "loop" && currentWorkflow) {
+            workflowRunsFilterTicketId = selectedWorkflowQueueTicketId;
             renderSteps(currentWorkflow.steps || []);
             restoreLoopFeedExpandedState();
             loadLoopActivityFeed({ quiet: true });
@@ -9995,6 +10807,7 @@
         }
         if (tab === "cli") {
             refreshWorkflowCliTab();
+            requestAnimationFrame(syncWorkflowCliLayoutHeight);
         }
         if (tab === "runs") {
             loadActiveRuns();
@@ -10443,9 +11256,7 @@
                     priority: (document.querySelector("#kb-modal-priority-btns button.bg-\\[\\#f97316\\]") || {}).dataset ? document.querySelector("#kb-modal-priority-btns button.bg-\\[\\#f97316\\]").dataset.pri : "medium",
                     complexity: document.getElementById("kb-modal-ticket-complexity").value,
                     time_estimate: document.getElementById("kb-modal-ticket-estimate").value.trim(),
-                    time_spent: document.getElementById("kb-modal-ticket-duration").value.trim(),
-                    linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value, 10) || null,
-                    linked_project_id: parseInt(document.getElementById("kb-modal-link-project").value, 10) || null
+                    time_spent: document.getElementById("kb-modal-ticket-duration").value.trim()
                 };
                 api("PUT", "/tickets/tickets/" + encodeURIComponent(ticket.id), payload)
                     .then(function () {
@@ -10472,7 +11283,7 @@
                 var state = workflowTicketModalState;
                 var ticket = state && state.ticket ? state.ticket : null;
                 var selected = state && state.context ? state.context.selected : {};
-                if (!ticket || !ticket.id || !state || !state.isLocal) return;
+                if (!ticket || !ticket.id || !state || !state.isLocal || !state.canDelete) return;
                 showConfirmModal({
                     title: "Delete ticket",
                     message: "Delete this ticket? This cannot be undone.",
@@ -10724,6 +11535,7 @@
         bindWorkflowSplitResizer();
         window.addEventListener("resize", function () {
             syncLoopFeedPanelHeight();
+            syncWorkflowCliLayoutHeight();
         });
 
         try {
