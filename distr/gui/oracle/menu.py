@@ -824,6 +824,7 @@ class MenuTrayMixin:
         for chat_id, title in recent_chats:
             action = QAction(title, self.chat_submenu)
             action.setCheckable(True)
+            action.setData(chat_id)
             action.setChecked(chat_id == current_chat_id)
             action.setEnabled(eula_accepted)
             action.setActionGroup(self._recent_chats_action_group)
@@ -916,9 +917,27 @@ class MenuTrayMixin:
         if getattr(self, "chat_manager", None):
             current_chat_id = self.chat_manager.get_current_chat()
         if current_chat_id == chat_id:
-            return
+            self._update_chat_id_display(chat_id)
 
         try:
+            if getattr(self, "chat_manager", None):
+                self.chat_manager.set_current_chat(chat_id, force_reload=True)
+            self._update_chat_id_display(chat_id)
+            for action in getattr(self, "_recent_chat_actions", []):
+                action.setChecked(action.data() == chat_id)
+            try:
+                from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+                settings = load_settings_from_db()
+                settings["last_chat_id"] = chat_id
+                settings["agent_current_chat_id"] = chat_id
+                save_settings_to_db(settings)
+            except Exception as settings_error:
+                logger.warning(
+                    "Oracle menu: could not persist selected chat %s: %s",
+                    chat_id,
+                    settings_error,
+                )
             signal_manager.web_load_chat_in_agent_requested.emit(chat_id)
             logger.info("Oracle menu: loading chat %s into agent", chat_id)
         except Exception as e:
