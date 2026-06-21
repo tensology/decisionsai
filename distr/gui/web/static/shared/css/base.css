@@ -14,6 +14,64 @@
     color: #f97316 !important;
 }
 
+.primary-nav {
+    min-width: 0;
+}
+
+.primary-nav .nav-tab {
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.primary-nav .nav-tab svg {
+    flex-shrink: 0;
+}
+
+.primary-nav .nav-tab-label {
+    display: inline-block;
+    max-width: 9rem;
+    overflow: hidden;
+    white-space: nowrap;
+    opacity: 1;
+    transition:
+        max-width 0.2s ease,
+        margin-left 0.2s ease,
+        opacity 0.16s ease,
+        transform 0.2s ease;
+}
+
+@media (min-width: 760px) and (max-width: 1320px) {
+    .primary-nav {
+        flex-wrap: nowrap;
+        gap: 0.25rem;
+    }
+
+    .primary-nav .nav-tab {
+        gap: 0 !important;
+        padding-left: 0.625rem;
+        padding-right: 0.625rem;
+    }
+
+    .primary-nav .nav-tab-label {
+        max-width: 8rem;
+        margin-left: 0.375rem;
+    }
+
+    .primary-nav .nav-tab:not(.active):not(:hover):not(:focus-visible):not(:focus-within) .nav-tab-label {
+        max-width: 0;
+        margin-left: 0;
+        opacity: 0;
+        transform: translateX(-0.25rem);
+    }
+
+    .primary-nav .nav-tab:hover,
+    .primary-nav .nav-tab:focus-visible,
+    .primary-nav .nav-tab:focus-within,
+    .primary-nav .nav-tab.active {
+        background-color: rgba(255, 255, 255, 0.1);
+    }
+}
+
 .nav-chat-bubble {
     display: inline-flex;
     align-items: center;

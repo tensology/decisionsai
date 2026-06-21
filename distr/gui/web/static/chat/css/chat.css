@@ -910,12 +910,12 @@
 }
 
 .message.user .message-content {
-    background: rgba(42, 57, 144, 0.5);
+    background: rgba(31, 44, 115, 0.8);
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .message.assistant .message-content {
-    background: rgba(220, 38, 38, 0.2);
+    background: rgba(65, 26, 59, 0.8);
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 

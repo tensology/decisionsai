@@ -536,7 +536,7 @@ class MenuTrayMixin:
         self.preferences_submenu.addSeparator()
         preference_section_groups = [
             [
-                ("General Audio", "/settings#general"),
+                ("General & Audio", "/settings#general"),
                 ("Third Party Vendors", "/settings#thirdparty"),
                 ("LLMs", "/settings#llms"),
                 ("Initiative", "/settings#initiative"),

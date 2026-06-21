@@ -128,7 +128,7 @@ def _confirmation_for_path(path: str) -> str:
         if "#" in path:
             frag = path.split("#", 1)[1].lower()
         section = {
-            "general": "General Audio",
+            "general": "General & Audio",
             "initiative": "Initiative",
             "thirdparty": "Third Party Vendors",
             "llms": "LLMs",

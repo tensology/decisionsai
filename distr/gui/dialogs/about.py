@@ -225,6 +225,7 @@ class AboutWindow(QtWidgets.QMainWindow):
                 border-radius: 4px;        
                 padding: 0px;
                 margin: 0px;
+                top: -1px;
             }}
             QTabBar {{
                 margin-left: 0px;
@@ -246,7 +247,8 @@ class AboutWindow(QtWidgets.QMainWindow):
             QTabBar::tab:selected {{
                 background-color: #1a2a3c;
                 color: #ffffff;
-                border-bottom: 2px solid #4a9eff;
+                border-bottom: 1px solid #1a2a3c;
+                margin-bottom: -1px;
             }}
             QTabBar::tab:hover {{
                 background-color: #2a3a4c;
