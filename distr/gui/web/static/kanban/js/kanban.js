@@ -2391,14 +2391,7 @@
     }
 
     function ticketSourceLinkMarkup(label) {
-        var normalized = String(label || "").toLowerCase();
-        if (normalized.indexOf("jira") !== -1) {
-            return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.64 1.17a1.42 1.42 0 0 0 1.38 1.7h2.02v1.94a1.42 1.42 0 0 0 1.42 1.42h1.9v1.84a1.42 1.42 0 0 1-1.42 1.42h-2v1.95a1.42 1.42 0 0 1-1.42 1.42H7.64V11.9a1.42 1.42 0 0 0-1.42-1.42H4.28V8.53a1.42 1.42 0 0 0-1.42-1.42H.94V5.27a1.42 1.42 0 0 1 1.42-1.42h2V1.93A1.42 1.42 0 0 1 5.78.51h1.86Z"/></svg>';
-        }
-        if (normalized.indexOf("trello") !== -1) {
-            return '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2.8 1h10.4A1.8 1.8 0 0 1 15 2.8v10.4a1.8 1.8 0 0 1-1.8 1.8H2.8A1.8 1.8 0 0 1 1 13.2V2.8A1.8 1.8 0 0 1 2.8 1Zm.82 2.2A.62.62 0 0 0 3 3.82v4.96c0 .34.28.62.62.62h2.56c.34 0 .62-.28.62-.62V3.82a.62.62 0 0 0-.62-.62H3.62Zm6.2 0a.62.62 0 0 0-.62.62v3.16c0 .34.28.62.62.62h2.56c.34 0 .62-.28.62-.62V3.82a.62.62 0 0 0-.62-.62H9.82Z"/></svg>';
-        }
-        return '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M11.5 3H16a1 1 0 0 1 1 1v4.5m-1-4.5L9 11m-2 6H4a1 1 0 0 1-1-1v-3"/></svg>';
+        return '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAi0lEQVR42u3WQQqDQBAAwXlFPprXe0quQVRyCGjsKvDoQo/u6gwAAMCJlufj9YsrP4T8m5DfDvkzIX8wGoAt4BD0GfQj5Ff45vFH9yTij+7NxO+tkYrfWisXv14zGf+5djY+/eTFixcvXrx48eLFixcvXvzVBjB3lY7/ZghTkY7fGsJUpeMBAAD+zRvbrtesCjwpyAAAAABJRU5ErkJggg==" alt="" aria-hidden="true">';
     }
 
     function setTicketModalSourceUrl(url, label) {

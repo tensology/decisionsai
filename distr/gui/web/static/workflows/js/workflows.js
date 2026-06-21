@@ -1643,6 +1643,7 @@
         if (urlLink) {
             urlLink.classList.toggle("hidden", !sourceUrl);
             urlLink.href = sourceUrl || "#";
+            urlLink.innerHTML = '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAi0lEQVR42u3WQQqDQBAAwXlFPprXe0quQVRyCGjsKvDoQo/u6gwAAMCJlufj9YsrP4T8m5DfDvkzIX8wGoAt4BD0GfQj5Ff45vFH9yTij+7NxO+tkYrfWisXv14zGf+5djY+/eTFixcvXrx48eLFixcvXvzVBjB3lY7/ZghTkY7fGsJUpeMBAAD+zRvbrtesCjwpyAAAAABJRU5ErkJggg==" alt="" aria-hidden="true">';
             var sourceLabel = sourceName ? ("Open " + sourceName + " ticket") : "Open source ticket";
             urlLink.title = sourceLabel;
             urlLink.setAttribute("aria-label", sourceLabel);

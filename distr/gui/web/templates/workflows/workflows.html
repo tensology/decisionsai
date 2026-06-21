@@ -283,8 +283,9 @@
 }
 .kb-modal-action-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.375rem; }
 .kb-modal-action-btn:hover { background: rgba(255,255,255,0.08); }
-.kb-modal-source-icon { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.375rem; color: #f97316; border: 1px solid transparent; }
-.kb-modal-source-icon:hover { color: #fdba74; background: rgba(249,115,22,0.1); border-color: rgba(249,115,22,0.35); }
+.kb-modal-source-icon { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
+.kb-modal-source-icon img { width: 18px; height: 18px; display: block; object-fit: contain; }
+.kb-modal-source-icon:hover { opacity: 0.82; }
 .wf-wa-media-preview-btn { cursor: pointer; }
 .wf-wa-media-preview-btn:hover { border-color: rgba(249,115,22,0.55); background: rgba(249,115,22,0.08); }
 /* Ticket board list view (shared with Ticket Boards page) */
@@ -2604,11 +2605,7 @@ body.wf-split-dragging * {
             <h3 id="kb-modal-title" class="text-lg font-semibold text-white leading-snug line-clamp-2">Ticket</h3>
             <div class="flex items-center gap-3">
                 <a id="kb-modal-url-link" href="#" target="_blank" rel="noopener noreferrer" class="hidden kb-modal-source-icon" title="Open source ticket" aria-label="Open source ticket">
-                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                        <path d="M15 3h6v6"></path>
-                        <path d="M10 14 21 3"></path>
-                    </svg>
+                    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAi0lEQVR42u3WQQqDQBAAwXlFPprXe0quQVRyCGjsKvDoQo/u6gwAAMCJlufj9YsrP4T8m5DfDvkzIX8wGoAt4BD0GfQj5Ff45vFH9yTij+7NxO+tkYrfWisXv14zGf+5djY+/eTFixcvXrx48eLFixcvXvzVBjB3lY7/ZghTkY7fGsJUpeMBAAD+zRvbrtesCjwpyAAAAABJRU5ErkJggg==" alt="" aria-hidden="true">
                 </a>
                 <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
             </div>
