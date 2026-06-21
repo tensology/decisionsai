@@ -293,6 +293,11 @@ class SignalBridgeMixin:
                     params['speak'] = bool(speak.get('speak'))
                 if speak.get('input_type'):
                     params['telegram_input_type'] = str(speak.get('input_type'))
+                if speak.get('chat_id') is not None:
+                    try:
+                        params['chat_id'] = int(speak.get('chat_id'))
+                    except (TypeError, ValueError):
+                        pass
             elif speak is not None:
                 params['speak'] = bool(speak)
             self._send_command_to_agent('process_text_input', params)

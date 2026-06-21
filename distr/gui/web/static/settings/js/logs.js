@@ -1,8 +1,24 @@
 // Logs tab: poll when visible; Reload refreshes immediately.
 
 var LOGS_POLL_INTERVAL_MS = 2500;
+var _logsLastRaw = "";
 var _logsPollTimer = null;
 var LOGS_API_URL = "/api/logs?tail_lines=500";
+var _logsTailCopyLines = 20;
+
+function formatShortLogPath(path) {
+    if (!path) return "";
+    var normalized = String(path).replace(/\\/g, "/");
+    var match = normalized.match(/\/db\/log\/decisions[^/\\]*/i);
+    if (match && match[0]) {
+        return "." + match[0];
+    }
+    var segments = normalized.split("/");
+    if (segments.length >= 3) {
+        return "./" + segments.slice(-3).join("/");
+    }
+    return normalized;
+}
 
 function isLogsTabVisible() {
     var panel = document.getElementById("tab-logs");
@@ -89,13 +105,14 @@ function loadLogs() {
         })
         .then(function(data) {
             var text = data.content != null ? data.content : "";
+            _logsLastRaw = String(text || "");
             if (text === "") {
                 contentEl.textContent = "(No log content yet.)";
             } else {
                 text = text.split("\n").reverse().join("\n");
                 contentEl.innerHTML = colorizeLogText(text);
             }
-            if (pathEl) pathEl.textContent = data.path ? "File: " + data.path : "";
+            if (pathEl) pathEl.textContent = data.path ? formatShortLogPath(data.path) : "";
             requestAnimationFrame(function() {
                 if (!isInitialLoad && scrollHeight > clientHeight) {
                     var maxScroll = contentEl.scrollHeight - contentEl.clientHeight;
@@ -109,12 +126,44 @@ function loadLogs() {
         });
 }
 
-function startLogsPolling() {
-    if (_logsPollTimer) return;
-    loadLogs();
-    _logsPollTimer = setInterval(function() {
-        if (isLogsTabVisible()) loadLogs();
-    }, LOGS_POLL_INTERVAL_MS);
+function copyLastLogs() {
+    var copyBtn = document.getElementById("logs-copy-btn");
+    var raw = _logsLastRaw || "";
+    var lines = raw ? raw.split("\n") : [];
+    var last = lines.slice(Math.max(0, lines.length - _logsTailCopyLines)).join("\n").trim();
+    if (!last) {
+        if (copyBtn) {
+            copyBtn.disabled = true;
+            setTimeout(function () { copyBtn.disabled = false; }, 2000);
+        }
+        if (typeof window.showNotification === "function") {
+            window.showNotification("No log lines available to copy.", "warning");
+        }
+        return Promise.resolve(false);
+    }
+    return navigator.clipboard.writeText(last).then(function () {
+        if (typeof window.showNotification === "function") {
+            window.showNotification("Copied last " + _logsTailCopyLines + " lines", "success");
+        }
+        return true;
+    }).catch(function () {
+        var ta = document.createElement("textarea");
+        ta.value = last;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+            document.execCommand("copy");
+            if (typeof window.showNotification === "function") {
+                window.showNotification("Copied last " + _logsTailCopyLines + " lines", "success");
+            }
+            return true;
+        } finally {
+            document.body.removeChild(ta);
+        }
+    });
 }
 
 function stopLogsPolling() {
@@ -124,6 +173,14 @@ function stopLogsPolling() {
     }
 }
 
+function startLogsPolling() {
+    if (_logsPollTimer) return;
+    loadLogs();
+    _logsPollTimer = setInterval(function() {
+        if (isLogsTabVisible()) loadLogs();
+    }, LOGS_POLL_INTERVAL_MS);
+}
+
 function initLogsTab() {
     var panel = document.getElementById("tab-logs");
     if (!panel) return;
@@ -131,19 +188,23 @@ function initLogsTab() {
         if (isLogsTabVisible()) startLogsPolling();
         else stopLogsPolling();
     }
+    var copyBtn = document.getElementById("logs-copy-btn");
+    if (copyBtn) {
+        copyBtn.addEventListener("click", copyLastLogs);
+    }
     window.addEventListener("hashchange", checkVisibility);
     var origSwitchTab = window.switchTab;
     if (typeof origSwitchTab === "function") {
         window.switchTab = function(tabName) {
             origSwitchTab(tabName);
             if (tabName === "logs") {
-                setTimeout(function() { loadLogs(); startLogsPolling(); }, 0);
+                setTimeout(function() { startLogsPolling(); }, 0);
             } else {
                 stopLogsPolling();
             }
         };
     }
-    if (isLogsTabVisible()) setTimeout(function() { loadLogs(); startLogsPolling(); }, 0);
+    if (isLogsTabVisible()) setTimeout(function() { startLogsPolling(); }, 0);
     setTimeout(checkVisibility, 100);
 }
 

@@ -8,6 +8,7 @@ import pytest
 
 from distr.core.integrations.telegram.manager import (
     friendly_telegram_connect_error,
+    friendly_telegram_immediate_close_reason,
     friendly_telegram_socket_error,
     relay_endpoint_label,
 )
@@ -50,3 +51,9 @@ def test_friendly_telegram_socket_error(err_str, expected_fragment):
         endpoint="www.decisionsai.net",
     )
     assert expected_fragment in reason
+
+
+def test_friendly_telegram_immediate_close_reason():
+    reason = friendly_telegram_immediate_close_reason(endpoint="www.decisionsai.net")
+    assert "accepted the session token" in reason
+    assert "stale" in reason or "unhealthy" in reason

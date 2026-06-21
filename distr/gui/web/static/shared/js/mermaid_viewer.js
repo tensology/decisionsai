@@ -18,6 +18,33 @@
             .replace(/"/g, "&quot;");
     }
 
+    function normalizeHistoryTimestamp(ts) {
+        if (ts == null || ts === "") return null;
+        if (typeof ts === "string") {
+            var parsedText = ts.trim();
+            if (!parsedText) return null;
+            if (/^\d+(\.\d+)?$/.test(parsedText)) {
+                ts = Number(parsedText);
+            } else {
+                var fromText = new Date(parsedText);
+                return Number.isFinite(fromText.getTime()) ? fromText : null;
+            }
+        }
+        var numeric = Number(ts);
+        if (!Number.isFinite(numeric) || numeric <= 0) return null;
+        if (numeric > 1000000000000) {
+            numeric = Math.round(numeric);
+        } else if (numeric > 10000000000) {
+            numeric = Math.round(numeric);
+        } else {
+            numeric = Math.round(numeric * 1000);
+        }
+        var date = new Date(numeric);
+        if (!Number.isFinite(date.getTime())) return null;
+        if (date.getFullYear() < 2020 || date.getFullYear() > 2100) return null;
+        return date;
+    }
+
     function randomKey() {
         if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
         return "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
@@ -153,7 +180,7 @@
         });
     }
 
-    function loadHistoryList(historyEl, onSelect) {
+    function loadHistoryList(historyEl, onSelect, statusEl) {
         if (!historyEl) return Promise.resolve();
         historyEl.innerHTML = '<div class="mermaid-viewer-history-empty">Loading…</div>';
         return apiFetch("/api/diagrams/history").then(function (data) {
@@ -163,19 +190,67 @@
                 return;
             }
             historyEl.innerHTML = items.map(function (item) {
-                var when = item.created_at ? new Date(item.created_at * 1000).toLocaleString() : "";
+                var whenDate = normalizeHistoryTimestamp(item.created_at);
+                var when = whenDate ? whenDate.toLocaleString() : "Date unavailable";
                 return (
-                    '<button type="button" class="mermaid-viewer-history-item" data-history-id="' + esc(item.id) + '">' +
+                    '<div class="mermaid-viewer-history-item" data-history-id="' + esc(item.id) + '">' +
+                    '<div class="mermaid-viewer-history-meta">' +
                     '<span class="mermaid-viewer-history-title">' + esc(item.title || "Diagram") + "</span>" +
-                    '<span class="mermaid-viewer-history-time">' + esc(when) + "</span></button>"
+                    '<span class="mermaid-viewer-history-time">' + esc(when) + "</span>" +
+                    "</div>" +
+                    '<div class="mermaid-viewer-history-actions">' +
+                    '<button type="button" class="mermaid-viewer-open-btn mermaid-action-btn" data-action="open-diagram" data-history-id="' + esc(item.id) + '" title="Open diagram in viewer" aria-label="Open diagram in viewer">' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" class="mermaid-action-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                    '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z" />' +
+                    '<circle cx="12" cy="12" r="3" />' +
+                    '</svg></button>' +
+                    '<button type="button" class="mermaid-viewer-delete-btn mermaid-action-btn mermaid-action-btn-danger" data-action="delete-diagram" data-history-id="' + esc(item.id) + '" title="Delete diagram" aria-label="Delete diagram">' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" class="mermaid-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                    '<path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>' +
+                    "</svg></button>" +
+                    "</div>" +
+                    "</div>"
                 );
             }).join("");
-            historyEl.querySelectorAll("[data-history-id]").forEach(function (btn) {
+            historyEl.querySelectorAll("[data-action='open-diagram']").forEach(function (btn) {
                 btn.addEventListener("click", function () {
                     var id = btn.getAttribute("data-history-id");
                     var match = items.find(function (row) { return row.id === id; });
                     if (match && onSelect) onSelect(match);
                 });
+            });
+            historyEl.querySelectorAll("[data-action='delete-diagram']").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    var id = btn.getAttribute("data-history-id");
+                    if (!id) return;
+                            var row = items.find(function (row) { return row.id === id; }) || {};
+                            var title = row.title || "diagram";
+                            if (!window.DecisionsAPI || typeof window.DecisionsAPI.confirm !== "function") {
+                                if (!window.confirm("Delete " + (title || "diagram") + "?")) {
+                                    return;
+                                }
+                                apiFetch("/api/diagrams/" + encodeURIComponent(id), { method: "DELETE" })
+                                    .then(function () { loadHistoryList(historyEl, onSelect, statusEl); })
+                                    .catch(function () {
+                                        setStatus(statusEl, "Failed to delete diagram.", "error");
+                                    });
+                                return;
+                            }
+                            window.DecisionsAPI.confirm({
+                                title: "Delete Mermaid diagram",
+                                message: 'Delete "' + title + '"? This cannot be undone.',
+                        confirmLabel: "Delete",
+                        danger: true,
+                        onConfirm: function () {}
+                            }).then(function (confirmed) {
+                                if (!confirmed) return;
+                                apiFetch("/api/diagrams/" + encodeURIComponent(id), { method: "DELETE" })
+                                    .then(function () { loadHistoryList(historyEl, onSelect, statusEl); })
+                                    .catch(function () {
+                                        setStatus(statusEl, "Failed to delete diagram.", "error");
+                                    });
+                            });
+                        });
             });
         }).catch(function () {
             historyEl.innerHTML = '<div class="mermaid-viewer-history-empty">History unavailable.</div>';
@@ -205,7 +280,7 @@
     function wireViewer(root, initial) {
         var parts = buildViewerDom(root, initial.title);
         parts.codeEl.value = initial.code || "";
-        var lastPersisted = "";
+        var lastPersisted = initial && initial.persisted ? (initial.code || "") : "";
 
         var renderDiagram = async function () {
             var code = parts.codeEl.value.trim();
@@ -221,7 +296,7 @@
                 if (code !== lastPersisted) {
                     lastPersisted = code;
                     persistDiagramHistory(title, code).then(function () {
-                        loadHistoryList(parts.historyEl, loadHistoryItem);
+                        loadHistoryList(parts.historyEl, loadHistoryItem, parts.statusEl);
                     });
                 }
                 return svg;
@@ -236,10 +311,11 @@
             if (!item) return;
             parts.codeEl.value = item.code || "";
             if (parts.titleEl) parts.titleEl.textContent = item.title || "Diagram";
+            lastPersisted = item.code || "";
             renderDiagram();
         }
 
-        loadHistoryList(parts.historyEl, loadHistoryItem);
+        loadHistoryList(parts.historyEl, loadHistoryItem, parts.statusEl);
 
         root.querySelectorAll("[data-action]").forEach(function (btn) {
             btn.addEventListener("click", async function () {
@@ -357,7 +433,7 @@
         if (!root) return;
 
         var query = parseQuery();
-        var payload = { title: query.title || "Diagram", code: "" };
+        var payload = { title: query.title || "Diagram", code: "", persisted: false };
 
         if (query.key) {
             var stored = readFromSession(query.key);
@@ -365,6 +441,7 @@
         } else if (query.id) {
             try {
                 payload = await fetchDiagramById(query.id);
+                payload.persisted = true;
             } catch (err) {
                 root.innerHTML = '<p style="padding:20px;color:#fca5a5;">' + esc((err && err.message) || "Diagram not found.") + "</p>";
                 return;

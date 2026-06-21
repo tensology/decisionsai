@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import platform
 import re
 import secrets
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -83,6 +86,7 @@ def _public_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "message": row.get("message"),
         "error": row.get("error"),
         "files": row.get("files") or [],
+        "file_items": row.get("file_items") or [],
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -101,6 +105,93 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _lock:
         row = _jobs.get(job_id)
         return _public_row(dict(row)) if row else None
+
+
+def _basename(path: str) -> str:
+    return Path(path or "").name if path else ""
+
+
+def _ensure_file_item(job_id: str, file_path: str, *, status: str = "running") -> None:
+    with _lock:
+        row = _jobs.get(job_id)
+        if not row:
+            return
+        items = list(row.get("file_items") or [])
+        for item in items:
+            if item.get("path") == file_path:
+                item["status"] = status
+                item["name"] = _basename(file_path)
+                row["file_items"] = items
+                row["updated_at"] = _now()
+                return
+        items.append({
+            "path": file_path,
+            "name": _basename(file_path),
+            "status": status,
+            "progress": 0.0,
+            "speed": "",
+            "eta": "",
+            "error": "",
+        })
+        row["file_items"] = items
+        row["updated_at"] = _now()
+
+
+def _complete_current_file(job_id: str) -> None:
+    with _lock:
+        row = _jobs.get(job_id)
+        if not row:
+            return
+        current = row.get("current_file") or ""
+        items = list(row.get("file_items") or [])
+        changed = False
+        for item in items:
+            if item.get("path") == current and item.get("status") not in {"completed", "failed", "cancelled"}:
+                item["status"] = "completed"
+                item["progress"] = 100.0
+                item["speed"] = ""
+                item["eta"] = ""
+                changed = True
+        if changed:
+            row["file_items"] = items
+            row["updated_at"] = _now()
+
+
+def _update_current_file_progress(job_id: str, *, progress: float, speed: str = "", eta: str = "") -> None:
+    with _lock:
+        row = _jobs.get(job_id)
+        if not row:
+            return
+        current = row.get("current_file") or ""
+        items = list(row.get("file_items") or [])
+        changed = False
+        for item in items:
+            if item.get("path") == current:
+                item["status"] = "running"
+                item["progress"] = progress
+                item["speed"] = speed
+                item["eta"] = eta
+                changed = True
+        if changed:
+            row["file_items"] = items
+            row["updated_at"] = _now()
+
+
+def _mark_job_files(job_id: str, *, status: str, error: str = "") -> None:
+    with _lock:
+        row = _jobs.get(job_id)
+        if not row:
+            return
+        items = list(row.get("file_items") or [])
+        for item in items:
+            if item.get("status") in {"completed", "failed", "cancelled"}:
+                continue
+            item["status"] = status
+            item["error"] = error
+            item["speed"] = ""
+            item["eta"] = ""
+        row["file_items"] = items
+        row["updated_at"] = _now()
 
 
 def _update_job(job_id: str, **fields: Any) -> None:
@@ -146,6 +237,7 @@ def create_job(
         "message": "Queued",
         "error": "",
         "files": [],
+        "file_items": [],
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -164,6 +256,11 @@ def cancel_job(job_id: str) -> bool:
             row["status"] = "cancelled"
             row["message"] = "Cancelled"
             row["updated_at"] = _now()
+            for item in row.get("file_items") or []:
+                if item.get("status") not in {"completed", "failed"}:
+                    item["status"] = "cancelled"
+                    item["speed"] = ""
+                    item["eta"] = ""
     if proc is not None:
         try:
             proc.terminate()
@@ -171,6 +268,55 @@ def cancel_job(job_id: str) -> bool:
             pass
     _persist_history()
     return proc is not None or (row is not None)
+
+
+def remove_job(job_id: str) -> bool:
+    with _lock:
+        row = _jobs.get(job_id)
+        if not row or row.get("status") in {"queued", "running"}:
+            return False
+        _jobs.pop(job_id, None)
+    _persist_history()
+    return True
+
+
+def clear_inactive_jobs() -> int:
+    removed = 0
+    with _lock:
+        inactive_ids = [job_id for job_id, row in _jobs.items() if row.get("status") not in {"queued", "running"}]
+        for job_id in inactive_ids:
+            _jobs.pop(job_id, None)
+            removed += 1
+    if removed:
+        _persist_history()
+    return removed
+
+
+def reveal_file_in_folder(job_id: str, file_path: str) -> bool:
+    with _lock:
+        row = _jobs.get(job_id)
+        if not row:
+            return False
+        allowed = {str(p) for p in (row.get("files") or [])}
+        allowed.update(str(item.get("path") or "") for item in (row.get("file_items") or []))
+    if file_path not in allowed:
+        return False
+    target = Path(file_path)
+    if not target.exists():
+        target = Path(file_path).parent
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.run(["open", "-R", str(target)], check=False, timeout=5)
+        elif system == "Windows":
+            subprocess.run(["explorer", "/select,", str(target)], check=False, timeout=5)
+        else:
+            folder = str(target.parent if target.is_file() else target)
+            subprocess.run(["xdg-open", folder], check=False, timeout=5)
+        return True
+    except Exception as exc:
+        logger.warning("Could not reveal download file: %s", exc)
+        return False
 
 
 def parse_ytdlp_progress(line: str) -> Optional[Dict[str, Any]]:
@@ -246,16 +392,30 @@ def _run_ytdlp_job(job_id: str) -> None:
                 continue
             if line.startswith("[download] Destination:"):
                 dest = line.split("Destination:", 1)[-1].strip()
+                _complete_current_file(job_id)
+                _ensure_file_item(job_id, dest, status="running")
                 _update_job(job_id, current_file=dest, message=f"Downloading {Path(dest).name}")
             elif "has already been downloaded" in line:
+                already = line.split("has already been downloaded", 1)[0].replace("[download]", "").strip()
+                if already:
+                    maybe_path = str(Path(output_dir) / already)
+                    _ensure_file_item(job_id, maybe_path, status="completed")
+                    _complete_current_file(job_id)
                 _update_job(job_id, message=line[:200])
             elif line.startswith("[Merger]") or line.startswith("[ExtractAudio]"):
                 _update_job(job_id, message=line[:200])
             elif line.startswith("[download]") and "100%" in line:
+                _update_current_file_progress(job_id, progress=100.0)
                 _update_job(job_id, progress=100.0, message="Finishing…")
             else:
                 parsed = parse_ytdlp_progress(line)
                 if parsed:
+                    _update_current_file_progress(
+                        job_id,
+                        progress=parsed["progress"],
+                        speed=parsed.get("speed") or "",
+                        eta=parsed.get("eta") or "",
+                    )
                     _update_job(
                         job_id,
                         progress=parsed["progress"],
@@ -269,19 +429,18 @@ def _run_ytdlp_job(job_id: str) -> None:
         with _lock:
             _processes.pop(job_id, None)
 
-    collected_files: List[str] = []
-    try:
-        out_path = Path(output_dir)
-        if out_path.exists():
-            collected_files = [
-                str(p)
-                for p in sorted(out_path.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
-                if p.is_file()
-            ][:20]
-    except Exception:
-        collected_files = []
+    with _lock:
+        latest_row = _jobs.get(job_id) or {}
+        collected_files = [
+            str(item.get("path") or "")
+            for item in (latest_row.get("file_items") or [])
+            if str(item.get("path") or "").strip()
+        ][:20]
 
     if rc == 0:
+        _complete_current_file(job_id)
+        for file_path in collected_files:
+            _ensure_file_item(job_id, file_path, status="completed")
         _update_job(
             job_id,
             status="completed",
@@ -291,6 +450,7 @@ def _run_ytdlp_job(job_id: str) -> None:
             error="",
         )
     else:
+        _mark_job_files(job_id, status="failed", error=f"yt-dlp exited with code {rc}")
         _update_job(
             job_id,
             status="failed",

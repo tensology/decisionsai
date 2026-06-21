@@ -102,6 +102,61 @@ def test_record_tool_execution_marks_internal_probe_tools_compact(monkeypatch):
     assert events[0]["title"] == "Ran helper code"
     assert events[1]["title"] == "Checked mode control"
     assert events[1]["status"] == "failed"
+    assert all(event["activity_style"] == "passive" for event in events)
+
+
+def test_record_tool_execution_describes_clipboard_ingest_and_mouse_actions(monkeypatch):
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+
+    @contextmanager
+    def patched_get_session():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    monkeypatch.setattr("distr.core.db.get_session", patched_get_session)
+    monkeypatch.setattr(
+        "distr.core.workflow.service.append_audit_step",
+        lambda **kwargs: None,
+    )
+
+    with patched_get_session() as session:
+        chat = Chat(title="Test chat")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+        chat.params = json.dumps({"active_turn_chat_row_id": chat_id})
+        session.commit()
+
+    record_tool_execution(
+        chat_id,
+        "clipboard_action",
+        "CLIPBOARD CONTENT:\n\nhello world\n\nThis is the current clipboard content.",
+        "completed",
+        instruction_hint="get clipboard",
+    )
+    record_tool_execution(
+        chat_id,
+        "mouse_movement",
+        "Moved mouse to bottom right corner",
+        "completed",
+    )
+
+    with patched_get_session() as session:
+        chat = session.get(Chat, chat_id)
+        params = json.loads(chat.params)
+
+    events = params["tool_events"]
+    assert events[0]["title"] == "Ingested clipboard into context"
+    assert events[0]["activity_style"] == "passive"
+    assert events[0]["chat_compact"] is True
+    assert events[1]["title"] == "Moved mouse to bottom right corner"
+    assert events[1]["activity_style"] == "active"
+    assert events[1]["chat_compact"] is False
 
 
 def test_record_tool_execution_does_not_create_audit_workflow(monkeypatch):

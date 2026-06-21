@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from distr.gui.web.routes.chat import (
     _api_timestamp,
     _append_row_messages,
+    _chat_tool_event_messages,
     _merge_thread_rows_with_tool_and_workflow_events,
 )
 
@@ -157,3 +158,29 @@ def test_orphan_tools_merge_with_naive_db_timestamps():
 
     messages = _merge_thread_rows_with_tool_and_workflow_events(rows, root)
     assert [m["role"] for m in messages] == ["user", "tool", "assistant"]
+
+
+def test_chat_tool_event_messages_preserve_activity_style():
+    chat = SimpleNamespace(
+        params=json.dumps(
+            {
+                "tool_events": [
+                    {
+                        "tool_name": "clipboard_action",
+                        "title": "Ingested clipboard into context",
+                        "result_summary": "CLIPBOARD CONTENT: hello",
+                        "status": "completed",
+                        "timestamp": "2026-05-10T16:44:00.000000+00:00",
+                        "chat_visible": True,
+                        "chat_compact": True,
+                        "activity_style": "passive",
+                    }
+                ]
+            }
+        )
+    )
+
+    messages = _chat_tool_event_messages(chat)
+    assert len(messages) == 1
+    assert messages[0]["tool_event"]["activity_style"] == "passive"
+    assert messages[0]["tool_event"]["compact"] is True

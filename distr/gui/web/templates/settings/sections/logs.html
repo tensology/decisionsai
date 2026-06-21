@@ -1,10 +1,22 @@
-<div class="logs-tab-inner">
+<div class="logs-tab-inner min-w-0">
     <div class="mb-4 pb-4 border-b border-[#565869]">
         <h2 class="text-xl font-semibold text-white mb-1">Logs</h2>
-        <p class="text-sm text-gray-400">Application log output (auto-refreshes while this tab is open)</p>
+        <p class="text-sm text-gray-400 flex items-center gap-2 flex-wrap">
+            <span class="shrink-0">Log file:</span>
+            <span id="logs_path" class="text-[#7a7c8c] truncate"></span>
+        </p>
     </div>
-    <div class="rounded-lg border border-[#565869] bg-[#0d1117] overflow-hidden min-h-[200px]">
-        <pre id="logs_content" class="p-4 text-[10px] leading-relaxed text-[#c9d1d9] font-mono whitespace-pre-wrap break-words max-h-[70vh] overflow-y-auto m-0 block min-h-[180px]">Loading…</pre>
+    <div class="logs-shell rounded-lg border border-[#565869] bg-[#0d1117] max-w-full relative">
+        <button type="button" id="logs-copy-btn"
+                class="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#565869] bg-[#1a1f3a] text-[#ececf1] transition-all duration-150 hover:border-[#f97316] hover:bg-[#f97316] hover:text-white hover:shadow-sm hover:shadow-[#f97316]/30 hover:-translate-y-0.5"
+                aria-label="Copy last 20 log lines"
+                title="Copy last 20 lines">
+            <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="8" y="8" width="12" height="12" rx="2"></rect>
+                <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+            </svg>
+        </button>
+        <pre id="logs_content" class="p-4 text-[10px] leading-relaxed text-[#c9d1d9] font-mono whitespace-pre m-0 block">Loading…</pre>
     </div>
-    <p id="logs_path" class="text-xs text-[#7a7c8c] mt-2"></p>
 </div>

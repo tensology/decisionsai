@@ -80,8 +80,6 @@ supertonic>=1.3.0
 #   pip install "setuptools<81" onnx
 # Kanade voice conversion model for Kokoro voice cloning (KokoClone)
 kanade-tokenizer @ git+https://github.com/frothywater/kanade-tokenizer
-# VoxCPM: tokenizer-free TTS with voice cloning (https://github.com/OpenBMB/VoxCPM)
-voxcpm
 colorama
 pynput
 

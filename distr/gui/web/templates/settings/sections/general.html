@@ -1,153 +1,252 @@
     <div class="mb-6 pb-4 border-b border-[#565869]">
-        <h2 class="text-xl font-semibold text-white mb-1">General Settings</h2>
-        <p class="text-sm text-gray-400">Basic application preferences</p>
+        <h2 class="text-xl font-semibold text-white mb-1">General &amp; Audio</h2>
+        <p class="text-sm text-gray-400">Core application, voice, and device preferences</p>
     </div>
 
-    <div class="space-y-6">
+    <div class="llm-settings-layout">
+        <div class="llm-config-tabs" role="tablist" aria-label="General settings sections">
+            <button type="button"
+                    class="llm-config-tab is-active"
+                    data-general-subtab="startup"
+                    role="tab"
+                    aria-selected="true">
+                On Startup
+            </button>
+            <button type="button"
+                    class="llm-config-tab"
+                    data-general-subtab="devices"
+                    role="tab"
+                    aria-selected="false">
+                Input and Output
+            </button>
+            <button type="button"
+                    class="llm-config-tab"
+                    data-general-subtab="voice"
+                    role="tab"
+                    aria-selected="false">
+                Voice Setup
+            </button>
+            <button type="button"
+                    class="llm-config-tab"
+                    data-general-subtab="helper"
+                    role="tab"
+                    aria-selected="false">
+                Device Reconnect
+            </button>
+        </div>
+
         <!-- On Startup Group -->
-        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-            <h3 class="text-lg font-semibold text-white mb-4">On Startup</h3>
+        <div class="llm-config-panel is-active" data-general-panel="startup">
+            <div class="border border-[#565869] rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
 
             <!-- Startup Checkboxes Row -->
-            <div class="grid grid-cols-2 gap-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <!-- Load Splash Sound -->
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="load_splash_sound" name="load_splash_sound"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                        Load Splash Sound
-                    </span>
+                <label class="settings-toggle settings-toggle--row">
+                    <span class="settings-toggle__label">Load Splash Sound</span>
+                    <input type="checkbox" id="load_splash_sound" name="load_splash_sound" class="settings-toggle__input">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
 
                 <!-- Show About -->
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="show_about" name="show_about"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                        Show About
-                    </span>
+                <label class="settings-toggle settings-toggle--row">
+                    <span class="settings-toggle__label">Show About</span>
+                    <input type="checkbox" id="show_about" name="show_about" class="settings-toggle__input">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
 
                 <!-- Welcome/Greet Me -->
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="welcome_greet_me" name="welcome_greet_me"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                        Welcome/Greet Me
-                    </span>
+                <label class="settings-toggle settings-toggle--row">
+                    <span class="settings-toggle__label">Welcome/Greet Me</span>
+                    <input type="checkbox" id="welcome_greet_me" name="welcome_greet_me" class="settings-toggle__input">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
 
                 <!-- Telegram Online Notice -->
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="telegram_send_online_notice" name="telegram_send_online_notice"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                        Telegram Online Notice
-                    </span>
+                <label class="settings-toggle settings-toggle--row">
+                    <span class="settings-toggle__label">Telegram Online Notice</span>
+                    <input type="checkbox" id="telegram_send_online_notice" name="telegram_send_online_notice" class="settings-toggle__input">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
 
                 <!-- Load on Startup -->
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="load_on_startup" name="load_on_startup"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                        Load on Startup
-                    </span>
+                <label class="settings-toggle settings-toggle--row md:col-span-2">
+                    <span class="settings-toggle__label">Load on Startup</span>
+                    <input type="checkbox" id="load_on_startup" name="load_on_startup" class="settings-toggle__input">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
             </div>
 
-            <!-- Listening State on Startup Sub-Group -->
+            <!-- Listening State on Start Up Sub-Group -->
             <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-                <h4 class="text-base font-semibold text-white mb-4">Listening State on Startup</h4>
-                <div class="flex gap-8">
-                    <label class="flex items-center cursor-pointer group">
-                        <input type="radio" id="remember_listening" name="listening_state" value="remember"
-                                class="w-4 h-4 border border-[#565869] text-[#10a37f]
-                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                        cursor-pointer">
-                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                            Remember Last Listening State
-                        </span>
+                <h4 class="text-base font-semibold text-white mb-4">Listening State on Start Up</h4>
+                <div class="settings-radio-grid">
+                    <label class="settings-radio-card">
+                        <input type="radio" id="remember_listening" name="listening_state" value="remember" class="settings-radio-card__input">
+                        <span class="settings-radio-card__indicator" aria-hidden="true"></span>
+                        <span class="settings-radio-card__label">Remember Last State</span>
                     </label>
 
-                    <label class="flex items-center cursor-pointer group">
-                        <input type="radio" id="always_stop" name="listening_state" value="stop"
-                                class="w-4 h-4 border border-[#565869] text-[#10a37f]
-                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                        cursor-pointer">
-                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                            Always Stop Listening
-                        </span>
+                    <label class="settings-radio-card">
+                        <input type="radio" id="always_stop" name="listening_state" value="stop" class="settings-radio-card__input">
+                        <span class="settings-radio-card__indicator" aria-hidden="true"></span>
+                        <span class="settings-radio-card__label">Switch Off Listening</span>
                     </label>
 
-                    <label class="flex items-center cursor-pointer group">
-                        <input type="radio" id="always_start" name="listening_state" value="start"
-                                class="w-4 h-4 border border-[#565869] text-[#10a37f]
-                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                        cursor-pointer">
-                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                            Always Start Listening
-                        </span>
+                    <label class="settings-radio-card">
+                        <input type="radio" id="always_start" name="listening_state" value="start" class="settings-radio-card__input">
+                        <span class="settings-radio-card__indicator" aria-hidden="true"></span>
+                        <span class="settings-radio-card__label">Listening</span>
                     </label>
+                </div>
+            </div>
+            </div>
+        </div>
+
+        <div class="llm-config-panel" data-general-panel="devices">
+            <div class="border border-white/20 rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
+                <h3 class="text-lg font-semibold text-white mb-4">Input and Output</h3>
+
+                <div class="grid grid-cols-2 gap-6">
+                    <div>
+                        <label for="input_device" class="block text-sm font-medium text-[#ececf1] mb-2">Input:</label>
+                        <select id="input_device" name="input_device"
+                                class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white
+                                        focus:outline-none focus:border-[#f97316] transition-colors
+                                        hover:border-white/40 cursor-pointer">
+                            <option value="System Default" selected>System Default</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="output_device" class="block text-sm font-medium text-[#ececf1] mb-2">Output:</label>
+                        <select id="output_device" name="output_device"
+                                class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white
+                                        focus:outline-none focus:border-[#f97316] transition-colors
+                                        hover:border-white/40 cursor-pointer">
+                            <option value="System Default" selected>System Default</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="llm-config-panel" data-general-panel="helper">
+            <div class="border border-white/20 rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
+                <div class="audio-helper-header mb-4">
+                    <div class="audio-helper-title">
+                        <div class="audio-helper-info">
+                            <button type="button" class="audio-helper-info__button" aria-label="Device reconnect info">i</button>
+                            <div class="audio-helper-info__tooltip" role="tooltip">
+                                <span class="block">Turn on Device Reconnect to restore your saved audio routing when a Bluetooth, USB, or other audio device disconnects and reconnects.</span>
+                                <span class="block mt-2">This helps bring back your preferred input and output device choices automatically.</span>
+                            </div>
+                        </div>
+                        <h3 class="text-lg font-semibold text-white">Device Reconnect</h3>
+                    </div>
+                    <label class="audio-helper-toggle settings-toggle" aria-label="Remember my audio settings">
+                        <input type="checkbox" id="remember_audio_settings" name="remember_audio_settings" class="settings-toggle__input">
+                        <span class="settings-toggle__switch" aria-hidden="true"></span>
+                    </label>
+                </div>
+
+                <div class="flex gap-4">
+                    <div class="flex-1">
+                        <div class="flex border-b border-white/20 mb-3">
+                            <button type="button" id="audio_output_tab"
+                                    onclick="switchAudioTab('output')"
+                                    class="px-4 py-2 text-sm font-medium text-[#ececf1] border-b-2 border-[#f97316]
+                                            hover:text-white transition-colors">
+                                Output
+                            </button>
+                            <button type="button" id="audio_input_tab"
+                                    onclick="switchAudioTab('input')"
+                                    class="px-4 py-2 text-sm font-medium text-[#ececf1] border-b-2 border-transparent
+                                            hover:text-white transition-colors">
+                                Input
+                            </button>
+                        </div>
+
+                        <div id="audio_output_table_container" class="audio-table-container">
+                            <table class="w-full">
+                                <thead>
+                                    <tr class="bg-[#152054]">
+                                        <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Name</th>
+                                        <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Type</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="audio_output_tbody" class="bg-[#1a1f3a]">
+                                    <tr class="hover:bg-white/10 cursor-pointer border-b border-white/10">
+                                        <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in Speakers</td>
+                                        <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div id="audio_input_table_container" class="audio-table-container hidden">
+                            <table class="w-full">
+                                <thead>
+                                    <tr class="bg-[#152054]">
+                                        <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Name</th>
+                                        <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Type</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="audio_input_tbody" class="bg-[#1a1f3a]">
+                                    <tr class="hover:bg-white/10 cursor-pointer border-b border-white/10">
+                                        <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in Microphone</td>
+                                        <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col gap-3 w-24">
+                        <button type="button" id="audio_save_button"
+                                class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
+                                        hover:bg-white/10 transition-colors">
+                            Set/Save
+                        </button>
+                        <button type="button" id="audio_detect_button"
+                                class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
+                                        hover:bg-white/10 transition-colors">
+                            Detect
+                        </button>
+                        <button type="button" id="audio_reset_button"
+                                class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
+                                        hover:bg-white/10 transition-colors">
+                            Reset
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Voice Setup Group -->
-        <div id="voice_setup_wrapper" class="w-full">
-            <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-                <!-- Row: Voice Setup title (left) + VAD (right) -->
-                <div class="flex flex-wrap items-end justify-between gap-6 mb-4">
-                    <h3 class="text-lg font-semibold text-white">Voice Setup</h3>
-                    <div class="max-w-xs w-full min-w-[12rem] ml-auto">
-                        <label for="vad_level" class="block text-sm font-semibold text-[#ececf1] mb-2">VAD Level:</label>
-                        <div class="flex items-center gap-3">
-                            <input type="range" id="vad_level" name="vad_level"
-                                    min="0" max="100" value="50" step="1"
-                                    class="flex-1 min-w-0 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="vad_level_value" class="text-sm text-[#ececf1] w-12 text-right shrink-0">50%</span>
-                        </div>
-                    </div>
-                </div>
-
+        <div id="voice_setup_wrapper" class="w-full llm-config-panel" data-general-panel="voice">
+            <div class="border border-[#565869] rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
                 <!-- Provider and Voice Selection Row -->
-                <div class="flex gap-4 mb-6 items-end">
-                    <div class="w-1/3">
-                    <label for="tts_provider" class="block text-sm font-medium text-[#ececf1] mb-2">Provider:</label>
-                    <select id="tts_provider" name="tts_provider"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <!-- Populated dynamically from /api/tts/providers -->
-                    </select>
-                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 items-end">
+                    <div>
+                        <label for="tts_provider" class="block text-sm font-medium text-[#ececf1] mb-2">Provider:</label>
+                        <select id="tts_provider" name="tts_provider"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors
+                                        hover:border-[#7a7c8c] cursor-pointer">
+                            <!-- Populated dynamically from /api/tts/providers -->
+                        </select>
+                    </div>
 
-                <div class="w-1/3">
-                    <label for="tts_voice" class="block text-sm font-medium text-[#ececf1] mb-2">Voice:</label>
-                    <select id="tts_voice" name="tts_voice"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="af" selected>af (Female, American)</option>
-                    </select>
-                </div>
-
-                <div class="flex gap-2 items-center">
+                    <div>
+                        <label for="tts_voice" class="block text-sm font-medium text-[#ececf1] mb-2">Voice:</label>
+                        <div class="flex gap-2 items-center">
+                            <select id="tts_voice" name="tts_voice"
+                                    class="flex-1 min-w-0 bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                            focus:outline-none focus:border-[#10a37f] transition-colors
+                                            hover:border-[#7a7c8c] cursor-pointer">
+                                <option value="af" selected>af (Female, American)</option>
+                            </select>
                         <button type="button" id="add_custom_voice_btn"
                                 class="h-[38px] px-3 bg-[#454655] border border-[#565869] rounded-md
                                         hover:bg-[#565869] transition-colors text-xs text-[#ececf1] whitespace-nowrap hidden"
@@ -189,102 +288,127 @@
                             </svg>
                         </button>
                     </div>
-                </div>
-
-                <!-- Two Sliders Row (VAD is in header row above) -->
-                <div class="grid grid-cols-2 gap-6 mb-4">
-                    <!-- Playback Speed -->
-                    <div>
-                        <label for="playback_speed" class="block text-sm font-semibold text-[#ececf1] mb-2">
-                            Playback Speed:
-                        </label>
-                        <div class="flex items-center gap-3">
-                            <input type="range" id="playback_speed" name="playback_speed"
-                                    min="0.5" max="2.0" value="1.0" step="0.1"
-                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="playback_speed_value" class="text-sm text-[#ececf1] w-12 text-right">1.0x</span>
-                        </div>
-                    </div>
-
-                    <!-- Speech Volume -->
-                    <div>
-                        <label for="speech_volume" class="block text-sm font-semibold text-[#ececf1] mb-2">
-                            Speech Volume:
-                        </label>
-                        <div class="flex items-center gap-3">
-                            <input type="range" id="speech_volume" name="speech_volume"
-                                    min="0" max="100" value="100" step="1"
-                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="speech_volume_value" class="text-sm text-[#ececf1] w-12 text-right">100%</span>
-                        </div>
                     </div>
                 </div>
 
-                <!-- ElevenLabs voice options (only when provider is ElevenLabs), before Audio Input Monitor -->
-                <div id="elevenlabs_voice_options" class="hidden grid grid-cols-2 md:grid-cols-4 gap-6 mb-4">
-                    <div>
-                        <label for="elevenlabs_stability" class="block text-sm font-semibold text-[#ececf1] mb-2">Stability:</label>
-                        <div class="flex items-center gap-3">
-                            <input type="range" id="elevenlabs_stability" name="elevenlabs_stability"
+                <div class="voice-setup-balance-row mb-4">
+                    <div class="voice-setup-balance-primary border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                        <label for="vad_level" class="block text-sm font-semibold text-[#ececf1] mb-2">VAD Level:</label>
+                        <div class="flex items-center gap-3 mb-3">
+                            <input type="range" id="vad_level" name="vad_level"
                                     min="0" max="100" value="50" step="1"
-                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="elevenlabs_stability_value" class="text-sm text-[#ececf1] w-12 text-right">50%</span>
+                                    class="flex-1 min-w-0 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="vad_level_value" class="text-sm text-[#ececf1] w-12 text-right shrink-0">50%</span>
+                        </div>
+                        <p class="text-xs text-[#7a7c8c] mb-3">Continuous mode only. Lower is more eager to barge in; higher is stricter about treating mic audio during speech output as your voice.</p>
+                        <div id="audio_monitor_container" class="w-full cursor-pointer flex flex-col" title="Click to enable or disable microphone level">
+                            <p id="audio_monitor_status" class="text-xs text-[#7a7c8c] mb-1">Mic off — click bar to enable</p>
+                            <div class="flex items-center gap-3">
+                                <div class="relative flex-1 h-2 bg-[#40414f] border border-[#565869] rounded-full overflow-hidden">
+                                    <div id="audio_monitor_threshold_fill" class="absolute inset-y-0 left-0 bg-[#f59e0b]/15 pointer-events-none" style="width: 50%"></div>
+                                    <div id="audio_monitor_threshold_marker" class="absolute inset-y-0 w-px bg-[#f59e0b] opacity-90 pointer-events-none" style="left: 50%"></div>
+                                    <div id="audio_level_bar" class="absolute inset-y-0 left-0 bg-[#10a37f] transition-all duration-75 ease-out" style="width: 0%"></div>
+                                </div>
+                                <span id="audio_monitor_value" class="text-sm text-[#ececf1] w-12 text-right shrink-0">0%</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 mt-3">
+                            <button type="button" id="vad_auto_detect_button"
+                                    class="h-[34px] px-3 bg-[#2a2f52] border border-[#565869] rounded-md text-sm text-[#ececf1]
+                                           hover:bg-[#343b67] transition-colors">
+                                Auto Detect
+                            </button>
+                            <p id="vad_auto_detect_status" class="text-xs text-[#7a7c8c] flex-1 min-w-0">
+                                Runs a quick silent-vs-interrupt test and applies a recommended continuous-mode VAD level.
+                            </p>
                         </div>
                     </div>
-                    <div>
-                        <label for="elevenlabs_similarity" class="block text-sm font-semibold text-[#ececf1] mb-2">Similarity:</label>
-                        <div class="flex items-center gap-3">
-                            <input type="range" id="elevenlabs_similarity" name="elevenlabs_similarity"
-                                    min="0" max="100" value="60" step="1"
-                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="elevenlabs_similarity_value" class="text-sm text-[#ececf1] w-12 text-right">60%</span>
+
+                    <div class="voice-setup-balance-secondary border border-[#565869] rounded-lg p-5 bg-[#1a1f3a] flex flex-col justify-center gap-6">
+                        <!-- Playback Speed -->
+                        <div>
+                            <label for="playback_speed" class="block text-sm font-semibold text-[#ececf1] mb-2">
+                                Playback Speed:
+                            </label>
+                            <div class="flex items-center gap-3">
+                                <input type="range" id="playback_speed" name="playback_speed"
+                                        min="0.5" max="2.0" value="1.0" step="0.1"
+                                        class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                <span id="playback_speed_value" class="text-sm text-[#ececf1] w-12 text-right">1.0x</span>
+                            </div>
                         </div>
-                    </div>
-                    <div>
-                        <label for="elevenlabs_style" class="block text-sm font-semibold text-[#ececf1] mb-2">Style:</label>
-                        <div class="flex items-center gap-3">
-                            <input type="range" id="elevenlabs_style" name="elevenlabs_style"
-                                    min="0" max="100" value="25" step="1"
-                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="elevenlabs_style_value" class="text-sm text-[#ececf1] w-12 text-right">25%</span>
+
+                        <!-- Speech Volume -->
+                        <div>
+                            <label for="speech_volume" class="block text-sm font-semibold text-[#ececf1] mb-2">
+                                Speech Volume:
+                            </label>
+                            <div class="flex items-center gap-3">
+                                <input type="range" id="speech_volume" name="speech_volume"
+                                        min="0" max="100" value="100" step="1"
+                                        class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                <span id="speech_volume_value" class="text-sm text-[#ececf1] w-12 text-right">100%</span>
+                            </div>
                         </div>
-                    </div>
-                    <div class="flex items-end pb-1">
-                        <label class="flex items-center cursor-pointer group">
-                            <input type="checkbox" id="elevenlabs_speaker_boost" name="elevenlabs_speaker_boost" checked
-                                    class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                            checked:bg-[#10a37f] checked:border-[#10a37f]
-                                            focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                            transition-colors cursor-pointer">
-                            <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">Speaker boost</span>
-                        </label>
                     </div>
                 </div>
 
-                <!-- Pixazo VoxCPM speed (cloud API — lower dit_steps = faster synthesis) -->
-                <div id="pixazo_voice_options" class="hidden mb-4 max-w-md">
-                    <label for="pixazo_dit_steps" class="block text-sm font-semibold text-[#ececf1] mb-2">VoxCPM generation speed:</label>
-                    <select id="pixazo_dit_steps" name="pixazo_dit_steps"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
-                                    focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
-                        <option value="4">Fast (4 steps)</option>
-                        <option value="6" selected>Balanced (6 steps)</option>
-                        <option value="8">High (8 steps)</option>
-                        <option value="10">Quality (10 steps)</option>
-                    </select>
-                    <p class="text-xs text-[#7a7c8c] mt-2">
-                        Pixazo cloud API — each line waits on a remote round-trip. Lower steps is faster;
-                        the OpenBMB repo’s “real-time” path is local GPU streaming, not this hosted endpoint.
-                    </p>
-                </div>
-
-                <!-- VAD bar: below voice card, same width, floating right (fill grows from right) -->
-                <div class="mt-2 w-full flex justify-end">
-                    <div id="audio_monitor_container" class="w-full max-w-full cursor-pointer flex flex-col items-end" title="Click to enable or disable microphone level">
-                        <p id="audio_monitor_status" class="text-xs text-[#7a7c8c] mb-1 order-first">Mic off — click bar to enable</p>
-                        <div class="w-full h-2 bg-[#40414f] border border-[#565869] rounded-full overflow-hidden flex justify-end">
-                            <div id="audio_level_bar" class="h-full bg-[#10a37f] transition-all duration-75 ease-out" style="width: 0%"></div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4 items-stretch">
+                    <!-- ElevenLabs voice options -->
+                    <div id="elevenlabs_voice_options" class="hidden md:col-span-2 w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                            <div>
+                                <label for="elevenlabs_stability" class="block text-sm font-semibold text-[#ececf1] mb-2">Stability:</label>
+                                <div class="flex items-center gap-3">
+                                    <input type="range" id="elevenlabs_stability" name="elevenlabs_stability"
+                                            min="0" max="100" value="50" step="1"
+                                            class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                    <span id="elevenlabs_stability_value" class="text-sm text-[#ececf1] w-12 text-right">50%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="elevenlabs_similarity" class="block text-sm font-semibold text-[#ececf1] mb-2">Similarity:</label>
+                                <div class="flex items-center gap-3">
+                                    <input type="range" id="elevenlabs_similarity" name="elevenlabs_similarity"
+                                            min="0" max="100" value="60" step="1"
+                                            class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                    <span id="elevenlabs_similarity_value" class="text-sm text-[#ececf1] w-12 text-right">60%</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="elevenlabs_style" class="block text-sm font-semibold text-[#ececf1] mb-2">Style:</label>
+                                <div class="flex items-center gap-3">
+                                    <input type="range" id="elevenlabs_style" name="elevenlabs_style"
+                                            min="0" max="100" value="25" step="1"
+                                            class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                    <span id="elevenlabs_style_value" class="text-sm text-[#ececf1] w-12 text-right">25%</span>
+                                </div>
+                            </div>
+                            <div class="flex items-end min-h-[42px]">
+                                <label class="settings-toggle min-h-[42px]">
+                                    <input type="checkbox" id="elevenlabs_speaker_boost" name="elevenlabs_speaker_boost" checked class="settings-toggle__input">
+                                    <span class="settings-toggle__switch" aria-hidden="true"></span>
+                                    <span class="settings-toggle__label">Speaker boost</span>
+                                </label>
+                            </div>
                         </div>
+                    </div>
+
+                    <!-- Pixazo VoxCPM speed -->
+                    <div id="pixazo_voice_options" class="hidden md:col-span-2 w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                        <label for="pixazo_dit_steps" class="block text-sm font-semibold text-[#ececf1] mb-2">VoxCPM generation speed:</label>
+                        <select id="pixazo_dit_steps" name="pixazo_dit_steps"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
+                            <option value="4">Fast (4 steps)</option>
+                            <option value="6" selected>Balanced (6 steps)</option>
+                            <option value="8">High (8 steps)</option>
+                            <option value="10">Quality (10 steps)</option>
+                        </select>
+                        <p class="text-xs text-[#7a7c8c] mt-2">
+                            Pixazo cloud API — each line waits on a remote round-trip. Lower steps is faster;
+                            the OpenBMB repo’s “real-time” path is local GPU streaming, not this hosted endpoint.
+                        </p>
                     </div>
                 </div>
             </div>

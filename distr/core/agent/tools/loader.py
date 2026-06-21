@@ -165,6 +165,7 @@ def _get_tool_definitions(
         ("DocumentExtractorTool", {}),
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
+        ("BenchmarkModelsTool", {}),
         ("DeveloperContextTool", {}),
         ("EcosystemScanTool", {}),
         ("BoardNotesTool", {}),
@@ -499,6 +500,7 @@ TOOL_REGISTRY = {
     "YtdlpDownloadTool":       ("integrations.ytdlp_download", "YtdlpDownloadTool"),
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
+    "BenchmarkModelsTool":     ("system.benchmark_models", "BenchmarkModelsTool"),
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
     "EcosystemScanTool":       ("system.ecosystem_scan", "EcosystemScanTool"),
     "BoardNotesTool":          ("system.board_notes", "BoardNotesTool"),
@@ -640,6 +642,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "YtdlpDownloadTool": "Download YouTube or video URLs with yt-dlp and open Download Manager for live progress, speed, and ETA. Use when user asks to download videos or save YouTube links.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
+    "BenchmarkModelsTool": "Answer questions about the latest and best AI models using the curated multi-source benchmark cache, including rankings, pricing, latency, speed, and context window.",
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
     "EcosystemScanTool": "Scan all boards and projects for health issues: unscoped tickets, missing folders, empty current lanes, and workflow/board name index.",
     "BoardNotesTool": "Read, create, edit, append to, or delete ticket board scratchpad notes in the kanban board area (not MEMORY.md). Actions: list, create, update, append, delete.",

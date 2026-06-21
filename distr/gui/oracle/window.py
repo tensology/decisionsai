@@ -900,14 +900,23 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Fire the hands-free hook — oracle skins will glow, avatar skins won't (glow: false in skin.json)
         self._event_dispatcher.fire_hook("hands_free_listening", trigger="oracle:enable_hands_free")
 
-    def disable_hands_free(self):
-        """Disable hands-free mode"""
+    def disable_hands_free(self, *, clear_pending_restore: bool = False):
+        """Disable hands-free mode.
+
+        When the user explicitly turns hands-free off, also clear any pending
+        dictation-time restore so a later stale restore signal cannot light the
+        Oracle back up unexpectedly.
+        """
         self.is_hands_free = False
         if hasattr(self, 'hands_free_action'):
             self.hands_free_action.setChecked(False)
             self.hands_free_action.setText("Hands-Free Mode: OFF")
         # Revert the hands-free hook now that the mode is off
         self._event_dispatcher.revert_hook("hands_free_listening", trigger="oracle:disable_hands_free")
+        if clear_pending_restore:
+            if getattr(self, '_hands_free_before_dictation', False):
+                logging.info("[ORACLE] Clearing pending hands-free restore after explicit manual disable")
+            self._hands_free_before_dictation = False
         signal_manager.hands_free_mode_changed.emit(False)
         self.save_hands_free_state()
 
@@ -926,7 +935,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if self.hands_free_action.isChecked():
             self.enable_hands_free()
         else:
-            self.disable_hands_free()
+            self.disable_hands_free(clear_pending_restore=True)
         self.save_hands_free_state()
 
     def start_hold_to_talk(self):
@@ -1148,7 +1157,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def on_hands_free_glow_on(self):
         """Enable the slow glow when STT reports hands-free listening."""
-        logging.info("[ORACLE] STT requested hands-free glow ON")
+        logging.info("[ORACLE] STT requested hands-free glow ON (is_hands_free=%s)", self.is_hands_free)
+        if not self.is_hands_free:
+            logging.info("[ORACLE] Ignoring stale hands-free glow ON while hands-free mode is OFF")
+            return
         self._event_dispatcher.fire_hook("hands_free_listening", trigger="oracle:stt_hands_free_glow_on")
 
     def on_hands_free_glow_off(self):
@@ -1792,6 +1804,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 str(current_settings.get("web_hotkey_workflows_modifier", HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"])).strip().lower(),
                 str(current_settings.get("web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"])).strip().lower(),
             ),
+            "open_automations": (
+                str(current_settings.get("web_hotkey_automations_modifier", HOTKEY_DEFAULTS["web_hotkey_automations_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_automations_key", HOTKEY_DEFAULTS["web_hotkey_automations_key"])).strip().lower(),
+            ),
+            "open_ticket_board": (
+                str(current_settings.get("web_hotkey_ticket_board_modifier", HOTKEY_DEFAULTS["web_hotkey_ticket_board_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_ticket_board_key", HOTKEY_DEFAULTS["web_hotkey_ticket_board_key"])).strip().lower(),
+            ),
+            "open_irc": (
+                str(current_settings.get("web_hotkey_irc_modifier", HOTKEY_DEFAULTS["web_hotkey_irc_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_irc_key", HOTKEY_DEFAULTS["web_hotkey_irc_key"])).strip().lower(),
+            ),
             "open_preferences": (
                 str(current_settings.get("web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"])).strip().lower(),
                 str(current_settings.get("web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"])).strip().lower(),
@@ -1889,6 +1913,15 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
         if action_name == "open_workflows":
             self._open_web_url("/workflows/")
+            return
+        if action_name == "open_automations":
+            self._open_web_url("/automations/")
+            return
+        if action_name == "open_ticket_board":
+            self._open_web_url("/tickets/")
+            return
+        if action_name == "open_irc":
+            self._open_web_url("/irc/")
             return
         if action_name == "open_preferences":
             self._open_web_url("/settings")

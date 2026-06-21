@@ -1,6 +1,6 @@
 <div class="mb-6 pb-4 border-b border-[#565869]">
     <h2 class="text-xl font-semibold text-white mb-1">Shortcuts</h2>
-    <p class="text-sm text-gray-400">Edit global keyboard shortcuts. Click a field and press your keys to set.</p>
+    <p class="text-sm text-gray-400">Edit global keyboard shortcuts by clicking in a field and pressing your key combination.</p>
 </div>
 
 <div class="space-y-6">
@@ -8,16 +8,15 @@
     <div class="flex flex-row flex-nowrap gap-3 sm:gap-6">
 
         <div class="flex-1 min-w-0 border border-[#565869] rounded-lg p-4 sm:p-6 bg-[#1a1f3a]">
-            <h3 class="text-base font-semibold text-white mb-4">Push-to-Talk</h3>
-            <div class="space-y-4">
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="shortcuts_global_ptt_hotkey_enabled"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">Enabled</span>
+            <div class="mb-4 flex items-center justify-between gap-3">
+                <h3 class="text-base font-semibold text-white">Push-to-Talk</h3>
+                <label class="settings-toggle">
+                    <input type="checkbox" id="shortcuts_global_ptt_hotkey_enabled" class="settings-toggle__input" aria-label="Enable Push-to-Talk shortcut">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
+                    <span class="sr-only">Enabled</span>
                 </label>
+            </div>
+            <div class="space-y-4">
                 <div>
                     <label class="block text-xs text-gray-400 mb-2">Hold combo</label>
                     <div class="hotkey-capture"
@@ -26,7 +25,12 @@
                       <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then hold your modifier keys">
                         <span class="hotkey-placeholder">Click to set</span>
                       </div>
-                      <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
                       <input type="hidden" id="shortcuts_global_ptt_hotkey_combo" value="">
                     </div>
                     <p class="text-xs text-gray-500 mt-2">Hold any modifier combo to talk.</p>
@@ -35,16 +39,15 @@
         </div>
 
         <div class="flex-1 min-w-0 border border-[#565869] rounded-lg p-4 sm:p-6 bg-[#1a1f3a]">
-            <h3 class="text-base font-semibold text-white mb-4">Dictation</h3>
-            <div class="space-y-4">
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="shortcuts_dictation_hotkey_enabled"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">Enabled</span>
+            <div class="mb-4 flex items-center justify-between gap-3">
+                <h3 class="text-base font-semibold text-white">Dictation</h3>
+                <label class="settings-toggle">
+                    <input type="checkbox" id="shortcuts_dictation_hotkey_enabled" class="settings-toggle__input" aria-label="Enable Dictation shortcut">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
+                    <span class="sr-only">Enabled</span>
                 </label>
+            </div>
+            <div class="space-y-4">
                 <div>
                     <label class="block text-xs text-gray-400 mb-2">Hold combo</label>
                     <div class="hotkey-capture"
@@ -54,7 +57,12 @@
                       <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your shortcut keys">
                         <span class="hotkey-placeholder">Click to set</span>
                       </div>
-                      <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
                       <input type="hidden" id="shortcuts_dictation_hotkey_modifier" value="">
                       <input type="hidden" id="shortcuts_dictation_hotkey_key"      value="">
                     </div>
@@ -64,16 +72,15 @@
         </div>
 
         <div class="flex-1 min-w-0 border border-[#565869] rounded-lg p-4 sm:p-6 bg-[#1a1f3a]">
-            <h3 class="text-base font-semibold text-white mb-4">Recording</h3>
-            <div class="space-y-4">
-                <label class="flex items-center cursor-pointer group">
-                    <input type="checkbox" id="shortcuts_recording_hotkey_enabled"
-                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                    checked:bg-[#10a37f] checked:border-[#10a37f]
-                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                    transition-colors cursor-pointer">
-                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">Enabled</span>
+            <div class="mb-4 flex items-center justify-between gap-3">
+                <h3 class="text-base font-semibold text-white">Recording</h3>
+                <label class="settings-toggle">
+                    <input type="checkbox" id="shortcuts_recording_hotkey_enabled" class="settings-toggle__input" aria-label="Enable Recording shortcut">
+                    <span class="settings-toggle__switch" aria-hidden="true"></span>
+                    <span class="sr-only">Enabled</span>
                 </label>
+            </div>
+            <div class="space-y-4">
                 <div>
                     <label class="block text-xs text-gray-400 mb-2">Shortcut</label>
                     <div class="hotkey-capture"
@@ -83,7 +90,12 @@
                       <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your shortcut keys">
                         <span class="hotkey-placeholder">Click to set</span>
                       </div>
-                      <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
                       <input type="hidden" id="shortcuts_recording_hotkey_modifier" value="">
                       <input type="hidden" id="shortcuts_recording_hotkey_key"      value="">
                     </div>
@@ -93,147 +105,268 @@
         </div>
 
     </div>
-    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-        <h3 class="text-base font-semibold text-white mb-4">Web UI Launcher</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div>
-                <label class="block text-xs text-gray-400 mb-2">Chat</label>
-                <div class="hotkey-capture" data-type="modifier-key"
-                     data-modifier-field="shortcuts_web_hotkey_chat_modifier"
-                     data-key-field="shortcuts_web_hotkey_chat_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_web_hotkey_chat_modifier" value="">
-                  <input type="hidden" id="shortcuts_web_hotkey_chat_key"      value="">
+    <details class="settings-collapsible">
+        <summary class="settings-collapsible__summary">
+            <h3 class="text-base font-semibold text-white">Oracle size &amp; skin navigation</h3>
+            <span class="settings-collapsible__chevron" aria-hidden="true">
+                <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 8l5 5 5-5"></path>
+                </svg>
+            </span>
+        </summary>
+        <div class="settings-collapsible__content pt-4">
+            <div class="flex flex-row flex-nowrap items-end gap-2 sm:gap-4">
+                <div class="flex-1 min-w-0">
+                    <label class="block text-xs text-gray-400 mb-2 truncate" title="Decrease oracle size">Decrease</label>
+                    <div class="hotkey-capture"
+                         data-type="modifier-key"
+                         data-modifier-field="shortcuts_oracle_size_hotkey_decrease_modifier"
+                         data-key-field="shortcuts_oracle_size_hotkey_decrease_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_oracle_size_hotkey_decrease_modifier" value="">
+                      <input type="hidden" id="shortcuts_oracle_size_hotkey_decrease_key"      value="">
+                    </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <label class="block text-xs text-gray-400 mb-2 truncate" title="Increase oracle size">Increase</label>
+                    <div class="hotkey-capture"
+                         data-type="modifier-key"
+                         data-modifier-field="shortcuts_oracle_size_hotkey_increase_modifier"
+                         data-key-field="shortcuts_oracle_size_hotkey_increase_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_oracle_size_hotkey_increase_modifier" value="">
+                      <input type="hidden" id="shortcuts_oracle_size_hotkey_increase_key"      value="">
+                    </div>
+                </div>
+                <div class="hidden sm:block w-px shrink-0 self-stretch min-h-[48px] bg-[#565869] mx-1" aria-hidden="true"></div>
+                <div class="flex-1 min-w-0">
+                    <label class="block text-xs text-gray-400 mb-2 truncate" title="Previous skin">Previous</label>
+                    <div class="hotkey-capture"
+                         data-type="modifier-key"
+                         data-modifier-field="shortcuts_skin_nav_hotkey_previous_modifier"
+                         data-key-field="shortcuts_skin_nav_hotkey_previous_key">
+                      <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your shortcut keys">
+                        <span class="hotkey-placeholder">Click to set</span>
+                      </div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_skin_nav_hotkey_previous_modifier" value="">
+                      <input type="hidden" id="shortcuts_skin_nav_hotkey_previous_key"      value="">
+                    </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <label class="block text-xs text-gray-400 mb-2 truncate" title="Next skin">Next</label>
+                    <div class="hotkey-capture"
+                         data-type="modifier-key"
+                         data-modifier-field="shortcuts_skin_nav_hotkey_next_modifier"
+                         data-key-field="shortcuts_skin_nav_hotkey_next_key">
+                      <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your shortcut keys">
+                        <span class="hotkey-placeholder">Click to set</span>
+                      </div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_skin_nav_hotkey_next_modifier" value="">
+                      <input type="hidden" id="shortcuts_skin_nav_hotkey_next_key"      value="">
+                    </div>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <label class="block text-xs text-gray-400 mb-2 truncate" title="Modifier held while pressing number keys">Number modifier</label>
+                    <div class="hotkey-capture"
+                         data-type="modifier-only"
+                         data-field="shortcuts_skin_select_hotkey_modifier">
+                      <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press modifier keys">
+                        <span class="hotkey-placeholder">Click to set</span>
+                      </div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_skin_select_hotkey_modifier" value="">
+                    </div>
                 </div>
             </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-2">Projects</label>
-                <div class="hotkey-capture" data-type="modifier-key"
-                     data-modifier-field="shortcuts_web_hotkey_projects_modifier"
-                     data-key-field="shortcuts_web_hotkey_projects_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_web_hotkey_projects_modifier" value="">
-                  <input type="hidden" id="shortcuts_web_hotkey_projects_key"      value="">
+            <p class="text-xs text-gray-500 mt-3">Size shortcuts match the Skins slider. Number modifier: 1 = Oracle, 2+ = skins.</p>
+        </div>
+    </details>
+    <details class="settings-collapsible">
+        <summary class="settings-collapsible__summary">
+            <h3 class="text-base font-semibold text-white">Web UI Launcher</h3>
+            <span class="settings-collapsible__chevron" aria-hidden="true">
+                <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 8l5 5 5-5"></path>
+                </svg>
+            </span>
+        </summary>
+        <div class="settings-collapsible__content pt-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Chat</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_chat_modifier"
+                         data-key-field="shortcuts_web_hotkey_chat_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_chat_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_chat_key"      value="">
+                    </div>
                 </div>
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-2">Actions</label>
-                <div class="hotkey-capture" data-type="modifier-key"
-                     data-modifier-field="shortcuts_web_hotkey_actions_modifier"
-                     data-key-field="shortcuts_web_hotkey_actions_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_web_hotkey_actions_modifier" value="">
-                  <input type="hidden" id="shortcuts_web_hotkey_actions_key"      value="">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Projects</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_projects_modifier"
+                         data-key-field="shortcuts_web_hotkey_projects_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_projects_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_projects_key"      value="">
+                    </div>
                 </div>
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-2">Snippets</label>
-                <div class="hotkey-capture" data-type="modifier-key"
-                     data-modifier-field="shortcuts_web_hotkey_snippets_modifier"
-                     data-key-field="shortcuts_web_hotkey_snippets_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_web_hotkey_snippets_modifier" value="">
-                  <input type="hidden" id="shortcuts_web_hotkey_snippets_key"      value="">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Actions</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_actions_modifier"
+                         data-key-field="shortcuts_web_hotkey_actions_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_actions_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_actions_key"      value="">
+                    </div>
                 </div>
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-2">Workflows</label>
-                <div class="hotkey-capture" data-type="modifier-key"
-                     data-modifier-field="shortcuts_web_hotkey_workflows_modifier"
-                     data-key-field="shortcuts_web_hotkey_workflows_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_web_hotkey_workflows_modifier" value="">
-                  <input type="hidden" id="shortcuts_web_hotkey_workflows_key"      value="">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Snippets</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_snippets_modifier"
+                         data-key-field="shortcuts_web_hotkey_snippets_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_snippets_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_snippets_key"      value="">
+                    </div>
                 </div>
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-2">Preferences</label>
-                <div class="hotkey-capture" data-type="modifier-key"
-                     data-modifier-field="shortcuts_web_hotkey_preferences_modifier"
-                     data-key-field="shortcuts_web_hotkey_preferences_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_web_hotkey_preferences_modifier" value="">
-                  <input type="hidden" id="shortcuts_web_hotkey_preferences_key"      value="">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Workflows</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_workflows_modifier"
+                         data-key-field="shortcuts_web_hotkey_workflows_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_workflows_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_workflows_key"      value="">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Automations</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_automations_modifier"
+                         data-key-field="shortcuts_web_hotkey_automations_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_automations_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_automations_key"      value="">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Ticket Board</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_ticket_board_modifier"
+                         data-key-field="shortcuts_web_hotkey_ticket_board_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_ticket_board_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_ticket_board_key"      value="">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">IRC</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_irc_modifier"
+                         data-key-field="shortcuts_web_hotkey_irc_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_irc_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_irc_key"      value="">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Preferences</label>
+                    <div class="hotkey-capture" data-type="modifier-key"
+                         data-modifier-field="shortcuts_web_hotkey_preferences_modifier"
+                         data-key-field="shortcuts_web_hotkey_preferences_key">
+                      <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
+                      <button type="button" class="hotkey-clear" title="Clear">
+                        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                          <circle cx="10" cy="10" r="9" stroke="currentColor" stroke-width="1.5"/>
+                          <path d="M6.5 6.5L13.5 13.5M13.5 6.5L6.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                        </svg>
+                      </button>
+                      <input type="hidden" id="shortcuts_web_hotkey_preferences_modifier" value="">
+                      <input type="hidden" id="shortcuts_web_hotkey_preferences_key"      value="">
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
-    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-        <h3 class="text-base font-semibold text-white mb-4">Oracle size &amp; skin navigation</h3>
-        <div class="flex flex-row flex-nowrap items-end gap-2 sm:gap-4">
-            <div class="flex-1 min-w-0">
-                <label class="block text-xs text-gray-400 mb-2 truncate" title="Decrease oracle size">Decrease</label>
-                <div class="hotkey-capture"
-                     data-type="modifier-key"
-                     data-modifier-field="shortcuts_oracle_size_hotkey_decrease_modifier"
-                     data-key-field="shortcuts_oracle_size_hotkey_decrease_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_oracle_size_hotkey_decrease_modifier" value="">
-                  <input type="hidden" id="shortcuts_oracle_size_hotkey_decrease_key"      value="">
-                </div>
-            </div>
-            <div class="flex-1 min-w-0">
-                <label class="block text-xs text-gray-400 mb-2 truncate" title="Increase oracle size">Increase</label>
-                <div class="hotkey-capture"
-                     data-type="modifier-key"
-                     data-modifier-field="shortcuts_oracle_size_hotkey_increase_modifier"
-                     data-key-field="shortcuts_oracle_size_hotkey_increase_key">
-                  <div class="hotkey-display" tabindex="0" role="button"><span class="hotkey-placeholder">Click to set</span></div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_oracle_size_hotkey_increase_modifier" value="">
-                  <input type="hidden" id="shortcuts_oracle_size_hotkey_increase_key"      value="">
-                </div>
-            </div>
-            <div class="hidden sm:block w-px shrink-0 self-stretch min-h-[48px] bg-[#565869] mx-1" aria-hidden="true"></div>
-            <div class="flex-1 min-w-0">
-                <label class="block text-xs text-gray-400 mb-2 truncate" title="Previous skin">Previous</label>
-                <div class="hotkey-capture"
-                     data-type="modifier-key"
-                     data-modifier-field="shortcuts_skin_nav_hotkey_previous_modifier"
-                     data-key-field="shortcuts_skin_nav_hotkey_previous_key">
-                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your shortcut keys">
-                    <span class="hotkey-placeholder">Click to set</span>
-                  </div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_skin_nav_hotkey_previous_modifier" value="">
-                  <input type="hidden" id="shortcuts_skin_nav_hotkey_previous_key"      value="">
-                </div>
-            </div>
-            <div class="flex-1 min-w-0">
-                <label class="block text-xs text-gray-400 mb-2 truncate" title="Next skin">Next</label>
-                <div class="hotkey-capture"
-                     data-type="modifier-key"
-                     data-modifier-field="shortcuts_skin_nav_hotkey_next_modifier"
-                     data-key-field="shortcuts_skin_nav_hotkey_next_key">
-                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your shortcut keys">
-                    <span class="hotkey-placeholder">Click to set</span>
-                  </div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_skin_nav_hotkey_next_modifier" value="">
-                  <input type="hidden" id="shortcuts_skin_nav_hotkey_next_key"      value="">
-                </div>
-            </div>
-            <div class="flex-1 min-w-0">
-                <label class="block text-xs text-gray-400 mb-2 truncate" title="Modifier held while pressing number keys">Number modifier</label>
-                <div class="hotkey-capture"
-                     data-type="modifier-only"
-                     data-field="shortcuts_skin_select_hotkey_modifier">
-                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press modifier keys">
-                    <span class="hotkey-placeholder">Click to set</span>
-                  </div>
-                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
-                  <input type="hidden" id="shortcuts_skin_select_hotkey_modifier" value="">
-                </div>
-            </div>
-        </div>
-        <p class="text-xs text-gray-500 mt-3">Size shortcuts match the Skins slider. Number modifier: 1 = Oracle, 2+ = skins.</p>
-    </div>
+    </details>
 
 </div>

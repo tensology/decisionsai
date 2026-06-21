@@ -66,6 +66,20 @@ def list_diagram_history() -> List[Dict[str, Any]]:
     return _load_history_rows()[:_MAX_HISTORY]
 
 
+def delete_diagram_entry(diagram_id: str) -> bool:
+    """Delete a diagram from memory and persisted history."""
+    removed = False
+    with _diagram_lock:
+        if _diagram_store.pop(diagram_id, None) is not None:
+            removed = True
+    rows = _load_history_rows()
+    filtered_rows = [row for row in rows if row.get("id") != diagram_id]
+    if len(filtered_rows) != len(rows):
+        removed = True
+        _save_history_rows(filtered_rows)
+    return removed
+
+
 def store_diagram(code: str, title: str = "Diagram") -> str:
     diagram_id = secrets.token_urlsafe(9)
     now = time.time()
@@ -134,6 +148,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             "code": row.get("code") or "",
             "created_at": row.get("created_at"),
         }
+
+    @router.delete("/diagrams/{diagram_id}")
+    async def delete_diagram(diagram_id: str):
+        if not delete_diagram_entry(diagram_id):
+            raise HTTPException(status_code=404, detail="Diagram not found")
+        return {"success": True}
 
     @router.post("/diagrams/export/google-drawing")
     async def export_diagram_google_drawing(body: DiagramGoogleExportRequest):

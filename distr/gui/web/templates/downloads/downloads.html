@@ -9,23 +9,16 @@
 {% block content %}
 <div class="downloads-page">
     <div class="downloads-header">
-        <div>
-            <h1 class="downloads-title">Download Manager</h1>
-            <p class="downloads-subtitle">Track yt-dlp and agent-started downloads with live progress.</p>
+        <h1 class="downloads-title">Download Manager</h1>
+        <div class="downloads-header-actions">
+            <button type="button" id="downloadsRefreshBtn" class="downloads-btn" hidden>Refresh</button>
+            <button type="button" id="downloadsClearBtn" class="downloads-btn" hidden>Clear all</button>
         </div>
-        <button type="button" id="downloadsRefreshBtn" class="downloads-btn">Refresh</button>
     </div>
 
-    <div id="downloadsActiveSection" class="downloads-section">
-        <h2 class="downloads-section-title">Active</h2>
-        <div id="downloadsActiveList" class="downloads-list"></div>
-        <p id="downloadsActiveEmpty" class="downloads-empty">No active downloads.</p>
-    </div>
-
-    <div class="downloads-section">
-        <h2 class="downloads-section-title">History</h2>
-        <div id="downloadsHistoryList" class="downloads-list"></div>
-        <p id="downloadsHistoryEmpty" class="downloads-empty">No completed downloads yet.</p>
+    <div class="downloads-section downloads-section-main">
+        <div id="downloadsList" class="downloads-list"></div>
+        <p id="downloadsEmpty" class="downloads-empty">No downloads yet.</p>
     </div>
 </div>
 {% endblock %}

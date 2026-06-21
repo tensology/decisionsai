@@ -561,7 +561,7 @@ def register_routes(router, templates):
         from distr.core.services.llm_benchmark_service import (
             _fallback_profile,
             _profile_from_row,
-            load_terminal_bench_leaderboard,
+            find_benchmark_row,
             normalize_model_key,
         )
         from distr.core.services.model_catalog_cache import (
@@ -637,14 +637,9 @@ def register_routes(router, templates):
             except Exception:
                 catalog_models = []
 
-        benchmark_rows = load_terminal_bench_leaderboard()
-        benchmark_by_id = {str(row.get("id") or ""): row for row in benchmark_rows}
         benchmark_key = normalize_model_key(model_name)
-        benchmark_profile = (
-            _profile_from_row(benchmark_by_id[benchmark_key], llm_type=llm_type, requested_provider=provider)
-            if benchmark_key in benchmark_by_id
-            else _fallback_profile(model_name, provider, llm_type)
-        )
+        benchmark_row = find_benchmark_row(model_name, provider_key) if benchmark_key else None
+        benchmark_profile = _profile_from_row(benchmark_row, llm_type=llm_type, requested_provider=provider) if benchmark_row else _fallback_profile(model_name, provider, llm_type)
 
         catalog_match = None
         for row in catalog_models:
@@ -717,7 +712,7 @@ def register_routes(router, templates):
             "last_benchmark_date": benchmark_profile.get("latest_date") or "",
             "best_for": (recommendation_lane or {}).get("description") or benchmark_profile.get("best_use_case") or benchmark_profile.get("summary") or "",
             "summary": benchmark_profile.get("summary") or (recommendation_lane or {}).get("description") or "",
-            "context_window": int(context_window or 0),
+            "context_window": int(context_window or 0) if context_window else (benchmark_profile.get("metrics") or {}).get("context_window"),
             "released": (recommendation_lane or {}).get("released") or "",
             "pricing": pricing,
             "quality": quality,
@@ -727,6 +722,22 @@ def register_routes(router, templates):
             "output_modalities": output_modalities,
             "sources": (recommendation_lane or {}).get("sources") or [],
         }
+        benchmark_metrics = benchmark_profile.get("metrics") or {}
+        if benchmark_profile.get("performance_score") is not None:
+            profile["performance_score"] = benchmark_profile.get("performance_score")
+        if benchmark_profile.get("value_score") is not None:
+            profile["value_score"] = benchmark_profile.get("value_score")
+        if benchmark_profile.get("sources"):
+            profile["benchmark_sources"] = benchmark_profile.get("sources") or []
+        profile["benchmark_metrics"] = benchmark_metrics
+        if benchmark_metrics.get("context_window") and not profile.get("context_window"):
+            profile["context_window"] = benchmark_metrics.get("context_window")
+        if benchmark_metrics.get("blended_price_per_1m") is not None:
+            profile["pricing"]["blended_per_1m"] = benchmark_metrics.get("blended_price_per_1m")
+        if benchmark_metrics.get("input_price_per_1m") is not None:
+            profile["pricing"]["input_per_1m"] = benchmark_metrics.get("input_price_per_1m")
+        if benchmark_metrics.get("output_price_per_1m") is not None:
+            profile["pricing"]["output_per_1m"] = benchmark_metrics.get("output_price_per_1m")
         return JSONResponse({"profile": profile})
 
     @router.post("/llms/models/reload")

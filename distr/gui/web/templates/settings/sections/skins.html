@@ -1,7 +1,13 @@
 <!-- Skins Tab -->
-    <div class="mb-6 pb-4 border-b border-[#565869]">
-        <h2 class="text-xl font-semibold text-white mb-1">Skins</h2>
-        <p class="text-sm text-gray-400">Select and customize your oracle skin</p>
+    <div class="mb-6 flex items-center justify-between gap-4 pb-4 border-b border-[#565869]">
+        <div>
+            <h2 id="skins_section_title" class="text-xl font-semibold text-white mb-1">Skins</h2>
+            <p id="skins_section_subtitle" class="text-sm text-gray-400">Select and customize your oracle-avatar skin</p>
+        </div>
+        <button type="button" id="skins_section_back"
+                class="hidden px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
+            ← Back
+        </button>
     </div>
 
     <div id="skins_content_wrap" class="relative space-y-6">
@@ -19,15 +25,10 @@
             <h3 class="text-lg font-semibold text-white mb-4">Oracle Settings</h3>
             <div class="grid grid-cols-2 gap-6">
                 <div>
-                    <label class="flex items-center cursor-pointer group">
-                        <input type="checkbox" id="restore_position" name="restore_position" checked
-                               class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                      checked:bg-[#10a37f] checked:border-[#10a37f]
-                                      focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                      transition-colors cursor-pointer">
-                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
-                            Restore Position
-                        </span>
+                    <label class="settings-toggle">
+                        <input type="checkbox" id="restore_position" name="restore_position" checked class="settings-toggle__input">
+                        <span class="settings-toggle__switch" aria-hidden="true"></span>
+                        <span class="settings-toggle__label">Restore Position</span>
                     </label>
                 </div>
                 <div>
@@ -181,14 +182,8 @@
         </div>
 
         <!-- Skin Detail Panel (shown when a skin is clicked) -->
-        <div id="skin_detail_panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden">
+        <div id="skin_detail_panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden min-h-[340px]">
             <div class="mb-4 flex flex-nowrap items-center gap-4">
-                <div class="flex w-[120px] flex-shrink-0 justify-start">
-                    <button type="button" id="skin_detail_back"
-                            class="px-3 py-1.5 rounded-md text-sm font-medium bg-[#0d1117] border border-[#565869] text-[#ececf1] hover:border-[#7a7c8c] hover:text-white transition-colors">
-                        ← Back
-                    </button>
-                </div>
                 <div class="flex min-w-0 flex-1 items-center justify-center gap-3">
                     <label for="skins_oracle_size" class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Size</label>
                     <input type="range" id="skins_oracle_size" min="4" max="10" value="9" step="1"
@@ -203,8 +198,14 @@
                 </div>
                 <div class="flex w-[76px] flex-shrink-0 justify-end">
                     <button type="button" id="skin_detail_load"
-                            class="px-3 py-1.5 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">
-                        Load
+                            class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">
+                        <span id="skin_detail_load_label">Load</span>
+                        <span id="skin_detail_load_icon" class="inline-flex h-4 w-4 items-center justify-center text-[#ffd3b0]" aria-hidden="true">
+                            <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 8h8"></path>
+                                <path d="m8 4 4 4-4 4"></path>
+                            </svg>
+                        </span>
                     </button>
                 </div>
             </div>
@@ -213,31 +214,40 @@
                 <div class="flex items-center gap-4 mb-4">
                     <h3 class="text-lg font-semibold text-white" id="oracle_detail_name">Oracle</h3>
                 </div>
-                <div class="flex gap-6 items-start">
-                    <div class="flex-1">
-                        <label class="block text-sm font-medium text-[#ececf1] mb-2">Background</label>
-                        <select id="oracle_gif_select"
-                                class="bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                       focus:outline-none focus:border-[#10a37f] transition-colors w-full max-w-sm">
-                        </select>
-                        <label class="flex items-center gap-2 mt-3 cursor-pointer">
-                            <input type="checkbox" id="oracle_pingpong_checkbox"
-                                   class="w-4 h-4 rounded border-[#565869] bg-[#0d1117] text-[#10a37f] focus:ring-[#10a37f] cursor-pointer">
-                            <span class="text-sm text-[#ececf1]">Ping-pong playback</span>
-                        </label>
-                        <label class="flex items-center gap-2 mt-3 cursor-pointer">
-                            <input type="checkbox" id="oracle_unfocused_opacity_checkbox"
-                                   class="w-4 h-4 rounded border-[#565869] bg-[#0d1117] text-[#10a37f] focus:ring-[#10a37f] cursor-pointer">
-                            <span class="text-sm text-[#ececf1]">Fade when unfocused</span>
-                        </label>
-                        <div id="oracle_unfocused_opacity_slider_wrap" class="mt-2 flex items-center gap-3 max-w-sm hidden">
-                            <input type="range" id="oracle_unfocused_opacity_slider" min="5" max="100" value="50" step="5"
-                                   class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
-                            <span id="oracle_unfocused_opacity_value" class="text-sm text-[#ececf1] w-10 text-right">50%</span>
+                <div class="flex gap-8 items-start">
+                    <div class="flex-1 space-y-5">
+                        <div class="grid grid-cols-2 gap-6">
+                            <div class="flex items-center">
+                                <select id="oracle_gif_select" aria-label="Oracle background"
+                                        class="bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                               focus:outline-none focus:border-[#10a37f] transition-colors w-full">
+                                </select>
+                            </div>
+                            <div class="flex items-center">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="oracle_pingpong_checkbox" class="settings-toggle__input">
+                                    <span class="settings-toggle__switch" aria-hidden="true"></span>
+                                    <span class="settings-toggle__label">Ping-pong playback</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="border border-[#565869] bg-[#1a1f3a] rounded-lg p-4 mt-4">
+                            <div class="flex items-center">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="oracle_unfocused_opacity_checkbox" class="settings-toggle__input">
+                                    <span class="settings-toggle__switch" aria-hidden="true"></span>
+                                    <span class="settings-toggle__label">Fade when focused</span>
+                                </label>
+                            </div>
+                            <div id="oracle_unfocused_opacity_slider_wrap" class="mt-4 flex items-center gap-3 hidden">
+                                <input type="range" id="oracle_unfocused_opacity_slider" min="5" max="100" value="50" step="5"
+                                       class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                                <span id="oracle_unfocused_opacity_value" class="text-sm text-[#ececf1] w-10 text-right">50%</span>
+                            </div>
                         </div>
                     </div>
-                    <div class="flex-shrink-0">
-                        <div id="oracle_preview_container" class="w-48 h-48 rounded-full bg-[#0d1117] border-2 border-[#565869] flex items-center justify-center overflow-hidden">
+                    <div class="flex-shrink-0 p-2 rounded-lg border border-[#565869]" style="background-color:#000000 !important;">
+                        <div id="oracle_preview_container" class="w-48 h-48 rounded-full border-2 border-[#565869] flex items-center justify-center overflow-hidden" style="background-color:#000000 !important;">
                             <span id="oracle_preview_placeholder" class="text-xs text-gray-500">Preview</span>
                         </div>
                     </div>
@@ -247,29 +257,44 @@
             <!-- Avatar detail: Event hooks editor -->
             <div id="avatar_detail" class="hidden">
                 <div class="flex items-center gap-4 mb-4">
-                    <h3 class="text-lg font-semibold text-white"><span id="avatar_editor_name"></span> — Event Hooks</h3>
+                    <h3 class="text-lg font-semibold text-white"><span id="avatar_editor_name"></span></h3>
                 </div>
-                <div class="flex gap-6">
-                    <div class="flex-1 overflow-x-auto">
-                        <table class="w-full text-sm text-left">
-                            <thead>
-                                <tr class="border-b border-[#565869] text-[#ececf1]">
-                                    <th class="py-2 px-2 font-medium">Hook</th>
-                                    <th class="py-2 px-2 font-medium">Animation</th>
-                                    <th class="py-2 px-2 font-medium">Playback</th>
-                                </tr>
-                            </thead>
-                            <tbody id="avatar_hooks_tbody"></tbody>
-                        </table>
+                <div class="grid items-start gap-6" style="grid-template-columns: minmax(0, 1fr) 224px;">
+                    <div class="min-w-0">
+                        <div class="overflow-hidden rounded-lg border border-[#565869] bg-[#0d1117]" style="height: 18rem;">
+                            <table class="w-full table-fixed text-sm text-left">
+                                <colgroup>
+                                    <col class="w-[44%]">
+                                    <col class="w-[28%]">
+                                    <col class="w-[28%]">
+                                </colgroup>
+                                <thead class="bg-[#0d1117]">
+                                    <tr class="border-b border-[#565869] text-[#ececf1]">
+                                        <th class="py-2 px-2 font-medium">Hook</th>
+                                        <th class="py-2 px-2 font-medium">Animation</th>
+                                        <th class="py-2 px-2 font-medium">Playback</th>
+                                    </tr>
+                                </thead>
+                            </table>
+                            <div id="avatar_hooks_scroll" class="overflow-x-auto overflow-y-auto" style="height: calc(18rem - 41px);">
+                                <table class="w-full table-fixed text-sm text-left">
+                                    <colgroup>
+                                        <col class="w-[44%]">
+                                        <col class="w-[28%]">
+                                        <col class="w-[28%]">
+                                    </colgroup>
+                                    <tbody id="avatar_hooks_tbody"></tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
-                    <div class="w-48 flex-shrink-0">
-                        <div class="border border-[#565869] rounded-lg p-3 bg-[#0d1117]">
-                            <h4 class="text-sm font-medium text-[#ececf1] mb-2">Live Preview</h4>
-                            <div id="skin_preview_container" class="w-full aspect-square bg-transparent rounded flex items-center justify-center overflow-hidden">
+                    <div class="min-w-0">
+                        <div class="flex w-full flex-col rounded-lg border border-[#565869] bg-[#0d1117] p-3" style="height: 18rem;">
+                            <h4 class="mb-2 text-sm font-medium text-[#ececf1]">Live Preview</h4>
+                            <div id="skin_preview_container" class="flex-1 bg-transparent rounded flex items-center justify-center overflow-hidden min-h-0">
                                 <video id="skin_preview_video" class="w-full h-full object-contain" loop muted playsinline style="display:none"></video>
                                 <span id="skin_preview_placeholder" class="text-xs text-gray-500">Select a hook</span>
                             </div>
-                            <p id="skin_preview_filename" class="text-xs text-gray-500 mt-1 truncate text-center"></p>
                         </div>
                     </div>
                 </div>

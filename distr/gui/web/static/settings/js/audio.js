@@ -73,7 +73,8 @@ function _highlightSavedDevice(tbodyId, deviceName) {
 }
 
 // Save audio settings to backend (triggers hot-swap). Dropdown is the source of truth.
-async function saveAudioSettings() {
+async function saveAudioSettings(options) {
+    options = options || {};
     try {
         var inputVal = document.getElementById('input_device').value;
         var outputVal = document.getElementById('output_device').value;
@@ -109,7 +110,9 @@ async function saveAudioSettings() {
         _highlightSavedDevice('audio_input_tbody', settings.input_device);
 
         const result = await response.json();
-        showNotification('Audio settings saved', 'success');
+        if (!options.silent) {
+            showNotification('Audio settings saved', 'success');
+        }
         console.log('Audio settings saved:', result);
     } catch (error) {
         console.error('Error saving audio settings:', error);
@@ -295,36 +298,72 @@ function setupAudioInputMonitor() {
     const bar = document.getElementById('audio_level_bar');
     const statusEl = document.getElementById('audio_monitor_status');
     const container = document.getElementById('audio_monitor_container');
-    if (!bar || !statusEl || !container) return;
+    const valueEl = document.getElementById('audio_monitor_value');
+    const thresholdMarker = document.getElementById('audio_monitor_threshold_marker');
+    const thresholdFill = document.getElementById('audio_monitor_threshold_fill');
+    const vadSlider = document.getElementById('vad_level');
+    if (!bar || !statusEl || !container || !valueEl) return;
     var audioContext = null;
     var stream = null;
     var analyser = null;
     var rafId = null;
     var timeData = null;
-    function setStatus(text) { statusEl.textContent = text; }
+    var vadThreshold = 50;
+    var currentPercent = 0;
+    var currentRms = 0;
+    var statusOverride = '';
+    function updateLiveStatus() {
+        if (statusOverride) {
+            statusEl.textContent = statusOverride;
+            return;
+        }
+        if (!stream) {
+            statusEl.textContent = 'Mic off — click bar to enable';
+            return;
+        }
+        statusEl.textContent = currentPercent >= vadThreshold ? 'Listening — over VAD guide' : 'Listening — below VAD guide';
+    }
+    function setStatus(text) {
+        statusOverride = text || '';
+        updateLiveStatus();
+    }
+    function setThreshold(threshold) {
+        vadThreshold = Math.max(0, Math.min(100, parseInt(threshold, 10) || 0));
+        if (thresholdMarker) thresholdMarker.style.left = vadThreshold + '%';
+        if (thresholdFill) thresholdFill.style.width = vadThreshold + '%';
+        updateLiveStatus();
+    }
+    window.updateAudioMonitorVadThreshold = setThreshold;
     function stopMonitor() {
         if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
         if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; }
         if (audioContext) { audioContext.close().catch(function() {}); audioContext = null; }
         analyser = null;
+        currentPercent = 0;
+        currentRms = 0;
         bar.style.width = '0%';
-        setStatus('Mic off — click to enable');
+        valueEl.textContent = '0%';
+        bar.style.backgroundColor = '#10a37f';
+        updateLiveStatus();
     }
     function tick() {
         if (!analyser || !timeData) return;
         analyser.getFloatTimeDomainData(timeData);
         var sumSq = 0;
         for (var i = 0; i < timeData.length; i++) { var s = timeData[i]; sumSq += s * s; }
-        var rms = Math.sqrt(sumSq / timeData.length);
-        var pct = Math.min(100, Math.round(rms * 500));
-        if (pct < 0) pct = 0;
-        bar.style.width = pct + '%';
+        currentRms = Math.sqrt(sumSq / timeData.length);
+        currentPercent = Math.min(100, Math.round(currentRms * 500));
+        if (currentPercent < 0) currentPercent = 0;
+        bar.style.width = currentPercent + '%';
+        valueEl.textContent = currentPercent + '%';
+        bar.style.backgroundColor = currentPercent >= vadThreshold ? '#f59e0b' : '#10a37f';
+        updateLiveStatus();
         rafId = requestAnimationFrame(tick);
     }
     function startMonitor() {
-        if (stream) return;
+        if (stream) return Promise.resolve();
         setStatus('Requesting microphone…');
-        navigator.mediaDevices.getUserMedia({ audio: true })
+        return navigator.mediaDevices.getUserMedia({ audio: true })
             .then(function(s) {
                 stream = s;
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -335,17 +374,39 @@ function setupAudioInputMonitor() {
                 source.connect(analyser);
                 var bufferLength = analyser.fftSize;
                 timeData = new Float32Array(bufferLength);
-                setStatus('Listening — VAD level');
+                statusOverride = '';
+                updateLiveStatus();
                 rafId = requestAnimationFrame(tick);
             })
             .catch(function(err) {
                 setStatus('Mic blocked or unavailable');
                 console.error('Audio Input Monitor:', err);
+                throw err;
             });
     }
+    setThreshold(vadSlider ? vadSlider.value : 50);
     container.addEventListener('click', function() {
         if (stream) stopMonitor(); else startMonitor();
     });
+    window.DecisionsAudioMonitor = {
+        start: startMonitor,
+        stop: stopMonitor,
+        isActive: function() { return !!stream; },
+        getSnapshot: function() {
+            return {
+                active: !!stream,
+                percent: currentPercent,
+                rms: currentRms,
+                threshold: vadThreshold,
+            };
+        },
+        setStatusOverride: function(text) { setStatus(text); },
+        clearStatusOverride: function() {
+            statusOverride = '';
+            updateLiveStatus();
+        },
+        setThreshold: setThreshold,
+    };
 }
 
 // Switch between Output/Input tabs in Audio settings
@@ -372,6 +433,35 @@ function switchAudioTab(tabName) {
     }
 }
 
+function initAudioSectionTabs() {
+    const tabButtons = Array.from(document.querySelectorAll('[data-audio-subtab]'));
+    const panels = Array.from(document.querySelectorAll('[data-audio-panel]'));
+    if (!tabButtons.length || !panels.length) return;
+
+    const activateTab = function(tabKey) {
+        tabButtons.forEach(function(button) {
+            const isActive = button.dataset.audioSubtab === tabKey;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        panels.forEach(function(panel) {
+            panel.classList.toggle('is-active', panel.dataset.audioPanel === tabKey);
+        });
+    };
+
+    tabButtons.forEach(function(button) {
+        button.addEventListener('click', function() {
+            activateTab(button.dataset.audioSubtab);
+        });
+    });
+
+    const activeButton = tabButtons.find(function(button) {
+        return button.classList.contains('is-active');
+    });
+    activateTab(activeButton ? activeButton.dataset.audioSubtab : tabButtons[0].dataset.audioSubtab);
+}
+
 // Poll for audio device changes (when desktop detects new devices) and refresh dropdowns
 var _audioDevicesVersionPollInterval = null;
 var _lastAudioDevicesVersion = 0;
@@ -381,7 +471,7 @@ function _startAudioDevicesVersionPolling() {
     _audioDevicesVersionPollInterval = setInterval(async function() {
         var tab = 'general';
         try { if (typeof getTabFromHash === 'function') tab = getTabFromHash(); } catch (e) {}
-        if (tab !== 'audio') return;
+        if (tab !== 'general' && tab !== 'audio') return;
         try {
             var r = await fetch('/api/audio/devices-version');
             if (!r.ok) return;
@@ -407,14 +497,23 @@ function _stopAudioDevicesVersionPolling() {
 
 // Initialize audio settings when DOM is loaded
 function _initAudio() {
-    if (!document.getElementById('tab-audio')) return;
-    loadAudioSettings().then(function() {
+    if (!document.getElementById('input_device') && !document.getElementById('tab-audio')) return;
+    initAudioSectionTabs();
+    if (document.getElementById('tab-audio')) {
+        loadAudioSettings().then(function() {
+            _lastAudioDevicesVersion = 0;
+            fetch('/api/audio/devices-version').then(function(r) { return r.ok ? r.json() : {}; }).then(function(d) {
+                _lastAudioDevicesVersion = d.version || 0;
+                _startAudioDevicesVersionPolling();
+            }).catch(function() { _startAudioDevicesVersionPolling(); });
+        });
+    } else {
         _lastAudioDevicesVersion = 0;
         fetch('/api/audio/devices-version').then(function(r) { return r.ok ? r.json() : {}; }).then(function(d) {
             _lastAudioDevicesVersion = d.version || 0;
             _startAudioDevicesVersionPolling();
         }).catch(function() { _startAudioDevicesVersionPolling(); });
-    });
+    }
     setupAudioInputMonitor();
     const saveButton = document.getElementById('audio_save_button');
     if (saveButton) saveButton.addEventListener('click', saveAudioSettings);

@@ -39,6 +39,9 @@ function setVoiceOptionMetadata(option, voice) {
 // Load general settings from backend
 async function loadGeneralSettings() {
     try {
+        if (typeof window.loadAudioSettings === 'function') {
+            await window.loadAudioSettings();
+        }
         // Load providers first so dropdown can be populated
         await loadTTSProviders();
 
@@ -89,6 +92,9 @@ async function loadGeneralSettings() {
         const vadThreshold = settings.vad_threshold !== undefined ? settings.vad_threshold : 50;
         document.getElementById('vad_level').value = vadThreshold;
         document.getElementById('vad_level_value').textContent = vadThreshold + '%';
+        if (typeof window.updateAudioMonitorVadThreshold === 'function') {
+            window.updateAudioMonitorVadThreshold(vadThreshold);
+        }
 
         // ElevenLabs voice options (only when provider is elevenlabs)
         const stability = settings.elevenlabs_stability !== undefined ? settings.elevenlabs_stability : 0.5;
@@ -180,7 +186,10 @@ async function saveGeneralSettings() {
         }
 
         const result = await response.json();
-        showNotification('General settings saved and oracle updated', 'success');
+        if (typeof window.saveAudioSettings === 'function') {
+            await window.saveAudioSettings({ silent: true });
+        }
+        showNotification('General & audio settings saved and oracle updated', 'success');
         console.log('General settings saved:', result);
     } catch (error) {
         console.error('Error saving general settings:', error);
@@ -218,6 +227,25 @@ function updatePlaybackSpeedLabel(value) {
 let _voiceAudio = null;
 let _voiceBlobUrl = null;
 let _voiceLoading = false;
+let _vadAutoDetectRunning = false;
+
+async function _fetchVoicePreviewBlobUrl(provider, voice, speed, voiceName) {
+    const response = await fetch('/api/play-voice?_=' + Date.now(), {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, voice, speed, voice_name: voiceName })
+    });
+
+    if (!response.ok) {
+        let msg = 'Failed to generate voice sample';
+        try { const err = await response.json(); msg = err.error || msg; } catch (e) {}
+        throw new Error(msg);
+    }
+
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+}
 
 function _setVoiceUI(state) {
     // state: 'idle' | 'loading' | 'playing'
@@ -259,21 +287,7 @@ async function playVoice() {
     _setVoiceUI('loading');
 
     try {
-        const response = await fetch('/api/play-voice?_=' + Date.now(), {
-            method: 'POST',
-            cache: 'no-store',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, voice, speed, voice_name: voiceName })
-        });
-
-        if (!response.ok) {
-            let msg = 'Failed to generate voice sample';
-            try { const err = await response.json(); msg = err.error || msg; } catch(e) {}
-            throw new Error(msg);
-        }
-
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
+        const url = await _fetchVoicePreviewBlobUrl(provider, voice, speed, voiceName);
         _voiceBlobUrl = url;
 
         _voiceAudio = new Audio(url);
@@ -334,6 +348,174 @@ function stopVoice() {
     _setVoiceUI('idle');
 }
 
+function _percentile(values, percentile) {
+    if (!values.length) return 0;
+    const sorted = values.slice().sort(function(a, b) { return a - b; });
+    const index = Math.min(sorted.length - 1, Math.max(0, Math.round((percentile / 100) * (sorted.length - 1))));
+    return sorted[index];
+}
+
+function _summarizeVadSamples(values) {
+    if (!values.length) {
+        return { count: 0, avg: 0, peak: 0, p75: 0, p90: 0 };
+    }
+    const total = values.reduce(function(sum, value) { return sum + value; }, 0);
+    return {
+        count: values.length,
+        avg: total / values.length,
+        peak: values.reduce(function(max, value) { return Math.max(max, value); }, 0),
+        p75: _percentile(values, 75),
+        p90: _percentile(values, 90),
+    };
+}
+
+function _setVadAutoDetectStatus(text, tone) {
+    const status = document.getElementById('vad_auto_detect_status');
+    if (!status) return;
+    status.textContent = text;
+    status.classList.remove('text-[#7a7c8c]', 'text-[#10a37f]', 'text-[#f59e0b]', 'text-[#ef4444]');
+    if (tone === 'success') status.classList.add('text-[#10a37f]');
+    else if (tone === 'warn') status.classList.add('text-[#f59e0b]');
+    else if (tone === 'error') status.classList.add('text-[#ef4444]');
+    else status.classList.add('text-[#7a7c8c]');
+}
+
+async function _playVadCalibrationSample(label, browserStatus) {
+    const provider = document.getElementById('tts_provider').value;
+    const voiceSelect = document.getElementById('tts_voice');
+    const voice = voiceSelect.value;
+    const voiceName = voiceSelect.options[voiceSelect.selectedIndex]
+        ? voiceSelect.options[voiceSelect.selectedIndex].text : voice;
+    const speed = parseFloat(document.getElementById('playback_speed').value);
+    const url = await _fetchVoicePreviewBlobUrl(provider, voice, speed, voiceName);
+    const audio = new Audio(url);
+    const samples = [];
+    const monitor = window.DecisionsAudioMonitor;
+    let intervalId = null;
+    if (monitor && typeof monitor.setStatusOverride === 'function') {
+        monitor.setStatusOverride(browserStatus);
+    }
+    try {
+        intervalId = window.setInterval(function() {
+            const snapshot = monitor && typeof monitor.getSnapshot === 'function' ? monitor.getSnapshot() : null;
+            if (snapshot && snapshot.active) samples.push(snapshot.percent);
+        }, 50);
+        await new Promise(function(resolve, reject) {
+            audio.onended = resolve;
+            audio.onerror = function() { reject(new Error('Audio playback failed during ' + label.toLowerCase())); };
+            audio.play().catch(reject);
+        });
+    } finally {
+        if (intervalId) window.clearInterval(intervalId);
+        try { audio.pause(); } catch (e) {}
+        audio.src = '';
+        try { URL.revokeObjectURL(url); } catch (e2) {}
+        if (monitor && typeof monitor.clearStatusOverride === 'function') {
+            monitor.clearStatusOverride();
+        }
+    }
+    return _summarizeVadSamples(samples);
+}
+
+function _computeRecommendedVadThreshold(silentStats, interruptStats, currentThreshold) {
+    const silentGuide = Math.max(silentStats.p90, silentStats.peak * 0.85);
+    const interruptGuide = Math.max(interruptStats.p75, interruptStats.peak * 0.7);
+    const separation = Math.max(0, interruptGuide - silentGuide);
+    const normalizedSeparation = Math.max(0, Math.min(1, separation / 35));
+    const falseRisk = Math.max(0, Math.min(1, (silentStats.peak - currentThreshold) / 25));
+    let recommended = Math.round(30 + ((1 - normalizedSeparation) * 40) + (falseRisk * 20));
+    recommended = Math.max(5, Math.min(95, recommended));
+    return {
+        recommended: recommended,
+        separation: separation,
+        silentGuide: silentGuide,
+        interruptGuide: interruptGuide,
+    };
+}
+
+async function _applyVadThresholdValue(value) {
+    const vadLevelSlider = document.getElementById('vad_level');
+    const vadLevelValue = document.getElementById('vad_level_value');
+    if (vadLevelSlider) vadLevelSlider.value = String(value);
+    if (vadLevelValue) vadLevelValue.textContent = value + '%';
+    if (typeof window.updateAudioMonitorVadThreshold === 'function') {
+        window.updateAudioMonitorVadThreshold(value);
+    }
+    const response = await fetch('/api/voice/vad-threshold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vad_threshold: value })
+    });
+    if (!response.ok) {
+        let msg = 'Failed to update VAD level';
+        try {
+            const err = await response.json();
+            msg = err.detail || msg;
+        } catch (e) {}
+        throw new Error(msg);
+    }
+}
+
+async function runVadAutoDetect() {
+    if (_vadAutoDetectRunning) return;
+    const button = document.getElementById('vad_auto_detect_button');
+    const monitor = window.DecisionsAudioMonitor;
+    const vadLevelSlider = document.getElementById('vad_level');
+    if (!button || !monitor || !vadLevelSlider) return;
+
+    _vadAutoDetectRunning = true;
+    button.disabled = true;
+    button.textContent = 'Testing…';
+    try {
+        _setVadAutoDetectStatus('Preparing mic monitor…', 'info');
+        await monitor.start();
+        await new Promise(function(resolve) { window.setTimeout(resolve, 300); });
+
+        _setVadAutoDetectStatus('Step 1 of 2: stay quiet while the sample plays.', 'info');
+        const silentStats = await _playVadCalibrationSample(
+            'Silent check',
+            'Auto detect: stay quiet while the sample plays'
+        );
+
+        await new Promise(function(resolve) { window.setTimeout(resolve, 450); });
+
+        _setVadAutoDetectStatus('Step 2 of 2: talk over the sample to interrupt it naturally.', 'info');
+        const interruptStats = await _playVadCalibrationSample(
+            'Interrupt check',
+            'Auto detect: speak over the sample now'
+        );
+
+        if (interruptStats.peak <= silentStats.peak + 6 || interruptStats.count < 10) {
+            throw new Error('I could not clearly separate your interrupt voice from the playback. Try again and speak a little more clearly over the sample.');
+        }
+
+        const currentThreshold = parseInt(vadLevelSlider.value, 10) || 50;
+        const result = _computeRecommendedVadThreshold(silentStats, interruptStats, currentThreshold);
+        await _applyVadThresholdValue(result.recommended);
+
+        _setVadAutoDetectStatus(
+            'Applied ' + result.recommended + '% from silent peak ' + Math.round(silentStats.peak) + '% and interrupt peak ' + Math.round(interruptStats.peak) + '%.',
+            'success'
+        );
+        if (typeof showNotification === 'function') {
+            showNotification('VAD auto detect applied ' + result.recommended + '%', 'success');
+        }
+    } catch (error) {
+        console.error('VAD auto detect failed:', error);
+        _setVadAutoDetectStatus(error.message || 'VAD auto detect failed.', 'error');
+        if (typeof showNotification === 'function') {
+            showNotification('VAD auto detect failed: ' + error.message, 'error');
+        }
+    } finally {
+        if (monitor && typeof monitor.clearStatusOverride === 'function') {
+            monitor.clearStatusOverride();
+        }
+        button.disabled = false;
+        button.textContent = 'Auto Detect';
+        _vadAutoDetectRunning = false;
+    }
+}
+
 // Setup General-tab range sliders and live API pushes (playback speed, speech volume, VAD, ElevenLabs, oracle)
 function setupGeneralSliders() {
     var throttleMs = 80;
@@ -387,12 +569,18 @@ function setupGeneralSliders() {
         function applyVadLevel(val) {
             val = parseInt(val, 10);
             vadLevelValue.textContent = val + '%';
+            if (typeof window.updateAudioMonitorVadThreshold === 'function') {
+                window.updateAudioMonitorVadThreshold(val);
+            }
             fetch('/api/voice/vad-threshold', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vad_threshold: val }) })
                 .then(function(r) { if (r.ok) return; return r.json().then(function(err) { throw new Error(err.detail || 'Failed'); }); })
                 .catch(function(e) { console.error(e); if (typeof showNotification === 'function') showNotification('VAD update failed', 'error'); });
         }
         vadLevelSlider.addEventListener('input', function() {
             vadLevelValue.textContent = this.value + '%';
+            if (typeof window.updateAudioMonitorVadThreshold === 'function') {
+                window.updateAudioMonitorVadThreshold(this.value);
+            }
             if (vadLevelThrottle) clearTimeout(vadLevelThrottle);
             vadLevelThrottle = setTimeout(function() { vadLevelThrottle = null; applyVadLevel(vadLevelSlider.value); }, throttleMs);
         });
@@ -443,8 +631,38 @@ function setupGeneralSliders() {
 }
 
 // Initialize general settings when DOM is loaded
+function initGeneralTabs() {
+    const tabButtons = Array.from(document.querySelectorAll('[data-general-subtab]'));
+    const panels = Array.from(document.querySelectorAll('[data-general-panel]'));
+    if (!tabButtons.length || !panels.length) return;
+
+    const activateTab = function(tabKey) {
+        tabButtons.forEach(function(button) {
+            const isActive = button.dataset.generalSubtab === tabKey;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        panels.forEach(function(panel) {
+            panel.classList.toggle('is-active', panel.dataset.generalPanel === tabKey);
+        });
+    };
+
+    tabButtons.forEach(function(button) {
+        button.addEventListener('click', function() {
+            activateTab(button.dataset.generalSubtab);
+        });
+    });
+
+    const activeButton = tabButtons.find(function(button) {
+        return button.classList.contains('is-active');
+    });
+    activateTab(activeButton ? activeButton.dataset.generalSubtab : tabButtons[0].dataset.generalSubtab);
+}
+
 function _initGeneral() {
     if (!document.getElementById('tab-general')) return;
+    initGeneralTabs();
     loadGeneralSettings();
     setupGeneralSliders();
     const providerSelect = document.getElementById('tts_provider');
@@ -463,6 +681,8 @@ function _initGeneral() {
     if (addBtn) addBtn.addEventListener('click', openCustomVoiceModal);
     const voiceSelect = document.getElementById('tts_voice');
     if (voiceSelect) voiceSelect.addEventListener('change', _updateDeleteButton);
+    const vadAutoDetectButton = document.getElementById('vad_auto_detect_button');
+    if (vadAutoDetectButton) vadAutoDetectButton.addEventListener('click', runVadAutoDetect);
 }
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _initGeneral);

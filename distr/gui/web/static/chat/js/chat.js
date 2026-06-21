@@ -27,6 +27,8 @@ let _createChatGuard = false;
 
 /** Persist active chat for Kanban ticket creation / lane-move notices (cross-tab). */
 const KANBAN_SOURCE_CHAT_STORAGE_KEY = 'decisions_source_chat_id';
+const LIVE_CHAT_STATE_STORAGE_KEY = 'decisions_live_chat_state_v1';
+const LIVE_CHAT_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 
 function syncKanbanSourceChatContext() {
     try {
@@ -52,6 +54,123 @@ window.DecisionsWebChat.getSourceChatIdForTickets = function () {
     } catch (e) { /* ignore */ }
     return null;
 };
+
+function _loadLiveChatStateMap() {
+    try {
+        const raw = sessionStorage.getItem(LIVE_CHAT_STATE_STORAGE_KEY);
+        if (!raw) return {};
+        const data = JSON.parse(raw);
+        return data && typeof data === 'object' ? data : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function _saveLiveChatStateMap(map) {
+    try {
+        sessionStorage.setItem(LIVE_CHAT_STATE_STORAGE_KEY, JSON.stringify(map || {}));
+    } catch (e) { /* ignore private mode / quota */ }
+}
+
+function _getLiveChatState(chatId) {
+    if (chatId == null) return null;
+    const key = String(chatId);
+    const state = _loadLiveChatStateMap()[key];
+    if (!state || typeof state !== 'object') return null;
+    const updatedAt = Number(state.updatedAt || 0);
+    if (!updatedAt || (Date.now() - updatedAt) > LIVE_CHAT_STATE_MAX_AGE_MS) {
+        _clearLiveChatState(chatId);
+        return null;
+    }
+    return state;
+}
+
+function _updateLiveChatState(chatId, patch) {
+    if (chatId == null) return;
+    const key = String(chatId);
+    const map = _loadLiveChatStateMap();
+    const previous = map[key];
+    map[key] = {
+        ...(previous && typeof previous === 'object' ? previous : {}),
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: Date.now()
+    };
+    _saveLiveChatStateMap(map);
+}
+
+function _clearLiveChatState(chatId) {
+    if (chatId == null) return;
+    const key = String(chatId);
+    const map = _loadLiveChatStateMap();
+    if (!(key in map)) return;
+    delete map[key];
+    _saveLiveChatStateMap(map);
+}
+
+function _setLivePreviewState(text) {
+    if (currentChatId == null) return;
+    const plain = _normalizeMsgPlain(text);
+    if (!plain) return;
+    _updateLiveChatState(currentChatId, {
+        pendingUserText: plain,
+        pendingUserPhase: 'preview'
+    });
+}
+
+function _setCommittedLiveUserState(text) {
+    if (currentChatId == null) return;
+    const plain = _normalizeMsgPlain(text);
+    if (!plain) return;
+    _updateLiveChatState(currentChatId, {
+        pendingUserText: plain,
+        pendingUserPhase: 'committed'
+    });
+}
+
+function _acknowledgePersistedLiveUser(chatId, text) {
+    const plain = _normalizeMsgPlain(text);
+    const state = _getLiveChatState(chatId);
+    if (!state || !plain || _normalizeMsgPlain(state.pendingUserText || '') !== plain) return;
+    if (state.assistantStreaming) {
+        _updateLiveChatState(chatId, {
+            pendingUserText: '',
+            pendingUserPhase: null
+        });
+        return;
+    }
+    _clearLiveChatState(chatId);
+}
+
+function _setLiveAssistantStreaming(chatId, text = '') {
+    if (chatId == null) return;
+    _updateLiveChatState(chatId, {
+        assistantStreaming: true,
+        assistantText: String(text || '')
+    });
+}
+
+function _appendLiveAssistantStreamText(chatId, text) {
+    if (chatId == null || !text) return;
+    const state = _getLiveChatState(chatId) || {};
+    _updateLiveChatState(chatId, {
+        assistantStreaming: true,
+        assistantText: String(state.assistantText || '') + String(text)
+    });
+}
+
+function _clearLiveAssistantStreaming(chatId) {
+    const state = _getLiveChatState(chatId);
+    if (!state) return;
+    const pendingUserText = _normalizeMsgPlain(state.pendingUserText || '');
+    if (pendingUserText) {
+        _updateLiveChatState(chatId, {
+            assistantStreaming: false,
+            assistantText: ''
+        });
+        return;
+    }
+    _clearLiveChatState(chatId);
+}
 
 // DOM Elements
 const sidebar = document.getElementById('sidebar');
@@ -892,10 +1011,76 @@ function promoteTranscriptionPreviewToUserMessage(committedText) {
     const div = createMessageElement({ role: 'user', content: plain, timestamp: Date.now() });
     insertMessageElementInOrder(div, { role: 'user', content: plain, timestamp: Date.now() });
     _optimisticUserMessages.add(plain.substring(0, 100));
+    _setCommittedLiveUserState(plain);
     syncRenderedMessageCountFromDom();
     scheduleRefreshChatHeaderStats();
     scrollToBottom();
     return true;
+}
+
+function ensureStreamingAssistantMessageElement() {
+    const existing = document.getElementById('streamingAssistantMessage');
+    if (existing) return existing;
+    const div = document.createElement('div');
+    div.className = 'message assistant';
+    div.id = 'streamingAssistantMessage';
+    div.innerHTML = `
+        <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+        <div class="message-content">
+            <div class="message-text" id="streamingAssistantText"></div>
+            <div class="typing-indicator" id="streamingTypingIndicator">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+            <div class="message-actions" style="display: none;"></div>
+        </div>
+    `;
+    insertMessageElementInOrder(div, { role: 'assistant', timestamp: Date.now() });
+    flushPendingAssistantTools(div, null);
+    return div;
+}
+
+function restoreLiveChatState(chatId) {
+    if (!chatMessages || chatId == null || currentChatId !== chatId) return;
+    const state = _getLiveChatState(chatId);
+    if (!state) return;
+
+    const pendingUserText = _normalizeMsgPlain(state.pendingUserText || '');
+    if (pendingUserText && hasRenderedMessagePlain('user', pendingUserText)) {
+        if (state.assistantStreaming) {
+            _updateLiveChatState(chatId, {
+                pendingUserText: '',
+                pendingUserPhase: null
+            });
+        } else {
+            _clearLiveChatState(chatId);
+            return;
+        }
+    } else if (pendingUserText) {
+        if (state.pendingUserPhase === 'preview' && !document.getElementById('transcriptionStatus')) {
+            showTranscriptionStatus(pendingUserText, false, false, false);
+        } else if (state.pendingUserPhase === 'committed' && !hasRenderedMessagePlain('user', pendingUserText)) {
+            const div = createMessageElement({ role: 'user', content: pendingUserText, timestamp: Date.now() });
+            insertMessageElementInOrder(div, { role: 'user', content: pendingUserText, timestamp: Date.now() });
+            _optimisticUserMessages.add(pendingUserText.substring(0, 100));
+            syncRenderedMessageCountFromDom();
+        }
+    }
+
+    if (state.assistantStreaming) {
+        streamingChatId = chatId;
+        isStreaming = true;
+        setSendButtonStreaming(true);
+        removeTypingIndicator();
+        const wrap = ensureStreamingAssistantMessageElement();
+        const textEl = wrap.querySelector('#streamingAssistantText');
+        const typingEl = wrap.querySelector('#streamingTypingIndicator');
+        const assistantText = String(state.assistantText || '');
+        if (textEl) textEl.textContent = assistantText;
+        if (typingEl) typingEl.style.display = assistantText ? 'none' : '';
+        _ensureTranscriptionPreviewPlacement();
+    }
 }
 
 /** DB/API timestamps are naive UTC; normalize before parse so local display/order stay correct. */
@@ -1066,11 +1251,13 @@ function handleChatEventMessageAdded(msg) {
         // Skip only if sendMessage() already rendered this exact text optimistically.
         const key = content.substring(0, 100);
         if (_optimisticUserMessages.has(key)) {
+            _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
             return;
         }
         const np = _normalizeMsgPlain(content);
         if (np && np === _lastRenderedUserBubblePlain() && hasRenderedMessagePlain('user', np)) {
+            _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
             return;
         }
@@ -1079,6 +1266,7 @@ function handleChatEventMessageAdded(msg) {
         const div = createMessageElement({ role, content, timestamp: msg.timestamp });
         insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
         _optimisticUserMessages.add(key);
+        _acknowledgePersistedLiveUser(currentChatId, content);
         repairOrphanAssistantBeforeUser();
         scrollToBottom();
         scheduleRefreshChatHeaderStats();
@@ -1194,24 +1382,8 @@ function handleChatEventStreamStarted(msg) {
     if (existingActivity) existingActivity.remove();
     const existing = document.getElementById('streamingAssistantMessage');
     if (existing) existing.remove();
-    const div = document.createElement('div');
-    div.className = 'message assistant';
-    div.id = 'streamingAssistantMessage';
-    div.innerHTML = `
-        <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
-        <div class="message-content">
-            <div class="message-text" id="streamingAssistantText"></div>
-            <div class="typing-indicator" id="streamingTypingIndicator">
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-            </div>
-            <div class="message-actions" style="display: none;"></div>
-        </div>
-    `;
-    const streamMessage = { role: 'assistant', timestamp: Date.now() };
-    insertMessageElementInOrder(div, streamMessage);
-    flushPendingAssistantTools(div, null);
+    const div = ensureStreamingAssistantMessageElement();
+    _setLiveAssistantStreaming(msg.chat_id, '');
     _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
 }
@@ -1234,6 +1406,7 @@ function handleChatEventStreamToken(msg) {
                     const typingEl = document.getElementById('streamingTypingIndicator');
                     if (typingEl) typingEl.style.display = 'none';
                 }
+                _appendLiveAssistantStreamText(currentChatId, _streamTextBuffer);
                 _streamTextBuffer = '';
                 scrollToBottom();
             });
@@ -1306,6 +1479,7 @@ function handleChatEventStreamFinished(msg) {
             }
         }).catch(() => {});
     }
+    _clearLiveAssistantStreaming(msg.chat_id);
     // Null streamingChatId AFTER resolving so the poll guard (streamingChatId !== currentChatId)
     // still holds for any in-flight poll tick that fires before the microtask queue drains.
     // Resolve pending WebSocket-based wait (sendToAgentAndPoll / pollUntilAgentResponse)
@@ -1369,6 +1543,7 @@ function handleChatEventStreamError(msg) {
         window._agentStreamResolve();
         window._agentStreamResolve = null;
     }
+    _clearLiveChatState(msg.chat_id != null ? msg.chat_id : currentChatId);
     streamingChatId = null;
 }
 
@@ -1409,7 +1584,8 @@ function handleChatEventToolExecuted(msg) {
             result_detail: msg.result_detail || '',
             routing_path: msg.routing_path || '',
             user_text: msg.user_text || '',
-            compact: Boolean(msg.chat_compact)
+            compact: Boolean(msg.chat_compact),
+            activity_style: msg.activity_style || 'active'
         }
     };
     appendToolToAssistantTurn(toolMessage);
@@ -1606,6 +1782,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
 
     // Dictation finished — drop any live preview without committing a user message.
     if (discardLivePreview) {
+        _clearLiveChatState(currentChatId);
         _discardLiveTranscriptionUi();
         return;
     }
@@ -1618,6 +1795,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
     }
     // Backend sent done + empty (defensive)
     if (done && !trimmed) {
+        _clearLiveChatState(currentChatId);
         _discardLiveTranscriptionUi();
         return;
     }
@@ -1628,6 +1806,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
         return;
     }
     if (done && trimmed) {
+        _clearLiveChatState(currentChatId);
         let wrap = document.getElementById('transcriptionStatus');
         if (!wrap) {
             wrap = document.createElement('div');
@@ -1706,6 +1885,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
     }
     const textEl = document.getElementById('transcriptionStatusText');
     if (textEl) textEl.textContent = trimmed || '…';
+    if (trimmed) _setLivePreviewState(trimmed);
     _ensureSttPreviewClockRunning();
     _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
@@ -2002,6 +2182,7 @@ async function selectChat(chatId) {
         // Discard if a newer selectChat/loadChat has already taken over
         if (seq !== _selectSeq) return;
         renderMessages(data.messages);
+        restoreLiveChatState(chatId);
         updateChatSettingsDisplay({
             title: data.title || 'New Chat',
             provider: data.provider || '-',
@@ -2052,6 +2233,7 @@ async function loadChat(chatId, options = {}) {
         const data = await response.json();
         if (seq !== _selectSeq) return; // superseded by another navigation
         renderMessages(data.messages);
+        restoreLiveChatState(chatId);
         updateChatSettingsDisplay({
             title: data.title || 'New Chat',
             provider: data.provider || '-',
@@ -3393,6 +3575,7 @@ function toolExecutionItemHtml(message) {
     const title = toolDisplayTitle(event);
     const detail = (event.result_detail || event.result_summary || message.content || '').trim();
     const compact = Boolean(event.compact);
+    const activityStyle = event.activity_style === 'passive' ? 'passive' : 'active';
     const statusLabel = toolStatusLabel(safeStatus);
     const statusHtml = statusLabel ? `<span class="activity-status activity-status--${safeStatus}">${escapeHtml(statusLabel)}</span>` : '';
     const meta = [];
@@ -3413,7 +3596,7 @@ function toolExecutionItemHtml(message) {
         label: activityStepLabel(title, event),
         bodyHtml,
         safeStatus,
-        extraClass: compact ? 'activity-step--compact' : '',
+        extraClass: `${compact ? 'activity-step--compact ' : ''}activity-step--${activityStyle}`.trim(),
         toolEventId: message.tool_event_id || event.event_id || ''
     });
 }
@@ -5224,9 +5407,11 @@ async function editChatCustomVoice(context) {
     const voiceEl = getChatVoiceModelEl(context);
     if (!voiceEl) return;
     const voiceId = voiceEl.value;
-    if (!voiceId || !voiceId.startsWith('custom_')) return;
-    const dbId = voiceId.split('_')[1];
-    const voiceName = voiceEl.options[voiceEl.selectedIndex]?.text || voiceId;
+    const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
+    if (!selected || selected.dataset.custom !== '1') return;
+    const dbId = selected.dataset.customVoiceId || (voiceId && voiceId.startsWith('custom_') ? voiceId.split('_')[1] : '');
+    if (!dbId) return;
+    const voiceName = selected.textContent || voiceId;
 
     // Fetch current personality
     try {

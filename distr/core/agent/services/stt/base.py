@@ -11,6 +11,15 @@ from distr.core.agent.libs import (
     InterruptionFrame, UserStartedSpeakingFrame, TranscriptionFrame,
     SpeakingStartedFrames, SpeakingStoppedFrames,
 )
+from distr.core.agent.constants import (
+    VAD_DEFAULT_THRESHOLD,
+    VAD_BARGEIN_MULTIPLIER_MIN,
+    VAD_BARGEIN_MULTIPLIER_MAX,
+    VAD_BARGEIN_FLOOR_MIN,
+    VAD_BARGEIN_FLOOR_MAX,
+    VAD_BARGEIN_CONSECUTIVE_MIN,
+    VAD_BARGEIN_CONSECUTIVE_MAX,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +148,9 @@ class BaseSTTService(STTService):
         self._filler_words = _FILLER_WORDS
         self._audio_artifacts = _AUDIO_ARTIFACTS
 
+        self._vad_threshold: int = VAD_DEFAULT_THRESHOLD
+        self.set_vad_threshold(self._vad_threshold)
+
     # ------------------------------------------------------------------
     # Text filtering
     # ------------------------------------------------------------------
@@ -178,6 +190,36 @@ class BaseSTTService(STTService):
         old = self._is_dictating
         self._is_dictating = enabled
         logger.info(f"STT dictation mode: {old} -> {enabled}")
+
+    def set_vad_threshold(self, threshold: int):
+        """Tune hands-free echo-gate sensitivity from the shared VAD slider.
+
+        Lower values make continuous-mode barge-in more sensitive.
+        Higher values demand stronger, more sustained speech before we
+        treat mic energy during TTS playback as real user speech.
+        """
+        threshold = max(0, min(100, int(threshold)))
+        strictness = threshold / 100.0
+        self._vad_threshold = threshold
+        self._echo_floor_multiplier = (
+            VAD_BARGEIN_MULTIPLIER_MIN
+            + ((VAD_BARGEIN_MULTIPLIER_MAX - VAD_BARGEIN_MULTIPLIER_MIN) * strictness)
+        )
+        self._echo_floor_min = (
+            VAD_BARGEIN_FLOOR_MIN
+            + ((VAD_BARGEIN_FLOOR_MAX - VAD_BARGEIN_FLOOR_MIN) * strictness)
+        )
+        span = VAD_BARGEIN_CONSECUTIVE_MAX - VAD_BARGEIN_CONSECUTIVE_MIN
+        self._bargein_consecutive_required = (
+            VAD_BARGEIN_CONSECUTIVE_MIN + round(span * strictness)
+        )
+        logger.info(
+            "STT VAD threshold set to %s -> barge-in multiplier=%.2f floor=%.3f chunks=%s",
+            threshold,
+            self._echo_floor_multiplier,
+            self._echo_floor_min,
+            self._bargein_consecutive_required,
+        )
 
     # ------------------------------------------------------------------
     # PTT activation / deactivation

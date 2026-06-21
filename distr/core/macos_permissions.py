@@ -307,7 +307,10 @@ def _probe_python_microphone(*, prompt: bool = False) -> tuple[bool, str]:
         elif isinstance(default, (list, tuple)) and default:
             input_index = default[0]
         else:
-            input_index = default
+            try:
+                input_index = default[0]
+            except Exception:
+                input_index = default
         if input_index is None:
             return False, "No input device selected"
         input_index = int(input_index)

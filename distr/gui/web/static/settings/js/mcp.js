@@ -11,33 +11,89 @@
             .replace(/"/g, '&quot;');
     }
 
-    function parseEnvLines(text) {
-        var out = {};
-        (text || '').split('\n').forEach(function (line) {
-            line = line.trim();
-            if (!line || line.indexOf('=') < 0) return;
-            var i = line.indexOf('=');
-            var k = line.slice(0, i).trim();
-            var v = line.slice(i + 1).trim();
-            if (k) out[k] = v;
-        });
-        return out;
-    }
-
-    function envToLines(env) {
-        if (!env || typeof env !== 'object') return '';
-        return Object.keys(env).sort().map(function (k) {
-            return k + '=' + (env[k] == null ? '' : String(env[k]));
-        }).join('\n');
-    }
-
-    function parseCommandJson(text) {
-        try {
-            var v = JSON.parse((text || '').trim() || '[]');
-            return Array.isArray(v) ? v.map(function (x) { return String(x); }) : [];
-        } catch (e) {
-            return [];
+    function splitCommandLine(text) {
+        var input = (text || '').trim();
+        var parts = [];
+        var current = '';
+        var quote = '';
+        var escaped = false;
+        for (var i = 0; i < input.length; i++) {
+            var ch = input[i];
+            if (escaped) {
+                current += ch;
+                escaped = false;
+                continue;
+            }
+            if (ch === '\\') {
+                escaped = true;
+                continue;
+            }
+            if (quote) {
+                if (ch === quote) quote = '';
+                else current += ch;
+                continue;
+            }
+            if (ch === '"' || ch === "'") {
+                quote = ch;
+                continue;
+            }
+            if (/\s/.test(ch)) {
+                if (current) {
+                    parts.push(current);
+                    current = '';
+                }
+                continue;
+            }
+            current += ch;
         }
+        if (current) parts.push(current);
+        return parts;
+    }
+
+    function quoteCommandPart(part) {
+        var value = String(part == null ? '' : part);
+        if (!value) return '';
+        if (!/\s|["'\\]/.test(value)) return value;
+        return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    }
+
+    function commandToLine(command) {
+        return Array.isArray(command) ? command.map(quoteCommandPart).join(' ') : '';
+    }
+
+    function deriveServerName(row, index) {
+        if (row.name && String(row.name).trim()) return String(row.name).trim();
+        if (row.transport === 'sse' && row.url) {
+            try {
+                return new URL(row.url).hostname.replace(/^www\./, '').split('.')[0] || ('mcp_server_' + (index + 1));
+            } catch (e) {
+                return 'remote_mcp_' + (index + 1);
+            }
+        }
+        if (Array.isArray(row.command) && row.command.length) {
+            var executable = String(row.command[0] || '').split('/').pop() || 'mcp';
+            var packageName = row.command.find(function (part) {
+                return String(part || '').indexOf('mcp') >= 0 && String(part || '').indexOf('-') >= 0;
+            });
+            return String(packageName || executable).replace(/^@/, '').replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 80) || ('mcp_server_' + (index + 1));
+        }
+        return 'mcp_server_' + (index + 1);
+    }
+
+    function uniqueServerName(name, seen) {
+        var base = String(name || 'mcp_server').trim() || 'mcp_server';
+        var candidate = base;
+        var suffix = 2;
+        while (seen[candidate.toLowerCase()]) {
+            candidate = base + '_' + suffix;
+            suffix += 1;
+        }
+        seen[candidate.toLowerCase()] = true;
+        return candidate;
+    }
+
+    function autosaveMCPSettings() {
+        return window.saveMCPSettings({ silent: true });
     }
 
     function render() {
@@ -45,113 +101,125 @@
         if (!mount) return;
         mount.innerHTML = '';
         _rows.forEach(function (row, idx) {
+            var isRemote = row.transport === 'sse';
+            var title = deriveServerName(row, idx);
             var card = document.createElement('div');
-            card.className = 'border border-[#565869] rounded-lg p-4 bg-[#1a1f3a] space-y-3';
+            card.className = 'relative border border-[#565869] rounded-lg p-4 bg-[#1a1f3a] space-y-3';
+            card.setAttribute('data-mcp-index', String(idx));
             card.innerHTML =
-                '<div class="flex flex-wrap gap-3 items-end">' +
-                '<div class="flex-1 min-w-[140px]">' +
-                '<label class="block text-xs text-[#9ca3af] mb-1">Name</label>' +
-                '<input type="text" data-field="name" class="mcp-field w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white" value="' + esc(row.name) + '" placeholder="my_server" />' +
+                '<div class="flex items-center justify-between gap-3 pr-10">' +
+                '<div class="min-w-0">' +
+                '<div class="text-sm font-medium text-white truncate">' + esc(title) + '</div>' +
+                '<div class="text-xs text-[#9ca3af]">' + (isRemote ? 'Remote MCP endpoint' : 'Local MCP command') + '</div>' +
                 '</div>' +
-                '<div>' +
-                '<label class="block text-xs text-[#9ca3af] mb-1">Enabled</label>' +
-                '<input type="checkbox" data-field="enabled" class="mcp-field h-5 w-5 rounded border-[#565869]" ' + (row.enabled ? 'checked' : '') + ' />' +
                 '</div>' +
-                '<div class="min-w-[120px]">' +
-                '<label class="block text-xs text-[#9ca3af] mb-1">Transport</label>' +
-                '<select data-field="transport" class="mcp-field w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white">' +
-                '<option value="stdio"' + (row.transport !== 'sse' ? ' selected' : '') + '>stdio</option>' +
-                '<option value="sse"' + (row.transport === 'sse' ? ' selected' : '') + '>sse</option>' +
-                '</select>' +
-                '</div>' +
-                '<button type="button" data-remove="' + idx + '" class="px-3 py-2 rounded-md text-sm bg-red-900/50 text-red-200 hover:bg-red-900">Remove</button>' +
-                '</div>' +
-                '<div data-stdio-block>' +
-                '<label class="block text-xs text-[#9ca3af] mb-1">Command (JSON array)</label>' +
-                '<textarea data-field="command" rows="2" class="w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white font-mono">' +
-                esc(JSON.stringify(row.command || [])) + '</textarea>' +
-                '<label class="block text-xs text-[#9ca3af] mb-1 mt-2">Env (KEY=value per line)</label>' +
-                '<textarea data-field="env" rows="2" class="w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white font-mono">' +
-                esc(envToLines(row.env)) + '</textarea>' +
-                '</div>' +
-                '<div data-sse-block class="hidden">' +
-                '<label class="block text-xs text-[#9ca3af] mb-1">SSE URL</label>' +
-                '<input type="text" data-field="url" class="mcp-field w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white" value="' + esc(row.url) + '" placeholder="https://..." />' +
-                '<label class="block text-xs text-[#9ca3af] mb-1 mt-2">Headers (KEY=value per line)</label>' +
-                '<textarea data-field="headers" rows="2" class="w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white font-mono">' +
-                esc(envToLines(row.headers)) + '</textarea>' +
-                '</div>';
+                '<button type="button" data-remove="' + idx + '" class="absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full bg-[#40414f] text-white hover:bg-[#565869] transition-colors" aria-label="Remove MCP server">×</button>' +
+                '<label class="block text-xs text-[#9ca3af] mb-1">' + (isRemote ? 'URL' : 'Command') + '</label>' +
+                '<input type="text" data-field="' + (isRemote ? 'url' : 'command_line') + '" class="mcp-field w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-sm text-white font-mono" value="' + esc(isRemote ? row.url : commandToLine(row.command)) + '" placeholder="' + (isRemote ? 'https://...' : 'npx -y @upstash/context7-mcp@latest') + '" />';
             mount.appendChild(card);
-
-            var cmdTa0 = card.querySelector('[data-field="command"]');
-            if (cmdTa0) cmdTa0.setAttribute('placeholder', '["executable","arg1"]');
-
-            var transportSel = card.querySelector('[data-field="transport"]');
-            var stdioBlock = card.querySelector('[data-stdio-block]');
-            var sseBlock = card.querySelector('[data-sse-block]');
-            function syncTransport() {
-                var t = transportSel && transportSel.value === 'sse' ? 'sse' : 'stdio';
-                if (stdioBlock) stdioBlock.classList.toggle('hidden', t === 'sse');
-                if (sseBlock) sseBlock.classList.toggle('hidden', t !== 'sse');
-            }
-            if (transportSel) transportSel.addEventListener('change', syncTransport);
-            syncTransport();
 
             var rm = card.querySelector('[data-remove="' + idx + '"]');
             if (rm) rm.addEventListener('click', function () {
                 _rows.splice(idx, 1);
                 render();
+                autosaveMCPSettings().catch(function () {});
             });
+            var field = card.querySelector('[data-field]');
+            if (field) {
+                field.addEventListener('change', function () {
+                    syncRowsFromForm();
+                    autosaveMCPSettings().catch(function () {});
+                });
+                field.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        field.blur();
+                    }
+                });
+            }
         });
     }
 
     function collectPayload() {
         var cards = document.querySelectorAll('#mcp-servers-mount > div');
         var servers = [];
+        var seen = {};
         for (var c = 0; c < cards.length; c++) {
             var card = cards[c];
-            var nameEl = card.querySelector('[data-field="name"]');
-            var name = nameEl ? nameEl.value.trim() : '';
-            if (!name) continue;
-            var enEl = card.querySelector('[data-field="enabled"]');
-            var enabled = enEl ? !!enEl.checked : true;
-            var transport = (card.querySelector('[data-field="transport"]') || {}).value || 'stdio';
-            var cmdTa = card.querySelector('[data-field="command"]');
-            var command = parseCommandJson(cmdTa ? cmdTa.value : '[]');
-            var envTa = card.querySelector('[data-field="env"]');
-            var env = parseEnvLines(envTa ? envTa.value : '');
+            var idx = parseInt(card.getAttribute('data-mcp-index') || String(c), 10);
+            var row = _rows[idx] || {};
+            var transport = row.transport === 'sse' ? 'sse' : 'stdio';
+            var commandLine = card.querySelector('[data-field="command_line"]');
+            var command = transport === 'sse' ? [] : splitCommandLine(commandLine ? commandLine.value : '');
             var urlEl = card.querySelector('[data-field="url"]');
             var url = urlEl ? urlEl.value.trim() : '';
-            var hdrTa = card.querySelector('[data-field="headers"]');
-            var headers = parseEnvLines(hdrTa ? hdrTa.value : '');
+            var nextRow = {
+                name: row.name || '',
+                enabled: row.enabled !== false,
+                transport: transport,
+                command: command,
+                env: row.env && typeof row.env === 'object' ? row.env : {},
+                url: transport === 'sse' ? url : '',
+                headers: row.headers && typeof row.headers === 'object' ? row.headers : {},
+            };
+            var name = uniqueServerName(deriveServerName(nextRow, c), seen);
+            if (transport === 'stdio' && !command.length) continue;
+            if (transport === 'sse' && !url) continue;
             servers.push({
                 name: name,
-                enabled: enabled,
-                transport: transport === 'sse' ? 'sse' : 'stdio',
+                enabled: nextRow.enabled,
+                transport: transport,
                 command: transport === 'sse' ? [] : command,
-                env: transport === 'sse' ? {} : env,
+                env: transport === 'sse' ? {} : nextRow.env,
                 url: transport === 'sse' ? url : '',
-                headers: transport === 'sse' ? headers : {},
+                headers: transport === 'sse' ? nextRow.headers : {},
             });
         }
         return { servers: servers };
+    }
+
+    function syncRowsFromForm() {
+        _rows = collectPayload().servers.map(normalizeServer);
+    }
+
+    function normalizeServer(s) {
+        return {
+            name: s.name || '',
+            enabled: s.enabled !== false,
+            transport: s.transport === 'sse' ? 'sse' : 'stdio',
+            command: Array.isArray(s.command) ? s.command.map(String) : [],
+            env: s.env && typeof s.env === 'object' ? s.env : {},
+            url: s.url || '',
+            headers: s.headers && typeof s.headers === 'object' ? s.headers : {},
+        };
+    }
+
+    function mergeImportedServers(servers) {
+        var imported = (servers || []).map(normalizeServer);
+        imported.forEach(function (server) {
+            var key = (server.name || '').trim().toLowerCase();
+            var existingIndex = _rows.findIndex(function (row) {
+                return (row.name || '').trim().toLowerCase() === key;
+            });
+            if (existingIndex >= 0) _rows[existingIndex] = server;
+            else _rows.push(server);
+        });
+        render();
+        return imported.length;
+    }
+
+    function setImportStatus(message, type) {
+        var el = document.getElementById('mcp-import-status');
+        if (!el) return;
+        el.textContent = message || '';
+        el.className = 'text-xs ' + (type === 'error' ? 'text-red-200' : type === 'success' ? 'text-green-200' : 'text-[#fcd9bd]');
     }
 
     window.loadMCPSettings = function () {
         fetch('/api/mcp')
             .then(function (r) { return r.ok ? r.json() : { servers: [] }; })
             .then(function (data) {
-                _rows = (data.servers || []).map(function (s) {
-                    return {
-                        name: s.name || '',
-                        enabled: s.enabled !== false,
-                        transport: s.transport === 'sse' ? 'sse' : 'stdio',
-                        command: Array.isArray(s.command) ? s.command : [],
-                        env: s.env && typeof s.env === 'object' ? s.env : {},
-                        url: s.url || '',
-                        headers: s.headers && typeof s.headers === 'object' ? s.headers : {},
-                    };
-                });
+                _rows = (data.servers || []).map(normalizeServer);
                 render();
             })
             .catch(function () {
@@ -160,9 +228,10 @@
             });
     };
 
-    window.saveMCPSettings = function () {
+    window.saveMCPSettings = function (opts) {
+        opts = opts || {};
         var payload = collectPayload();
-        fetch('/api/mcp', {
+        return fetch('/api/mcp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -174,7 +243,7 @@
                 });
             })
             .then(function () {
-                if (typeof window.showNotification === 'function') {
+                if (!opts.silent && typeof window.showNotification === 'function') {
                     window.showNotification('MCP configuration saved', 'success');
                 }
             })
@@ -183,25 +252,111 @@
                 if (typeof window.showNotification === 'function') {
                     window.showNotification('Save failed: ' + msg, 'error');
                 }
+                throw e;
             });
     };
 
     function init() {
-        var addBtn = document.getElementById('mcp-add-row');
-        if (addBtn) {
-            addBtn.addEventListener('click', function () {
-                _rows.push({
-                    name: '',
-                    enabled: true,
-                    transport: 'stdio',
-                    command: [],
-                    env: {},
-                    url: '',
-                    headers: {},
-                });
-                render();
+        var modeCommandBtn = document.getElementById('mcp-mode-command');
+        var modeJsonBtn = document.getElementById('mcp-mode-json');
+        var formCommand = document.getElementById('mcp-form-command');
+        var formJson = document.getElementById('mcp-form-json');
+
+        function setActiveMode(mode) {
+            if (!modeCommandBtn || !modeJsonBtn || !formCommand || !formJson) {
+                return;
+            }
+            if (mode === 'json') {
+                formCommand.classList.add('hidden');
+                formJson.classList.remove('hidden');
+                modeCommandBtn.className = 'px-3 py-2 text-sm bg-[#111827] text-[#d1d5db] border-r border-[#565869] hover:bg-[#1f2937]';
+                modeJsonBtn.className = 'px-3 py-2 text-sm bg-[#f97316] text-white';
+            } else {
+                formCommand.classList.remove('hidden');
+                formJson.classList.add('hidden');
+                modeCommandBtn.className = 'px-3 py-2 text-sm bg-[#f97316] text-white';
+                modeJsonBtn.className = 'px-3 py-2 text-sm bg-[#111827] text-[#d1d5db] border-l border-[#565869] hover:bg-[#1f2937]';
+            }
+        }
+
+        if (modeCommandBtn) modeCommandBtn.addEventListener('click', function () { setActiveMode('command'); });
+        if (modeJsonBtn) modeJsonBtn.addEventListener('click', function () { setActiveMode('json'); });
+
+        var addBtn = document.getElementById('mcp-add-command');
+        var commandInput = document.getElementById('mcp-manual-command');
+        function addManualCommand() {
+            var command = splitCommandLine(commandInput ? commandInput.value : '');
+            if (!command.length) {
+                setImportStatus('Enter an MCP command first.', 'error');
+                return;
+            }
+            var row = normalizeServer({
+                name: '',
+                enabled: true,
+                transport: 'stdio',
+                command: command,
+                env: {},
+                url: '',
+                headers: {},
+            });
+            row.name = deriveServerName(row, _rows.length);
+            _rows.push(row);
+            if (commandInput) commandInput.value = '';
+            render();
+            autosaveMCPSettings().then(function () {
+                setImportStatus('Command added.', 'success');
+            }).catch(function () {});
+        }
+        if (addBtn) addBtn.addEventListener('click', addManualCommand);
+        if (commandInput) {
+            commandInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    addManualCommand();
+                }
             });
         }
+        var importBtn = document.getElementById('mcp-import-json-btn');
+        var importTa = document.getElementById('mcp-import-json');
+        if (importBtn && importTa) {
+            importBtn.addEventListener('click', function () {
+                var raw = importTa.value.trim();
+                if (!raw) {
+                    setImportStatus('Paste MCP JSON first.', 'error');
+                    return;
+                }
+                importBtn.disabled = true;
+                importBtn.textContent = 'Importing...';
+                setImportStatus('Normalizing pasted MCP JSON...', 'info');
+                fetch('/api/mcp/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: raw,
+                })
+                    .then(function (r) {
+                        return r.json().then(function (body) {
+                            if (!r.ok) throw new Error(body.error || body.detail || r.statusText);
+                            return body;
+                        });
+                    })
+                    .then(function (data) {
+                        var count = mergeImportedServers(data.servers || []);
+                        var warningText = data.warnings && data.warnings.length ? ' ' + data.warnings.join(' ') : '';
+                        setImportStatus(count ? ('Imported ' + count + ' server' + (count === 1 ? '' : 's') + '.' + warningText) : 'No valid MCP servers found.', count ? 'success' : 'error');
+                        if (count) importTa.value = '';
+                        if (count) return autosaveMCPSettings();
+                    })
+                    .catch(function (e) {
+                        setImportStatus((e && e.message) || 'Import failed', 'error');
+                    })
+                    .finally(function () {
+                        importBtn.disabled = false;
+                        importBtn.textContent = 'Import JSON';
+                    });
+            });
+        }
+
+        setActiveMode('command');
         window.loadMCPSettings();
     }
 

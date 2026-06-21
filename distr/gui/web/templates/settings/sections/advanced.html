@@ -1,108 +1,117 @@
 <!-- Advanced Tab -->
     <div class="mb-6 pb-4 border-b border-[#565869]">
         <h2 class="text-xl font-semibold text-white mb-1">Advanced Settings</h2>
-        <p class="text-sm text-gray-400">AI safety, data handling, and directory management</p>
+        <p class="text-sm text-gray-400">
+            <span class="block">Permissions, skills, and directory management.</span>
+        </p>
     </div>
 
-    <div class="space-y-6">
-        <!-- AI Safety & Data Handling -->
-        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-            <h3 class="text-lg font-semibold text-white mb-4">AI Safety & Data Handling</h3>
-            <p class="text-sm text-[#ececf1] leading-relaxed text-justify mb-6">
-                This software is provided as-is, without warranties or guarantees. All data is stored locally on your device. The AI models and features are for personal use. You are responsible for reviewing and verifying any information or suggestions provided.
-            </p>
-
-            <!-- Connection Buttons (flex-wrap + advanced-integration-btn keeps every chip the same size; Discord/Slack no longer shrink) -->
-            <div class="flex flex-wrap justify-center items-center gap-3">
-                <button type="button" id="google_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Google
-                </button>
-                <button type="button" id="telegram_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Telegram
-                </button>
-                <button type="button" id="whatsapp_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 border-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-md text-sm font-medium transition-colors">
-                    WhatsApp
-                </button>
-                <button type="button" id="trello_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Trello
-                </button>
-                <button type="button" id="jira_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Jira
-                </button>
-                <button type="button" id="discord_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#5865F2] hover:bg-[#4752c4] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Discord
-                </button>
-                <button type="button" id="slack_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#4A154B] hover:bg-[#611f69] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Slack
-                </button>
-                <button type="button" id="clickup_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#7B68EE] hover:bg-[#6754d8] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    ClickUp
-                </button>
-                <button type="button" id="monday_connect_btn"
-                        class="advanced-integration-btn px-6 py-2.5 bg-[#00C875] hover:bg-[#00a862] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
-                    Monday
-                </button>
-            </div>
+    <div class="llm-settings-layout">
+        <div class="llm-config-tabs" role="tablist" aria-label="Advanced settings sections">
+            <button type="button"
+                    class="llm-config-tab is-active"
+                    data-advanced-subtab="permissions"
+                    role="tab"
+                    aria-selected="true">
+                Desktop Permissions
+            </button>
+            <button type="button"
+                    class="llm-config-tab"
+                    data-advanced-subtab="builder"
+                    role="tab"
+                    aria-selected="false">
+                Skills
+            </button>
+            <button type="button"
+                    class="llm-config-tab"
+                    data-advanced-subtab="directories"
+                    role="tab"
+                    aria-selected="false">
+                Directory Management
+            </button>
         </div>
 
-        <!-- Builder tools -->
-        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-            <h3 class="text-lg font-semibold text-white mb-2">Builder tools</h3>
-            <p class="text-sm text-gray-400 mb-4">Advanced configuration surfaces that stay out of the main navigation.</p>
-            <a href="/skills/" class="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium border border-white/20 text-[#ececf1] hover:bg-white/10 transition-colors">
-                Open skills library
-            </a>
-            <p class="text-xs text-gray-500 mt-3">Skills are reusable execution guidance. Workflows pick them up automatically when relevant.</p>
-        </div>
-
-        <!-- macOS desktop permissions -->
-        <div id="macos-permissions-panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden">
-            <h3 class="text-lg font-semibold text-white mb-2">Desktop permissions</h3>
-            <p class="text-sm text-gray-400 mb-4">
-                Screenshots, clicks, and voice need macOS approval. Check status here and open the right System Settings pane.
-            </p>
-            <div id="macos-permissions-status" class="space-y-2 mb-4 text-sm"></div>
-            <div class="flex flex-wrap gap-2">
-                <button type="button" id="macos-permissions-check"
-                        class="px-4 py-2 rounded-md text-sm font-medium bg-[#007bff] hover:bg-[#0069d9] text-white">
-                    Check again
-                </button>
-            </div>
-            <p class="text-xs text-gray-500 mt-3">
-                Terminal setup: <code class="text-gray-400">./decisions --permissions --interactive</code>
-            </p>
-        </div>
-
-        <!-- Directory Management (tree like native: QTreeView from ~/, expand to see subfolders, checkboxes = indexed_folders) -->
-        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
-            <h3 class="text-lg font-semibold text-white mb-4">Directory Management</h3>
-
-            <!-- Directory tree: root from ~/, expand loads children, checked = saved indexed_folders -->
-            <div class="bg-[#40414f] border border-[#565869] rounded-md overflow-hidden mb-4" style="min-height: 200px;">
-                <div id="directory_tree" class="p-2 min-h-[200px] max-h-96 overflow-y-auto text-sm text-[#ececf1]">
-                    <p class="text-[#9ca3af] py-2">Loading...</p>
+        <div class="llm-config-panel is-active" data-advanced-panel="permissions">
+            <div id="macos-permissions-panel" class="border border-[#565869] rounded-lg rounded-tl-none p-6 bg-[#1a1f3a] hidden">
+                <div class="flex items-start justify-between gap-3 flex-wrap mb-4">
+                    <p class="text-sm text-gray-400">
+                        <span class="block">Screenshots, clicks, and voice need macOS approval.</span>
+                        <span class="block">Check status here and open the right System Settings pane.</span>
+                    </p>
+                    <button type="button" id="macos-permissions-check"
+                            class="px-4 py-2 rounded-md text-sm font-medium bg-[#007bff] hover:bg-[#0069d9] text-white">
+                        Check again
+                    </button>
+                </div>
+                <div class="border border-white/10 rounded-md bg-[#10162f] p-3 overflow-y-auto overflow-x-hidden" style="height: 360px; min-height: 360px; max-height: 360px;">
+                    <div id="macos-permissions-status" class="space-y-2 text-sm"></div>
                 </div>
             </div>
+            <div id="macos-permissions-placeholder" class="border border-[#565869] rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
+                <div class="border border-white/10 rounded-md bg-[#10162f] p-3 overflow-y-auto overflow-x-hidden" style="height: 360px; min-height: 360px; max-height: 360px;">
+                    <p class="text-sm text-gray-400">
+                        <span class="block">Desktop permissions are only shown when this environment reports macOS permission checks.</span>
+                    </p>
+                </div>
+            </div>
+        </div>
 
-            <!-- Exclude file types and Reindex (single row like native exclude_layout) -->
-            <div class="flex items-center gap-4 pt-2">
-                <label for="exclude_types" class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Exclude file types:</label>
-                <input type="text" id="exclude_types" name="exclude_types"
-                        placeholder="e.g., .jpg, .pdf, .doc"
-                        class="flex-1 bg-[#40414f] border border-[#565869] rounded-md px-4 py-2 text-white text-sm
-                                focus:outline-none focus:border-[#ececf1] transition-colors">
-                <button type="button" id="reindex_button"
-                        class="px-6 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-semibold transition-colors whitespace-nowrap">
-                    Reindex Models
+        <div class="llm-config-panel" data-advanced-panel="builder">
+            <div class="border border-[#565869] rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
+                <div class="mb-4">
+                    <input type="text" id="advanced-skills-search" placeholder="Search skills by name or description…" class="w-full md:max-w-md px-3 py-2 rounded-lg bg-[#152054] border border-white/20 text-sm text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
+                </div>
+                <div class="border border-white/10 rounded-lg bg-[#10162f] p-3 overflow-y-auto overflow-x-hidden" style="height: 360px; min-height: 360px; max-height: 360px;">
+                    <div id="advanced-skills-list" class="space-y-3 pr-1">
+                        <p class="text-sm text-gray-400">Loading skills…</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="llm-config-panel" data-advanced-panel="directories">
+            <div class="border border-[#565869] rounded-lg rounded-tl-none p-6 bg-[#1a1f3a]">
+                <p class="text-sm text-gray-400 leading-relaxed mb-6">
+                    <span class="block">These directories are indexed for every chat so the agent can use them for memory and context.</span>
+                </p>
+                <div class="bg-[#40414f] border border-[#565869] rounded-md overflow-hidden mb-4">
+                    <div id="directory_tree" class="p-2 overflow-y-auto text-sm text-[#ececf1]" style="height: 300px; min-height: 300px; max-height: 300px;">
+                        <p class="text-sm text-gray-400 py-2">Loading</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4 pt-2">
+                    <label for="exclude_types" class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Exclude file types:</label>
+                    <input type="text" id="exclude_types" name="exclude_types"
+                            placeholder="e.g., .jpg, .pdf, .doc"
+                            class="flex-1 bg-[#40414f] border border-[#565869] rounded-md px-4 py-2 text-white text-sm
+                                    focus:outline-none focus:border-[#ececf1] transition-colors">
+                    <button type="button" id="reindex_button"
+                            class="px-6 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-semibold transition-colors whitespace-nowrap">
+                        Reindex Models
+                    </button>
+                    <button type="button" id="advanced_save_btn"
+                            class="px-6 py-2 bg-[#f97316] hover:bg-[#ea580c] text-white rounded-md text-sm font-semibold transition-colors whitespace-nowrap">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="advanced-skill-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden" role="dialog" aria-modal="true">
+        <div class="bg-[#1a1f3a] border border-white/20 rounded-lg w-full max-w-3xl max-h-[85vh] flex flex-col shadow-xl">
+            <div class="flex items-start justify-between p-6 border-b border-white/20">
+                <div class="min-w-0 flex-1">
+                    <h3 class="text-lg font-semibold text-white" id="advanced-skill-modal-title"></h3>
+                    <p id="advanced-skill-modal-description" class="text-sm text-[#fb923c] mt-1 leading-relaxed"></p>
+                </div>
+                <button type="button" id="advanced-skill-modal-close" class="p-2 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0 ml-4">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6">
+                <pre id="advanced-skill-modal-content" class="text-sm text-gray-300 whitespace-pre-wrap font-[inherit] leading-relaxed"></pre>
             </div>
         </div>
     </div>

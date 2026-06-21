@@ -191,6 +191,12 @@ class IntegrationMessageBus:
         return {"speak": speak, "surface": platform}
 
     @staticmethod
+    def _set_target_chat_metadata(metadata: dict[str, Any], chat_id: int | None) -> dict[str, Any]:
+        if chat_id is not None:
+            metadata["chat_id"] = int(chat_id)
+        return metadata
+
+    @staticmethod
     def _deliver_to_sink(
         sink: AgentTextSink,
         text: str,
@@ -230,15 +236,19 @@ class IntegrationMessageBus:
         queued = False
         with self._route_lock:
             cid: int | None = None
-            prov = self._chat_id_provider
-            if prov:
-                try:
-                    cid = prov()
-                except Exception:
-                    logger.debug("message bus chat_id_provider failed", exc_info=True)
-            if telegram_chat_id is not None and cid is not None:
-                self._thread_to_chat[f"telegram:{int(telegram_chat_id)}"] = int(cid)
-                self._persist_mapping_unlocked()
+            if telegram_chat_id is not None:
+                cid = self._thread_to_chat.get(f"telegram:{int(telegram_chat_id)}")
+            if cid is None:
+                prov = self._chat_id_provider
+                if prov:
+                    try:
+                        cid = prov()
+                    except Exception:
+                        logger.debug("message bus chat_id_provider failed", exc_info=True)
+                if telegram_chat_id is not None and cid is not None:
+                    self._thread_to_chat[f"telegram:{int(telegram_chat_id)}"] = int(cid)
+                    self._persist_mapping_unlocked()
+            self._set_target_chat_metadata(metadata, cid)
             sink = self._text_sink
             if sink is None:
                 self._queue_pending_sink_call_unlocked(
@@ -269,15 +279,19 @@ class IntegrationMessageBus:
         queued = False
         with self._route_lock:
             cid: int | None = None
-            prov = self._chat_id_provider
-            if prov:
-                try:
-                    cid = prov()
-                except Exception:
-                    logger.debug("message bus chat_id_provider failed", exc_info=True)
-            if cid is not None and msg.thread_id:
-                self._thread_to_chat[f"{msg.platform}:{msg.thread_id}"] = int(cid)
-                self._persist_mapping_unlocked()
+            if msg.thread_id:
+                cid = self._thread_to_chat.get(f"{msg.platform}:{msg.thread_id}")
+            if cid is None:
+                prov = self._chat_id_provider
+                if prov:
+                    try:
+                        cid = prov()
+                    except Exception:
+                        logger.debug("message bus chat_id_provider failed", exc_info=True)
+                if cid is not None and msg.thread_id:
+                    self._thread_to_chat[f"{msg.platform}:{msg.thread_id}"] = int(cid)
+                    self._persist_mapping_unlocked()
+            self._set_target_chat_metadata(metadata, cid)
             sink = self._text_sink
             if sink is None:
                 self._queue_pending_sink_call_unlocked(

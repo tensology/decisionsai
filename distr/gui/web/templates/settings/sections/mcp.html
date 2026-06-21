@@ -1,21 +1,43 @@
 <!-- MCP servers tab (R7) -->
-<div class="mb-6 pb-4 border-b border-[#565869]">
-    <h2 class="text-xl font-semibold text-white mb-1">MCP Servers</h2>
-    <p class="text-sm text-gray-400">
-        Edit MCP servers stored in <code class="text-[#ececf1] bg-[#40414f] px-1 rounded">mcp_config.json</code>
-        (next to your models directory). Saving writes atomically; the running app reloads MCP when the file changes.
-    </p>
+<div class="mb-4">
+    <div class="mb-3 text-sm text-white">What would you like to do?</div>
+    <div class="mb-4 inline-flex rounded-md border border-[#565869] overflow-hidden">
+        <button type="button" id="mcp-mode-command" class="px-3 py-2 text-sm bg-[#f97316] text-white">
+            Enter a command
+        </button>
+        <button type="button" id="mcp-mode-json" class="px-3 py-2 text-sm bg-[#111827] text-[#d1d5db] border-l border-[#565869] hover:bg-[#1f2937]">
+            Paste MCP JSON
+        </button>
+    </div>
+
+    <div id="mcp-form-command" class="rounded-lg border border-[#565869] bg-[#111827]/70 p-4">
+        <label for="mcp-manual-command" class="block text-sm font-medium text-white mb-2">Enter Command</label>
+        <textarea id="mcp-manual-command" rows="6"
+                  class="w-full resize-y bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-sm text-white font-mono"
+                  placeholder="npx -y @upstash/context7-mcp@latest"></textarea>
+        <div class="mt-3 flex justify-end">
+            <button type="button" id="mcp-add-command"
+                    class="px-4 py-2 rounded-md text-sm font-medium bg-[#565869] text-[#ececf1] hover:bg-[#7a7c8c] transition-colors">
+                Add command
+            </button>
+        </div>
+    </div>
+
+    <div id="mcp-form-json" class="rounded-lg border border-[#565869] bg-[#111827]/70 p-4 hidden">
+        <label for="mcp-import-json" class="block text-sm font-medium text-white mb-2">Paste MCP JSON</label>
+        <textarea id="mcp-import-json" rows="6"
+                  class="w-full resize-y bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-sm text-white font-mono"
+                  placeholder='{"mcpServers":{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp@latest"]}}}'></textarea>
+        <div class="mt-3 flex justify-end">
+            <button type="button" id="mcp-import-json-btn"
+                    class="px-4 py-2 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">
+                Import JSON
+            </button>
+        </div>
+    </div>
 </div>
 
 <div class="space-y-4 mb-6">
+    <p id="mcp-import-status" class="text-xs text-[#fcd9bd]"></p>
     <div id="mcp-servers-mount" class="space-y-4"></div>
-    <button type="button" id="mcp-add-row"
-            class="px-4 py-2 rounded-md text-sm font-medium bg-[#565869] text-[#ececf1] hover:bg-[#7a7c8c] transition-colors">
-        Add server
-    </button>
 </div>
-
-<p class="text-xs text-[#9ca3af] leading-relaxed">
-    <strong class="text-[#ececf1]">stdio:</strong> command is argv (first item = executable). &nbsp;
-    <strong class="text-[#ececf1]">sse:</strong> set URL and optional headers (e.g. Authorization). Env lines use <code class="text-[#ececf1]">KEY=value</code>.
-</p>

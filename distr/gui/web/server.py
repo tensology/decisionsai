@@ -302,11 +302,11 @@ def create_app() -> FastAPI:
 
     @app.get("/downloads", response_class=HTMLResponse)
     async def downloads_page_no_slash(request: Request):
-        return page_templates.TemplateResponse(request, "downloads/downloads.html", _template_context(request, "/downloads"))
+        return RedirectResponse(url="/settings#downloads", status_code=307)
 
     @app.get("/downloads/", response_class=HTMLResponse)
     async def downloads_page_with_slash(request: Request):
-        return page_templates.TemplateResponse(request, "downloads/downloads.html", _template_context(request, "/downloads"))
+        return RedirectResponse(url="/settings#downloads", status_code=307)
 
     @app.get("/irc", response_class=HTMLResponse)
     async def irc_page_no_slash(request: Request):
@@ -944,6 +944,20 @@ def create_app() -> FastAPI:
                 logger.info("Model recommendations stale — background refresh started")
         except Exception as e:
             logger.warning("Could not check model recommendations: %s", e)
+
+    @app.on_event("startup")
+    async def _check_llm_benchmark_cache():
+        try:
+            from distr.core.services.llm_benchmark_service import (
+                _refresh_running,
+                is_benchmark_cache_stale,
+                trigger_benchmark_refresh,
+            )
+            if is_benchmark_cache_stale() and not _refresh_running:
+                trigger_benchmark_refresh(force=True)
+                logger.info("LLM benchmark cache stale — background refresh started")
+        except Exception as e:
+            logger.warning("Could not check LLM benchmark cache: %s", e)
 
     return app
 

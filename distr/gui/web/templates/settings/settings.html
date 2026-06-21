@@ -5,6 +5,7 @@
 {% block head_styles %}
 {{ super() }}
 <link rel="stylesheet" href="/settings/static/css/settings.css">
+<link rel="stylesheet" href="/static/shared/css/downloads.css">
 {% endblock %}
 
 {% block body_scripts %}
@@ -19,7 +20,9 @@
 <script src="/settings/static/js/advanced.js"></script>
 <script src="/settings/static/js/initiative.js"></script>
 <script src="/settings/static/js/logs.js"></script>
+<script src="/settings/static/js/mermaid_history.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
+<script src="/static/shared/js/downloads.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -30,13 +33,10 @@
         <div id="settings-sidebar" class="settings-sidebar w-64 flex-shrink-0" role="navigation" aria-label="Settings sections">
             <nav id="settings-nav" class="space-y-1 sticky top-20">
                 <a href="#general" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="general">
-                    <span class="font-medium">General</span>
+                    <span class="font-medium">General &amp; Audio</span>
                 </a>
                 <a href="#thirdparty" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="thirdparty">
-                    <span class="font-medium">API Keys</span>
-                </a>
-                <a href="#audio" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="audio">
-                    <span class="font-medium">Audio</span>
+                    <span class="font-medium">Third Party Vendors</span>
                 </a>
                 <a href="#llms" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="llms">
                     <span class="font-medium">LLMs</span>
@@ -56,22 +56,21 @@
                 <a href="#advanced" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="advanced">
                     <span class="font-medium">Advanced</span>
                 </a>
-                <a href="#mcp" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="mcp">
-                    <span class="font-medium">MCP Servers</span>
-                </a>
                 <a href="#logs" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="logs">
                     <span class="font-medium">Activity Logs</span>
+                </a>
+                <hr class="settings-nav-divider" aria-hidden="true">
+                <a href="#downloads" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="downloads">
+                    <span class="font-medium">Downloads</span>
+                </a>
+                <a href="#mermaid" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="mermaid">
+                    <span class="font-medium">Mermaid History</span>
                 </a>
             </nav>
         </div>
 
         <!-- Tab Content -->
-        <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-[#565869] p-8 relative min-h-0">
-            <!-- Reload / Save floating top-right (section title is in each tab) -->
-            <div class="settings-actions-float">
-                <button type="button" id="btn_cancel" class="px-4 py-2 rounded-md text-sm font-medium bg-[#565869] text-[#ececf1] hover:bg-[#7a7c8c] transition-colors">Reload</button>
-                <button type="button" id="btn_save" class="px-5 py-2 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">Save</button>
-            </div>
+        <div class="flex-1 min-w-0 overflow-hidden bg-[#1a1f3a] rounded-lg border border-[#565869] p-8 relative min-h-0">
             <div class="settings-tab-inner">
 
                 <div id="tab-general" class="tab-content">  
@@ -79,9 +78,6 @@
                 </div>
                 <div id="tab-thirdparty" class="tab-content">
                     {% include "settings/sections/thirdparty.html" %}
-                </div>
-                <div id="tab-audio" class="tab-content">
-                    {% include "settings/sections/audio.html" %}
                 </div>
                 <div id="tab-llms" class="tab-content">
                     {% include "settings/sections/llms.html" %}
@@ -98,13 +94,20 @@
                 <div id="tab-advanced" class="tab-content">
                     {% include "settings/sections/advanced.html" %}
                 </div>
-                <div id="tab-mcp" class="tab-content">
-                    {% include "settings/sections/mcp.html" %}
-                </div>
                 <div id="tab-logs" class="tab-content">
                     {% include "settings/sections/logs.html" %}
                 </div>
+                <div id="tab-downloads" class="tab-content">
+                    {% include "settings/sections/downloads.html" %}
+                </div>
+                <div id="tab-mermaid" class="tab-content">
+                    {% include "settings/sections/mermaid_history.html" %}
+                </div>
                 {% include "settings/sections/modals.html" %}
+            </div>
+            <div class="settings-actions-float">
+                <button type="button" id="btn_cancel" class="px-4 py-2 rounded-md text-sm font-medium bg-[#565869] text-[#ececf1] hover:bg-[#7a7c8c] transition-colors">Reload</button>
+                <button type="button" id="btn_save" class="px-5 py-2 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">Save</button>
             </div>
         </div>
     </div>

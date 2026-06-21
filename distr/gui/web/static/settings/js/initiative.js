@@ -27,9 +27,9 @@
             var isActive = btn.dataset.level === level;
             btn.classList.toggle('border-[#f97316]', isActive);
             btn.classList.toggle('bg-[#f97316]/10', isActive);
+            btn.classList.toggle('shadow-[0_0_0_1px_rgba(249,115,22,0.15)]', isActive);
             btn.classList.toggle('border-white/15', !isActive);
         });
-        paintPostureSummary(level);
     }
 
     function init() {
@@ -39,6 +39,12 @@
                 applyLevelDefaults(btn.dataset.level);
             });
         });
+        var inlineSaveBtn = document.getElementById('initiative-inline-save');
+        if (inlineSaveBtn) {
+            inlineSaveBtn.addEventListener('click', function() {
+                window.saveInitiativeSettings();
+            });
+        }
         loadInitiativeSettings();
         startInitiativeStatusPoll();
     }
@@ -47,18 +53,6 @@
         var badge = document.getElementById('initiative-nav-badge');
         if (!badge) return;
         badge.classList.add('hidden');
-    }
-
-    function paintPostureSummary(level) {
-        var el = document.getElementById('initiative-posture-summary');
-        if (!el) return;
-        var copy = {
-            observe: 'The agent stays quiet and only responds when you ask.',
-            assist: 'The agent watches context and suggests useful next steps during conversation.',
-            operate: 'The agent runs daily check-ins, sends gated decisions to Telegram, and runs approved routines.',
-            own: 'The agent follows through on defined outcomes and only pulls you in for sensitive or unclear decisions.',
-        };
-        el.textContent = copy[level] || copy.assist;
     }
 
     function setChecked(id, value) {
@@ -111,16 +105,16 @@
         dot.classList.remove('bg-green-500', 'bg-yellow-400', 'bg-red-500', 'bg-gray-500');
         if (state === 'green') {
             dot.classList.add('bg-green-500');
-            labelEl.textContent = 'Cycle status: healthy';
+            labelEl.textContent = 'Healthy';
         } else if (state === 'yellow') {
             dot.classList.add('bg-yellow-400');
-            labelEl.textContent = 'Cycle status: busy or degraded — ' + (detail || 'see activity logs');
+            labelEl.textContent = detail || 'Busy or degraded';
         } else if (state === 'red') {
             dot.classList.add('bg-red-500');
-            labelEl.textContent = 'Cycle status: failing repeatedly — ' + (detail || 'check desktop logs');
+            labelEl.textContent = detail || 'Failing repeatedly';
         } else {
             dot.classList.add('bg-gray-500');
-            labelEl.textContent = detail || 'Cycle status: desktop app may not be running';
+            labelEl.textContent = detail || 'Checking';
         }
     }
 

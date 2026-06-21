@@ -640,7 +640,14 @@ class AgentSession:
         if getattr(self, 'is_dictating', False):
             if hasattr(self.stt_service, 'set_dictating'):
                 self.stt_service.set_dictating(self.is_dictating)
-        
+        if hasattr(self.stt_service, 'set_vad_threshold'):
+            try:
+                self.stt_service.set_vad_threshold(
+                    self.settings.get('vad_threshold', VAD_DEFAULT_THRESHOLD)
+                )
+            except Exception as e:
+                self.logger.warning("Failed to initialize STT VAD threshold mapping: %s", e)
+
         self.logger.info(
             "✅ STT service swap complete - VAD enabled, hands_free=%s, ptt_active=%s, dictating=%s",
             self.is_hands_free,

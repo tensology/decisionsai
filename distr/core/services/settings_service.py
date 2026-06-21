@@ -43,6 +43,12 @@ SHORTCUT_SETTING_KEYS = (
     "web_hotkey_snippets_key",
     "web_hotkey_workflows_modifier",
     "web_hotkey_workflows_key",
+    "web_hotkey_automations_modifier",
+    "web_hotkey_automations_key",
+    "web_hotkey_ticket_board_modifier",
+    "web_hotkey_ticket_board_key",
+    "web_hotkey_irc_modifier",
+    "web_hotkey_irc_key",
     "web_hotkey_preferences_modifier",
     "web_hotkey_preferences_key",
     "dictation_hotkey_enabled",
@@ -390,6 +396,12 @@ def save_shortcut_settings(data) -> Dict[str, Any]:
     web_snippets_key = _norm_key(getattr(data, "web_hotkey_snippets_key", HOTKEY_DEFAULTS["web_hotkey_snippets_key"]))
     web_workflows_modifier = _norm_modifier(getattr(data, "web_hotkey_workflows_modifier", HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"]), HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"])
     web_workflows_key = _norm_key(getattr(data, "web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"]))
+    web_automations_modifier = _norm_modifier(getattr(data, "web_hotkey_automations_modifier", HOTKEY_DEFAULTS["web_hotkey_automations_modifier"]), HOTKEY_DEFAULTS["web_hotkey_automations_modifier"])
+    web_automations_key = _norm_key(getattr(data, "web_hotkey_automations_key", HOTKEY_DEFAULTS["web_hotkey_automations_key"]))
+    web_ticket_board_modifier = _norm_modifier(getattr(data, "web_hotkey_ticket_board_modifier", HOTKEY_DEFAULTS["web_hotkey_ticket_board_modifier"]), HOTKEY_DEFAULTS["web_hotkey_ticket_board_modifier"])
+    web_ticket_board_key = _norm_key(getattr(data, "web_hotkey_ticket_board_key", HOTKEY_DEFAULTS["web_hotkey_ticket_board_key"]))
+    web_irc_modifier = _norm_modifier(getattr(data, "web_hotkey_irc_modifier", HOTKEY_DEFAULTS["web_hotkey_irc_modifier"]), HOTKEY_DEFAULTS["web_hotkey_irc_modifier"])
+    web_irc_key = _norm_key(getattr(data, "web_hotkey_irc_key", HOTKEY_DEFAULTS["web_hotkey_irc_key"]))
     web_preferences_modifier = _norm_modifier(getattr(data, "web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]), HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"])
     web_preferences_key = _norm_key(getattr(data, "web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"]))
 
@@ -419,6 +431,12 @@ def save_shortcut_settings(data) -> Dict[str, Any]:
     settings["web_hotkey_snippets_key"] = web_snippets_key
     settings["web_hotkey_workflows_modifier"] = web_workflows_modifier
     settings["web_hotkey_workflows_key"] = web_workflows_key
+    settings["web_hotkey_automations_modifier"] = web_automations_modifier
+    settings["web_hotkey_automations_key"] = web_automations_key
+    settings["web_hotkey_ticket_board_modifier"] = web_ticket_board_modifier
+    settings["web_hotkey_ticket_board_key"] = web_ticket_board_key
+    settings["web_hotkey_irc_modifier"] = web_irc_modifier
+    settings["web_hotkey_irc_key"] = web_irc_key
     settings["web_hotkey_preferences_modifier"] = web_preferences_modifier
     settings["web_hotkey_preferences_key"] = web_preferences_key
     raw_dictation_modifier = str(getattr(data, "dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]) or "").strip().lower()
@@ -450,6 +468,9 @@ def save_shortcut_settings(data) -> Dict[str, Any]:
         {"name": "Actions launcher", "enabled": True, "modifier": web_actions_modifier, "key": web_actions_key, "modifier_field": "web_hotkey_actions_modifier", "key_field": "web_hotkey_actions_key"},
         {"name": "Snippets launcher", "enabled": True, "modifier": web_snippets_modifier, "key": web_snippets_key, "modifier_field": "web_hotkey_snippets_modifier", "key_field": "web_hotkey_snippets_key"},
         {"name": "Workflows launcher", "enabled": True, "modifier": web_workflows_modifier, "key": web_workflows_key, "modifier_field": "web_hotkey_workflows_modifier", "key_field": "web_hotkey_workflows_key"},
+        {"name": "Automations launcher", "enabled": True, "modifier": web_automations_modifier, "key": web_automations_key, "modifier_field": "web_hotkey_automations_modifier", "key_field": "web_hotkey_automations_key"},
+        {"name": "Ticket board launcher", "enabled": True, "modifier": web_ticket_board_modifier, "key": web_ticket_board_key, "modifier_field": "web_hotkey_ticket_board_modifier", "key_field": "web_hotkey_ticket_board_key"},
+        {"name": "IRC launcher", "enabled": True, "modifier": web_irc_modifier, "key": web_irc_key, "modifier_field": "web_hotkey_irc_modifier", "key_field": "web_hotkey_irc_key"},
         {"name": "Preferences launcher", "enabled": True, "modifier": web_preferences_modifier, "key": web_preferences_key, "modifier_field": "web_hotkey_preferences_modifier", "key_field": "web_hotkey_preferences_key"},
     ], previous_settings)
     settings["dictation_hotkey_enabled"] = dictation_enabled

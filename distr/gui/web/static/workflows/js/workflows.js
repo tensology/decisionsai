@@ -2694,6 +2694,8 @@
             backend_id: String(backendId || model.backend_id || workflowCliActiveBackend() || "").trim() || "pi",
             scope: String(model.scope || "").trim(),
             tier: String(model.tier || "").trim(),
+            speed_hint: String(model.speed_hint || model.speed || "").trim(),
+            intelligence_hint: String(model.intelligence_hint || model.reasoning_effort || model.intelligence || "").trim(),
             free: !!model.free,
             local: !!model.local,
             usable: model.usable !== false,
@@ -2701,6 +2703,47 @@
             reason: String(model.reason || "").trim(),
             selected_at: model.selected_at || new Date().toISOString()
         };
+    }
+
+    function workflowCliModelPrimaryLabel(model) {
+        if (!model) return "Model";
+        return String(model.name || model.id || model.model || "Model").trim() || "Model";
+    }
+
+    function workflowCliModelSecondaryLabel(model) {
+        if (!model) return "";
+        var primary = workflowCliModelPrimaryLabel(model).toLowerCase().replace(/\s+/g, "");
+        var id = String(model.id || model.model || "").trim();
+        if (!id) return "";
+        var compactId = id.toLowerCase().replace(/\s+/g, "");
+        if (compactId === primary) return "";
+        if (compactId.indexOf(primary) >= 0 || primary.indexOf(compactId) >= 0) return "";
+        return id;
+    }
+
+    function workflowCliLevelLabel(model) {
+        var raw = String((model && (model.intelligence_hint || model.tier)) || "").trim().toLowerCase();
+        if (raw === "high" || raw === "max" || raw === "deep" || raw === "opus") return "High";
+        if (raw === "low" || raw === "fast" || raw === "light" || raw === "haiku") return "Low";
+        if (raw === "medium" || raw === "standard" || raw === "balanced" || raw === "sonnet") return "Medium";
+        var id = String(model && (model.id || model.model || "") || "").toLowerCase();
+        if (/(opus|max|large|70b|gpt-5\.3-codex$|sonnet\[1m\])/.test(id)) return "High";
+        if (/(haiku|fast|spark|mini|nano|small|0\.5b|0\.6b|1\.7b)/.test(id)) return "Low";
+        return "Medium";
+    }
+
+    function workflowCliSpeedLabel(model) {
+        var raw = String((model && model.speed_hint) || "").trim().toLowerCase();
+        if (raw === "slow" || raw === "deliberate" || raw === "deep") return "Deep";
+        if (raw === "fast" || raw === "instant" || raw === "quick") return "Fast";
+        if (raw === "balanced" || raw === "medium" || raw === "standard") return "Balanced";
+        var tier = String(model && model.tier || "").toLowerCase();
+        if (tier === "high") return "Deep";
+        if (tier === "low") return "Fast";
+        var id = String(model && (model.id || model.model || "") || "").toLowerCase();
+        if (/(fast|spark|haiku|mini|nano|small|0\.5b|0\.6b|1\.7b)/.test(id)) return "Fast";
+        if (/(opus|max|large|70b)/.test(id)) return "Deep";
+        return "Balanced";
     }
 
     function workflowCliNormalizeChosenModels(models) {
@@ -2717,53 +2760,45 @@
     }
 
     function workflowCliChosenDropzoneHtml(hasItems) {
+        if (hasItems) return "";
         return '<div id="wf-cli-chosen-dropzone" class="wf-cli-chosen-dropzone">' +
-            (hasItems ? "Drag another model here to add it." : "Drag models here to remember the CLI, provider, model, and metadata for this workflow.") +
+            "Drag models here to remember the CLI, provider, model, and metadata for this workflow." +
             '</div>';
     }
 
     function renderWorkflowCliChosenModels() {
         var list = document.getElementById("wf-cli-chosen-list");
-        var count = document.getElementById("wf-cli-chosen-count");
         if (!list) return;
         var chosen = workflowCliNormalizeChosenModels(_wfCliChosenModels);
         _wfCliChosenModels = chosen;
-        if (count) count.textContent = String(chosen.length);
         if (!chosen.length) {
             list.innerHTML = workflowCliChosenDropzoneHtml(false);
             return;
         }
-        list.innerHTML = chosen.map(function (model, index) {
+        list.innerHTML = '<table class="wf-cli-model-table wf-cli-chosen-table">' +
+            '<thead><tr>' +
+                '<th>Model</th>' +
+                '<th style="width: 4.75rem;">CLI</th>' +
+                '<th style="width: 5.75rem;">Provider</th>' +
+                '<th style="width: 5.25rem;">Scope</th>' +
+                '<th style="width: 2.25rem;"></th>' +
+            '</tr></thead><tbody>' +
+            chosen.map(function (model, index) {
             var flags = [];
-            if (model.backend_id) flags.push(model.backend_id);
-            if (model.provider) flags.push(model.provider);
             if (model.scope) flags.push(model.scope);
             if (model.free) flags.push("free");
             if (model.local) flags.push("local");
             if (model.tier) flags.push(model.tier);
             if (model.supports_chat === false) flags.push("no chat");
-            return '<div class="wf-cli-chosen-item" draggable="true" data-wf-cli-chosen-index="' + index + '">' +
-                '<div class="wf-cli-chosen-item-main">' +
-                    '<div class="wf-cli-chosen-item-head">' +
-                        '<span class="wf-cli-chosen-item-name truncate" title="' + esc(model.name || model.id) + '">' + esc(model.name || model.id) + '</span>' +
-                    '</div>' +
-                    '<div class="wf-cli-chosen-item-meta">' +
-                        '<div>CLI: ' + esc(model.backend_id || "pi") + '</div>' +
-                        '<div>Provider: ' + esc(model.provider || "unknown") + '</div>' +
-                        '<div>Model: ' + esc(model.id || model.model || "") + '</div>' +
-                    '</div>' +
-                    '<div class="wf-cli-chosen-item-flags">' +
-                        flags.map(function (flag) {
-                            return '<span class="wf-cli-chosen-chip">' + esc(flag) + '</span>';
-                        }).join("") +
-                    '</div>' +
-                '</div>' +
-                '<div class="wf-cli-chosen-item-actions">' +
-                    '<button type="button" class="wf-cli-chosen-grip" title="Drag to reorder" aria-label="Drag to reorder">::</button>' +
-                    '<button type="button" class="wf-cli-chosen-remove" data-wf-cli-chosen-remove="' + index + '" title="Remove model" aria-label="Remove model">&times;</button>' +
-                '</div>' +
-            '</div>';
-        }).join("") + workflowCliChosenDropzoneHtml(true);
+            return '<tr class="wf-cli-chosen-row">' +
+                '<td><div class="wf-cli-model-name" title="' + esc(model.name || model.id) + '">' + esc(model.name || model.id) + '</div>' +
+                    '<div class="wf-cli-model-id" title="' + esc(model.id || model.model || "") + '">' + esc(model.id || model.model || "") + '</div></td>' +
+                '<td>' + esc(model.backend_id || "pi") + '</td>' +
+                '<td>' + esc(model.provider || "unknown") + '</td>' +
+                '<td><span class="wf-cli-model-flags">' + esc(flags.join(" / ") || "saved") + '</span></td>' +
+                '<td><button type="button" class="wf-cli-chosen-remove" data-wf-cli-chosen-remove="' + index + '" title="Remove model" aria-label="Remove model">' + SVG_TRASH + '</button></td>' +
+            '</tr>';
+        }).join("") + '</tbody></table>';
     }
 
     function workflowCliChosenModelsFromSettings(data) {
@@ -2812,9 +2847,14 @@
         persistWorkflowCliChosenModels();
     }
 
+    function workflowCliClearChosenModels() {
+        if (!_wfCliChosenModels.length) return;
+        _wfCliChosenModels = [];
+        persistWorkflowCliChosenModels();
+    }
+
     function renderWorkflowCliModelInventory(data, emptyMessage) {
         var list = document.getElementById("wf-cli-model-list");
-        var count = document.getElementById("wf-cli-model-count");
         var select = document.getElementById("wf-cli-model-select");
         var activeModel = select ? String(select.value || "") : "";
         if (!list) return;
@@ -2824,25 +2864,32 @@
             var snapshot = workflowCliSnapshotModelMeta(model, workflowCliActiveBackend());
             if (snapshot) _wfCliInventoryById[snapshot.id] = snapshot;
         });
-        if (count) count.textContent = String(models.length || 0);
         if (!models.length) {
             list.innerHTML = '<p class="text-xs text-gray-500 italic">' + esc(emptyMessage || "No models returned for this CLI.") + "</p>";
             return;
         }
-        list.innerHTML = models.map(function (model) {
-            var flags = [];
-            if (model.scope) flags.push(model.scope);
-            if (model.free) flags.push("free");
-            if (model.tier) flags.push(model.tier);
-            if (model.supports_chat === false) flags.push("no chat");
+        list.innerHTML = '<table class="wf-cli-model-table wf-cli-available-table">' +
+            '<thead><tr>' +
+                '<th>Model</th>' +
+                '<th style="width: 4.75rem;">Level</th>' +
+                '<th style="width: 5.5rem;">Speed</th>' +
+                '<th style="width: 2.5rem;">Add</th>' +
+            '</tr></thead><tbody>' +
+            models.map(function (model) {
             var name = model.name || model.id || model.model || "Model";
             var disabled = model.supports_chat === false;
             var id = model.id || model.model || "";
-            return '<div class="wf-cli-model-item' + (disabled ? " is-disabled" : "") + (activeModel === id ? " is-active" : "") + '" role="button" tabindex="' + (disabled ? "-1" : "0") + '" draggable="' + (disabled ? "false" : "true") + '" data-model-id="' + esc(id) + '" data-provider="' + esc(model.provider || "") + '">' +
-                '<span class="truncate" title="' + esc(name) + '">' + esc(name) + "</span>" +
-                '<span class="wf-cli-model-flags">' + esc(flags.join(" / ")) + "</span>" +
-            "</div>";
-        }).join("");
+            var subtitle = workflowCliModelSecondaryLabel(model);
+            var levelLabel = workflowCliLevelLabel(model);
+            var speedLabel = workflowCliSpeedLabel(model);
+            return '<tr class="wf-cli-model-row' + (disabled ? " is-disabled" : "") + (activeModel === id ? " is-active" : "") + '" role="button" tabindex="' + (disabled ? "-1" : "0") + '" draggable="' + (disabled ? "false" : "true") + '" data-model-id="' + esc(id) + '" data-provider="' + esc(model.provider || "") + '">' +
+                '<td><div class="wf-cli-model-name" title="' + esc(name) + '">' + esc(name) + '</div>' +
+                    (subtitle ? ('<div class="wf-cli-model-id" title="' + esc(subtitle) + '">' + esc(subtitle) + '</div>') : '') + '</td>' +
+                '<td><span class="wf-cli-model-flags">' + esc(levelLabel) + '</span></td>' +
+                '<td><span class="wf-cli-model-flags">' + esc(speedLabel) + '</span></td>' +
+                '<td><button type="button" class="wf-cli-model-add" data-wf-cli-model-add="' + esc(id) + '" title="Add model" aria-label="Add model">+</button></td>' +
+            '</tr>';
+        }).join("") + '</tbody></table>';
     }
 
     function setWorkflowCliActivity(state, text) {
@@ -2858,7 +2905,7 @@
     function refreshWorkflowCliModelCardSelection() {
         var select = document.getElementById("wf-cli-model-select");
         var active = select ? String(select.value || "") : "";
-        document.querySelectorAll(".wf-cli-model-item").forEach(function (item) {
+        document.querySelectorAll(".wf-cli-model-row").forEach(function (item) {
             item.classList.toggle("is-active", String(item.dataset.modelId || "") === active);
         });
     }
@@ -2924,7 +2971,13 @@
         if (els.title) els.title.textContent = (config && config.title) || "CLI setup needs attention";
         if (els.summary) els.summary.textContent = (config && config.summary) || "The CLI needs a little help before it can connect.";
         if (els.checks) {
-            var checks = Array.isArray(config && config.checks) ? config.checks : [];
+            var summaryText = String((config && config.summary) || "").trim().toLowerCase();
+            var checks = (Array.isArray(config && config.checks) ? config.checks : []).filter(function (check) {
+                var label = String((check && check.label) || "").trim();
+                var message = String((check && check.message) || "").trim();
+                var combined = (label && message) ? (label + ": " + message) : (label || message);
+                return combined && combined.trim().toLowerCase() !== summaryText;
+            });
             els.checks.innerHTML = checks.map(function (check) {
                 var ok = !!check.ok;
                 return '<div class="wf-cli-recovery-check' + (ok ? ' is-ok' : '') + '">' +
@@ -3044,7 +3097,7 @@
         return {
             title: (row.name || "CLI") + " needs setup",
             summary: summary,
-            checks: [{ ok: false, label: row.state || "status", message: summary }],
+            checks: [],
             actions: actions
         };
     }
@@ -3894,7 +3947,16 @@
         if (modelList && modelList.dataset.bound !== "1") {
             modelList.dataset.bound = "1";
             modelList.addEventListener("click", function (evt) {
-                var item = evt.target.closest(".wf-cli-model-item");
+                var addBtn = evt.target.closest("[data-wf-cli-model-add]");
+                if (addBtn) {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    var addId = String(addBtn.getAttribute("data-wf-cli-model-add") || "");
+                    var model = _wfCliInventoryById[addId];
+                    if (model) workflowCliAddChosenModel(model);
+                    return;
+                }
+                var item = evt.target.closest(".wf-cli-model-row");
                 if (!item || item.classList.contains("is-disabled")) return;
                 var modelId = item.dataset.modelId || "";
                 var modelSel = document.getElementById("wf-cli-model-select");
@@ -3905,13 +3967,13 @@
             });
             modelList.addEventListener("keydown", function (evt) {
                 if (evt.key !== "Enter" && evt.key !== " ") return;
-                var item = evt.target.closest(".wf-cli-model-item");
+                var item = evt.target.closest(".wf-cli-model-row");
                 if (!item || item.classList.contains("is-disabled")) return;
                 evt.preventDefault();
                 item.click();
             });
             modelList.addEventListener("dragstart", function (evt) {
-                var item = evt.target.closest(".wf-cli-model-item");
+                var item = evt.target.closest(".wf-cli-model-row");
                 if (!item || item.classList.contains("is-disabled")) return;
                 _wfCliDraggedModelId = String(item.dataset.modelId || "");
                 _wfCliDraggedChosenIndex = -1;
@@ -3923,7 +3985,7 @@
                 }
             });
             modelList.addEventListener("dragend", function (evt) {
-                var item = evt.target.closest(".wf-cli-model-item");
+                var item = evt.target.closest(".wf-cli-model-row");
                 if (item) item.classList.remove("is-dragging");
                 _wfCliDraggedModelId = "";
             });
@@ -3936,57 +3998,29 @@
                 if (!removeBtn) return;
                 workflowCliRemoveChosenModel(removeBtn.getAttribute("data-wf-cli-chosen-remove"));
             });
-            chosenList.addEventListener("dragstart", function (evt) {
-                var item = evt.target.closest("[data-wf-cli-chosen-index]");
-                if (!item) return;
-                _wfCliDraggedChosenIndex = parseInt(item.getAttribute("data-wf-cli-chosen-index"), 10);
-                _wfCliDraggedModelId = "";
-                if (evt.dataTransfer) {
-                    evt.dataTransfer.effectAllowed = "move";
-                    evt.dataTransfer.setData("application/x-wf-cli-chosen-index", String(_wfCliDraggedChosenIndex));
-                }
-            });
             chosenList.addEventListener("dragover", function (evt) {
-                var targetItem = evt.target.closest("[data-wf-cli-chosen-index]");
                 var dropzone = evt.target.closest("#wf-cli-chosen-dropzone");
-                if (_wfCliDraggedModelId || _wfCliDraggedChosenIndex >= 0) {
+                if (_wfCliDraggedModelId) {
                     evt.preventDefault();
-                    if (evt.dataTransfer) evt.dataTransfer.dropEffect = _wfCliDraggedModelId ? "copy" : "move";
+                    if (evt.dataTransfer) evt.dataTransfer.dropEffect = "copy";
                 }
                 chosenList.querySelectorAll(".is-over").forEach(function (el) { el.classList.remove("is-over"); });
-                if (targetItem) targetItem.classList.add("is-over");
                 if (dropzone) dropzone.classList.add("is-over");
             });
             chosenList.addEventListener("dragleave", function (evt) {
-                var targetItem = evt.target.closest("[data-wf-cli-chosen-index]");
                 var dropzone = evt.target.closest("#wf-cli-chosen-dropzone");
-                if (targetItem) targetItem.classList.remove("is-over");
                 if (dropzone) dropzone.classList.remove("is-over");
             });
             chosenList.addEventListener("drop", function (evt) {
-                var targetItem = evt.target.closest("[data-wf-cli-chosen-index]");
-                var dropzone = evt.target.closest("#wf-cli-chosen-dropzone");
-                if (!_wfCliDraggedModelId && _wfCliDraggedChosenIndex < 0) return;
+                if (!_wfCliDraggedModelId) return;
                 evt.preventDefault();
                 chosenList.querySelectorAll(".is-over").forEach(function (el) { el.classList.remove("is-over"); });
-                if (_wfCliDraggedModelId) {
-                    var model = _wfCliInventoryById[_wfCliDraggedModelId];
-                    if (model) workflowCliAddChosenModel(model);
-                    _wfCliDraggedModelId = "";
-                    return;
-                }
-                if (_wfCliDraggedChosenIndex >= 0) {
-                    if (targetItem) {
-                        workflowCliMoveChosenModel(_wfCliDraggedChosenIndex, parseInt(targetItem.getAttribute("data-wf-cli-chosen-index"), 10));
-                    } else if (dropzone) {
-                        workflowCliMoveChosenModel(_wfCliDraggedChosenIndex, Math.max(0, _wfCliChosenModels.length - 1));
-                    }
-                }
-                _wfCliDraggedChosenIndex = -1;
+                var model = _wfCliInventoryById[_wfCliDraggedModelId];
+                if (model) workflowCliAddChosenModel(model);
+                _wfCliDraggedModelId = "";
             });
             chosenList.addEventListener("dragend", function () {
                 chosenList.querySelectorAll(".is-over").forEach(function (el) { el.classList.remove("is-over"); });
-                _wfCliDraggedChosenIndex = -1;
                 _wfCliDraggedModelId = "";
             });
         }

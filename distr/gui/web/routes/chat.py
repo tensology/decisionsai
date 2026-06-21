@@ -91,6 +91,7 @@ def _chat_tool_event_messages(chat: Chat) -> List[Dict[str, Any]]:
                     "routing_path": event.get("routing_path") or "",
                     "user_text": event.get("user_text") or "",
                     "compact": _is_compact_tool_event(event),
+                    "activity_style": event.get("activity_style") or "active",
                 },
             }
         )

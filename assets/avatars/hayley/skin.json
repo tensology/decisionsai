@@ -10,7 +10,9 @@
     "image_offset_x": 0,
     "image_offset_y": 0,
     "chroma_key": null,
-    "chroma_threshold": 35
+    "chroma_threshold": 35,
+    "unfocused_opacity_enabled": false,
+    "unfocused_opacity": 0.5
   },
   "events": {
     "idle": {

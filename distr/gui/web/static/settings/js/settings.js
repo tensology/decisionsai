@@ -2,6 +2,10 @@
 
 function showNotification(message, type) {
     type = type || 'info';
+    if (window.__settingsNotificationTimer) {
+        clearTimeout(window.__settingsNotificationTimer);
+        window.__settingsNotificationTimer = null;
+    }
     var existing = document.getElementById('notification');
     if (existing) existing.remove();
     var el = document.createElement('div');
@@ -10,14 +14,33 @@ function showNotification(message, type) {
         (type === 'success' ? 'bg-green-600' : type === 'error' ? 'bg-red-600' : type === 'warning' ? 'bg-yellow-600' : 'bg-[#1a237e]');
     el.textContent = message;
     document.body.appendChild(el);
-    setTimeout(function() {
+    window.__settingsNotificationTimer = setTimeout(function() {
         el.style.opacity = '0';
         setTimeout(function() { el.remove(); }, 300);
     }, 3000);
 }
 window.showNotification = showNotification;
 
-var SETTINGS_TABS = ['general', 'thirdparty', 'audio', 'llms', 'initiative', 'shortcuts', 'skins', 'advanced', 'mcp', 'logs'];
+function clearAllSnackbars() {
+    if (window.__settingsNotificationTimer) {
+        clearTimeout(window.__settingsNotificationTimer);
+        window.__settingsNotificationTimer = null;
+    }
+    var snackNodes = document.querySelectorAll('#notification, #shared-snackbar, [id$="-snackbar"]');
+    for (var i = 0; i < snackNodes.length; i++) {
+        if (snackNodes[i] && snackNodes[i].parentNode) {
+            snackNodes[i].remove();
+        }
+    }
+    var legacyNotification = document.getElementById('snackbar');
+    if (legacyNotification) {
+        legacyNotification.innerHTML = '';
+        legacyNotification.className = '';
+    }
+}
+window.clearAllSnackbars = clearAllSnackbars;
+
+var SETTINGS_TABS = ['general', 'thirdparty', 'llms', 'initiative', 'shortcuts', 'skins', 'advanced', 'logs', 'downloads', 'mermaid'];
 
 function getTabFromHash() {
     var hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
@@ -26,6 +49,7 @@ function getTabFromHash() {
 
 function switchTab(tabName) {
     var tab = SETTINGS_TABS.indexOf(tabName) >= 0 ? tabName : 'general';
+    clearAllSnackbars();
     var container = document.querySelector('.settings-tab-inner');
     var contents = container ? Array.prototype.filter.call(container.children, function(el) { return el.classList && el.classList.contains('tab-content'); }) : document.querySelectorAll('.tab-content');
     for (var i = 0; i < contents.length; i++) {
@@ -43,29 +67,30 @@ function switchTab(tabName) {
     if (btn) btn.classList.add('active');
     var wrapper = document.querySelector('.settings-tab-inner') && document.querySelector('.settings-tab-inner').parentElement;
     if (wrapper) {
-        if (tab === 'logs') wrapper.classList.add('logs-tab-active');
+        if (tab === 'logs' || tab === 'downloads' || tab === 'mermaid') wrapper.classList.add('logs-tab-active');
         else wrapper.classList.remove('logs-tab-active');
     }
     var actions = document.querySelector('.settings-actions-float');
     if (actions) {
-        actions.classList.toggle('llms-actions-active', tab === 'llms');
+        actions.classList.toggle('llms-actions-active', false);
     }
     var saveBtn = document.getElementById('btn_save');
     if (saveBtn && !saveBtn.dataset.busy) {
         saveBtn.textContent = 'Save';
-        saveBtn.style.display = tab === 'skins' ? 'none' : '';
+        saveBtn.style.display = (tab === 'skins' || tab === 'initiative' || tab === 'thirdparty' || tab === 'llms' || tab === 'shortcuts' || tab === 'logs' || tab === 'downloads' || tab === 'mermaid' || tab === 'advanced') ? 'none' : '';
     }
     var reloadBtn = document.getElementById('btn_cancel');
     if (reloadBtn && !reloadBtn.dataset.busy) {
         reloadBtn.textContent = 'Reload';
-        reloadBtn.style.display = tab === 'skins' ? 'none' : '';
+        reloadBtn.style.display = 'none';
     }
     window.location.hash = tab;
     // Avoid double-fetch on first paint: llms.js loads the LLMs tab on DOMContentLoaded.
     if (window._settingsUiReady) {
         if (tab === 'logs' && typeof window.loadLogs === 'function') setTimeout(window.loadLogs, 0);
+        if (tab === 'downloads' && typeof window.loadDownloadsSection === 'function') setTimeout(window.loadDownloadsSection, 0);
+        if (tab === 'mermaid' && typeof window.loadMermaidHistorySection === 'function') setTimeout(window.loadMermaidHistorySection, 0);
         if (tab === 'llms' && typeof window.loadLLMsSettings === 'function') setTimeout(window.loadLLMsSettings, 0);
-        if (tab === 'mcp' && typeof window.loadMCPSettings === 'function') setTimeout(window.loadMCPSettings, 0);
     }
 }
 window.switchTab = switchTab;
@@ -129,14 +154,12 @@ function setupActionButtons() {
             var active = document.querySelector('.tab-content.active-tab-panel');
             if (active) {
                 if (active.id === 'tab-general' && typeof window.saveGeneralSettings === 'function') window.saveGeneralSettings();
-                else if (active.id === 'tab-audio' && typeof window.saveAudioSettings === 'function') window.saveAudioSettings();
                 else if (active.id === 'tab-thirdparty' && typeof window.saveThirdPartySettings === 'function') window.saveThirdPartySettings();
                 else if (active.id === 'tab-llms' && typeof window.saveLLMsSettings === 'function') window.saveLLMsSettings();
                 else if (active.id === 'tab-skins' && typeof window.saveSkinsSettings === 'function') window.saveSkinsSettings();
                 else if (active.id === 'tab-shortcuts' && typeof window.saveShortcutSettings === 'function') window.saveShortcutSettings();
                 else if (active.id === 'tab-advanced' && typeof window.saveAdvancedSettings === 'function') window.saveAdvancedSettings();
                 else if (active.id === 'tab-initiative' && typeof window.saveInitiativeSettings === 'function') window.saveInitiativeSettings();
-                else if (active.id === 'tab-mcp' && typeof window.saveMCPSettings === 'function') window.saveMCPSettings();
                 else if (active.id === 'tab-logs') showNotification('Logs tab has no save action', 'info');
                 else showNotification('Settings saved (UI only)', 'info');
             }
@@ -156,14 +179,12 @@ function setupActionButtons() {
             var active = document.querySelector('.settings-tab-inner > .tab-content.active-tab-panel');
             if (active) {
                 if (active.id === 'tab-general' && typeof window.loadGeneralSettings === 'function') window.loadGeneralSettings();
-                else if (active.id === 'tab-audio' && typeof window.loadAudioSettings === 'function') window.loadAudioSettings();
                 else if (active.id === 'tab-thirdparty' && typeof window.loadThirdPartySettings === 'function') window.loadThirdPartySettings();
                 else if (active.id === 'tab-llms' && typeof window.reloadLLMsSettings === 'function') window.reloadLLMsSettings();
                 else if (active.id === 'tab-skins' && typeof window.loadSkinsSettings === 'function') window.loadSkinsSettings();
                 else if (active.id === 'tab-shortcuts' && typeof window.loadShortcutSettings === 'function') window.loadShortcutSettings();
                 else if (active.id === 'tab-advanced' && typeof window.loadAdvancedSettings === 'function') window.loadAdvancedSettings();
                 else if (active.id === 'tab-initiative' && typeof window.loadInitiativeSettings === 'function') window.loadInitiativeSettings();
-                else if (active.id === 'tab-mcp' && typeof window.loadMCPSettings === 'function') window.loadMCPSettings();
             }
             if (!active || active.id !== 'tab-llms') {
                 showNotification('Settings reloaded', 'info');

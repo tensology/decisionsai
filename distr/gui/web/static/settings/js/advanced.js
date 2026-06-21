@@ -1,6 +1,8 @@
 // Advanced Settings JavaScript - Directory tree like native CheckableDirModel (expand ~/, checkboxes = indexed_folders)
 
 var advancedCheckedPaths = new Set();
+var advancedSkills = [];
+var advancedSkillsQuery = '';
 var advancedOrchestratorSettings = {
     orchestrator_enabled: true,
     orchestrator_memory_export_enabled: false,
@@ -11,6 +13,316 @@ var advancedOrchestratorSettings = {
     orchestrator_correction_provider: '',
     orchestrator_correction_model: ''
 };
+
+function cleanAdvancedSkillDescription(text) {
+    var value = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!value) return '';
+    value = value.replace(/^(?:>\-?|[\|]\-?)\s*$/gm, '');
+    value = value.replace(/^(?:>\s*|-\s*>?\s*)+/, '');
+    value = value.replace(/\s+/g, ' ').trim();
+    return value;
+}
+
+function initAdvancedTabs() {
+    const tabButtons = Array.from(document.querySelectorAll('[data-advanced-subtab]'));
+    const panels = Array.from(document.querySelectorAll('[data-advanced-panel]'));
+    if (!tabButtons.length || !panels.length) return;
+
+    const activateTab = function(tabKey) {
+        tabButtons.forEach(function(button) {
+            const isActive = button.dataset.advancedSubtab === tabKey;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        panels.forEach(function(panel) {
+            panel.classList.toggle('is-active', panel.dataset.advancedPanel === tabKey);
+        });
+    };
+
+    tabButtons.forEach(function(button) {
+        button.addEventListener('click', function() {
+            activateTab(button.dataset.advancedSubtab);
+        });
+    });
+
+    const activeButton = tabButtons.find(function(button) {
+        return button.classList.contains('is-active');
+    });
+    activateTab(activeButton ? activeButton.dataset.advancedSubtab : tabButtons[0].dataset.advancedSubtab);
+}
+
+function syncAdvancedPermissionsPanelVisibility() {
+    var livePanel = document.getElementById('macos-permissions-panel');
+    var placeholderPanel = document.getElementById('macos-permissions-placeholder');
+    if (!livePanel || !placeholderPanel) return;
+    placeholderPanel.classList.toggle('hidden', !livePanel.classList.contains('hidden'));
+}
+
+function setIntegrationCardState(key, connected, statusText) {
+    var card = document.getElementById('integration_card_' + key);
+    var statusEl = document.getElementById(key + '_status_text');
+    var connectBtn = document.getElementById(key + '_connect_btn');
+    var disconnectBtn = document.getElementById(
+        key === 'whatsapp' ? 'whatsapp_disconnect_btn_card' : key + '_disconnect_btn'
+    );
+    if (card) {
+        card.classList.toggle('border-[#10a37f]', !!connected);
+        card.classList.toggle('bg-[#10a37f]/8', !!connected);
+        card.classList.toggle('border-[#565869]', !connected);
+        card.classList.toggle('bg-[#0d1117]', !connected);
+    }
+    if (statusEl) {
+        statusEl.textContent = statusText;
+        statusEl.className = 'text-xs ' + (connected ? 'text-green-300' : 'text-gray-400');
+    }
+    if (connectBtn) {
+        connectBtn.dataset.connected = connected ? 'true' : 'false';
+    }
+    if (disconnectBtn) {
+        disconnectBtn.classList.toggle('hidden', !connected);
+    }
+}
+
+function disconnectGoogleDirect() {
+    window.DecisionsAPI.confirm({
+        title: "Disconnect Google",
+        message: "Disconnect Google? This will remove your tokens and OAuth config.",
+        confirmLabel: "Disconnect",
+        danger: true,
+        onConfirm: function() {
+            fetch(settingsBase + '/api/advanced/google/disconnect', { method: 'POST' })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data.success) {
+                        if (typeof window.showNotification === 'function') window.showNotification('Google disconnected', 'success');
+                        updateConnectionStatus();
+                    } else {
+                        if (typeof window.showNotification === 'function') window.showNotification(data.error || 'Disconnect failed', 'error');
+                    }
+                })
+                .catch(function () {
+                    if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+                });
+        }
+    });
+}
+
+function disconnectTelegramDirect() {
+    fetch(settingsBase + '/api/advanced/telegram/disconnect', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                if (typeof window.showNotification === 'function') window.showNotification('Telegram disconnected', 'success');
+                updateConnectionStatus();
+            } else {
+                if (typeof window.showNotification === 'function') window.showNotification(data.error || 'Disconnect failed', 'error');
+            }
+        })
+        .catch(function () {
+            if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+        });
+}
+
+function disconnectWhatsAppDirect() {
+    fetch(settingsBase + '/api/advanced/whatsapp/disconnect', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                if (typeof window.showNotification === 'function') window.showNotification('WhatsApp disconnected', 'success');
+                updateConnectionStatus();
+            } else {
+                if (typeof window.showNotification === 'function') window.showNotification(data.error || 'Disconnect failed', 'error');
+            }
+        })
+        .catch(function () {
+            if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+        });
+}
+
+function disconnectAccountProvider(provider, label) {
+    window.DecisionsAPI.confirm({
+        title: "Disconnect " + label,
+        message: "Disconnect all saved " + label + " accounts?",
+        confirmLabel: "Disconnect",
+        danger: true,
+        onConfirm: function() {
+            fetch(settingsBase + '/api/advanced/accounts?provider=' + encodeURIComponent(provider))
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var accounts = data.accounts || [];
+                    return Promise.all(accounts.map(function(acc) {
+                        return fetch(settingsBase + '/api/advanced/accounts', {
+                            method: 'DELETE',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ provider: provider, name: acc.name || label })
+                        });
+                    }));
+                })
+                .then(function () {
+                    if (typeof window.showNotification === 'function') window.showNotification(label + ' disconnected', 'success');
+                    updateConnectionStatus();
+                })
+                .catch(function () {
+                    if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+                });
+        }
+    });
+}
+
+function disconnectConnectorProvider(provider, label) {
+    var payload = {};
+    if (provider === 'discord') payload.discord_bot_token = '';
+    if (provider === 'slack') {
+        payload.slack_bot_token = '';
+        payload.slack_signing_secret = '';
+    }
+    if (provider === 'clickup') payload.clickup_api_token = '';
+    if (provider === 'monday') payload.monday_api_token = '';
+    window.DecisionsAPI.confirm({
+        title: "Disconnect " + label,
+        message: "Disconnect " + label + " from this app?",
+        confirmLabel: "Disconnect",
+        danger: true,
+        onConfirm: function() {
+            fetch(settingsBase + '/api/advanced/integration-connectors', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function (r) { return r.json(); })
+              .then(function () {
+                  if (typeof window.showNotification === 'function') window.showNotification(label + ' settings cleared', 'success');
+                  updateConnectionStatus();
+              })
+              .catch(function () {
+                  if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+              });
+        }
+    });
+}
+
+function renderAdvancedSkillsList() {
+    var listEl = document.getElementById('advanced-skills-list');
+    if (!listEl) return;
+    var query = (advancedSkillsQuery || '').trim().toLowerCase();
+    var rows = advancedSkills.filter(function(skill) {
+        var cleanDescription = cleanAdvancedSkillDescription(skill.description);
+        if (!query) return true;
+        return ((skill.name || '').toLowerCase().indexOf(query) >= 0) ||
+            (cleanDescription.toLowerCase().indexOf(query) >= 0) ||
+            ((skill.id || '').toLowerCase().indexOf(query) >= 0);
+    });
+    if (!rows.length) {
+        listEl.innerHTML = '<p class="text-sm text-gray-400">No skills match your search.</p>';
+        return;
+    }
+    listEl.innerHTML = rows.map(function(skill) {
+        var cleanDescription = cleanAdvancedSkillDescription(skill.description) || 'No description available.';
+        return '' +
+            '<div class="border border-white/10 rounded-lg bg-[#152054] p-4">' +
+                '<div class="flex items-start justify-between gap-3">' +
+                    '<div class="min-w-0 flex-1">' +
+                        '<h4 class="text-sm font-semibold text-white">' + escapeHtml(skill.name || skill.id || 'Skill') + '</h4>' +
+                        '<p class="text-xs text-gray-400 mt-1 leading-relaxed">' + escapeHtml(cleanDescription) + '</p>' +
+                    '</div>' +
+                    '<div class="flex items-center gap-1.5 shrink-0">' +
+                        '<button type="button" class="advanced-skill-copy-btn p-2 rounded-md border border-white/20 text-[#ececf1] hover:bg-white/10 transition-colors" title="Copy skill" aria-label="Copy skill" data-skill-id="' + escapeHtml(skill.id || '') + '">' +
+                            '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
+                        '</button>' +
+                        '<button type="button" class="advanced-skill-view-btn px-3 py-1.5 rounded-md border border-white/20 text-xs font-medium text-[#ececf1] hover:bg-white/10 transition-colors" data-skill-id="' + escapeHtml(skill.id || '') + '">View Skill</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+    }).join('');
+    listEl.querySelectorAll('.advanced-skill-view-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            openAdvancedSkillModal(btn.getAttribute('data-skill-id'));
+        });
+    });
+    listEl.querySelectorAll('.advanced-skill-copy-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            copyAdvancedSkill(btn.getAttribute('data-skill-id'));
+        });
+    });
+}
+
+function copyAdvancedSkill(skillId) {
+    if (!skillId) return;
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+        if (typeof window.showNotification === 'function') {
+            window.showNotification('Clipboard access is not available in this browser.', 'error');
+        }
+        return;
+    }
+    fetch('/api/skills/' + encodeURIComponent(skillId))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var content = data && typeof data.content === 'string' ? data.content : '';
+            if (!content) {
+                if (typeof window.showNotification === 'function') {
+                    window.showNotification('No skill content found to copy.', 'error');
+                }
+                return;
+            }
+            return navigator.clipboard.writeText(content)
+                .then(function() {
+                    if (typeof window.showNotification === 'function') {
+                        window.showNotification('Skill copied to clipboard', 'success');
+                    }
+                });
+        })
+        .catch(function (err) {
+            if (typeof window.showNotification === 'function') {
+                window.showNotification('Failed to copy skill: ' + ((err && err.message) || String(err)), 'error');
+            }
+        });
+}
+
+function loadAdvancedSkills() {
+    var listEl = document.getElementById('advanced-skills-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<p class="text-sm text-gray-400">Loading skills…</p>';
+    fetch('/api/skills')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            advancedSkills = (Array.isArray(data) ? data : []).map(function(skill) {
+                return Object.assign({}, skill, {
+                    description: cleanAdvancedSkillDescription(skill && skill.description)
+                });
+            });
+            renderAdvancedSkillsList();
+        })
+        .catch(function (err) {
+            listEl.innerHTML = '<p class="text-sm text-red-400">Failed to load skills: ' + escapeHtml((err && err.message) || String(err)) + '</p>';
+        });
+}
+
+function openAdvancedSkillModal(skillId) {
+    if (!skillId) return;
+    var modal = document.getElementById('advanced-skill-modal');
+    var titleEl = document.getElementById('advanced-skill-modal-title');
+    var descEl = document.getElementById('advanced-skill-modal-description');
+    var contentEl = document.getElementById('advanced-skill-modal-content');
+    if (!modal || !titleEl || !descEl || !contentEl) return;
+    var skill = advancedSkills.find(function(item) { return item.id === skillId; }) || {};
+    titleEl.textContent = skill.name || skillId;
+    descEl.textContent = cleanAdvancedSkillDescription(skill.description) || '';
+    contentEl.textContent = 'Loading…';
+    modal.classList.remove('hidden');
+    fetch('/api/skills/' + encodeURIComponent(skillId))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            contentEl.textContent = data.content || 'No skill content available.';
+        })
+        .catch(function (err) {
+            contentEl.textContent = 'Failed to load skill: ' + ((err && err.message) || String(err));
+        });
+}
+
+function closeAdvancedSkillModal() {
+    var modal = document.getElementById('advanced-skill-modal');
+    if (modal) modal.classList.add('hidden');
+}
 
 function escapeHtml(text) {
     var div = document.createElement('div');
@@ -311,44 +623,53 @@ function updateConnectionStatus() {
         var mondayBtn = document.getElementById('monday_connect_btn');
         if (googleBtn) {
             googleBtn.className = data.google_connected ? connectedClass : shell + ' bg-[#007bff] hover:bg-[#0069d9] text-white' + filledBorder;
-            googleBtn.innerHTML = data.google_connected ? '✓ Google' : 'Google';
+            googleBtn.textContent = data.google_connected ? 'Reconnect' : 'Connect';
         }
         var whatsappBtn = document.getElementById('whatsapp_connect_btn');
         if (whatsappBtn) {
             whatsappBtn.className = data.whatsapp_connected ? connectedClass : shell + ' border-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white';
-            whatsappBtn.innerHTML = data.whatsapp_connected ? '\u2713 WhatsApp' : 'WhatsApp';
+            whatsappBtn.textContent = data.whatsapp_connected ? 'Manage' : 'Connect';
         }
         if (telegramBtn) {
             telegramBtn.className = data.telegram_connected ? connectedClass : shell + ' bg-[#0088cc] hover:bg-[#0077b3] text-white' + filledBorder;
-            telegramBtn.innerHTML = data.telegram_connected ? '✓ Telegram' : 'Telegram';
+            telegramBtn.textContent = data.telegram_connected ? 'Manage' : 'Connect';
         }
         if (trelloBtn) {
             trelloBtn.className = data.trello_has_valid ? connectedClass : shell + ' bg-[#0079BF] hover:bg-[#026aa7] text-white' + filledBorder;
-            trelloBtn.innerHTML = data.trello_has_valid ? '✓ Trello' : 'Trello';
+            trelloBtn.textContent = data.trello_has_valid ? 'Manage' : 'Connect';
         }
         if (jiraBtn) {
             jiraBtn.className = data.jira_has_valid ? connectedClass : shell + ' bg-[#0052CC] hover:bg-[#0043a8] text-white' + filledBorder;
-            jiraBtn.innerHTML = data.jira_has_valid ? '✓ Jira' : 'Jira';
+            jiraBtn.textContent = data.jira_has_valid ? 'Manage' : 'Connect';
         }
         var discordBtn = document.getElementById('discord_connect_btn');
         if (discordBtn) {
             discordBtn.className = data.discord_bot_configured ? connectedClass : shell + ' bg-[#5865F2] hover:bg-[#4752c4] text-white' + filledBorder;
-            discordBtn.innerHTML = data.discord_bot_configured ? '\u2713 Discord' : 'Discord';
+            discordBtn.textContent = data.discord_bot_configured ? 'Manage' : 'Connect';
         }
         var slackBtn = document.getElementById('slack_connect_btn');
         if (slackBtn) {
             var slackOk = !!(data.slack_bot_configured || data.slack_signing_configured);
             slackBtn.className = slackOk ? connectedClass : shell + ' bg-[#4A154B] hover:bg-[#611f69] text-white' + filledBorder;
-            slackBtn.innerHTML = slackOk ? '\u2713 Slack' : 'Slack';
+            slackBtn.textContent = slackOk ? 'Manage' : 'Connect';
+            setIntegrationCardState('slack', slackOk, slackOk ? 'Connected' : 'Not connected');
         }
         if (clickupBtn) {
             clickupBtn.className = data.clickup_configured ? connectedClass : shell + ' bg-[#7B68EE] hover:bg-[#6754d8] text-white' + filledBorder;
-            clickupBtn.innerHTML = data.clickup_configured ? '\u2713 ClickUp' : 'ClickUp';
+            clickupBtn.textContent = data.clickup_configured ? 'Manage' : 'Connect';
         }
         if (mondayBtn) {
             mondayBtn.className = data.monday_configured ? connectedClass : shell + ' bg-[#00C875] hover:bg-[#00a862] text-white' + filledBorder;
-            mondayBtn.innerHTML = data.monday_configured ? '\u2713 Monday' : 'Monday';
+            mondayBtn.textContent = data.monday_configured ? 'Manage' : 'Connect';
         }
+        setIntegrationCardState('google', !!data.google_connected, data.google_connected ? 'Connected' : 'Not connected');
+        setIntegrationCardState('telegram', !!data.telegram_connected, data.telegram_connected ? 'Connected' : 'Not connected');
+        setIntegrationCardState('whatsapp', !!data.whatsapp_connected, data.whatsapp_connected ? 'Connected' : 'Not connected');
+        setIntegrationCardState('trello', !!data.trello_has_valid, data.trello_has_valid ? 'Connected' : 'Not connected');
+        setIntegrationCardState('jira', !!data.jira_has_valid, data.jira_has_valid ? 'Connected' : 'Not connected');
+        setIntegrationCardState('discord', !!data.discord_bot_configured, data.discord_bot_configured ? 'Connected' : 'Not connected');
+        setIntegrationCardState('clickup', !!data.clickup_configured, data.clickup_configured ? 'Connected' : 'Not connected');
+        setIntegrationCardState('monday', !!data.monday_configured, data.monday_configured ? 'Connected' : 'Not connected');
     }).catch(function () {});
 }
 
@@ -463,32 +784,8 @@ function openIntegrationConnectorsModal() {
 }
 
 function connectGoogle() {
-    // Check if already connected — offer disconnect instead
+    // If already connected, go straight to reconnect flow; dedicated disconnect lives on the card.
     var btn = document.getElementById('google_connect_btn');
-    if (btn && btn.textContent.indexOf('✓') !== -1) {
-        window.DecisionsAPI.confirm({
-            title: "Disconnect Google",
-            message: "Disconnect Google? This will remove your tokens and OAuth config.",
-            confirmLabel: "Disconnect",
-            danger: true,
-            onConfirm: function() {
-                fetch(settingsBase + '/api/advanced/google/disconnect', { method: 'POST' })
-                    .then(function (r) { return r.json(); })
-                    .then(function (data) {
-                        if (data.success) {
-                            if (typeof window.showNotification === 'function') window.showNotification('Google disconnected', 'success');
-                            updateConnectionStatus();
-                        } else {
-                            if (typeof window.showNotification === 'function') window.showNotification(data.error || 'Disconnect failed', 'error');
-                        }
-                    })
-                    .catch(function () {
-                        if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
-                    });
-            }
-        });
-        return;
-    }
     fetch(settingsBase + '/api/advanced/google/oauth-url').then(function (r) { return r.json(); }).then(function (data) {
         if (data.needs_config) {
             openGoogleSetupModal(data.javascript_origin, data.redirect_uri);
@@ -954,6 +1251,8 @@ function connectWhatsApp() {
 }
 
 function initAdvancedTab() {
+    initAdvancedTabs();
+    loadAdvancedSkills();
     var treeEl = document.getElementById('directory_tree');
     if (treeEl) {
         treeEl.addEventListener('click', function (e) {
@@ -977,9 +1276,11 @@ async function loadMacosPermissionsPanel() {
         var data = await res.json();
         if (!data.supported) {
             panel.classList.add('hidden');
+            syncAdvancedPermissionsPanelVisibility();
             return;
         }
         panel.classList.remove('hidden');
+        syncAdvancedPermissionsPanelVisibility();
         statusEl.innerHTML = '';
         (data.items || []).forEach(function (item) {
             var row = document.createElement('div');
@@ -1040,6 +1341,7 @@ async function loadMacosPermissionsPanel() {
         });
     } catch (e) {
         statusEl.innerHTML = '<p class="text-red-400">Could not load permission status.</p>';
+        syncAdvancedPermissionsPanelVisibility();
     }
 }
 
@@ -1069,8 +1371,39 @@ if (document.readyState === 'loading') {
             if (clickupBtn) clickupBtn.addEventListener('click', openIntegrationConnectorsModal);
             var mondayBtn = document.getElementById('monday_connect_btn');
             if (mondayBtn) mondayBtn.addEventListener('click', openIntegrationConnectorsModal);
+            var googleDisconnectBtn = document.getElementById('google_disconnect_btn');
+            if (googleDisconnectBtn) googleDisconnectBtn.addEventListener('click', disconnectGoogleDirect);
+            var telegramDisconnectBtn = document.getElementById('telegram_disconnect_btn');
+            if (telegramDisconnectBtn) telegramDisconnectBtn.addEventListener('click', disconnectTelegramDirect);
+            var whatsappDisconnectBtnCard = document.getElementById('whatsapp_disconnect_btn_card');
+            if (whatsappDisconnectBtnCard) whatsappDisconnectBtnCard.addEventListener('click', disconnectWhatsAppDirect);
+            var trelloDisconnectBtn = document.getElementById('trello_disconnect_btn');
+            if (trelloDisconnectBtn) trelloDisconnectBtn.addEventListener('click', function () { disconnectAccountProvider('trello', 'Trello'); });
+            var jiraDisconnectBtn = document.getElementById('jira_disconnect_btn');
+            if (jiraDisconnectBtn) jiraDisconnectBtn.addEventListener('click', function () { disconnectAccountProvider('jira', 'Jira'); });
+            var discordDisconnectBtn = document.getElementById('discord_disconnect_btn');
+            if (discordDisconnectBtn) discordDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('discord', 'Discord'); });
+            var slackDisconnectBtn = document.getElementById('slack_disconnect_btn');
+            if (slackDisconnectBtn) slackDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('slack', 'Slack'); });
+            var clickupDisconnectBtn = document.getElementById('clickup_disconnect_btn');
+            if (clickupDisconnectBtn) clickupDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('clickup', 'ClickUp'); });
+            var mondayDisconnectBtn = document.getElementById('monday_disconnect_btn');
+            if (mondayDisconnectBtn) mondayDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('monday', 'Monday'); });
+            var advancedSkillsSearch = document.getElementById('advanced-skills-search');
+            if (advancedSkillsSearch) advancedSkillsSearch.addEventListener('input', function () {
+                advancedSkillsQuery = advancedSkillsSearch.value || '';
+                renderAdvancedSkillsList();
+            });
+            var advancedSkillModalClose = document.getElementById('advanced-skill-modal-close');
+            if (advancedSkillModalClose) advancedSkillModalClose.addEventListener('click', closeAdvancedSkillModal);
+            var advancedSkillModal = document.getElementById('advanced-skill-modal');
+            if (advancedSkillModal) advancedSkillModal.addEventListener('click', function (e) {
+                if (e.target === advancedSkillModal) closeAdvancedSkillModal();
+            });
             var reindexBtn = document.getElementById('reindex_button');
             if (reindexBtn) reindexBtn.addEventListener('click', reindexModels);
+            var advancedSaveBtn = document.getElementById('advanced_save_btn');
+            if (advancedSaveBtn) advancedSaveBtn.addEventListener('click', saveAdvancedSettings);
         }
     });
 } else {
@@ -1095,8 +1428,39 @@ if (document.readyState === 'loading') {
         if (clickupBtn) clickupBtn.addEventListener('click', openIntegrationConnectorsModal);
         var mondayBtn = document.getElementById('monday_connect_btn');
         if (mondayBtn) mondayBtn.addEventListener('click', openIntegrationConnectorsModal);
+        var googleDisconnectBtn = document.getElementById('google_disconnect_btn');
+        if (googleDisconnectBtn) googleDisconnectBtn.addEventListener('click', disconnectGoogleDirect);
+        var telegramDisconnectBtn = document.getElementById('telegram_disconnect_btn');
+        if (telegramDisconnectBtn) telegramDisconnectBtn.addEventListener('click', disconnectTelegramDirect);
+        var whatsappDisconnectBtnCard = document.getElementById('whatsapp_disconnect_btn_card');
+        if (whatsappDisconnectBtnCard) whatsappDisconnectBtnCard.addEventListener('click', disconnectWhatsAppDirect);
+        var trelloDisconnectBtn = document.getElementById('trello_disconnect_btn');
+        if (trelloDisconnectBtn) trelloDisconnectBtn.addEventListener('click', function () { disconnectAccountProvider('trello', 'Trello'); });
+        var jiraDisconnectBtn = document.getElementById('jira_disconnect_btn');
+        if (jiraDisconnectBtn) jiraDisconnectBtn.addEventListener('click', function () { disconnectAccountProvider('jira', 'Jira'); });
+        var discordDisconnectBtn = document.getElementById('discord_disconnect_btn');
+        if (discordDisconnectBtn) discordDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('discord', 'Discord'); });
+        var slackDisconnectBtn = document.getElementById('slack_disconnect_btn');
+        if (slackDisconnectBtn) slackDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('slack', 'Slack'); });
+        var clickupDisconnectBtn = document.getElementById('clickup_disconnect_btn');
+        if (clickupDisconnectBtn) clickupDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('clickup', 'ClickUp'); });
+        var mondayDisconnectBtn = document.getElementById('monday_disconnect_btn');
+        if (mondayDisconnectBtn) mondayDisconnectBtn.addEventListener('click', function () { disconnectConnectorProvider('monday', 'Monday'); });
+        var advancedSkillsSearch = document.getElementById('advanced-skills-search');
+        if (advancedSkillsSearch) advancedSkillsSearch.addEventListener('input', function () {
+            advancedSkillsQuery = advancedSkillsSearch.value || '';
+            renderAdvancedSkillsList();
+        });
+        var advancedSkillModalClose = document.getElementById('advanced-skill-modal-close');
+        if (advancedSkillModalClose) advancedSkillModalClose.addEventListener('click', closeAdvancedSkillModal);
+        var advancedSkillModal = document.getElementById('advanced-skill-modal');
+        if (advancedSkillModal) advancedSkillModal.addEventListener('click', function (e) {
+            if (e.target === advancedSkillModal) closeAdvancedSkillModal();
+        });
         var reindexBtn = document.getElementById('reindex_button');
         if (reindexBtn) reindexBtn.addEventListener('click', reindexModels);
+        var advancedSaveBtn = document.getElementById('advanced_save_btn');
+        if (advancedSaveBtn) advancedSaveBtn.addEventListener('click', saveAdvancedSettings);
     }
 }
 

@@ -1454,6 +1454,8 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
 }
 .wf-cli-model-inventory {
+    display: flex;
+    flex-direction: column;
     height: auto;
     min-height: 0;
     max-height: none;
@@ -1481,59 +1483,107 @@ body.wf-board-pointer-dragging * {
     color: #9ca3af;
 }
 .wf-cli-model-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
+    flex: 1 1 auto;
+    min-height: 0;
 }
-.wf-cli-model-item {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 0.4rem;
-    padding: 0.45rem 0.5rem;
-    background: rgba(21, 32, 84, 0.45);
-    color: #e5e7eb;
-    font-size: 0.72rem;
+.wf-cli-model-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.7rem;
+}
+.wf-cli-model-table th {
+    padding: 0.35rem 0.45rem;
+    color: #9ca3af;
+    font-weight: 600;
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.wf-cli-model-table td {
+    padding: 0.38rem 0.45rem;
+    color: #d1d5db;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    vertical-align: middle;
+}
+.wf-cli-model-table tr:last-child td {
+    border-bottom: 0;
+}
+.wf-cli-model-row {
     cursor: pointer;
 }
-.wf-cli-model-item[draggable="true"] {
+.wf-cli-model-row[draggable="true"] {
     cursor: grab;
 }
-.wf-cli-model-item[draggable="true"]:active {
+.wf-cli-model-row[draggable="true"]:active {
     cursor: grabbing;
 }
-.wf-cli-model-item:hover {
-    border-color: rgba(249, 115, 22, 0.45);
-    background: rgba(249, 115, 22, 0.12);
+.wf-cli-model-row:hover td {
+    background: rgba(249, 115, 22, 0.1);
 }
-.wf-cli-model-item.is-active {
-    border-color: rgba(249, 115, 22, 0.8);
+.wf-cli-model-row.is-active td {
+    background: rgba(249, 115, 22, 0.14);
+}
+.wf-cli-model-row.is-active td:first-child {
     box-shadow: inset 3px 0 0 #f97316;
 }
-.wf-cli-model-item.is-disabled {
+.wf-cli-model-row.is-disabled {
     opacity: 0.55;
     cursor: not-allowed;
 }
-.wf-cli-model-item.is-dragging {
+.wf-cli-model-row.is-dragging {
     opacity: 0.45;
 }
+.wf-cli-model-name,
+.wf-cli-model-id {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.wf-cli-model-id {
+    color: #9ca3af;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.66rem;
+}
 .wf-cli-model-flags {
-    flex-shrink: 0;
     color: #fdba74;
     font-size: 0.65rem;
+    white-space: nowrap;
+}
+.wf-cli-model-add,
+.wf-cli-chosen-remove {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(21, 32, 84, 0.55);
+    color: #e5e7eb;
+    border-radius: 0.3rem;
+    font-size: 0.68rem;
+    line-height: 1;
+}
+.wf-cli-model-add,
+.wf-cli-chosen-remove {
+    width: 1.75rem;
+    height: 1.55rem;
+}
+.wf-cli-model-add {
+    color: #fdba74;
+    cursor: pointer;
+}
+.wf-cli-model-add:hover,
+.wf-cli-chosen-remove:hover {
+    border-color: rgba(249, 115, 22, 0.45);
+    background: rgba(249, 115, 22, 0.12);
+    color: #fff;
 }
 .wf-cli-chosen-list {
     display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
+    flex: 1 1 auto;
     min-height: 5rem;
 }
 .wf-cli-chosen-dropzone {
     display: flex;
+    flex: 1 1 auto;
     align-items: center;
     justify-content: center;
-    min-height: 5rem;
+    min-height: 100%;
     border: 1px dashed rgba(249, 115, 22, 0.35);
     border-radius: 0.45rem;
     color: #9ca3af;
@@ -1546,76 +1596,12 @@ body.wf-board-pointer-dragging * {
     background: rgba(249, 115, 22, 0.12);
     color: #fff;
 }
-.wf-cli-chosen-item {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.5rem;
-    align-items: start;
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 0.45rem;
-    background: rgba(21, 32, 84, 0.38);
-    padding: 0.55rem 0.6rem;
-}
-.wf-cli-chosen-item.is-over {
-    border-color: rgba(249,115,22,0.8);
-    background: rgba(249,115,22,0.14);
-}
-.wf-cli-chosen-item-main {
-    min-width: 0;
-}
-.wf-cli-chosen-item-head {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    min-width: 0;
-}
-.wf-cli-chosen-item-name {
-    color: #f3f4f6;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-.wf-cli-chosen-item-meta {
-    margin-top: 0.25rem;
-    color: #9ca3af;
-    font-size: 0.67rem;
-    line-height: 1.35;
-}
-.wf-cli-chosen-item-flags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-    margin-top: 0.35rem;
-}
-.wf-cli-chosen-chip {
-    border-radius: 9999px;
-    padding: 0.15rem 0.42rem;
-    font-size: 0.62rem;
-    line-height: 1.1;
-    background: rgba(255,255,255,0.08);
-    color: #d1d5db;
-}
-.wf-cli-chosen-item-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-}
-.wf-cli-chosen-grip,
-.wf-cli-chosen-remove {
-    border: 0;
-    background: transparent;
-    color: #9ca3af;
-    font-size: 0.78rem;
-    line-height: 1;
-}
-.wf-cli-chosen-grip {
-    cursor: grab;
-}
 .wf-cli-chosen-remove {
     cursor: pointer;
+    color: #fca5a5;
 }
-.wf-cli-chosen-grip:hover,
-.wf-cli-chosen-remove:hover {
-    color: #fff;
+.wf-cli-chosen-row.is-over td {
+    background: rgba(249,115,22,0.14);
 }
 .wf-cli-chosen-empty {
     color: #9ca3af;
@@ -2495,7 +2481,6 @@ body.wf-split-dragging * {
                                     <section id="wf-cli-model-inventory" class="wf-cli-model-inventory wf-cli-model-inventory--available">
                                         <div class="wf-cli-model-inventory-title">
                                             <span>Models</span>
-                                            <span id="wf-cli-model-count">0</span>
                                         </div>
                                         <div id="wf-cli-model-list" class="wf-cli-model-list">
                                             <p class="text-xs text-gray-500 italic">Connect a CLI to load its models.</p>
@@ -2504,7 +2489,6 @@ body.wf-split-dragging * {
                                     <section class="wf-cli-model-inventory wf-cli-model-inventory--chosen" aria-label="Chosen models">
                                         <div class="wf-cli-model-inventory-title">
                                             <span>Chosen Models</span>
-                                            <span id="wf-cli-chosen-count">0</span>
                                         </div>
                                         <div id="wf-cli-chosen-list" class="wf-cli-chosen-list">
                                             <div id="wf-cli-chosen-dropzone" class="wf-cli-chosen-dropzone">Drag models here to remember the CLI, provider, model, and metadata for this workflow.</div>

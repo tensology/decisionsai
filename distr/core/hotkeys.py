@@ -89,8 +89,14 @@ DEFAULTS = {
     "web_hotkey_snippets_key": "n",
     "web_hotkey_workflows_modifier": "option_command",
     "web_hotkey_workflows_key": "w",
+    "web_hotkey_automations_modifier": "option_command",
+    "web_hotkey_automations_key": "o",
+    "web_hotkey_irc_modifier": "option_command",
+    "web_hotkey_irc_key": "i",
     "web_hotkey_preferences_modifier": "option_command",
     "web_hotkey_preferences_key": "grave",
+    "web_hotkey_ticket_board_modifier": "option_command",
+    "web_hotkey_ticket_board_key": "t",
 }
 
 

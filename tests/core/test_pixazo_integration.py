@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from distr.core.pixazo_client import pixazo_model_spec, pixazo_models_for_modality
 from distr.core.workflow.planning import _litellm_model
@@ -118,6 +119,48 @@ def test_relay_media_multipart_and_refresh(tmp_path, monkeypatch):
     url = relay_media.ensure_pixazo_reference_url(str(wav), str(audio_dir), label="custom_1")
     assert url == record["download_url"]
     assert captured["url"].endswith("/api/media/voice-reference/upload/")
+
+
+def test_pixazo_clone_voice_defers_relay_staging_failure(tmp_path, monkeypatch):
+    from distr.core.agent.services.tts.pixazo_descriptor import PixazoDescriptor
+    from distr.core.integrations import relay_media
+
+    audio_dir = tmp_path / "voice"
+    audio_dir.mkdir()
+    wav = audio_dir / "clip1.wav"
+    wav.write_bytes(b"RIFFxxxx")
+
+    class _Voice:
+        def __init__(self):
+            self.id = 7
+            self.name = "Hayley"
+            self.audio_dir = str(audio_dir)
+            self.provider_voice_id = ""
+            self.status = "processing"
+            self.error_message = ""
+
+    class _Session:
+        def __init__(self):
+            self.commits = 0
+
+        def commit(self):
+            self.commits += 1
+
+    def _fail_upload(*args, **kwargs):
+        raise RuntimeError("Relay upload failed (404): missing")
+
+    monkeypatch.setitem(__import__("sys").modules, "pydub", SimpleNamespace(AudioSegment=object))
+    monkeypatch.setattr(relay_media, "upload_pixazo_voice_reference", _fail_upload)
+
+    voice = _Voice()
+    session = _Session()
+
+    PixazoDescriptor().clone_voice(voice, [str(wav)], session)
+
+    assert voice.status == "ready"
+    assert voice.provider_voice_id == "custom_7"
+    assert voice.error_message == ""
+    assert session.commits >= 1
 
 
 def test_pixazo_dit_steps_from_settings_defaults():

@@ -536,9 +536,8 @@ class MenuTrayMixin:
         self.preferences_submenu.addSeparator()
         preference_section_groups = [
             [
-                ("General", "/settings#general"),
-                ("API Keys", "/settings#thirdparty"),
-                ("Audio", "/settings#audio"),
+                ("General Audio", "/settings#general"),
+                ("Third Party Vendors", "/settings#thirdparty"),
                 ("LLMs", "/settings#llms"),
                 ("Initiative", "/settings#initiative"),
             ],
@@ -548,12 +547,11 @@ class MenuTrayMixin:
             ],
             [
                 ("Advanced", "/settings#advanced"),
-                ("MCP Servers", "/settings#mcp"),
                 ("Activity Logs", "/settings#logs"),
             ],
             [
-                ("Download Manager", "/downloads/"),
-                ("Mermaid JS Viewer", "/diagram/"),
+                ("Downloads", "/settings#downloads"),
+                ("Mermaid History", "/settings#mermaid"),
             ],
         ]
         self._preferences_section_actions: list[QAction] = []
@@ -770,6 +768,8 @@ class MenuTrayMixin:
                 self.actions_menu_action: "open_actions",
                 self.snippets_menu_action: "open_snippets",
                 self.step_runner_action: "open_workflows",
+                self.automations_menu_action: "open_automations",
+                self.kanban_menu_action: "open_ticket_board",
                 self.preferences_menu_action: "open_preferences",
             }
             for action, combo_name in submenu_shortcuts.items():

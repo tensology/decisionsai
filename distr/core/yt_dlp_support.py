@@ -188,7 +188,7 @@ def run_ytdlp_step(config: dict[str, Any]) -> dict[str, Any]:
         payload = {
             "ok": True,
             "job_id": job_id,
-            "manager_path": "/downloads/",
+            "manager_path": "/settings#downloads",
             "message": "Download started — open Download Manager for progress.",
         }
     else:

@@ -110,7 +110,7 @@ class YtdlpDownloadTool(BaseTool):
             return f"Error starting download: {exc}"
 
         job_id = (result or {}).get("id")
-        manager = f"{base_url}/downloads/"
+        manager = f"{base_url}/settings#downloads"
         try:
             webbrowser.open(manager)
         except Exception as exc:

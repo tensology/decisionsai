@@ -17,6 +17,10 @@ class DownloadCreateRequest(BaseModel):
     output_dir: Optional[str] = Field(None, description="Output folder (default ~/Downloads/DecisionsAI)")
 
 
+class RevealDownloadRequest(BaseModel):
+    file_path: str = Field(..., description="Absolute path of the downloaded file to reveal in Finder/File Explorer")
+
+
 def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
     router = APIRouter()
 
@@ -47,15 +51,33 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         download_jobs.start_ytdlp_job(job_id)
         return {
             "id": job_id,
-            "manager_path": "/downloads/",
+            "manager_path": "/settings#downloads",
             "job": download_jobs.get_job(job_id),
         }
 
     @router.delete("/downloads/{job_id}")
     async def cancel_download(job_id: str):
+        row = download_jobs.get_job(job_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if row.get("status") in {"queued", "running"}:
+            download_jobs.cancel_job(job_id)
+            return {"id": job_id, "cancelled": True, "job": download_jobs.get_job(job_id)}
+        removed = download_jobs.remove_job(job_id)
+        return {"id": job_id, "removed": removed}
+
+    @router.post("/downloads/{job_id}/reveal")
+    async def reveal_download(job_id: str, body: RevealDownloadRequest):
         if not download_jobs.get_job(job_id):
             raise HTTPException(status_code=404, detail="Job not found")
-        download_jobs.cancel_job(job_id)
-        return {"id": job_id, "cancelled": True, "job": download_jobs.get_job(job_id)}
+        ok = download_jobs.reveal_file_in_folder(job_id, body.file_path)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Could not reveal file")
+        return {"id": job_id, "revealed": True}
+
+    @router.post("/downloads/clear-inactive")
+    async def clear_inactive_downloads():
+        removed = download_jobs.clear_inactive_jobs()
+        return {"removed": removed}
 
     return router

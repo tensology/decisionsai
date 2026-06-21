@@ -429,6 +429,12 @@ def _cmd_set_vad_threshold(session, params):
     confidence = max(VAD_CONFIDENCE_MIN, min(VAD_CONFIDENCE_MAX, threshold / 100.0))
     session.logger.debug(f"Setting VAD threshold to {threshold}% (confidence: {confidence:.2f})")
 
+    if hasattr(session, 'stt_service') and session.stt_service and hasattr(session.stt_service, 'set_vad_threshold'):
+        try:
+            session.stt_service.set_vad_threshold(threshold)
+        except Exception as e:
+            session.logger.warning(f"Failed to update STT VAD threshold mapping: {e}")
+
     if hasattr(session, 'vad_analyzer') and session.vad_analyzer:
         try:
             from .libs import VADParams

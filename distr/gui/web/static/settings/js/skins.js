@@ -8,6 +8,7 @@ var _editingSkin = null;
 var _editingSkinConfig = null;
 var _skinFiles = [];
 var _selectedHook = null;
+var _skinsBusyDepth = 0;
 
 var EVENT_HOOKS = [
     "idle", "hands_free_listening", "ptt_active", "dictation",
@@ -16,26 +17,125 @@ var EVENT_HOOKS = [
     "thinking", "needs_attention"
 ];
 var PLAYBACK_MODES = ["loop", "pingpong"];
+var _skinCardBaseClass = 'relative flex flex-col items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all';
+var _skinCardSelectedClass = 'border-[#34d399] bg-[#10a37f]/16 shadow-lg shadow-[#10a37f]/25';
+var _skinCardLoadedClass = 'border-[#10a37f] bg-[#10a37f]/10';
+var _skinCardIdleClass = 'border-[#565869] bg-[#0d1117] hover:border-[#7a7c8c]';
+var _skinsSectionTitle = 'Skins';
+var _skinsSectionSubtitle = 'Select and customize your oracle-avatar skin';
 
-function _setSkinsBusy(busy, message) {
+function _setLoadButtonState(busy) {
+    var loadBtn = document.getElementById('skin_detail_load');
+    var loadLabel = document.getElementById('skin_detail_load_label');
+    var loadIcon = document.getElementById('skin_detail_load_icon');
+    if (!loadBtn) return;
+    if (loadLabel) {
+        loadLabel.textContent = busy ? 'Loading...' : 'Load';
+    } else {
+        loadBtn.textContent = busy ? 'Loading...' : 'Load';
+    }
+    if (loadIcon) {
+        loadIcon.classList.toggle('hidden', !!busy);
+    }
+}
+
+function _replaceSkinsUrl(nextSkinFolder) {
+    if (!window.history || !window.history.replaceState) return;
+    var params = new URLSearchParams(window.location.search);
+    if (nextSkinFolder) params.set('skin', nextSkinFolder);
+    else params.delete('skin');
+    var nextSearch = params.toString();
+    var nextUrl = window.location.pathname + (nextSearch ? '?' + nextSearch : '') + window.location.hash;
+    window.history.replaceState({}, '', nextUrl);
+}
+
+function _getSkinFromUrl() {
+    var params = new URLSearchParams(window.location.search);
+    return params.get('skin') || '';
+}
+
+function _syncSkinsSectionHeader(isEditorOpen, skinType) {
+    var titleEl = document.getElementById('skins_section_title');
+    var subtitleEl = document.getElementById('skins_section_subtitle');
+    var backBtn = document.getElementById('skins_section_back');
+    if (titleEl) titleEl.textContent = _skinsSectionTitle;
+    if (subtitleEl) {
+        subtitleEl.textContent = skinType === 'oracle'
+            ? 'Select and customize your oracle skin'
+            : _skinsSectionSubtitle;
+    }
+    if (backBtn) backBtn.classList.toggle('hidden', !isEditorOpen);
+}
+
+function _setSkinsBusy(busy, message, showOverlay, showButtons) {
+    showOverlay = (showOverlay !== false);
+    showButtons = (showButtons !== false);
+    if (busy) _skinsBusyDepth += 1;
+    else _skinsBusyDepth = Math.max(0, _skinsBusyDepth - 1);
+    var effectiveBusy = _skinsBusyDepth > 0;
     var overlay = document.getElementById('skins_loading_overlay');
     var textEl = document.getElementById('skins_loading_text');
     var loadBtn = document.getElementById('skin_detail_load');
     var saveBtn = document.getElementById('skin_detail_save');
-    if (overlay) overlay.classList.toggle('hidden', !busy);
-    if (textEl && message) textEl.textContent = message;
-    if (loadBtn) {
-        loadBtn.disabled = !!busy;
-        loadBtn.classList.toggle('opacity-50', !!busy);
-        loadBtn.classList.toggle('cursor-not-allowed', !!busy);
-        loadBtn.textContent = busy ? 'Loading...' : 'Load';
+    if (overlay) {
+        if (showOverlay) {
+            overlay.classList.toggle('hidden', !effectiveBusy);
+        } else {
+            overlay.classList.add('hidden');
+        }
     }
-    if (saveBtn) {
-        saveBtn.disabled = !!busy;
-        saveBtn.classList.toggle('opacity-50', !!busy);
-        saveBtn.classList.toggle('cursor-not-allowed', !!busy);
-        saveBtn.textContent = busy ? 'Saving...' : 'Save';
+    if (textEl && showOverlay) textEl.textContent = effectiveBusy ? (message || 'Loading...') : '';
+    if (showButtons && loadBtn) {
+        loadBtn.disabled = !!effectiveBusy;
+        loadBtn.classList.toggle('opacity-50', !!effectiveBusy);
+        loadBtn.classList.toggle('cursor-not-allowed', !!effectiveBusy);
+        _setLoadButtonState(!!effectiveBusy);
     }
+    if (showButtons && saveBtn) {
+        saveBtn.disabled = !!effectiveBusy;
+        saveBtn.classList.toggle('opacity-50', !!effectiveBusy);
+        saveBtn.classList.toggle('cursor-not-allowed', !!effectiveBusy);
+        saveBtn.textContent = effectiveBusy ? 'Saving...' : 'Save';
+    }
+}
+
+function _updateSkinCardSelectionState() {
+    var grid = document.getElementById('skins_grid');
+    if (!grid) return;
+
+    Array.prototype.forEach.call(grid.querySelectorAll('[data-skin-card]'), function(card) {
+        var folderName = card.dataset.folder;
+        var isSelected = folderName === _selectedSkin;
+        var isLoaded = folderName === _loadedSkin;
+        var badge = card.querySelector('[data-skin-badge]');
+        var previewWrap = card.querySelector('[data-skin-preview-wrap]');
+
+        if (isSelected) {
+            card.className = _skinCardBaseClass + ' ' + _skinCardSelectedClass;
+        } else if (isLoaded) {
+            card.className = _skinCardBaseClass + ' ' + _skinCardLoadedClass;
+        } else {
+            card.className = _skinCardBaseClass + ' ' + _skinCardIdleClass;
+        }
+
+        if (previewWrap) {
+            if (isSelected) {
+                previewWrap.classList.add('bg-[#10a37f]/18');
+                previewWrap.classList.remove('bg-[#0d1117]', 'bg-[#10a37f]/12');
+            } else if (isLoaded) {
+                previewWrap.classList.add('bg-[#10a37f]/12');
+                previewWrap.classList.remove('bg-[#0d1117]', 'bg-[#10a37f]/18');
+            } else {
+                previewWrap.classList.add('bg-[#0d1117]');
+                previewWrap.classList.remove('bg-[#10a37f]/12', 'bg-[#10a37f]/18');
+            }
+        }
+
+        if (badge) {
+            badge.textContent = '';
+            badge.className = 'hidden';
+        }
+    });
 }
 
 function _getOraclePlaybackMode() {
@@ -93,7 +193,16 @@ async function loadSkinsSettings() {
         if (positionEl) positionEl.value = general.oracle_position || 'custom';
 
         renderSkinsGrid();
-        closeSkinEditor();
+        var skinFromUrl = _getSkinFromUrl();
+        var shouldOpenEditor = skinFromUrl && (window.location.hash || '').toLowerCase() === '#skins';
+        if (shouldOpenEditor && _skinsList.some(function(skin) { return skin.folder_name === skinFromUrl; })) {
+            await openSkinEditor(skinFromUrl);
+        } else {
+            closeSkinEditor();
+            if (skinFromUrl && !_skinsList.some(function(skin) { return skin.folder_name === skinFromUrl; })) {
+                _replaceSkinsUrl('');
+            }
+        }
     } catch (e) {
         console.error('Error loading skins:', e);
     }
@@ -179,12 +288,25 @@ async function saveSkinsSettings() {
     var saved = await _saveSkinEditorState(false);
     if (!saved) return;
 
+    await _loadSkinByName(saved.selectedSkin, saved.stagedScale, true);
+}
+
+async function _loadSkinByName(folderName, skinScale, showToast) {
     _setSkinsBusy(true, 'Loading selected skin...');
     try {
+        var resolvedScale = skinScale;
+        if (resolvedScale === undefined || resolvedScale === null) {
+            var sizeRespForSkin = await fetch('/api/skins/' + encodeURIComponent(folderName) + '/size');
+            if (!sizeRespForSkin.ok) throw new Error('Failed to load skin size');
+            var sizeData = await sizeRespForSkin.json();
+            var rawSize = sizeData.sphere_size !== undefined ? sizeData.sphere_size : _loadedSkinScale;
+            resolvedScale = rawSize > 10 ? Math.max(4, Math.min(10, Math.round(rawSize / 20))) : Math.max(4, Math.min(10, parseInt(rawSize, 10) || _loadedSkinScale || 9));
+        }
+
         var selectResp = await fetch('/api/skins/select', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ skin_name: saved.selectedSkin })
+            body: JSON.stringify({ skin_name: folderName })
         });
 
         if (!selectResp.ok) {
@@ -195,17 +317,19 @@ async function saveSkinsSettings() {
         var sizeResp = await fetch('/api/oracle/size', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sphere_size: saved.stagedScale })
+            body: JSON.stringify({ sphere_size: resolvedScale })
         });
         if (!sizeResp.ok) {
             throw new Error('Failed to load selected size');
         }
 
-        _loadedSkin = saved.selectedSkin;
-        _loadedSkinScale = saved.stagedScale;
-        renderSkinsGrid();
+        _selectedSkin = folderName;
+        _loadedSkin = folderName;
+        _selectedSkinScale = resolvedScale;
+        _loadedSkinScale = resolvedScale;
+        _updateSkinCardSelectionState();
 
-        if (typeof showNotification === 'function') showNotification('Skin loaded', 'success');
+        if (showToast && typeof showNotification === 'function') showNotification('Skin loaded', 'success');
     } catch (e) {
         console.error('Error loading selected skin:', e);
         if (typeof showNotification === 'function') showNotification('Failed to load skin', 'error');
@@ -222,9 +346,9 @@ function renderSkinsGrid() {
         var sel = skin.folder_name === _selectedSkin;
         var isLoaded = skin.folder_name === _loadedSkin;
         var card = document.createElement('div');
-        card.className = 'relative flex flex-col items-center gap-3 p-4 rounded-xl border-2 cursor-pointer transition-all ' +
-            (sel ? 'border-[#10a37f] bg-[#10a37f]/10 shadow-lg shadow-[#10a37f]/20' : 'border-[#565869] bg-[#0d1117] hover:border-[#7a7c8c]');
+        card.className = _skinCardBaseClass + ' ' + (sel ? _skinCardSelectedClass : (isLoaded ? _skinCardLoadedClass : _skinCardIdleClass));
         card.dataset.folder = skin.folder_name;
+        card.dataset.skinCard = 'true';
 
         // Preview image/video — use the idle animation from the API
         var idleFile = skin.idle_animation || 'idle.webm';
@@ -263,27 +387,33 @@ function renderSkinsGrid() {
 
         var previewWrap = document.createElement('div');
         if (skin.type === 'oracle') {
-            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-full bg-[#0d1117] flex items-center justify-center';
+            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-full flex items-center justify-center border border-[#565869] ' +
+                (sel ? 'bg-[#10a37f]/18' : (isLoaded ? 'bg-[#10a37f]/12' : 'bg-[#0d1117]'));
         } else {
-            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-lg bg-[#0d1117] flex items-center justify-center';
+            previewWrap.className = 'w-full aspect-square overflow-hidden rounded-lg flex items-center justify-center ' +
+                (sel ? 'bg-[#10a37f]/18' : (isLoaded ? 'bg-[#10a37f]/12' : 'bg-[#0d1117]'));
         }
+        previewWrap.dataset.skinPreviewWrap = 'true';
         previewWrap.appendChild(previewEl);
         card.appendChild(previewWrap);
 
-        // Name
+        var titleRow = document.createElement('div');
+        titleRow.className = 'flex w-full items-center justify-between gap-2';
+
         var nameEl = document.createElement('span');
-        nameEl.className = 'text-sm font-medium text-white text-center';
+        nameEl.className = 'min-w-0 flex-1 text-sm font-medium text-white';
         nameEl.textContent = skin.name;
-        card.appendChild(nameEl);
+        titleRow.appendChild(nameEl);
 
         var editButton = document.createElement('button');
         editButton.type = 'button';
-        editButton.className = 'absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-[#565869] bg-[#1a1f3a]/95 text-[#ececf1] transition-colors hover:border-[#10a37f] hover:text-white';
+        editButton.className = 'absolute top-3 right-3 flex h-8 w-8 items-center justify-center rounded-full border border-[#565869] bg-[#1a1f3a]/95 text-[#ececf1] transition-colors hover:border-[#10a37f] hover:text-white';
         editButton.setAttribute('aria-label', 'Edit ' + skin.name);
         editButton.innerHTML = '' +
-            '<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-            '<path d="M12 20h9"></path>' +
-            '<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"></path>' +
+            '<svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="m14.7 5.3 4 4"></path>' +
+            '<path d="M4 20l3.8-.8L19 8a2.8 2.8 0 1 0-4-4L3.8 15.2 3 19.9Z"></path>' +
+            '<path d="M13.5 6.5 17.5 10.5"></path>' +
             '</svg>';
         editButton.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -291,18 +421,27 @@ function renderSkinsGrid() {
         });
         card.appendChild(editButton);
 
+        var loadButton = document.createElement('button');
+        loadButton.type = 'button';
+        loadButton.className = 'flex h-8 w-8 items-center justify-center rounded-full bg-[#f97316] text-white shadow-md shadow-[#f97316]/20 transition-colors hover:bg-[#ea580c]';
+        loadButton.setAttribute('aria-label', 'Load ' + skin.name);
+        loadButton.innerHTML = '' +
+            '<svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M3 8h8"></path>' +
+            '<path d="m8 4 4 4-4 4"></path>' +
+            '</svg>';
+        loadButton.addEventListener('click', function(e) {
+            e.stopPropagation();
+            _loadSkinByName(skin.folder_name, null, true);
+        });
+        titleRow.appendChild(loadButton);
+        card.appendChild(titleRow);
+
         // Selected indicator
-        if (sel) {
-            var badge = document.createElement('span');
-            badge.className = 'text-xs font-medium ' + (isLoaded ? 'text-[#10a37f]' : 'text-[#f97316]');
-            badge.textContent = isLoaded ? '✓ Loaded' : 'Selected';
-            card.appendChild(badge);
-        } else if (isLoaded) {
-            var loadedBadge = document.createElement('span');
-            loadedBadge.className = 'text-xs text-[#10a37f] font-medium';
-            loadedBadge.textContent = 'Loaded';
-            card.appendChild(loadedBadge);
-        }
+        var badge = document.createElement('span');
+        badge.dataset.skinBadge = 'true';
+        badge.className = 'hidden';
+        card.appendChild(badge);
 
         card.addEventListener('click', function() { selectSkin(skin.folder_name); });
         card.addEventListener('dblclick', function(e) {
@@ -341,18 +480,28 @@ function renderSkinsGrid() {
 function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 async function selectSkin(folderName) {
+    if (_selectedSkin === folderName) {
+        closeSkinEditor();
+        return;
+    }
     _selectedSkin = folderName;
-    renderSkinsGrid();
+    _updateSkinCardSelectionState();
     closeSkinEditor();
 }
 
 async function openSkinEditor(folderName) {
     _setSkinsBusy(true, 'Loading skin editor...');
+    var panel = document.getElementById('skin_detail_panel');
+    var oracleDetail = document.getElementById('oracle_detail');
+    var avatarDetail = document.getElementById('avatar_detail');
     if (folderName !== _selectedSkin) {
         await selectSkin(folderName);
     }
     var grid = document.getElementById('skins_grid');
     if (grid) grid.classList.add('hidden');
+    if (panel) panel.classList.remove('hidden');
+    if (oracleDetail) oracleDetail.classList.add('hidden');
+    if (avatarDetail) avatarDetail.classList.add('hidden');
     try {
         await loadSkinSize(folderName);
         await showEditorForSkin(folderName);
@@ -386,6 +535,8 @@ function closeSkinEditor() {
     if (panel) panel.classList.add('hidden');
     if (oracleDetail) oracleDetail.classList.add('hidden');
     if (avatarDetail) avatarDetail.classList.add('hidden');
+    _replaceSkinsUrl('');
+    _syncSkinsSectionHeader(false);
 }
 
 async function showEditorForSkin(folderName) {
@@ -399,6 +550,8 @@ async function showEditorForSkin(folderName) {
 
     if (grid) grid.classList.add('hidden');
     panel.classList.remove('hidden');
+    _replaceSkinsUrl(folderName);
+    _syncSkinsSectionHeader(true, skin.type);
 
     if (skin.type === 'oracle') {
         avatarDetail.classList.add('hidden');
@@ -444,7 +597,7 @@ async function loadOracleEditor(folderName) {
         var cur = (_editingSkinConfig.events && _editingSkinConfig.events.idle) ? _editingSkinConfig.events.idle.animation : '0.webm';
         skinFiles.forEach(function(f, i) {
             var o = document.createElement('option');
-            o.value = f; o.textContent = 'Skin ' + (i + 1);
+            o.value = f; o.textContent = 'Background ' + (i + 1);
             if (f === cur) o.selected = true;
             sel.appendChild(o);
         });
@@ -488,9 +641,11 @@ async function loadOracleEditor(folderName) {
 function previewOracleGif(filename) {
     var container = document.getElementById('oracle_preview_container');
     var ph = document.getElementById('oracle_preview_placeholder');
-    if (!filename || !_editingSkin) { if (ph) ph.style.display='block'; return; }
+    if (!container) return;
+    container.style.setProperty('background-color', '#000000', 'important');
+    container.classList.remove('bg-black');
 
-    // Remove any existing preview element
+    // Remove any existing preview element and enforce black background.
     var oldImg = container.querySelector('img');
     var oldVid = container.querySelector('video');
     if (oldImg) oldImg.remove();
@@ -500,6 +655,15 @@ function previewOracleGif(filename) {
         if (oldVid._ppRafId) cancelAnimationFrame(oldVid._ppRafId);
         oldVid.remove();
     }
+
+    if (!filename || !_editingSkin) {
+        if (ph) {
+            ph.style.display = 'block';
+            ph.style.color = '#9ca3af';
+        }
+        return;
+    }
+
     if (ph) ph.style.display = 'none';
 
     var url = '/api/skins/' + encodeURIComponent(_editingSkin) + '/preview/' + encodeURIComponent(filename);
@@ -512,14 +676,14 @@ function previewOracleGif(filename) {
         vid.autoplay = true; vid.muted = true;
         vid.setAttribute('playsinline', '');
         vid.loop = true; // Always loop in preview
-        vid.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
+        vid.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%; background:#000000; background-color:#000000;';
         _applyPingPongToVideo(vid, isPingPong);
         container.appendChild(vid);
         vid.play().catch(function(){});
     } else {
         var img = document.createElement('img');
         img.src = url;
-        img.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
+        img.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%; background:#000000; background-color:#000000;';
         container.appendChild(img);
     }
 }
@@ -753,8 +917,11 @@ function _initSkins() {
     if (loadBtn) loadBtn.addEventListener('click', saveSkinsSettings);
     var backBtn = document.getElementById('skin_detail_back');
     if (backBtn) backBtn.addEventListener('click', closeSkinEditor);
+    var sectionBackBtn = document.getElementById('skins_section_back');
+    if (sectionBackBtn) sectionBackBtn.addEventListener('click', closeSkinEditor);
     _initCreateSkinCard();
     _setupCreateSkinModalClose();
+    _syncSkinsSectionHeader(false);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _initSkins);

@@ -2,7 +2,7 @@
 
 function _getLLMActionButtons() {
     return {
-        saveBtn: document.getElementById('btn_save'),
+        saveBtn: document.getElementById('llms_inline_save') || document.getElementById('btn_save'),
         reloadBtn: document.getElementById('btn_cancel'),
     };
 }
@@ -806,10 +806,54 @@ function benchmarkProfileCapabilities(profile) {
     }).join('');
 }
 
+function benchmarkMetricDisplay(value, suffix) {
+    if (value === null || value === undefined || value === '' || value === 0 || value === '0') return '';
+    return escapeHtml(String(value)) + (suffix ? escapeHtml(suffix) : '');
+}
+
+function benchmarkMetricRows(profile) {
+    profile = profile || {};
+    const metrics = profile.benchmark_metrics || {};
+    const pricing = profile.pricing || {};
+    const rows = [
+        { label: 'Performance score', value: profile.performance_score },
+        { label: 'Value score', value: profile.value_score },
+        { label: 'Context window', value: metrics.context_window_label || profile.context_window },
+        { label: 'Blended price', value: metrics.blended_price_per_1m || pricing.blended_per_1m, suffix: '/1M' },
+        { label: 'Input price', value: metrics.input_price_per_1m || pricing.input_per_1m, suffix: '/1M' },
+        { label: 'Output price', value: metrics.output_price_per_1m || pricing.output_per_1m, suffix: '/1M' },
+        { label: 'Output speed', value: metrics.output_speed_tps, suffix: ' t/s' },
+        { label: 'Latency', value: metrics.latency_first_chunk_s, suffix: ' s' },
+        { label: 'Response time', value: metrics.end_to_end_response_s, suffix: ' s' },
+        { label: 'Kilo completion', value: metrics.completion_percent, suffix: '%' },
+        { label: 'Cost per attempt', value: metrics.cost_per_attempt_usd, suffix: ' USD' },
+        { label: 'Intelligence index', value: metrics.intelligence_index },
+        { label: 'Benchmark count', value: profile.benchmark_count }
+    ];
+    return rows.filter(function (row) {
+        return !(row.value === null || row.value === undefined || row.value === '' || row.value === 0 || row.value === '0');
+    }).map(function (row) {
+        return '<div><dt>' + escapeHtml(row.label) + '</dt><dd>' + benchmarkMetricDisplay(row.value, row.suffix || '') + '</dd></div>';
+    }).join('');
+}
+
+function benchmarkSourcesMarkup(profile) {
+    const sources = (profile && profile.benchmark_sources) || [];
+    if (!sources.length) return '';
+    return '<div class="llm-benchmark-card__sources">' + sources.map(function (source) {
+        const href = source.detail_url || source.url || '#';
+        const rank = source.rank ? ' · #' + source.rank : '';
+        return '<a class="llm-benchmark-card__source" href="' + escapeHtml(href) + '" target="_blank" rel="noreferrer">' +
+            escapeHtml(source.label || source.id || 'Source') + escapeHtml(rank) +
+            '</a>';
+    }).join('') + '</div>';
+}
+
 function renderBenchmarkCard(title, profile, accentClass, cardKey, type, modelOptionsHtml, providerOptionsHtml) {
     profile = profile || {};
     const providerId = cardKey === 'primary' ? 'llm_benchmark_primary_provider' : 'llm_benchmark_compare_provider';
     const modelId = cardKey === 'primary' ? 'llm_benchmark_primary_model' : 'llm_benchmark_compare_model';
+    const metricRows = benchmarkMetricRows(profile);
     return '<article class="llm-benchmark-card ' + accentClass + '">' +
         '<div class="llm-benchmark-card__row">' +
         '<div class="llm-benchmark-card__select-stack">' +
@@ -831,13 +875,8 @@ function renderBenchmarkCard(title, profile, accentClass, cardKey, type, modelOp
         '<p class="llm-benchmark-card__model-name">' + escapeHtml(profile.model_label || profile.model_id || 'Select a model') + '</p>' +
         '<p class="llm-benchmark-card__provider">' + escapeHtml((profile.provider_label || profile.provider || '').toString()) + '</p>' +
         '<p class="llm-benchmark-card__summary">' + escapeHtml(profile.summary || '') + '</p>' +
-        '<dl class="llm-benchmark-card__stats">' +
-        '<div><dt>Performance score</dt><dd>' + escapeHtml(String(profile.performance_score || 0)) + '</dd></div>' +
-        '<div><dt>Value score</dt><dd>' + escapeHtml(String(profile.value_score || 0)) + '</dd></div>' +
-        '<div><dt>Benchmark count</dt><dd>' + escapeHtml(String(profile.benchmark_count || 0)) + '</dd></div>' +
-        '<div><dt>Context</dt><dd>' + escapeHtml(profile.context_window ? String(profile.context_window) : 'n/a') + '</dd></div>' +
-        '</dl>' +
-        '<p class="llm-benchmark-card__metric-note">Performance is the benchmark result. Value is the price-adjusted score.</p>' +
+        (metricRows ? '<dl class="llm-benchmark-card__stats">' + metricRows + '</dl>' : '') +
+        benchmarkSourcesMarkup(profile) +
         '<p class="llm-benchmark-card__use-case"><strong>Best for:</strong> ' + escapeHtml(profile.best_for || 'No recommendation available yet') + '</p>' +
         '<div class="llm-benchmark-card__capabilities"><strong>Tooling:</strong> ' + benchmarkProfileCapabilities(profile) + '</div>' +
         '<p class="llm-benchmark-card__footnote">Released: ' + escapeHtml(profile.released || 'n/a') + ' · Last benchmark: ' + escapeHtml(profile.last_benchmark_date || 'n/a') + '</p>' +
@@ -871,15 +910,23 @@ function renderBenchmarkModal(payload) {
     const compareOptionsHtml = benchmarkSelectOptions(comparePayload, comparison.id, { id: compareProfile.model_id || comparison.id, label: compareProfile.model_label || comparison.label });
     const primaryProviderOptions = benchmarkProviderOptions(payload.type, primaryProvider);
     const compareProviderOptions = benchmarkProviderOptions(payload.type, compareProvider);
+    if (payload.refreshing && !(payload.leaderboard || []).length) {
+        content.innerHTML = '<div class="llm-benchmark-modal__loading">' +
+            '<div class="llm-benchmark-modal__spinner" aria-hidden="true"></div>' +
+            '<div>Fetching data from sources, you can close this window and come back in a bit.</div>' +
+            '</div>';
+        return;
+    }
     const leaderboard = (payload.leaderboard || []).map(function (row, index) {
         const active = benchmarkModalState && benchmarkModalState.compareModel === row.id ? ' is-active' : '';
         return '<tr class="llm-benchmark-leaderboard__row' + active + '" data-benchmark-compare="' + escapeHtml(row.id || '') + '" data-benchmark-provider="' + escapeHtml(row.provider || '') + '">' +
             '<td class="llm-benchmark-leaderboard__rank">#' + (index + 1) + '</td>' +
             '<td class="llm-benchmark-leaderboard__model">' + escapeHtml(row.label || row.id || '') + '</td>' +
-            '<td class="llm-benchmark-leaderboard__score">' + escapeHtml(String(row.performance_score || 0)) + '</td>' +
-            '<td class="llm-benchmark-leaderboard__score">' + escapeHtml(String(row.value_score || 0)) + '</td>' +
+            '<td class="llm-benchmark-leaderboard__score">' + escapeHtml(row.performance_score != null ? String(row.performance_score) : '—') + '</td>' +
+            '<td class="llm-benchmark-leaderboard__score">' + escapeHtml(row.value_score != null ? String(row.value_score) : '—') + '</td>' +
             '</tr>';
     }).join('');
+    const refreshBanner = payload.refreshing ? '<div class="llm-benchmark-modal__refreshing">Fetching fresh benchmark data from sources in the background. You can close this window and come back in a bit.</div>' : '';
     content.innerHTML = '<header class="llm-benchmark-modal__header">' +
         '<h3 class="llm-benchmark-modal__title">Comparison models</h3>' +
         '<button type="button" class="llm-benchmark-modal__close" data-benchmark-close="1">×</button>' +
@@ -888,6 +935,7 @@ function renderBenchmarkModal(payload) {
         '<button type="button" class="llm-benchmark-modal__tab' + (activeTab === 'leaderboard' ? ' is-active' : '') + '" data-benchmark-tab="leaderboard">Leaderboard</button>' +
         '<button type="button" class="llm-benchmark-modal__tab' + (activeTab === 'compare' ? ' is-active' : '') + '" data-benchmark-tab="compare">Compare</button>' +
         '</div>' +
+        refreshBanner +
         '<section class="llm-benchmark-modal__panel' + (activeTab === 'leaderboard' ? ' is-active' : '') + '">' +
         '<p class="llm-benchmark-modal__helper">Performance is the benchmark score. Value is the score adjusted for cost. Click a row to compare it.</p>' +
         '<aside class="llm-benchmark-modal__leaderboard llm-benchmark-modal__leaderboard--full">' +
@@ -1088,6 +1136,13 @@ function initLLMEnhancements() {
     ensureProjectCliStatusPills();
     ensureBenchmarkButtons();
     ensureBenchmarkModal();
+    const { saveBtn } = _getLLMActionButtons();
+    if (saveBtn && saveBtn.id === 'llms_inline_save' && saveBtn.dataset.bound !== '1') {
+        saveBtn.dataset.bound = '1';
+        saveBtn.addEventListener('click', function () {
+            saveLLMsSettings();
+        });
+    }
 }
 
 function setActiveLLMSubtab(tabName) {

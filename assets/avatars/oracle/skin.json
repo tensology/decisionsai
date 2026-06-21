@@ -16,7 +16,7 @@
   },
   "events": {
     "idle": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -31,7 +31,7 @@
       "playback": "pingpong"
     },
     "hands_free_listening": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -46,7 +46,7 @@
       "playback": "pingpong"
     },
     "ptt_active": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -61,7 +61,7 @@
       "playback": "pingpong"
     },
     "dictation": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -76,7 +76,7 @@
       "playback": "pingpong"
     },
     "ticket_dictation": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -91,7 +91,7 @@
       "playback": "pingpong"
     },
     "recording_action": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -106,7 +106,7 @@
       "playback": "pingpong"
     },
     "file_drop_success": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -121,7 +121,7 @@
       "playback": "pingpong"
     },
     "tts_response": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": true,
       "show_chat_bubble": false,
       "glow": false,
@@ -136,7 +136,7 @@
       "playback": "pingpong"
     },
     "running_action": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -151,7 +151,7 @@
       "playback": "pingpong"
     },
     "running_step_runner": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -166,7 +166,7 @@
       "playback": "pingpong"
     },
     "snippet_copied": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -181,7 +181,7 @@
       "playback": "pingpong"
     },
     "thinking": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -196,7 +196,7 @@
       "playback": "pingpong"
     },
     "needs_attention": {
-      "animation": "14.webm",
+      "animation": "8.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,

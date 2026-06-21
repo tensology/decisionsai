@@ -28,9 +28,11 @@ _PAGE_MAP = {
     # Settings sections
     "general":        "/settings#general",
     "general settings": "/settings#general",
+    "general and audio": "/settings#general",
+    "general & audio": "/settings#general",
     "initiative":     "/settings#initiative",
-    "audio":          "/settings#audio",
-    "audio settings": "/settings#audio",
+    "audio":          "/settings#general",
+    "audio settings": "/settings#general",
     "third party":    "/settings#thirdparty",
     "third-party":    "/settings#thirdparty",
     "thirdparty":     "/settings#thirdparty",
@@ -84,13 +86,14 @@ _PAGE_MAP = {
     "mermaid editor": "/diagram/",
     "mermaid diagram": "/diagram/",
     # Download manager
-    "downloads":      "/downloads/",
-    "download manager": "/downloads/",
+    "downloads":      "/settings#downloads",
+    "download manager": "/settings#downloads",
+    "mermaid history": "/settings#mermaid",
 }
 
 # Build a nice list for the tool description
 _KNOWN_PAGES = ", ".join(sorted({
-    "chat", "settings/preferences", "general", "initiative", "audio",
+    "chat", "settings/preferences", "general & audio", "initiative", "audio",
     "third party/providers/api keys", "llms/models", "skins/avatar",
     "advanced", "actions", "skills", "projects",
     "workflows", "ticket board", "docs/api docs",
@@ -125,14 +128,15 @@ def _confirmation_for_path(path: str) -> str:
         if "#" in path:
             frag = path.split("#", 1)[1].lower()
         section = {
-            "general": "General",
+            "general": "General Audio",
             "initiative": "Initiative",
-            "audio": "Audio",
-            "thirdparty": "API keys",
+            "thirdparty": "Third Party Vendors",
             "llms": "LLMs",
             "skins": "Skins",
             "advanced": "Advanced",
-            "logs": "Activity logs",
+            "logs": "Activity Logs",
+            "downloads": "Downloads",
+            "mermaid": "Mermaid History",
             "about": "About",
         }.get(frag, "")
         if section:

@@ -86,8 +86,9 @@
 
 .mermaid-viewer-history-item {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     width: 100%;
     text-align: left;
     border: 0;
@@ -95,11 +96,16 @@
     background: transparent;
     color: #ececf1;
     padding: 8px 10px;
-    cursor: pointer;
 }
 
 .mermaid-viewer-history-item:hover {
     background: rgba(249, 115, 22, 0.12);
+}
+
+.mermaid-viewer-history-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .mermaid-viewer-history-title {
@@ -111,6 +117,96 @@
     font-size: 10px;
     color: rgba(255, 255, 255, 0.45);
     margin-top: 2px;
+}
+
+.mermaid-viewer-history-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.mermaid-viewer-open-btn {
+    color: #e2e8f0;
+}
+
+.mermaid-viewer-open-btn:hover {
+    background: rgba(30, 41, 59, 0.85);
+    border-color: rgba(249, 115, 22, 0.35);
+    color: #fff;
+}
+
+.mermaid-viewer-delete-btn {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(15, 23, 42, 0.55);
+    color: #e2e8f0;
+    border-radius: 8px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.mermaid-viewer-delete-btn:hover {
+    background: rgba(30, 41, 59, 0.85);
+    border-color: rgba(249, 115, 22, 0.35);
+    color: #fff;
+}
+
+.mermaid-viewer-delete-btn.mermaid-action-btn-danger:hover {
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fecaca;
+}
+
+.mermaid-viewer-delete-btn .mermaid-action-icon,
+.mermaid-viewer-delete-btn svg {
+    width: 14px;
+    height: 14px;
+    line-height: 1;
+}
+
+.mermaid-action-btn {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(15, 23, 42, 0.55);
+    color: #e2e8f0;
+    border-radius: 8px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    line-height: 1;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.mermaid-action-btn:hover {
+    background: rgba(30, 41, 59, 0.85);
+    border-color: rgba(249, 115, 22, 0.35);
+    color: #fff;
+}
+
+.mermaid-action-btn-danger {
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+}
+
+.mermaid-action-btn-danger:hover {
+    border-color: rgba(239, 68, 68, 0.45);
+    color: #fecaca;
+}
+
+.mermaid-action-btn .mermaid-action-icon,
+.mermaid-action-icon {
+    width: 16px;
+    height: 16px;
 }
 
 @media (max-width: 900px) {

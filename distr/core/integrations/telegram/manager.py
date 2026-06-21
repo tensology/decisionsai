@@ -42,6 +42,7 @@ from distr.core.integrations.base import IntegrationReconnectMixin
 
 # How often to repeat the same "not connected" summary in the main log.
 _CONNECT_FAILURE_LOG_INTERVAL_S = 300.0
+_IMMEDIATE_CLOSE_WINDOW_S = 3.0
 
 
 def relay_endpoint_label(server_url: str) -> str:
@@ -92,6 +93,15 @@ def friendly_telegram_socket_error(err_str: str, *, endpoint: str = "") -> str:
     if err_str:
         return f"Telegram not connected ({err_str})"
     return "Telegram not connected"
+
+
+def friendly_telegram_immediate_close_reason(*, endpoint: str = "") -> str:
+    """User-facing reason when the relay accepts auth, then drops the socket immediately."""
+    host = endpoint or "Telegram relay"
+    return (
+        f"{host} accepted the session token but closed the Telegram socket immediately — "
+        "the stored Telegram session is likely stale, or the relay backend is unhealthy"
+    )
 
 
 def telegram_online_notice_enabled() -> bool:
@@ -227,6 +237,8 @@ class TelegramWebSocketManager(
         self._outage_announced: bool = False
         self._last_socket_error_log_at: float = 0.0
         self._dns_fallback_applied: bool = False
+        self._connected_at: float = 0.0
+        self._immediate_close_count: int = 0
 
         # Rate Limiting & Dedup
         self._last_send_time = 0
@@ -828,6 +840,7 @@ class TelegramWebSocketManager(
 
         self._clear_connect_failure()
         self.connection_status_changed.emit(True, "Connected")
+        self._connected_at = time.time()
 
         self._reset_reconnect_state("Telegram")
         self._is_auto_reconnecting = False  # Reset flag after connection
@@ -882,7 +895,17 @@ class TelegramWebSocketManager(
         self._stop_socket_heartbeat()
 
         if not self._active_disconnect:
-            reason = "Telegram relay disconnected — reconnecting automatically"
+            lived_for = (
+                time.time() - self._connected_at if self._connected_at > 0 else None
+            )
+            if lived_for is not None and lived_for <= _IMMEDIATE_CLOSE_WINDOW_S:
+                self._immediate_close_count += 1
+                reason = friendly_telegram_immediate_close_reason(
+                    endpoint=self._relay_endpoint_label()
+                )
+            else:
+                self._immediate_close_count = 0
+                reason = "Telegram relay disconnected — reconnecting automatically"
             if not self._outage_announced:
                 self._announce_connect_failure(reason)
             else:
@@ -894,6 +917,7 @@ class TelegramWebSocketManager(
 
         # Reset connection status tracking
         self._last_connection_status = None
+        self._connected_at = 0.0
 
         if not self._active_disconnect:
             self._schedule_reconnect("Telegram")
@@ -903,6 +927,18 @@ class TelegramWebSocketManager(
         err_str = self.socket.errorString()
         endpoint = self._relay_endpoint_label()
         friendly = friendly_telegram_socket_error(err_str, endpoint=endpoint)
+        lived_for = time.time() - self._connected_at if self._connected_at > 0 else None
+        if (
+            lived_for is not None
+            and lived_for <= _IMMEDIATE_CLOSE_WINDOW_S
+            and (
+                "tls" in (err_str or "").lower()
+                or "ssl" in (err_str or "").lower()
+                or "remote host closed" in (err_str or "").lower()
+                or "connection closed" in (err_str or "").lower()
+            )
+        ):
+            friendly = friendly_telegram_immediate_close_reason(endpoint=endpoint)
         self._log_detailed(f"SOCKET ERROR: {err_str} (code={error_code})")
 
         now = time.time()

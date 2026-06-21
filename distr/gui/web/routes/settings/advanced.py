@@ -55,6 +55,37 @@ def _whatsapp_relay_base_url() -> str:
     return "https://www.decisionsai.net/api/whatsapp"
 
 
+def _telegram_relay_base_url() -> str:
+    """
+    Resolve Telegram relay base URL independent of generic DEBUG.
+
+    Local UI development often enables DEBUG without also running the local
+    Telegram relay, so using DEBUG as the switch causes false localhost
+    connection failures from the settings screen.
+    """
+    explicit = str(os.environ.get("DECISIONSAI_TELEGRAM_API_BASE") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if use_local_relay:
+        return "http://localhost:8090"
+    return "https://www.decisionsai.net"
+
+
+def _telegram_relay_candidates() -> list[str]:
+    primary = _telegram_relay_base_url().rstrip("/")
+    candidates = [primary]
+    hosted = "https://www.decisionsai.net"
+    if primary != hosted:
+        candidates.append(hosted)
+    return candidates
+
+
 def register_routes(router, templates):
 
     @router.get("/advanced")
@@ -974,27 +1005,28 @@ def register_routes(router, templates):
     async def telegram_link_request():
         """Proxy to decisionsai.net to get Telegram QR link (same as native _fetch_qr_code)."""
         try:
-            import os
             import requests as req
 
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                server_base = "http://localhost:8090"
-            else:
-                server_base = "https://www.decisionsai.net"
-
-            api_url = f"{server_base.rstrip('/')}/api/telegram/link/request/"
             headers = {"Content-Type": "application/json"}
             relay_token = relay_internal_token()
             if relay_token:
                 headers["X-Relay-Internal-Token"] = relay_token
 
             payload_str = "{}"
-
-            response = req.post(api_url, headers=headers, data=payload_str, timeout=10)
-            if response.status_code != 200:
-                return JSONResponse({"qr_code": None, "token": None, "link": None, "app_user_id": None, "error": f"HTTP {response.status_code}"})
-            data = response.json()
-            return JSONResponse({"qr_code": data.get("qr_code"), "token": data.get("token"), "link": data.get("link"), "app_user_id": data.get("app_user_id")})
+            last_error = None
+            for server_base in _telegram_relay_candidates():
+                api_url = f"{server_base}/api/telegram/link/request/"
+                try:
+                    response = req.post(api_url, headers=headers, data=payload_str, timeout=10)
+                    if response.status_code != 200:
+                        last_error = f"HTTP {response.status_code}"
+                        continue
+                    data = response.json()
+                    return JSONResponse({"qr_code": data.get("qr_code"), "token": data.get("token"), "link": data.get("link"), "app_user_id": data.get("app_user_id")})
+                except Exception as relay_error:
+                    last_error = str(relay_error)
+                    continue
+            return JSONResponse({"qr_code": None, "token": None, "link": None, "app_user_id": None, "error": last_error or "Telegram relay unavailable"})
         except Exception as e:
             logger.error(f"Telegram request: {e}", exc_info=True)
             return JSONResponse({"qr_code": None, "token": None, "link": None, "app_user_id": None, "error": str(e)})
@@ -1003,21 +1035,20 @@ def register_routes(router, templates):
     async def telegram_link_status(body: dict):
         """Check Telegram link status (proxy to decisionsai.net)."""
         try:
-            import os
             import requests as req
 
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                server_base = "http://localhost:8090"
-            else:
-                server_base = "https://www.decisionsai.net"
-
-            api_url = f"{server_base.rstrip('/')}/api/telegram/link/status/"
             headers = {"Content-Type": "application/json"}
-            response = req.get(api_url, headers=headers, params={"token": body.get("token")}, timeout=5)
-            if response.status_code != 200:
-                return JSONResponse({"status": "error"})
-            data = response.json()
-            return JSONResponse({"status": data.get("status"), "user_id": data.get("user_id")})
+            for server_base in _telegram_relay_candidates():
+                api_url = f"{server_base}/api/telegram/link/status/"
+                try:
+                    response = req.get(api_url, headers=headers, params={"token": body.get("token")}, timeout=5)
+                    if response.status_code != 200:
+                        continue
+                    data = response.json()
+                    return JSONResponse({"status": data.get("status"), "user_id": data.get("user_id")})
+                except Exception:
+                    continue
+            return JSONResponse({"status": "error"})
         except Exception:
             return JSONResponse({"status": "error"})
 
@@ -1044,6 +1075,24 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Telegram save: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)})
+
+    @router.post("/advanced/telegram/disconnect")
+    async def telegram_disconnect():
+        """Remove Telegram connection details from connected_accounts."""
+        try:
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+            settings = load_settings_from_db()
+            connected_accounts = parse_connected_accounts(settings)
+            settings["connected_accounts"] = [
+                a for a in connected_accounts
+                if not (isinstance(a, dict) and a.get("provider") == "telegram")
+            ]
+            save_settings_to_db(settings)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error(f"Telegram disconnect: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     @router.get("/advanced/macos-permissions")
     @route_handler("macOS permission status")

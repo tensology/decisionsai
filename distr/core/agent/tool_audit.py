@@ -25,6 +25,9 @@ _CHAT_COMPACT_TOOLS = {
     "mode_control",
 }
 
+_ACTIVITY_STYLE_PASSIVE = "passive"
+_ACTIVITY_STYLE_ACTIVE = "active"
+
 
 def _preview_result(text: Optional[str], limit: int = 220) -> str:
     if not text:
@@ -177,7 +180,8 @@ def _build_chat_tool_event(
     normalized_status = (status or "completed").lower()
     if _looks_like_error(result):
         normalized_status = "failed"
-    title = _chat_title(normalized_tool, result, instruction_hint)
+    activity_style = _tool_activity_style(normalized_tool, result, instruction_hint)
+    title = _tool_activity_title(normalized_tool, result, instruction_hint)
     event = {
         "id": f"tool-{chat_id}-{now}",
         "event": "tool_executed",
@@ -189,7 +193,8 @@ def _build_chat_tool_event(
         "status": normalized_status,
         "timestamp": now,
         "chat_visible": True,
-        "chat_compact": _is_compact_tool(normalized_tool),
+        "chat_compact": _is_compact_tool(normalized_tool) or activity_style == _ACTIVITY_STYLE_PASSIVE,
+        "activity_style": activity_style,
     }
     if turn_chat_id is not None:
         event["turn_chat_id"] = int(turn_chat_id)
@@ -232,6 +237,45 @@ def _chat_title(tool_name: str, result: Optional[str], instruction_hint: Optiona
 
 def _is_compact_tool(tool_name: str) -> bool:
     return tool_name in _CHAT_COMPACT_TOOLS
+
+
+def _tool_activity_style(tool_name: str, result: Optional[str], instruction_hint: Optional[str]) -> str:
+    normalized_tool = (tool_name or "").strip()
+    lowered_result = (result or "").strip().lower()
+    lowered_hint = (instruction_hint or "").strip().lower()
+    if normalized_tool in {"execute_code", "file_operations", "mode_control", "chat_settings", "read_aloud"}:
+        return _ACTIVITY_STYLE_PASSIVE
+    if normalized_tool == "clipboard_action":
+        if lowered_result.startswith("clipboard updated"):
+            return _ACTIVITY_STYLE_ACTIVE
+        if lowered_result.startswith("clipboard content:"):
+            return _ACTIVITY_STYLE_PASSIVE
+        if lowered_result.startswith("reading ") or lowered_result.startswith("read_action:"):
+            return _ACTIVITY_STYLE_ACTIVE
+        if "explain" in lowered_hint or "elaborate" in lowered_hint:
+            return _ACTIVITY_STYLE_PASSIVE
+    return _ACTIVITY_STYLE_ACTIVE
+
+
+def _tool_activity_title(tool_name: str, result: Optional[str], instruction_hint: Optional[str]) -> str:
+    normalized_tool = (tool_name or "").strip()
+    raw_result = (result or "").strip()
+    lowered_result = raw_result.lower()
+    lowered_hint = (instruction_hint or "").strip().lower()
+    if normalized_tool == "clipboard_action":
+        if lowered_result.startswith("clipboard content:"):
+            return "Ingested clipboard into context"
+        if lowered_result.startswith("clipboard updated"):
+            return "Updated clipboard"
+        if lowered_result.startswith("reading ") or lowered_result.startswith("read_action:"):
+            return "Read clipboard aloud"
+        if "explain" in lowered_hint:
+            return "Used selected text for explanation"
+        if "elaborate" in lowered_hint:
+            return "Used selected text for elaboration"
+    if normalized_tool == "mouse_movement" and lowered_result.startswith("moved mouse"):
+        return raw_result.rstrip(".")
+    return _chat_title(normalized_tool, result, instruction_hint)
 
 
 def _persist_chat_tool_event(event: Dict[str, Any], limit: int = 200) -> bool:

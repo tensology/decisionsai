@@ -1127,6 +1127,23 @@
     color: rgba(226, 232, 240, 0.55);
 }
 
+.activity-step--passive .activity-step-label {
+    color: rgba(226, 232, 240, 0.66);
+}
+
+.activity-step--passive .activity-step-chevron,
+.activity-step--passive .activity-step-time {
+    opacity: 0.32;
+}
+
+.activity-step--active .activity-step-label {
+    color: rgba(255, 255, 255, 0.88);
+}
+
+.activity-step--active .activity-step-detail--title {
+    color: rgba(255, 255, 255, 0.96);
+}
+
 .activity-status {
     font-size: 10px;
     line-height: 1;
@@ -2338,7 +2355,7 @@
 .voice-select-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: nowrap;
 }
 
@@ -2368,6 +2385,20 @@
 .modal-play-voice-btn:hover {
     background-color: #565869;
     border-color: rgba(255, 255, 255, 0.3);
+}
+
+.voice-select-row .chat-voice-action-btn {
+    width: 38px;
+    height: 38px;
+    border-radius: 6px;
+}
+
+.voice-select-row .chat-voice-custom-btn {
+    width: auto;
+    min-width: 86px;
+    padding: 0 12px;
+    font-size: 12px;
+    white-space: nowrap;
 }
 
 .modal-play-spinner {

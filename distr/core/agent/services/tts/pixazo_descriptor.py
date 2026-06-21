@@ -228,15 +228,16 @@ class PixazoDescriptor(TTSProviderDescriptor):
             record = upload_pixazo_voice_reference(ref_path, label=f"custom_{voice.id}")
             write_relay_reference_meta(voice.audio_dir, record)
         except Exception as exc:
-            voice.status = "failed"
-            voice.error_message = f"Could not stage reference audio on Decisions relay: {exc}"[:500]
-            session.commit()
-            logger.warning("Pixazo relay staging failed for voice %s: %s", voice.id, exc)
-            return
+            logger.warning(
+                "Pixazo relay staging failed for voice %s: %s; deferring reference staging until first use",
+                voice.id,
+                exc,
+            )
         voice.provider_voice_id = f"custom_{voice.id}"
         voice.status = "ready"
+        voice.error_message = ""
         session.commit()
-        logger.info("Pixazo custom voice registered: %s -> %s (relay staged)", voice.name, voice.provider_voice_id)
+        logger.info("Pixazo custom voice registered: %s -> %s", voice.name, voice.provider_voice_id)
 
     @staticmethod
     def _resolve_custom_voice_name(voice_id: str) -> Optional[str]:

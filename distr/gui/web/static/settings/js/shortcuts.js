@@ -31,7 +31,7 @@ function _rememberHiddenTicketDictationSettings(s) {
         .hotkey-capture {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 0;
             position: relative;
         }
         .hotkey-display {
@@ -41,7 +41,7 @@ function _rememberHiddenTicketDictationSettings(s) {
             align-items: center;
             flex-wrap: wrap;
             gap: 4px;
-            padding: 6px 10px;
+            padding: 6px 34px 6px 10px;
             background: #0d1117;
             border: 1px solid #565869;
             border-radius: 6px;
@@ -91,23 +91,42 @@ function _rememberHiddenTicketDictationSettings(s) {
             white-space: nowrap;
         }
         .hotkey-clear {
-            flex-shrink: 0;
-            width: 26px;
-            height: 26px;
+            position: absolute;
+            top: 50%;
+            right: 9px;
+            transform: translateY(-50%);
             display: flex;
             align-items: center;
             justify-content: center;
+            width: auto;
+            height: auto;
+            border: none;
+            color: #ffffff;
+            font-size: 14px;
+            line-height: 1;
             background: transparent;
-            border: 1px solid #565869;
-            border-radius: 4px;
-            color: #7a7c8c;
-            font-size: 11px;
             cursor: pointer;
-            transition: color 0.15s, border-color 0.15s;
+            transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+            padding: 0;
+            margin: 0;
+            opacity: 1;
+            width: 20px;
+            height: 20px;
+            border: 1px solid rgba(120, 129, 141, 0.65);
+            border-radius: 9999px;
+            background: rgba(120, 129, 141, 0.14);
         }
         .hotkey-clear:hover {
-            color: #ececf1;
-            border-color: #9ca3af;
+            color: #ffffff;
+            background: rgba(120, 129, 141, 0.2);
+            border-color: rgba(148, 163, 184, 0.85);
+            opacity: 1;
+            transform: translateY(-50%) scale(1.04);
+        }
+        .hotkey-clear svg {
+            width: 12px;
+            height: 12px;
+            display: block;
         }
     `;
     document.head.appendChild(style);
@@ -243,8 +262,32 @@ function _validateShortcutCollisions(shortcuts) {
 // "Saved" baseline — used to detect unsaved changes
 // ---------------------------------------------------------------------------
 const _savedValues = {}; // field-id → string value
+let _shortcutAutosaveTimer = null;
+let _shortcutAutosaveInFlight = false;
 
 function _recordSaved(id, val) { _savedValues[id] = val || ''; }
+
+function _shortcutsHavePendingChanges() {
+    if (String(_cb('shortcuts_global_ptt_hotkey_enabled', true)) !== (_savedValues.shortcuts_global_ptt_hotkey_enabled || '')) return true;
+    if (String(_cb('shortcuts_recording_hotkey_enabled', true)) !== (_savedValues.shortcuts_recording_hotkey_enabled || '')) return true;
+    if (String(_cb('shortcuts_dictation_hotkey_enabled', false)) !== (_savedValues.shortcuts_dictation_hotkey_enabled || '')) return true;
+    return Array.from(document.querySelectorAll('.hotkey-capture')).some(_isChanged);
+}
+
+function _queueShortcutAutosave() {
+    if (_shortcutAutosaveTimer) clearTimeout(_shortcutAutosaveTimer);
+    _shortcutAutosaveTimer = setTimeout(async () => {
+        _shortcutAutosaveTimer = null;
+        if (_shortcutAutosaveInFlight || !_shortcutsHavePendingChanges()) return;
+        _shortcutAutosaveInFlight = true;
+        try {
+            await saveShortcutSettings({ silentSuccess: true });
+        } finally {
+            _shortcutAutosaveInFlight = false;
+            if (_shortcutsHavePendingChanges()) _queueShortcutAutosave();
+        }
+    }, 250);
+}
 
 function _isChanged(captureEl) {
     const type = captureEl.dataset.type;
@@ -499,6 +542,7 @@ function _finalizeChordCapture(el, pressedMods, pressedKeys) {
 
     display && display.classList.remove('capturing');
     _updateChangedState(el);
+    _queueShortcutAutosave();
 }
 
 function _cancelCapture() {
@@ -594,6 +638,7 @@ function initHotkeyCapture() {
                     if (ki) ki.value = '';
                 }
                 _updateChangedState(captureEl);
+                _queueShortcutAutosave();
             });
         }
     });
@@ -655,6 +700,12 @@ function _applyShortcutSettings(s) {
            _valueOrDefault(s.web_hotkey_snippets_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_snippets_key, 'n'));
     _setMK('shortcuts_web_hotkey_workflows_modifier',   'shortcuts_web_hotkey_workflows_key',
            _valueOrDefault(s.web_hotkey_workflows_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_workflows_key, 'w'));
+    _setMK('shortcuts_web_hotkey_automations_modifier', 'shortcuts_web_hotkey_automations_key',
+           _valueOrDefault(s.web_hotkey_automations_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_automations_key, 'o'));
+    _setMK('shortcuts_web_hotkey_ticket_board_modifier', 'shortcuts_web_hotkey_ticket_board_key',
+           _valueOrDefault(s.web_hotkey_ticket_board_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_ticket_board_key, 't'));
+    _setMK('shortcuts_web_hotkey_irc_modifier',        'shortcuts_web_hotkey_irc_key',
+           _valueOrDefault(s.web_hotkey_irc_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_irc_key, 'i'));
     _setMK('shortcuts_web_hotkey_preferences_modifier', 'shortcuts_web_hotkey_preferences_key',
            _valueOrDefault(s.web_hotkey_preferences_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_preferences_key, 'grave'));
 
@@ -696,7 +747,8 @@ async function loadShortcutSettings() {
 function _v(id)  { return (document.getElementById(id) || {}).value || ''; }
 function _cb(id, def) { const el = document.getElementById(id); return el ? el.checked : def; }
 
-async function saveShortcutSettings() {
+async function saveShortcutSettings(options) {
+    options = options || {};
     try {
         const settings = {
             global_ptt_hotkey_enabled: _cb('shortcuts_global_ptt_hotkey_enabled', true),
@@ -738,6 +790,12 @@ async function saveShortcutSettings() {
             web_hotkey_snippets_key:         _v('shortcuts_web_hotkey_snippets_key'),
             web_hotkey_workflows_modifier:   _v('shortcuts_web_hotkey_workflows_modifier'),
             web_hotkey_workflows_key:        _v('shortcuts_web_hotkey_workflows_key'),
+            web_hotkey_automations_modifier: _v('shortcuts_web_hotkey_automations_modifier'),
+            web_hotkey_automations_key:      _v('shortcuts_web_hotkey_automations_key'),
+            web_hotkey_ticket_board_modifier: _v('shortcuts_web_hotkey_ticket_board_modifier'),
+            web_hotkey_ticket_board_key:      _v('shortcuts_web_hotkey_ticket_board_key'),
+            web_hotkey_irc_modifier:        _v('shortcuts_web_hotkey_irc_modifier'),
+            web_hotkey_irc_key:             _v('shortcuts_web_hotkey_irc_key'),
             web_hotkey_preferences_modifier: _v('shortcuts_web_hotkey_preferences_modifier'),
             web_hotkey_preferences_key:      _v('shortcuts_web_hotkey_preferences_key'),
         };
@@ -756,6 +814,9 @@ async function saveShortcutSettings() {
             { name: 'Actions launcher', enabled: true, modifier: settings.web_hotkey_actions_modifier, key: settings.web_hotkey_actions_key, modifierField: 'shortcuts_web_hotkey_actions_modifier', keyField: 'shortcuts_web_hotkey_actions_key' },
             { name: 'Snippets launcher', enabled: true, modifier: settings.web_hotkey_snippets_modifier, key: settings.web_hotkey_snippets_key, modifierField: 'shortcuts_web_hotkey_snippets_modifier', keyField: 'shortcuts_web_hotkey_snippets_key' },
             { name: 'Workflows launcher', enabled: true, modifier: settings.web_hotkey_workflows_modifier, key: settings.web_hotkey_workflows_key, modifierField: 'shortcuts_web_hotkey_workflows_modifier', keyField: 'shortcuts_web_hotkey_workflows_key' },
+            { name: 'Automations launcher', enabled: true, modifier: settings.web_hotkey_automations_modifier, key: settings.web_hotkey_automations_key, modifierField: 'shortcuts_web_hotkey_automations_modifier', keyField: 'shortcuts_web_hotkey_automations_key' },
+            { name: 'Ticket board launcher', enabled: true, modifier: settings.web_hotkey_ticket_board_modifier, key: settings.web_hotkey_ticket_board_key, modifierField: 'shortcuts_web_hotkey_ticket_board_modifier', keyField: 'shortcuts_web_hotkey_ticket_board_key' },
+            { name: 'IRC launcher', enabled: true, modifier: settings.web_hotkey_irc_modifier, key: settings.web_hotkey_irc_key, modifierField: 'shortcuts_web_hotkey_irc_modifier', keyField: 'shortcuts_web_hotkey_irc_key' },
             { name: 'Preferences launcher', enabled: true, modifier: settings.web_hotkey_preferences_modifier, key: settings.web_hotkey_preferences_key, modifierField: 'shortcuts_web_hotkey_preferences_modifier', keyField: 'shortcuts_web_hotkey_preferences_key' },
         ]);
         if (collisionMessage) {
@@ -780,7 +841,7 @@ async function saveShortcutSettings() {
         } else {
             await loadShortcutSettings();
         }
-        if (typeof showNotification === 'function')
+        if (!options.silentSuccess && typeof showNotification === 'function')
             showNotification('Shortcut settings saved', 'success');
     } catch (err) {
         console.error('Error saving shortcut settings:', err);
@@ -795,6 +856,13 @@ async function saveShortcutSettings() {
 function _initShortcuts() {
     if (!document.getElementById('tab-shortcuts')) return;
     initHotkeyCapture();
+    ['shortcuts_global_ptt_hotkey_enabled', 'shortcuts_recording_hotkey_enabled', 'shortcuts_dictation_hotkey_enabled'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el && !el.dataset.autosaveBound) {
+            el.addEventListener('change', _queueShortcutAutosave);
+            el.dataset.autosaveBound = 'true';
+        }
+    });
     loadShortcutSettings();
 }
 
