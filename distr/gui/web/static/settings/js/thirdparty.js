@@ -646,6 +646,24 @@ function renderThirdPartyConnectList() {
     }).join('');
 }
 
+function applyThirdPartyConnectDeepLink() {
+    var query = new URLSearchParams(window.location.search || '');
+    var requestedSubtab = (query.get('subtab') || '').toLowerCase();
+    var requestedProvider = (query.get('provider') || '').toLowerCase();
+
+    if (requestedSubtab === 'api_keys' || requestedSubtab === 'connect' || requestedSubtab === 'mcp') {
+        activeThirdPartySubtab = requestedSubtab;
+    }
+
+    if (activeThirdPartySubtab === 'connect' && requestedProvider) {
+        var normalizedProvider = requestedProvider.toLowerCase();
+        if (getThirdPartyConnectProvider(normalizedProvider)) {
+            selectedThirdPartyConnectProviderId = normalizedProvider;
+            thirdPartyConnectDetailOpen = true;
+        }
+    }
+}
+
 function thirdPartyConnectDetailMarkup(provider) {
     if (!provider) return '';
     if (provider.id === 'google') {
@@ -1627,6 +1645,7 @@ function initThirdPartySettingsUi() {
         window.__thirdPartyWrappedConnectionStatus = true;
     }
     loadThirdPartySettings();
+    applyThirdPartyConnectDeepLink();
     loadThirdPartyConnectStatus(false);
     loadThirdPartyConnectorDraft(false);
 }

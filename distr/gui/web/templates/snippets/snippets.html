@@ -149,6 +149,57 @@
     width: 16px;
     height: 16px;
   }
+
+  .snippets-footer {
+    padding: 12px 18px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(14, 20, 42, 0.86);
+    font-size: 0.86rem;
+    color: #d1d5db;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .snippets-footer a {
+    color: #93c5fd;
+    text-decoration: none;
+  }
+
+  .snippets-footer a:hover {
+    text-decoration: underline;
+  }
+
+  .snippets-footer-copy {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .snippets-footer-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    height: 36px;
+    min-width: 96px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    color: #93c5fd;
+    background: rgba(15, 23, 42, 0.95);
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .snippets-footer-action:hover {
+    border-color: rgba(249, 115, 22, 0.75);
+    color: #fde68a;
+    background: rgba(249, 115, 22, 0.14);
+  }
 </style>
 <div class="w-full px-6 py-4 h-[calc(100vh-4rem)]">
   <div class="h-full bg-[#1a1f3a] border border-white/20 rounded-lg overflow-hidden flex flex-col">
@@ -159,8 +210,23 @@
       <button type="button" id="snippet-add" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Snippet</button>
     </div>
 
-    <div id="snippets-list" class="flex-1 overflow-y-auto">
+  <div id="snippets-list" class="flex-1 overflow-y-auto">
       <div class="p-6 text-sm text-gray-400">Loading snippets...</div>
+    </div>
+
+    <div class="snippets-footer">
+      <div class="snippets-footer-copy">
+        <img src="/assets/img/providers/connect/telegram.svg" alt="Telegram" class="h-10 w-10 rounded-md bg-white p-0.5 shrink-0 object-contain">
+        <div>
+          <div class="font-semibold text-sm text-[#f3f4f6]">Snippets for remote control</div>
+          <p class="text-xs text-gray-400 leading-relaxed">
+            Snippets are ideal for pasting short pieces of text quickly while using the Telegram remote control. Type "remote" into Telegram to open it.
+          </p>
+        </div>
+      </div>
+      <a href="/settings?tab=thirdparty&subtab=connect&provider=telegram&open=1#thirdparty" class="snippets-footer-action" title="Connect telegram" aria-label="Connect telegram">
+        Connect telegram
+      </a>
     </div>
   </div>
 </div>
