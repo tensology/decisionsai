@@ -172,6 +172,23 @@ function _clearLiveAssistantStreaming(chatId) {
     _clearLiveChatState(chatId);
 }
 
+function _messagesEndWithAssistant(messages) {
+    if (!Array.isArray(messages) || !messages.length) return false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i] || {};
+        if (message.role === 'tool') continue;
+        return message.role === 'assistant' && Boolean(_normalizeMsgPlain(message.content || ''));
+    }
+    return false;
+}
+
+function _hasActiveAssistantStreamForCurrentChat() {
+    if (currentChatId == null) return false;
+    if (isStreaming && streamingChatId === currentChatId) return true;
+    const state = _getLiveChatState(currentChatId);
+    return Boolean(state && state.assistantStreaming);
+}
+
 // DOM Elements
 const sidebar = document.getElementById('sidebar');
 const chatList = document.getElementById('chatList');
@@ -1041,10 +1058,23 @@ function ensureStreamingAssistantMessageElement() {
     return div;
 }
 
-function restoreLiveChatState(chatId) {
+function restoreLiveChatState(chatId, messages = []) {
     if (!chatMessages || chatId == null || currentChatId !== chatId) return;
     const state = _getLiveChatState(chatId);
     if (!state) return;
+
+    if (state.assistantStreaming && _messagesEndWithAssistant(messages)) {
+        _clearLiveChatState(chatId);
+        streamingChatId = null;
+        isStreaming = false;
+        setSendButtonStreaming(false);
+        removeTypingIndicator();
+        const staleStream = document.getElementById('streamingAssistantMessage');
+        if (staleStream) staleStream.remove();
+        const staleActivity = document.getElementById('streamingAssistantActivity');
+        if (staleActivity) staleActivity.remove();
+        return;
+    }
 
     const pendingUserText = _normalizeMsgPlain(state.pendingUserText || '');
     if (pendingUserText && hasRenderedMessagePlain('user', pendingUserText)) {
@@ -2182,7 +2212,7 @@ async function selectChat(chatId) {
         // Discard if a newer selectChat/loadChat has already taken over
         if (seq !== _selectSeq) return;
         renderMessages(data.messages);
-        restoreLiveChatState(chatId);
+        restoreLiveChatState(chatId, data.messages);
         updateChatSettingsDisplay({
             title: data.title || 'New Chat',
             provider: data.provider || '-',
@@ -2233,7 +2263,7 @@ async function loadChat(chatId, options = {}) {
         const data = await response.json();
         if (seq !== _selectSeq) return; // superseded by another navigation
         renderMessages(data.messages);
-        restoreLiveChatState(chatId);
+        restoreLiveChatState(chatId, data.messages);
         updateChatSettingsDisplay({
             title: data.title || 'New Chat',
             provider: data.provider || '-',
@@ -2925,7 +2955,19 @@ function messagesAreChronological(messages) {
 }
 
 function renderMessages(messages, preserveOnEmpty) {
-    const preserveLiveUi = Boolean(isStreaming || document.getElementById('typingIndicator') || document.getElementById('streamingAssistantMessage'));
+    messages = normalizeTraceMessages(sortMessagesForDisplay(normalizeReadAloudAssistantMessages(messages || [])));
+    if (_messagesEndWithAssistant(messages)) {
+        const liveState = currentChatId != null ? _getLiveChatState(currentChatId) : null;
+        if (liveState && liveState.assistantStreaming) {
+            _clearLiveChatState(currentChatId);
+        }
+        if (streamingChatId === currentChatId) streamingChatId = null;
+        if (isStreaming && !streamingChatId) {
+            isStreaming = false;
+            setSendButtonStreaming(false);
+        }
+    }
+    const preserveLiveUi = _hasActiveAssistantStreamForCurrentChat();
     if (!preserveLiveUi) {
         removeTypingIndicator();
         const streamingEl = document.getElementById('streamingAssistantMessage');
@@ -2936,8 +2978,6 @@ function renderMessages(messages, preserveOnEmpty) {
     // Incremental reload from API does not wipe innerHTML — remove live STT preview so
     // "Listening…" never sits next to persisted rows from the socket.
     _discardLiveTranscriptionUi();
-
-    messages = normalizeTraceMessages(sortMessagesForDisplay(normalizeReadAloudAssistantMessages(messages || [])));
 
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;

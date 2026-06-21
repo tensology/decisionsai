@@ -701,6 +701,13 @@ body.wf-board-pointer-dragging * {
 .wf-loop-ring-node.wf-loop-step-drop-target .wf-loop-ring-node-ball { box-shadow: 0 0 0 3px rgba(249,115,22,0.75); }
 .wf-ticket-list-surface .kb-act-transfer { background: rgba(34,197,94,0.28); }
 .wf-ticket-list-surface .kb-act-delete { background: rgba(239,68,68,0.28); }
+.wf-ticket-list-surface .wf-board-pane-toggle {
+    background: rgba(255,255,255,0.14);
+    border-color: rgba(255,255,255,0.28);
+}
+.wf-ticket-list-surface .wf-board-pane-toggle.is-collapsed svg {
+    transform: rotate(180deg);
+}
 .wf-ticket-list-surface .kb-card-action-btn svg { width: 12px; height: 12px; }
 .wf-ticket-list-surface .kb-ticket-list-row.wf-board-ticket-linked {
     border-color: rgba(34, 197, 94, 0.5);
@@ -807,6 +814,9 @@ body.wf-board-pointer-dragging * {
     flex-direction: column;
     min-height: 0;
     flex: 1 1 auto;
+}
+#wf-tab-cli {
+    margin: -0.75rem;
 }
 #wf-tab-loop .wf-loop-layout {
     flex: 1 1 auto;
@@ -1428,6 +1438,264 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
     height: 100%;
 }
+.wf-cli-workspace {
+    display: flex;
+    gap: 0.75rem;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-top: 0.5rem;
+}
+.wf-cli-inspector {
+    flex: 0 0 20.5rem;
+    width: 20.5rem;
+    min-width: 20.5rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.65rem;
+    background: #0d1117;
+    overflow: hidden;
+    transition: width 0.18s ease, min-width 0.18s ease, flex-basis 0.18s ease;
+}
+.wf-cli-workspace.wf-cli-workspace--inspector-collapsed .wf-cli-inspector {
+    flex-basis: 3rem;
+    width: 3rem;
+    min-width: 3rem;
+}
+.wf-cli-inspector-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.wf-cli-inspector-heading {
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #e5e7eb;
+    white-space: nowrap;
+}
+.wf-cli-inspector-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.04);
+    color: #cbd5e1;
+}
+.wf-cli-inspector-toggle:hover {
+    color: #fff;
+    border-color: rgba(249, 115, 22, 0.45);
+    background: rgba(249, 115, 22, 0.12);
+}
+.wf-cli-inspector-toggle svg {
+    width: 0.9rem;
+    height: 0.9rem;
+}
+.wf-board-pane-toggle-compact {
+    width: 1.55rem;
+    height: 1.55rem;
+    border-radius: 0.4rem;
+}
+.wf-board-pane-toggle-header-raised {
+    transform: translateY(-0.35rem);
+}
+.wf-board-pane-toggle-compact svg {
+    width: 0.8rem;
+    height: 0.8rem;
+}
+.wf-cli-inspector-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+.wf-cli-workspace.wf-cli-workspace--inspector-collapsed .wf-cli-inspector-body,
+.wf-cli-workspace.wf-cli-workspace--inspector-collapsed .wf-cli-inspector-heading {
+    display: none;
+}
+.wf-cli-inspector-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.wf-cli-inspector-tab {
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: #9ca3af;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.7rem 0.8rem;
+}
+.wf-cli-inspector-tab:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+}
+.wf-cli-inspector-tab.active {
+    color: #fff;
+    border-bottom-color: #f97316;
+    background: rgba(255, 255, 255, 0.06);
+}
+.wf-cli-inspector-pane {
+    display: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+.wf-cli-inspector-pane.active {
+    display: flex;
+    flex-direction: column;
+}
+.wf-cli-step-models-pane {
+    padding: 0.6rem;
+    gap: 0.6rem;
+}
+.wf-cli-step-models-callout {
+    border: 1px solid rgba(249, 115, 22, 0.24);
+    border-radius: 0.55rem;
+    background: rgba(249, 115, 22, 0.08);
+    padding: 0.7rem 0.8rem;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: #fdba74;
+}
+.wf-cli-step-models-callout.hidden {
+    display: none;
+}
+.wf-cli-step-models-callout-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.wf-cli-step-models-callout strong {
+    display: block;
+    color: #fff7ed;
+    margin-bottom: 0.2rem;
+}
+.wf-cli-step-models-callout-close {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 1px solid rgba(249, 115, 22, 0.24);
+    border-radius: 9999px;
+    background: rgba(255, 255, 255, 0.04);
+    color: #fdba74;
+    line-height: 1;
+}
+.wf-cli-step-models-callout-close:hover {
+    background: rgba(249, 115, 22, 0.14);
+    color: #fff;
+}
+.wf-cli-session-thread-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+.wf-cli-session-thread-empty {
+    margin: auto 0;
+    text-align: center;
+    color: #6b7280;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    padding: 1.5rem 0.75rem;
+}
+.wf-cli-session-thread-card {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.6rem;
+    background: rgba(21, 32, 84, 0.34);
+    padding: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+.wf-cli-session-thread-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+.wf-cli-session-thread-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #fff;
+}
+.wf-cli-session-thread-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.wf-cli-session-thread-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.15rem 0.45rem;
+    font-size: 0.64rem;
+    color: #cbd5e1;
+}
+.wf-cli-session-thread-block {
+    border-left: 2px solid rgba(249, 115, 22, 0.45);
+    padding-left: 0.65rem;
+}
+.wf-cli-session-thread-block--context {
+    border-left-color: rgba(59, 130, 246, 0.45);
+}
+.wf-cli-session-thread-block--output {
+    border-left-color: rgba(34, 197, 94, 0.45);
+}
+.wf-cli-session-thread-label {
+    display: block;
+    margin-bottom: 0.2rem;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9ca3af;
+}
+.wf-cli-session-thread-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    color: #e5e7eb;
+}
+.wf-cli-session-thread-events {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.wf-cli-session-thread-event {
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.45rem;
+    background: rgba(0, 0, 0, 0.2);
+    font-size: 0.68rem;
+    color: #d1d5db;
+}
+.wf-cli-session-thread-event strong {
+    color: #fff;
+}
 .wf-cli-terminal-wrap {
     position: relative;
     flex: 1 1 auto;
@@ -1438,21 +1706,6 @@ body.wf-board-pointer-dragging * {
     border-radius: 0.5rem;
     background: #0d1117;
     overflow: hidden;
-}
-.wf-cli-workspace {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem);
-    gap: 0.75rem;
-    align-items: stretch;
-    flex: 1 1 auto;
-    min-height: 0;
-    padding-top: 0.75rem;
-}
-.wf-cli-sidebar {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    min-height: 0;
 }
 .wf-cli-model-inventory {
     display: flex;
@@ -1614,7 +1867,7 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
     max-height: none;
     overflow-y: auto;
-    padding: 0.75rem;
+    padding: 0.55rem 0.65rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 12px;
     line-height: 1.45;
@@ -1627,7 +1880,7 @@ body.wf-board-pointer-dragging * {
     display: flex;
     align-items: center;
     gap: 0.45rem;
-    padding: 0.45rem 0.75rem;
+    padding: 0.35rem 0.6rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     color: #9ca3af;
     font-size: 0.72rem;
@@ -1653,7 +1906,7 @@ body.wf-board-pointer-dragging * {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(15rem, 20rem);
     gap: 0.5rem;
-    padding: 0.5rem;
+    padding: 0.4rem;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 0.5rem;
     background: rgba(21, 32, 84, 0.5);
@@ -1691,7 +1944,7 @@ body.wf-board-pointer-dragging * {
     display: none;
     gap: 0.5rem;
     align-items: center;
-    padding: 0.5rem;
+    padding: 0.4rem;
     border: 1px solid rgba(249, 115, 22, 0.28);
     border-top: 0;
     border-radius: 0 0 0.5rem 0.5rem;
@@ -1825,8 +2078,18 @@ body.wf-board-pointer-dragging * {
     .wf-cli-workspace {
         grid-template-columns: 1fr;
     }
-    .wf-cli-sidebar {
-        min-height: auto;
+    .wf-cli-workspace {
+        flex-direction: column;
+    }
+    .wf-cli-inspector {
+        width: 100%;
+        min-width: 0;
+        flex-basis: auto;
+    }
+    .wf-cli-workspace.wf-cli-workspace--inspector-collapsed .wf-cli-inspector {
+        width: 100%;
+        min-width: 0;
+        flex-basis: auto;
     }
     .wf-cli-model-inventory {
         max-height: 12rem;
@@ -2242,10 +2505,36 @@ body.wf-board-pointer-dragging * {
     width: var(--wf-split-left-width, 50%);
     min-width: 17.5rem;
     max-width: calc(100% - 17.5rem - 0.625rem);
+    transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease, opacity 0.18s ease, padding 0.18s ease, border-width 0.18s ease;
+}
+.wf-split-pane-left > * {
+    transition: opacity 0.06s ease, visibility 0s linear 0.06s;
 }
 .wf-split-pane-right {
     flex: 1 1 0;
     min-width: 17.5rem;
+}
+.wf-split-layout.wf-board-panel-collapsed .wf-split-pane-left {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    padding: 0 !important;
+    border-width: 0 !important;
+    opacity: 0;
+    overflow: hidden;
+}
+.wf-split-layout.wf-board-panel-collapsed .wf-split-pane-left > * {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.01s linear, visibility 0s linear 0s;
+}
+.wf-split-layout.wf-board-panel-collapsed .wf-split-resizer {
+    flex: 0 0 0;
+    width: 0;
+    margin: 0;
+    opacity: 0;
+    pointer-events: none;
+    overflow: hidden;
 }
 .wf-split-resizer {
     flex: 0 0 0.625rem;
@@ -2306,7 +2595,14 @@ body.wf-split-dragging * {
         <!-- Left panel: board tickets -->
         <div id="wf-split-left" class="wf-board-panel wf-split-pane-left min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
             <div class="mb-3">
-                <p class="text-xs uppercase tracking-wide text-gray-500 mb-1">Board Tickets</p>
+                <div class="mb-1 flex items-center justify-between gap-2">
+                    <p class="text-xs uppercase tracking-wide text-gray-500">Board Tickets</p>
+                    <button type="button" id="wf-board-pane-toggle-header" class="wf-cli-inspector-toggle wf-board-pane-toggle-compact wf-board-pane-toggle-header-raised flex-shrink-0" title="Collapse board tickets" aria-label="Collapse board tickets">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                        </svg>
+                    </button>
+                </div>
                 <div class="flex items-center gap-2">
                     <select id="wf-board-select" class="min-w-0 flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
                         <option value="">Loading boards...</option>
@@ -2331,6 +2627,13 @@ body.wf-split-dragging * {
         <!-- Workflow workspace: tabs + editor -->
         <div id="wf-split-right" class="wf-split-pane-right min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col min-h-0">
             <div class="wf-workflow-tabbar flex items-stretch flex-shrink-0 border-b border-white/20">
+                <div id="wf-board-pane-reopen-wrap" class="hidden flex-shrink-0 flex items-center ml-2 pr-0.5">
+                    <button type="button" id="wf-board-pane-reopen" class="wf-cli-inspector-toggle wf-board-pane-toggle-compact" title="Expand board tickets" aria-label="Expand board tickets">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+                        </svg>
+                    </button>
+                </div>
                 <div id="wf-list" class="flex-1 min-w-0 flex items-stretch overflow-x-auto" role="tablist" aria-label="Workflows"></div>
                 <div class="wf-workflow-tabbar-actions flex-shrink-0 flex items-center gap-0.5 px-1">
                     <button type="button" id="wf-new-workflow-btn" title="New workflow" aria-label="New workflow" class="flex-shrink-0 px-2 py-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-white">
@@ -2464,7 +2767,53 @@ body.wf-split-dragging * {
                                 <div id="wf-cli-recovery-checks" class="wf-cli-recovery-checks"></div>
                                 <div id="wf-cli-recovery-actions" class="wf-cli-recovery-actions"></div>
                             </div>
-                            <div class="wf-cli-workspace">
+                            <div id="wf-cli-workspace" class="wf-cli-workspace">
+                                <aside id="wf-cli-inspector" class="wf-cli-inspector" aria-label="Workflow CLI inspector">
+                                    <div class="wf-cli-inspector-header">
+                                        <div class="wf-cli-inspector-heading">Workflow Inspector</div>
+                                        <button type="button" id="wf-cli-inspector-toggle" class="wf-cli-inspector-toggle" title="Collapse inspector" aria-label="Collapse inspector" aria-expanded="true">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    <div class="wf-cli-inspector-body">
+                                        <div class="wf-cli-inspector-tabs" role="tablist" aria-label="Workflow CLI inspector tabs">
+                                            <button type="button" class="wf-cli-inspector-tab active" data-cli-inspector-tab="step-models">Step Models</button>
+                                            <button type="button" class="wf-cli-inspector-tab" data-cli-inspector-tab="session-thread">Session Thread</button>
+                                        </div>
+                                        <div id="wf-cli-inspector-pane-step-models" class="wf-cli-inspector-pane wf-cli-step-models-pane active" data-cli-inspector-pane="step-models">
+                                            <div id="wf-cli-step-models-callout" class="wf-cli-step-models-callout">
+                                                <div class="wf-cli-step-models-callout-head">
+                                                    <strong>Step models and route choices</strong>
+                                                    <button type="button" id="wf-cli-step-models-callout-close" class="wf-cli-step-models-callout-close" title="Hide this info block" aria-label="Hide this info block">×</button>
+                                                </div>
+                                                <div>These are the models, CLIs, and chosen fallbacks currently used across workflow steps and execution routes for this workflow.</div>
+                                            </div>
+                                            <section id="wf-cli-model-inventory" class="wf-cli-model-inventory wf-cli-model-inventory--available">
+                                                <div class="wf-cli-model-inventory-title">
+                                                    <span>Models</span>
+                                                </div>
+                                                <div id="wf-cli-model-list" class="wf-cli-model-list">
+                                                    <p class="text-xs text-gray-500 italic">Connect a CLI to load its models.</p>
+                                                </div>
+                                            </section>
+                                            <section class="wf-cli-model-inventory wf-cli-model-inventory--chosen" aria-label="Chosen models">
+                                                <div class="wf-cli-model-inventory-title">
+                                                    <span>Chosen Models</span>
+                                                </div>
+                                                <div id="wf-cli-chosen-list" class="wf-cli-chosen-list">
+                                                    <div id="wf-cli-chosen-dropzone" class="wf-cli-chosen-dropzone">Drag models here to remember the CLI, provider, model, and metadata for this workflow.</div>
+                                                </div>
+                                            </section>
+                                        </div>
+                                        <div id="wf-cli-inspector-pane-session-thread" class="wf-cli-inspector-pane" data-cli-inspector-pane="session-thread">
+                                            <div id="wf-cli-session-thread-list" class="wf-cli-session-thread-list">
+                                                <p class="wf-cli-session-thread-empty">No workflow-linked CLI session activity yet.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </aside>
                                 <div class="wf-cli-terminal-wrap">
                                     <div class="wf-cli-status-pill" aria-live="polite" title="CLI connection status">
                                         <span id="wf-cli-status-dot" class="wf-cli-status-dot" title="Not connected"></span>
@@ -2478,24 +2827,6 @@ body.wf-split-dragging * {
                                         <div class="wf-cli-line-system">Output appears here when you send a prompt or when a workflow run dispatches work.</div>
                                     </div>
                                 </div>
-                                <aside class="wf-cli-sidebar" aria-label="CLI model inventory">
-                                    <section id="wf-cli-model-inventory" class="wf-cli-model-inventory wf-cli-model-inventory--available">
-                                        <div class="wf-cli-model-inventory-title">
-                                            <span>Models</span>
-                                        </div>
-                                        <div id="wf-cli-model-list" class="wf-cli-model-list">
-                                            <p class="text-xs text-gray-500 italic">Connect a CLI to load its models.</p>
-                                        </div>
-                                    </section>
-                                    <section class="wf-cli-model-inventory wf-cli-model-inventory--chosen" aria-label="Chosen models">
-                                        <div class="wf-cli-model-inventory-title">
-                                            <span>Chosen Models</span>
-                                        </div>
-                                        <div id="wf-cli-chosen-list" class="wf-cli-chosen-list">
-                                            <div id="wf-cli-chosen-dropzone" class="wf-cli-chosen-dropzone">Drag models here to remember the CLI, provider, model, and metadata for this workflow.</div>
-                                        </div>
-                                    </section>
-                                </aside>
                             </div>
                         </div>
                     </div>

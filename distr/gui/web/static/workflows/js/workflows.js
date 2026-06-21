@@ -26,6 +26,10 @@
     var workflowRunsFilterTicketId = null;
     var workflowRunsSeenByWorkflowId = {};
     var latestWorkflowExecutionSessions = [];
+    var workflowCliInspectorOpen = true;
+    var workflowCliInspectorTab = "step-models";
+    var workflowStepModelsCalloutVisible = true;
+    var workflowBoardPaneCollapsed = false;
     var latestOrchestratorEvents = [];
     var loopFeedRunId = null;
     var latestLoopFeedItems = [];
@@ -1156,6 +1160,26 @@
                     ? "Adding to workflow queue…"
                     : (state.isLinkedToWorkflow ? "Already in workflow queue" : "Cannot add to workflow"));
             addBtn.setAttribute("aria-label", addBtn.title);
+        }
+        var actions = row.querySelector(".kb-ticket-list-actions");
+        if (actions && !actions.querySelector(".wf-board-pane-toggle")) {
+            var toggleBtn = document.createElement("button");
+            toggleBtn.type = "button";
+            toggleBtn.className = "wf-board-pane-toggle kb-card-action-btn";
+            toggleBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>';
+            toggleBtn.addEventListener("click", function (evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                toggleWorkflowBoardPaneCollapsed();
+            });
+            actions.appendChild(toggleBtn);
+        }
+        var paneToggle = actions ? actions.querySelector(".wf-board-pane-toggle") : null;
+        if (paneToggle) {
+            var collapsed = !!workflowBoardPaneCollapsed;
+            paneToggle.setAttribute("aria-label", collapsed ? "Expand board tickets" : "Collapse board tickets");
+            paneToggle.title = collapsed ? "Expand board tickets" : "Collapse board tickets";
+            paneToggle.classList.toggle("is-collapsed", collapsed);
         }
     }
 
@@ -5698,6 +5722,88 @@
         return null;
     }
 
+    function executionSessionThreadId(session) {
+        var packet = session && session.input_packet;
+        if (packet && typeof packet === "object") {
+            if (packet.external_thread_id) return String(packet.external_thread_id);
+            if (packet.thread_id) return String(packet.thread_id);
+        }
+        var events = Array.isArray(session && session.events) ? session.events : [];
+        for (var i = events.length - 1; i >= 0; i--) {
+            var payload = events[i] && events[i].payload;
+            if (!payload || typeof payload !== "object") continue;
+            if (payload.external_thread_id) return String(payload.external_thread_id);
+            if (payload.thread_id) return String(payload.thread_id);
+            if (payload.payload && typeof payload.payload === "object") {
+                if (payload.payload.external_thread_id) return String(payload.payload.external_thread_id);
+                if (payload.payload.thread_id) return String(payload.payload.thread_id);
+            }
+        }
+        return "";
+    }
+
+    function executionSessionContextSummary(session) {
+        var packet = session && session.input_packet;
+        if (!packet || typeof packet !== "object") return "";
+        var parts = [];
+        if (packet.project_name) parts.push("Project: " + packet.project_name);
+        if (packet.ticket_title) parts.push("Ticket: " + packet.ticket_title);
+        if (packet.workflow_id) parts.push("Workflow #" + packet.workflow_id);
+        if (packet.run_id) parts.push("Run #" + packet.run_id);
+        if (packet.step_id) parts.push("Step #" + packet.step_id);
+        if (packet.complexity) parts.push("Complexity: " + packet.complexity);
+        return parts.join(" | ");
+    }
+
+    function renderWorkflowCliSessionThread(sessions) {
+        var list = document.getElementById("wf-cli-session-thread-list");
+        if (!list) return;
+        sessions = Array.isArray(sessions) ? sessions.slice() : [];
+        sessions.sort(function (a, b) {
+            return new Date(a.started_at || 0).getTime() - new Date(b.started_at || 0).getTime();
+        });
+        if (!sessions.length) {
+            list.innerHTML = '<p class="wf-cli-session-thread-empty">No workflow-linked CLI session activity yet.</p>';
+            return;
+        }
+        list.innerHTML = sessions.map(function (session) {
+            var packet = session && typeof session.input_packet === "object" ? session.input_packet : {};
+            var started = session.started_at ? new Date(session.started_at).toLocaleString() : "";
+            var backend = session.backend_id || session.route_backend || packet.backend_id || "backend";
+            var model = session.model || session.selected_model || packet.model || "auto";
+            var threadId = executionSessionThreadId(session);
+            var instruction = executionSessionInstructionPreview(session);
+            var output = executionSessionOutputText(session) || session.error || "";
+            var contextSummary = executionSessionContextSummary(session);
+            var events = Array.isArray(session.events) ? session.events.slice(-4) : [];
+            var ticketTitle = session.ticket_title || packet.ticket_title || (session.ticket_id ? ("Ticket #" + session.ticket_id) : "Workflow session");
+            return '<div class="wf-cli-session-thread-card">' +
+                '<div class="wf-cli-session-thread-head">' +
+                    '<div class="min-w-0">' +
+                        '<div class="wf-cli-session-thread-title">' + esc(ticketTitle) + '</div>' +
+                        (started ? '<div class="text-[11px] text-gray-500 mt-1">' + esc(started) + '</div>' : '') +
+                    '</div>' +
+                    '<span class="text-[11px] px-1.5 py-0.5 rounded ' + executionSessionStatusClass(session.status || "") + '">' + esc(session.status || "session") + '</span>' +
+                '</div>' +
+                '<div class="wf-cli-session-thread-meta">' +
+                    '<span class="wf-cli-session-thread-chip">CLI: ' + esc(backend) + '</span>' +
+                    '<span class="wf-cli-session-thread-chip">Model: ' + esc(model) + '</span>' +
+                    '<span class="wf-cli-session-thread-chip">Session #' + esc(session.id) + '</span>' +
+                    (threadId ? '<span class="wf-cli-session-thread-chip">Thread: ' + esc(threadId) + '</span>' : '') +
+                '</div>' +
+                (instruction ? '<div class="wf-cli-session-thread-block"><span class="wf-cli-session-thread-label">Submitted / dispatched prompt</span><p class="wf-cli-session-thread-text">' + esc(instruction) + '</p></div>' : '') +
+                (contextSummary ? '<div class="wf-cli-session-thread-block wf-cli-session-thread-block--context"><span class="wf-cli-session-thread-label">Injected workflow context</span><p class="wf-cli-session-thread-text">' + esc(contextSummary) + '</p></div>' : '') +
+                (output ? '<div class="wf-cli-session-thread-block wf-cli-session-thread-block--output"><span class="wf-cli-session-thread-label">Output / result</span><p class="wf-cli-session-thread-text">' + esc(output) + '</p></div>' : '') +
+                (events.length ? '<div class="wf-cli-session-thread-events">' + events.map(function (event) {
+                    return '<div class="wf-cli-session-thread-event"><strong>' + esc(event.event_type || "event") + '</strong>' +
+                        (event.status ? ' <span class="text-gray-500">/ ' + esc(event.status) + '</span>' : '') +
+                        (event.message ? '<div class="mt-1 whitespace-pre-wrap">' + esc(event.message) + '</div>' : '') +
+                    '</div>';
+                }).join("") + '</div>' : '') +
+            '</div>';
+        }).join("");
+    }
+
     function renderRuntimeSnapshot(snapshot) {
         if (!snapshot || typeof snapshot !== "object") return "";
         var sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
@@ -5855,8 +5961,13 @@
                     '</div>';
                 bindWorkflowTicketQueueRows(mainEl);
             } else {
-                mainEl.classList.add("hidden");
-                mainEl.innerHTML = "";
+                if (contextRun) {
+                    mainEl.classList.remove("hidden");
+                    mainEl.innerHTML = loopRunTicketContextHtml(contextRun, "main");
+                } else {
+                    mainEl.classList.add("hidden");
+                    mainEl.innerHTML = "";
+                }
             }
         }
         if (feedEl) {
@@ -6313,6 +6424,7 @@
         if (!currentWorkflowId) {
             latestWorkflowExecutionSessions = [];
             renderWorkflowExecutionSessions([]);
+            renderWorkflowCliSessionThread([]);
             stopExecutionSessionPolling();
             renderWorkflowTickets(workflowQueueTickets);
             refreshWorkflowCliTabIfVisible();
@@ -6322,6 +6434,7 @@
             .then(function (data) {
                 latestWorkflowExecutionSessions = Array.isArray(data.sessions) ? data.sessions : [];
                 renderWorkflowExecutionSessions(latestWorkflowExecutionSessions);
+                renderWorkflowCliSessionThread(latestWorkflowExecutionSessions);
                 syncExecutionSessionPolling();
                 renderWorkflowTickets(workflowQueueTickets);
                 refreshWorkflowCliTabIfVisible();
@@ -6329,6 +6442,7 @@
             .catch(function (e) {
                 latestWorkflowExecutionSessions = [];
                 renderWorkflowExecutionSessions([]);
+                renderWorkflowCliSessionThread([]);
                 syncExecutionSessionPolling();
                 if (!options.quiet) snack(e.message || "Failed to load CLI execution sessions", "error");
             });
@@ -6523,30 +6637,40 @@
         var qs = runId ? ("?run_id=" + encodeURIComponent(String(runId))) : "";
         var html = '' +
             '<div id="wf-harness-handoff-modal" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:2147483646;background:rgba(0,0,0,0.6);padding:1rem;">' +
-                '<div class="w-full max-w-2xl max-h-[90vh] flex flex-col bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden">' +
-                    '<div class="px-5 pt-5 pb-3 flex-shrink-0">' +
-                        '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Agent handle</p>' +
-                        '<h3 class="text-white text-lg font-semibold">Work in your CLI or IDE</h3>' +
-                        '<p class="mt-1 text-xs text-gray-400">Copy this into your CLI or IDE. It tells the agent what to open and what to do.</p>' +
+                '<div class="w-full max-w-2xl h-[38rem] min-h-[38rem] max-h-[90vh] flex flex-col bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden relative">' +
+                    '<button type="button" class="wf-harness-handoff-close absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/20 text-gray-300 text-sm hover:bg-white/10" aria-label="Close modal">×</button>' +
+                    '<div class="px-5 pt-5 pb-4 mb-2 flex-shrink-0">' +
+                        '<h3 class="text-white text-lg font-semibold text-center">Handoff</h3>' +
                     '</div>' +
-                    '<div id="wf-harness-handoff-body" class="px-5 pb-3 flex-1 min-h-0 overflow-y-auto">' +
-                        '<p class="text-sm text-gray-400">Loading workflow memory…</p>' +
+                    '<div id="wf-handoff-body-scroll" class="px-5 pb-3 flex-1 min-h-0 overflow-y-auto">' +
+                        '<div class="h-full min-h-[24rem] flex items-center justify-center">' +
+                            '<div class="text-center text-sm text-gray-400">' +
+                                '<div class="w-8 h-8 rounded-full border-2 border-t-[#f97316] animate-spin mx-auto mb-2" style="border-color: rgba(148, 163, 184, 0.22); border-top-color: #f97316;" role="presentation"></div>' +
+                                '<p>Loading workflow memory…</p>' +
+                            '</div>' +
+                        '</div>' +
                     '</div>' +
-                    '<div class="flex flex-wrap items-center justify-between gap-2 px-5 py-4 border-t border-white/10 flex-shrink-0">' +
-                        '<div id="wf-harness-footer-actions" class="flex flex-wrap items-center gap-2"></div>' +
-                        '<button type="button" class="wf-harness-handoff-close px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Close</button>' +
+                    '<div class="flex flex-wrap items-center justify-center gap-2 px-5 py-4 border-t border-white/10 flex-shrink-0 text-center">' +
+                        '<div id="wf-harness-footer-actions" class="flex flex-wrap items-center justify-center gap-2 text-center"></div>' +
                     '</div>' +
                 '</div>' +
             '</div>';
         document.body.insertAdjacentHTML("beforeend", html);
         var modal = document.getElementById("wf-harness-handoff-modal");
-        function closeModal() { if (modal) modal.remove(); }
+        function closeModal() {
+            if (modal) modal.remove();
+            document.removeEventListener("keydown", handleEscapeKey);
+        }
+        function handleEscapeKey(evt) {
+            if (evt && evt.key === "Escape") closeModal();
+        }
         modal.addEventListener("click", function (evt) { if (evt.target === modal) closeModal(); });
         modal.querySelectorAll(".wf-harness-handoff-close").forEach(function (btn) {
             btn.addEventListener("click", closeModal);
         });
+        document.addEventListener("keydown", handleEscapeKey);
         api("GET", "/workflows/" + currentWorkflowId + "/harness-handoff" + qs).then(function (data) {
-            var body = document.getElementById("wf-harness-handoff-body");
+            var body = document.getElementById("wf-handoff-body-scroll");
             if (!body) return;
             var entry = (data && data.entry_file) || "";
             var paste = (data && data.paste_block) || "";
@@ -6559,18 +6683,19 @@
             var boardId = data && data.linked_board_id != null ? String(data.linked_board_id) : "";
             var projectId = data && data.linked_project_id != null ? String(data.linked_project_id) : "";
             var wfName = esc((data && data.workflow_name) || "Workflow");
+            body = document.getElementById("wf-handoff-body-scroll");
+            if (!body) return;
             body.innerHTML =
-                '<div class="space-y-4 text-sm">' +
-                    '<div class="rounded-lg border border-[#f97316]/30 bg-[#f97316]/10 px-3 py-3">' +
-                        '<p class="text-xs uppercase tracking-wide text-[#fdba74] mb-1">Handle</p>' +
-                        '<p class="text-sm text-white leading-relaxed">Copy this into your CLI or IDE. It tells the agent what to open and what to do.</p>' +
+                '<div class="space-y-4 text-sm min-h-[24rem] flex flex-col justify-start">' +
+                    '<div class="rounded-lg border bg-[#f97316]/10 px-3 py-3 text-center min-h-[4rem] flex items-center justify-center" style="border-color:#6b7280;">' +
+                        '<p class="text-sm text-white leading-relaxed text-center">Copy this into your CLI or IDE. It tells the agent what to open and what to do.</p>' +
                     '</div>' +
-                    '<textarea id="wf-harness-paste-block" readonly rows="9" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-gray-200 text-xs font-mono">' + esc(paste) + '</textarea>' +
+                    '<textarea id="wf-harness-paste-block" readonly rows="9" class="w-full flex-1 min-h-[16rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-gray-200 text-xs font-mono">' + esc(paste) + '</textarea>' +
                 '</div>';
             var footerActions = document.getElementById("wf-harness-footer-actions");
             if (footerActions) {
                 footerActions.innerHTML =
-                    '<button type="button" id="wf-harness-copy-full" class="px-2.5 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Copy handle</button>' +
+                    '<button type="button" id="wf-harness-copy-full" class="px-2.5 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Copy text</button>' +
                     (entry ? '<button type="button" id="wf-harness-copy-entry" class="px-2.5 py-1 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">Copy agent file path</button>' : '');
             }
             var tabs = body.querySelectorAll(".wf-harness-tab");
@@ -6604,7 +6729,7 @@
             var copyContract = document.getElementById("wf-harness-copy-contract");
             if (copyContract) copyContract.addEventListener("click", function () { copyWorkflowHarnessText(contract, "Return contract"); });
         }).catch(function (e) {
-            var body = document.getElementById("wf-harness-handoff-body");
+            var body = document.getElementById("wf-handoff-body-scroll");
             if (body) body.innerHTML = '<p class="text-sm text-red-400">' + esc(e.message || "Failed to load harness handoff") + '</p>';
         });
     }
@@ -12073,6 +12198,12 @@
             });
         }
 
+        loadWorkflowCliInspectorPrefs();
+        bindWorkflowCliInspectorControls();
+        setWorkflowCliInspectorTab(workflowCliInspectorTab, false);
+        setWorkflowCliInspectorOpen(workflowCliInspectorOpen, false);
+        setWorkflowStepModelsCalloutVisible(workflowStepModelsCalloutVisible, false);
+        setWorkflowBoardPaneCollapsed(workflowBoardPaneCollapsed, false);
         bindWorkflowSplitResizer();
         window.addEventListener("resize", function () {
             syncLoopFeedPanelHeight();
@@ -12090,6 +12221,129 @@
         connectWebSocket();
         // Start version polling as initial fallback until WebSocket connects
         startVersionPolling();
+    }
+
+    function loadWorkflowCliInspectorPrefs() {
+        try {
+            var openRaw = localStorage.getItem("wf_cli_inspector_open");
+            if (openRaw === "0") workflowCliInspectorOpen = false;
+            var tabRaw = (localStorage.getItem("wf_cli_inspector_tab") || "").trim();
+            if (tabRaw === "session-thread" || tabRaw === "step-models") workflowCliInspectorTab = tabRaw;
+            if (localStorage.getItem("wf_step_models_callout_visible") === "0") workflowStepModelsCalloutVisible = false;
+            workflowBoardPaneCollapsed = localStorage.getItem("wf_board_panel_collapsed") === "1";
+        } catch (e) {}
+    }
+
+    function setWorkflowCliInspectorTab(tab, persist) {
+        tab = tab === "session-thread" ? "session-thread" : "step-models";
+        workflowCliInspectorTab = tab;
+        document.querySelectorAll(".wf-cli-inspector-tab").forEach(function (btn) {
+            btn.classList.toggle("active", (btn.dataset.cliInspectorTab || "") === tab);
+        });
+        document.querySelectorAll(".wf-cli-inspector-pane").forEach(function (pane) {
+            pane.classList.toggle("active", (pane.dataset.cliInspectorPane || "") === tab);
+        });
+        if (persist !== false) {
+            try { localStorage.setItem("wf_cli_inspector_tab", tab); } catch (e) {}
+        }
+    }
+
+    function setWorkflowCliInspectorOpen(open, persist) {
+        workflowCliInspectorOpen = !!open;
+        var workspace = document.getElementById("wf-cli-workspace");
+        var toggle = document.getElementById("wf-cli-inspector-toggle");
+        if (workspace) workspace.classList.toggle("wf-cli-workspace--inspector-collapsed", !workflowCliInspectorOpen);
+        if (toggle) {
+            toggle.setAttribute("aria-expanded", workflowCliInspectorOpen ? "true" : "false");
+            toggle.setAttribute("aria-label", workflowCliInspectorOpen ? "Collapse inspector" : "Expand inspector");
+            toggle.title = workflowCliInspectorOpen ? "Collapse inspector" : "Expand inspector";
+        }
+        if (persist !== false) {
+            try { localStorage.setItem("wf_cli_inspector_open", workflowCliInspectorOpen ? "1" : "0"); } catch (e) {}
+        }
+        syncWorkflowCliLayoutHeight();
+    }
+
+    function toggleWorkflowCliInspector() {
+        setWorkflowCliInspectorOpen(!workflowCliInspectorOpen);
+    }
+
+    function setWorkflowStepModelsCalloutVisible(visible, persist) {
+        workflowStepModelsCalloutVisible = !!visible;
+        var callout = document.getElementById("wf-cli-step-models-callout");
+        if (callout) callout.classList.toggle("hidden", !workflowStepModelsCalloutVisible);
+        if (persist !== false) {
+            try { localStorage.setItem("wf_step_models_callout_visible", workflowStepModelsCalloutVisible ? "1" : "0"); } catch (e) {}
+        }
+    }
+
+    function setWorkflowBoardPaneCollapsed(collapsed, persist) {
+        workflowBoardPaneCollapsed = !!collapsed;
+        var layout = document.getElementById("wf-split-layout");
+        var reopenWrap = document.getElementById("wf-board-pane-reopen-wrap");
+        var headerToggle = document.getElementById("wf-board-pane-toggle-header");
+        if (layout) layout.classList.toggle("wf-board-panel-collapsed", workflowBoardPaneCollapsed);
+        if (reopenWrap) reopenWrap.classList.toggle("hidden", !workflowBoardPaneCollapsed);
+        if (headerToggle) {
+            headerToggle.setAttribute("aria-label", workflowBoardPaneCollapsed ? "Expand board tickets" : "Collapse board tickets");
+            headerToggle.title = workflowBoardPaneCollapsed ? "Expand board tickets" : "Collapse board tickets";
+            headerToggle.classList.toggle("is-collapsed", workflowBoardPaneCollapsed);
+        }
+        document.querySelectorAll(".wf-board-pane-toggle").forEach(function (btn) {
+            var collapsedNow = !!workflowBoardPaneCollapsed;
+            btn.setAttribute("aria-label", collapsedNow ? "Expand board tickets" : "Collapse board tickets");
+            btn.title = collapsedNow ? "Expand board tickets" : "Collapse board tickets";
+            btn.classList.toggle("is-collapsed", collapsedNow);
+        });
+        if (persist !== false) {
+            try { localStorage.setItem("wf_board_panel_collapsed", workflowBoardPaneCollapsed ? "1" : "0"); } catch (e) {}
+        }
+    }
+
+    function toggleWorkflowBoardPaneCollapsed(forceValue) {
+        if (typeof forceValue === "boolean") {
+            setWorkflowBoardPaneCollapsed(forceValue);
+            return;
+        }
+        setWorkflowBoardPaneCollapsed(!workflowBoardPaneCollapsed);
+    }
+
+    function bindWorkflowCliInspectorControls() {
+        var toggle = document.getElementById("wf-cli-inspector-toggle");
+        if (toggle && toggle.dataset.bound !== "1") {
+            toggle.dataset.bound = "1";
+            toggle.addEventListener("click", function () {
+                toggleWorkflowCliInspector();
+            });
+        }
+        document.querySelectorAll(".wf-cli-inspector-tab").forEach(function (btn) {
+            if (btn.dataset.bound === "1") return;
+            btn.dataset.bound = "1";
+            btn.addEventListener("click", function () {
+                setWorkflowCliInspectorTab(btn.dataset.cliInspectorTab || "step-models");
+            });
+        });
+        var reopen = document.getElementById("wf-board-pane-reopen");
+        if (reopen && reopen.dataset.bound !== "1") {
+            reopen.dataset.bound = "1";
+            reopen.addEventListener("click", function () {
+                setWorkflowBoardPaneCollapsed(false);
+            });
+        }
+        var headerToggle = document.getElementById("wf-board-pane-toggle-header");
+        if (headerToggle && headerToggle.dataset.bound !== "1") {
+            headerToggle.dataset.bound = "1";
+            headerToggle.addEventListener("click", function () {
+                toggleWorkflowBoardPaneCollapsed();
+            });
+        }
+        var calloutClose = document.getElementById("wf-cli-step-models-callout-close");
+        if (calloutClose && calloutClose.dataset.bound !== "1") {
+            calloutClose.dataset.bound = "1";
+            calloutClose.addEventListener("click", function () {
+                setWorkflowStepModelsCalloutVisible(false);
+            });
+        }
     }
 
     function bindWorkflowSplitResizer() {
@@ -12160,6 +12414,7 @@
         }
 
         resizer.addEventListener("pointerdown", function (evt) {
+            if (workflowBoardPaneCollapsed) return;
             if (evt.button !== 0) return;
             evt.preventDefault();
             dragging = true;
@@ -12172,10 +12427,12 @@
         });
 
         resizer.addEventListener("dblclick", function () {
+            if (workflowBoardPaneCollapsed) return;
             applyPct(50);
         });
 
         resizer.addEventListener("keydown", function (evt) {
+            if (workflowBoardPaneCollapsed) return;
             var step = evt.shiftKey ? 5 : 2;
             var current = loadPct();
             if (evt.key === "ArrowLeft") {
