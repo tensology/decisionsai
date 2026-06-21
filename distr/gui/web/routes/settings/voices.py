@@ -22,6 +22,10 @@ OPENAI_TTS_VOICES = [
 
 # Same tree as settings.db (distr.core.paths.DB_DIR) — do not use distr/db/custom_voices.
 CUSTOM_VOICE_AUDIO_DIR = os.path.join(DB_DIR, "custom_voices")
+VOICE_REFERENCE_LIMITS = {
+    "pixazo": {"seconds": 12_000, "sample_rate": 24000},
+    "coqui": {"seconds": 15_000, "sample_rate": 22050},
+}
 
 
 def _tts_online_provider_verified(settings: dict, provider_id: str) -> bool:
@@ -75,6 +79,33 @@ def register_routes(router, templates):
             "provider_voice_id": provider_voice_id,
             "custom_source": "database",
         }
+
+    def _prepared_reference_path(provider: str, source_path: str, target_dir: str) -> str:
+        """Return the provider-ready audio sample used for cloning/transcription."""
+        limit = VOICE_REFERENCE_LIMITS.get(provider)
+        if not limit or source_path.lower().endswith(".json"):
+            return source_path
+
+        from pydub import AudioSegment
+
+        audio = AudioSegment.from_file(source_path)
+        audio = audio[: int(limit["seconds"])]
+        audio = audio.set_channels(1).set_frame_rate(int(limit["sample_rate"])).set_sample_width(2)
+        prepared_path = os.path.join(target_dir, "reference.wav")
+        audio.export(prepared_path, format="wav")
+        return prepared_path
+
+    async def _transcribe_provider_reference(provider: str, file_path: str) -> str:
+        """Transcribe the exact sample used by providers that clip voice references."""
+        import shutil
+        import tempfile
+
+        target_dir = tempfile.mkdtemp(prefix="decision_voice_ref_")
+        try:
+            prepared_path = _prepared_reference_path(provider, file_path, target_dir)
+            return await _transcribe_audio(prepared_path)
+        finally:
+            shutil.rmtree(target_dir, ignore_errors=True)
 
     def _elevenlabs_api_voice_entry(voice):
         category = (getattr(voice, "category", "") or "").strip().lower()
@@ -383,6 +414,26 @@ def register_routes(router, templates):
                 session.commit()
                 return JSONResponse({"error": "At least one audio file is required"}, status_code=400)
 
+            if provider in VOICE_REFERENCE_LIMITS:
+                source_audio = next((p for p in saved_files if not p.lower().endswith(".json")), None)
+                if source_audio:
+                    prepared_path = _prepared_reference_path(provider, source_audio, audio_dir)
+                    for path in saved_files:
+                        if path != prepared_path:
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
+                    saved_files = [prepared_path]
+                    try:
+                        voice.system_prompt = await _transcribe_audio(prepared_path)
+                    except Exception as transcribe_error:
+                        logger.warning(
+                            "Could not transcribe prepared %s custom voice reference: %s",
+                            provider,
+                            transcribe_error,
+                        )
+
             session.commit()
         finally:
             session.close()
@@ -508,6 +559,7 @@ def register_routes(router, templates):
     async def transcribe_audio_for_custom_voice(request: Request):
         """Transcribe an uploaded audio file and return the text. Used by the custom voice modal."""
         form = await request.form()
+        provider = (form.get("provider") or "").strip().lower()
         audio_file = None
         for key in form:
             item = form[key]
@@ -524,7 +576,7 @@ def register_routes(router, templates):
         try:
             tmp.write(content)
             tmp.close()
-            transcript = await _transcribe_audio(tmp.name)
+            transcript = await _transcribe_provider_reference(provider, tmp.name)
             return {"transcript": transcript}
         except Exception as e:
             logger.error("Transcription failed: %s", e, exc_info=True)

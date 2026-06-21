@@ -5203,6 +5203,10 @@ function openChatCustomVoiceModal(context) {
     document.getElementById('chatCv_providerLabel').textContent = provider.charAt(0).toUpperCase() + provider.slice(1);
     document.getElementById('chatCv_name').value = '';
     document.getElementById('chatCv_personality').value = '';
+    const promptEl = document.getElementById('chatCv_prompt');
+    if (promptEl) promptEl.value = '';
+    const transcribingEl = document.getElementById('chatCv_transcribing');
+    if (transcribingEl) transcribingEl.classList.add('hidden');
     document.getElementById('chatCv_error').classList.add('hidden');
     document.getElementById('chatCv_form').classList.remove('hidden');
     document.getElementById('chatCv_processing').classList.add('hidden');
@@ -5235,6 +5239,9 @@ function openChatCustomVoiceModal(context) {
 
     audioInput.onchange = function() {
         document.getElementById('chatCv_submitBtn').disabled = !(this.files && this.files.length > 0);
+        if (provider !== 'supertonic' && this.files && this.files.length > 0) {
+            _autoTranscribeChatCustomVoice(this.files[0], provider);
+        }
     };
 }
 
@@ -5278,6 +5285,29 @@ function _updateChatCvSubmit() {
     }
 }
 
+function _autoTranscribeChatCustomVoice(file, provider) {
+    const indicator = document.getElementById('chatCv_transcribing');
+    const promptEl = document.getElementById('chatCv_prompt');
+    if (indicator) indicator.classList.remove('hidden');
+    if (promptEl) promptEl.value = '';
+
+    const fd = new FormData();
+    fd.append('audio', file);
+    fd.append('provider', provider || '');
+
+    fetch('/api/custom-voices/transcribe', { method: 'POST', body: fd })
+        .then(r => r.json().then(data => ({ ok: r.ok, data })))
+        .then(({ ok, data }) => {
+            if (indicator) indicator.classList.add('hidden');
+            if (ok && data.transcript && promptEl) {
+                promptEl.value = data.transcript;
+            }
+        })
+        .catch(() => {
+            if (indicator) indicator.classList.add('hidden');
+        });
+}
+
 function submitChatCustomVoice(e) {
     e.preventDefault();
     const errEl = document.getElementById('chatCv_error');
@@ -5302,7 +5332,7 @@ function submitChatCustomVoice(e) {
     const fd = new FormData();
     fd.append('name', name);
     fd.append('provider', provider);
-    fd.append('system_prompt', '');
+    fd.append('system_prompt', (document.getElementById('chatCv_prompt')?.value || '').trim());
     fd.append('personality', document.getElementById('chatCv_personality').value.trim());
     fd.append('gender', document.getElementById('chatCv_gender').value || 'female');
 
@@ -5377,7 +5407,11 @@ async function deleteChatCustomVoice(context) {
     if (!voiceEl || !providerEl) return;
     const voiceId = voiceEl.value;
     const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
-    if (!selected || selected.dataset.custom !== '1') return;
+    const selectedIsCustom = selected && (selected.dataset.custom === '1' || (voiceId || '').startsWith('custom_'));
+    if (!selectedIsCustom) {
+        alert('Select a custom voice before deleting.');
+        return;
+    }
     const dbId = selected.dataset.customVoiceId || (voiceId && voiceId.startsWith('custom_') ? voiceId.split('_')[1] : '');
     const providerVoiceId = selected.dataset.providerVoiceId || voiceId;
     const voiceName = voiceEl.options[voiceEl.selectedIndex]?.text || voiceId;
@@ -5394,13 +5428,18 @@ async function deleteChatCustomVoice(context) {
             ? '/api/custom-voices/' + encodeURIComponent(dbId)
             : '/api/elevenlabs-voices/' + encodeURIComponent(providerVoiceId);
         const r = await fetch(url, { method: 'DELETE' });
-        if (r.ok) {
-            const provider = providerEl.value;
-            invalidateTTSProvidersCache();
-            await reloadChatVoiceModels(context, provider);
-            updateChatVoiceButtons(context);
+        if (!r.ok) {
+            const data = await r.json().catch(() => ({}));
+            throw new Error(data.error || data.detail || 'Delete failed');
         }
-    } catch (e) { console.error('Delete failed:', e); }
+        const provider = providerEl.value;
+        invalidateTTSProvidersCache();
+        await reloadChatVoiceModels(context, provider);
+        updateChatVoiceButtons(context);
+    } catch (e) {
+        console.error('Delete failed:', e);
+        alert('Delete failed: ' + (e.message || 'Please try again.'));
+    }
 }
 
 async function editChatCustomVoice(context) {

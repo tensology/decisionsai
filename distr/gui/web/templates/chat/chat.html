@@ -262,6 +262,10 @@
                        class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-[#565869] file:bg-[#454655] file:text-[#ececf1] file:text-xs file:cursor-pointer file:hover:bg-[#565869] file:transition-colors cursor-pointer">
                 <p id="chatCv_uploadHelp" class="text-xs text-gray-500 mt-1">Upload audio clips of the voice to clone</p>
             </div>
+            <textarea id="chatCv_prompt" class="hidden"></textarea>
+            <p id="chatCv_transcribing" class="text-xs text-amber-400 hidden">
+                <span class="inline-block animate-pulse">Transcribing audio...</span>
+            </p>
             <div id="chatCv_recordPanel" class="hidden">
                 <div class="bg-[#0d1117] border border-[#565869] rounded-lg p-4">
                     <div id="chatCv_recReady">

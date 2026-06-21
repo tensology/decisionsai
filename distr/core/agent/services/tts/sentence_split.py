@@ -17,6 +17,32 @@ _ABBREV_RE = re.compile(
     r")\.",
     re.IGNORECASE,
 )
+_WORD_RE = re.compile(r"\b[\w']+\b")
+
+
+def spoken_word_count(text: str) -> int:
+    """Count spoken words for deciding whether a TTS chunk has enough weight."""
+    return len(_WORD_RE.findall(text or ""))
+
+
+def tts_chunk_has_enough_weight(
+    sentences: list[str],
+    *,
+    min_words: int = 14,
+    min_chars: int = 72,
+    max_sentences: int = 3,
+) -> bool:
+    """Return True when a sentence group is substantial enough to synthesize."""
+    if not sentences:
+        return False
+    text = " ".join(s.strip() for s in sentences if s.strip())
+    if not text:
+        return False
+    return (
+        spoken_word_count(text) >= min_words
+        or len(text) >= min_chars
+        or len(sentences) >= max_sentences
+    )
 
 
 def extract_complete_sentences(text: str) -> tuple[list[str], str]:

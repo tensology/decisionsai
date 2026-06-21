@@ -49,6 +49,8 @@ class TTSPipelineMixin:
         self._cancelled_since = time.monotonic()
         if clear_buffer:
             self._text_buffer = ""
+            if hasattr(self, "_sentence_batch_hold"):
+                self._sentence_batch_hold = []
             if hasattr(self, "_processed_sentences"):
                 self._processed_sentences.clear()
         queue = self._speak_queue
@@ -85,6 +87,8 @@ class TTSPipelineMixin:
     def reset_tts_response_start(self) -> None:
         self._llm_response_started_at = time.monotonic()
         self._text_buffer = ""
+        if hasattr(self, "_sentence_batch_hold"):
+            self._sentence_batch_hold = []
         self._cancelled = False
         self._cancelled_since = 0.0
         if hasattr(self, "_processed_sentences"):

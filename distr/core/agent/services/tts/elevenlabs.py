@@ -14,7 +14,10 @@ from distr.core.agent.libs import (
 )
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 from distr.core.agent.services.tts.elevenlabs_config import ELEVENLABS_TTS_MODEL_ID
-from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
+from distr.core.agent.services.tts.sentence_split import (
+    extract_complete_sentences,
+    tts_chunk_has_enough_weight,
+)
 from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,7 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
         self._total_audio_duration = 0.0
         self._tts_started_emitted = False  # Track if we've emitted tts_started for this session  # Accumulate total audio duration for the entire response
         self._processed_sentences = set()  # Track processed sentences (normalized text) to prevent duplicates
+        self._sentence_batch_hold = []
         # Convert speech_volume (0-100) to multiplier (0.0-1.0)
         self._speech_volume = max(0.0, min(1.0, speech_volume / 100.0))
         # ElevenLabs voice_settings (0-1; updated live via set_elevenlabs_voice_settings)
@@ -583,8 +587,15 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
                     if len(self._processed_sentences) > 100:
                         self._processed_sentences = set(list(self._processed_sentences)[-50:])
                     
-                    logger.debug(f"TTS: Synthesizing: '{sentence[:60]}'")
-                    await self._enqueue_sentence(sentence, direction)
+                    hold = getattr(self, "_sentence_batch_hold", []) or []
+                    hold.append(sentence)
+                    if tts_chunk_has_enough_weight(hold):
+                        chunk = " ".join(hold)
+                        self._sentence_batch_hold = []
+                        logger.debug(f"TTS: Synthesizing chunk: '{chunk[:60]}'")
+                        await self._enqueue_sentence(chunk, direction)
+                    else:
+                        self._sentence_batch_hold = hold
             else:
                 logger.debug(f"TTS: No complete sentences yet, buffering (buffer: '{self._text_buffer[:50]}...')")
             
@@ -616,8 +627,17 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
             if self._text_buffer.strip() and not self._cancelled:
                 text = self._text_buffer.strip()
                 self._text_buffer = ""
+                hold = getattr(self, "_sentence_batch_hold", []) or []
+                if hold:
+                    text = " ".join(hold + [text])
+                    self._sentence_batch_hold = []
                 logger.debug(f"TTS: Enqueueing remaining text: '{text[:50]}...'")
                 await self._enqueue_sentence(text, direction)
+            elif getattr(self, "_sentence_batch_hold", None) and not self._cancelled:
+                hold = getattr(self, "_sentence_batch_hold", []) or []
+                self._sentence_batch_hold = []
+                logger.debug("TTS: Enqueueing held short sentence chunk: '%s...'", " ".join(hold)[:50])
+                await self._enqueue_sentence(" ".join(hold), direction)
             else:
                 logger.debug("TTS: No remaining text to process (buffer empty or cancelled)")
 

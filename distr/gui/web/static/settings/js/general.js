@@ -971,10 +971,12 @@ function submitCustomVoice(e) {
 function _autoTranscribe(file) {
     const indicator = document.getElementById('cv_transcribing');
     const promptEl = document.getElementById('cv_prompt');
+    const provider = document.getElementById('cv_provider').value;
     indicator.classList.remove('hidden');
 
     const fd = new FormData();
     fd.append('audio', file);
+    fd.append('provider', provider);
 
     fetch('/api/custom-voices/transcribe', { method: 'POST', body: fd })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))

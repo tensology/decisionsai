@@ -11,7 +11,10 @@ from distr.core.agent.libs import (
     AudioSegment, PYDUB_AVAILABLE
 )
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
-from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
+from distr.core.agent.services.tts.sentence_split import (
+    extract_complete_sentences,
+    tts_chunk_has_enough_weight,
+)
 from distr.core.agent.services.tts.tts_pipeline_mixin import (
     STALE_INTERRUPT_GRACE_SEC,
     TTSPipelineMixin,
@@ -147,14 +150,11 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
                 logger.debug("TTS: Skipping duplicate sentence: %r", sentence[:50])
                 continue
             self._mark_sentence_processed(sentence)
-            if batch_size <= 1:
-                await self._enqueue_sentence(sentence, direction)
-            else:
-                hold.append(sentence)
-                if len(hold) >= batch_size:
-                    chunk = " ".join(hold)
-                    hold = []
-                    await self._enqueue_sentence(chunk, direction)
+            hold.append(sentence)
+            if tts_chunk_has_enough_weight(hold, max_sentences=max(3, batch_size)):
+                chunk = " ".join(hold)
+                hold = []
+                await self._enqueue_sentence(chunk, direction)
 
         self._sentence_batch_hold = hold
 
@@ -619,7 +619,6 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
     def get_sample_rate(self) -> int:
         """Return the output sample rate for OpenAI TTS (24kHz)"""
         return 24000
-
 
 
 
