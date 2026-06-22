@@ -174,3 +174,43 @@ def test_executor_screenshot_output_populates_result_packet_ui_quality():
     assert ui_quality["before_screenshot"] == "/tmp/before.png"
     assert ui_quality["after_screenshot"] == "/tmp/after.png"
     assert ui_quality["click_count"] == 1
+
+
+def test_scoped_execution_route_snapshot_overrides_harness_route():
+    route = StepExecutorMixin._apply_step_harness_overrides(
+        {"backend": "pi", "model": "auto", "complexity": "medium"},
+        {
+            "execution_route": {
+                "enabled": True,
+                "mode": "scoped",
+                "scoped_model_key": "codex|openai|gpt-5.3-codex",
+                "route_snapshot": {
+                    "backend_id": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.3-codex",
+                    "name": "GPT-5.3 Codex",
+                    "intelligence_hint": "high",
+                    "speed_hint": "balanced",
+                },
+            }
+        },
+    )
+
+    assert route["backend"] == "codex"
+    assert route["model"] == "gpt-5.3-codex"
+    assert route["model_provider"] == "openai"
+    assert route["source"] == "step_execution_route"
+    assert route["intelligence_hint"] == "high"
+
+
+def test_active_run_execution_route_returns_empty_without_backend_or_model():
+    assert StepExecutorMixin._active_run_execution_route({"execution_route": {"source": "policy"}}) == {}
+
+
+def test_active_run_execution_route_returns_saved_route():
+    route = StepExecutorMixin._active_run_execution_route(
+        {"execution_route": {"backend": "cursor", "model": "auto", "source": "active_run_route"}}
+    )
+
+    assert route["backend"] == "cursor"
+    assert route["model"] == "auto"

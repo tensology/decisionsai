@@ -16,6 +16,31 @@ _PATH_REDACT_PLACEHOLDER = "a local path"
 _TTS_LINE_SENTENCE_END_RE = re.compile(r'[.!?…]["\'\)\]]*\s*$')
 # Trailing clause punctuation to drop before appending a period.
 _TTS_LINE_TRAILING_CLAUSE_RE = re.compile(r'[,;:\-–—]+\s*$')
+_PROMPT_LEAK_RE = re.compile(
+    r"""(?isx)
+    ^\s*(?:
+        (?:system|developer)\s+(?:prompt|message|instructions)\s*:
+        |
+        you\s+are\s+(?:codex|chatgpt|an?\s+ai\s+assistant|an?\s+voice\s+assistant|haley|heart)\b
+        |
+        (?:the\s+)?(?:system|developer)\s+(?:prompt|message|instructions)\s+(?:is|are|says|states)\b
+    )
+    |
+    \b(?:valid\s+channels|available\s+tools|tool\s+namespace|knowledge\s+cutoff|current\s+date)\b
+    |
+    \bdo\s+not\s+(?:reveal|mention|disclose)\s+(?:the\s+)?(?:system\s+prompt|instructions)\b
+    """
+)
+
+
+def looks_like_prompt_leak(text: str) -> bool:
+    """Return True when model output appears to be internal prompt/instruction text."""
+    if not text:
+        return False
+    sample = str(text).strip()
+    if len(sample) < 12:
+        return False
+    return bool(_PROMPT_LEAK_RE.search(sample[:1500]))
 
 
 def ensure_line_sentence_boundaries_for_tts(text: str) -> str:
@@ -132,6 +157,10 @@ def clean_text_for_tts(
         return ""
 
     from distr.core.llm_errors import is_formatted_model_error_message
+
+    if looks_like_prompt_leak(text):
+        logger.warning("Suppressing probable prompt leak in model text")
+        return ""
 
     if is_formatted_model_error_message(text):
         return ""

@@ -44,10 +44,21 @@ class _FakeStream:
     def is_active(self):
         return self._active
 
+    def start_stream(self):
+        self._active = True
+
+    def stop_stream(self):
+        self._active = False
+
+    def close(self):
+        self._active = False
+
 
 class _FakePyAudio:
     def __init__(self, default_index):
         self.default_index = default_index
+        self.opened_indices = []
+        self.fail_indices = set()
 
     def get_default_output_device_info(self):
         return {"index": self.default_index, "name": f"Device {self.default_index}"}
@@ -62,6 +73,10 @@ class _FakePyAudio:
         return width
 
     def open(self, **kwargs):
+        index = kwargs.get("output_device_index")
+        self.opened_indices.append(index)
+        if index in self.fail_indices:
+            raise OSError("device failed")
         return _FakeStream(active=True)
 
 
@@ -82,6 +97,7 @@ def test_transport_refreshes_when_system_default_output_changes():
     def fake_reopen(device_index):
         reopened.append(device_index)
         transport._resolved_output_device_index = device_index
+        return True
 
     transport._reopen_output_stream = fake_reopen
 
@@ -108,6 +124,7 @@ def test_transport_refreshes_when_system_default_name_changes_at_same_index():
     def fake_reopen(device_index):
         reopened.append(device_index)
         transport._resolved_output_device_index = device_index
+        return True
 
     transport._reopen_output_stream = fake_reopen
 
@@ -139,3 +156,32 @@ def test_transport_defers_confirmed_tts_started_until_output_stream_is_active():
     transport._ensure_output_stream_ready_async = fake_recovering_ensure_output_stream_ready_async
 
     assert asyncio.run(transport._ready_to_emit_confirmed_tts_started()) is True
+
+
+def test_transport_falls_back_when_resolved_output_device_will_not_open():
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    py_audio = _FakePyAudio(default_index=2)
+    py_audio.fail_indices.add(2)
+    transport._py_audio = py_audio
+    transport._params = SimpleNamespace(output_device_index=2, audio_out_channels=1)
+    transport._output_device_name = "System Default"
+    transport._resolved_output_device_index = 2
+    transport._resolved_default_output_name = "JBL TUNE510BT"
+    transport._last_opened_default_output_name = "JBL TUNE510BT"
+    transport._out_stream = _FakeStream(active=False)
+    transport._sample_rate = 24000
+    transport._original_sample_rate = 24000
+    transport._stream_error_count = 0
+    transport._stream_error_logged = False
+
+    transport._ensure_output_stream_for_configured_device(reason="test fallback")
+
+    assert py_audio.opened_indices == [2, 0]
+    assert transport._output_stream_is_active() is True
+    assert transport._params.output_device_index == 0
+    assert transport._resolved_output_device_index == 0
+    assert transport._failed_output_device_index == 2
+
+    transport._ensure_output_stream_for_configured_device(reason="next audio frame")
+
+    assert py_audio.opened_indices == [2, 0]

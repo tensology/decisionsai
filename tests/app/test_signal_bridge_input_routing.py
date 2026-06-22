@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import inspect
 
 from distr.app.signals import SignalBridgeMixin
 
@@ -129,3 +130,12 @@ def test_send_text_input_forwards_chat_id_from_integration_metadata(monkeypatch)
             "chat_id": 42,
         },
     )
+
+
+def test_web_chat_events_are_queued_for_ordered_delivery():
+    src = inspect.getsource(SignalBridgeMixin._bridge_signals_to_agent)
+
+    assert "self._web_chat_event_queue = Queue()" in src
+    assert "name=\"web-chat-event-bridge\"" in src
+    assert "self._web_chat_event_queue.put(dict(payload or {}))" in src
+    assert "threading.Thread(target=_do_post" not in src

@@ -332,15 +332,22 @@ def _enrich_execution_session_for_ui(
     boards: dict[int, Any] | None = None,
     include_events: bool = False,
 ) -> dict[str, Any]:
+    from distr.core.project_cli_backends.live_sessions import (
+        live_session_connected,
+        live_session_external_id,
+        live_session_is_alive,
+    )
+
     data = serialize_execution_session(row, include_events=include_events)
     input_packet = data.get("input_packet") if isinstance(data.get("input_packet"), dict) else {}
     output_packet = data.get("output_packet") if isinstance(data.get("output_packet"), dict) else {}
     board = None
     if ticket and getattr(ticket, "lane", None):
         board = (boards or {}).get(ticket.lane.board_id)
+    board_id = getattr(board, "id", None) or input_packet.get("board_id")
     data.update({
         "ticket_title": getattr(ticket, "title", None) or input_packet.get("ticket_title") or (f"Ticket #{row.ticket_id}" if row.ticket_id else ""),
-        "board_id": getattr(board, "id", None),
+        "board_id": board_id,
         "board_name": getattr(board, "name", None) or input_packet.get("board_name") or "",
         "project_name": getattr(project, "name", None) or input_packet.get("project_name") or "",
         "project_folder": getattr(project, "folder_location", None) or input_packet.get("folder") or "",
@@ -350,6 +357,9 @@ def _enrich_execution_session_for_ui(
         "instruction": input_packet.get("instruction") or "",
         "elapsed_seconds": _seconds_between(row.started_at),
         "duration_seconds": _seconds_between(row.started_at, row.completed_at) if row.completed_at else None,
+        "live_running": live_session_is_alive(row.project_id, row.route_backend or "", board_id=board_id),
+        "live_connected": live_session_connected(row.project_id, row.route_backend or "", board_id=board_id),
+        "external_thread_id": input_packet.get("external_thread_id") or live_session_external_id(row.project_id, row.route_backend or "", board_id=board_id),
     })
     return data
 

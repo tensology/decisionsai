@@ -1789,9 +1789,9 @@ body.wf-board-pointer-dragging * {
 }
 .wf-cli-model-name,
 .wf-cli-model-id {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 .wf-cli-model-id {
     color: #9ca3af;
@@ -1920,38 +1920,214 @@ body.wf-board-pointer-dragging * {
     gap: 0.5rem;
     align-items: center;
 }
-.wf-cli-backend-select {
-    width: 6.5rem;
-    flex: 0 0 6.5rem;
+.wf-cli-input-models {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    flex-wrap: wrap;
 }
-.wf-cli-connect-btn {
-    width: 5.75rem;
-    flex: 0 0 5.75rem;
+.wf-cli-backend-shell {
+    position: relative;
+    width: 11.5rem;
+    flex: 0 0 11.5rem;
+}
+.wf-cli-backend-select {
+    display: none;
+}
+.wf-cli-backend-trigger {
+    width: 100%;
+    min-height: 2.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.45rem;
+    background: #152054;
+    color: #fff;
+    font-size: 0.76rem;
+}
+.wf-cli-backend-trigger:disabled {
+    opacity: 0.55;
+}
+.wf-cli-backend-trigger-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+.wf-cli-backend-trigger-copy {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+}
+.wf-cli-backend-trigger-name {
+    color: #fff;
+    font-size: 0.76rem;
+    font-weight: 600;
+    line-height: 1.1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 8rem;
+}
+.wf-cli-backend-trigger-caret {
+    color: #cbd5e1;
+    flex: 0 0 auto;
+}
+.wf-cli-backend-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    flex: 0 0 auto;
+    background: #6b7280;
+    box-shadow: 0 0 0 3px rgba(107,114,128,0.12);
+}
+.wf-cli-backend-dot.is-ready {
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34,197,94,0.14);
+}
+.wf-cli-backend-dot.is-connected {
+    background: #38bdf8;
+    box-shadow: 0 0 0 3px rgba(56,189,248,0.16);
+}
+.wf-cli-backend-dot.is-running {
+    background: #a78bfa;
+    box-shadow: 0 0 0 3px rgba(167,139,250,0.18);
+}
+.wf-cli-backend-dot.is-setup {
+    background: #f59e0b;
+    box-shadow: 0 0 0 3px rgba(245,158,11,0.14);
+}
+.wf-cli-backend-dot.is-missing {
+    background: #6b7280;
+    box-shadow: 0 0 0 3px rgba(107,114,128,0.12);
+}
+.wf-cli-backend-dot.is-error {
+    background: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239,68,68,0.14);
+}
+.wf-cli-backend-menu {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    display: none;
+    padding: 0.35rem;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 0.6rem;
+    background: rgba(9, 13, 25, 0.98);
+    box-shadow: 0 18px 40px rgba(0,0,0,0.38);
+}
+.wf-cli-backend-menu.is-open {
+    display: block;
+}
+.wf-cli-backend-menu-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0.6rem;
+    border: 0;
+    border-radius: 0.45rem;
+    background: transparent;
+    text-align: left;
+}
+.wf-cli-backend-menu-item:hover,
+.wf-cli-backend-menu-item.is-active {
+    background: rgba(249, 115, 22, 0.12);
+}
+.wf-cli-backend-menu-item-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+.wf-cli-backend-menu-item-name {
+    color: #fff;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wf-cli-backend-menu-item-check {
+    color: #fdba74;
+    font-size: 0.72rem;
+    font-weight: 700;
+    min-width: 0.8rem;
+    text-align: right;
 }
 .wf-cli-model-select {
     flex: 1 1 auto;
     min-width: 0;
 }
 .wf-cli-key-toggle {
-    width: 3rem;
-    flex: 0 0 3rem;
+    width: 2.35rem;
+    height: 2.35rem;
+    flex: 0 0 2.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid rgba(249, 115, 22, 0.38);
+    background: rgba(249, 115, 22, 0.14);
+    color: #fdba74;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+    transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.wf-cli-key-toggle:hover {
+    border-color: rgba(249, 115, 22, 0.68);
+    background: rgba(249, 115, 22, 0.22);
+    color: #ffedd5;
+    transform: translateY(-1px);
+}
+.wf-cli-key-toggle:focus-visible {
+    outline: 2px solid rgba(249, 115, 22, 0.42);
+    outline-offset: 1px;
+}
+.wf-cli-key-toggle svg {
+    width: 1.02rem;
+    height: 1.02rem;
+    display: block;
+}
+.wf-cli-model-capability-row {
+    display: none;
+    align-items: center;
+    flex: 1 1 auto;
+    gap: 0.5rem;
+}
+.wf-cli-model-capability-row.is-visible {
+    display: flex;
+}
+.wf-cli-capability-field {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 0 0 auto;
+}
+.wf-cli-capability-field label {
+    display: none;
+}
+.wf-cli-capability-field select {
+    width: auto;
+    min-width: 5.25rem;
+    padding: 0.5rem 0.55rem;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 0.42rem;
+    background: #152054;
+    color: #fff;
+    font-size: 0.74rem;
+}
+.wf-cli-capability-hint {
+    display: none;
 }
 .wf-cli-send-btn {
     width: 3.75rem;
     flex: 0 0 3.75rem;
-}
-.wf-cli-key-panel {
-    display: none;
-    gap: 0.5rem;
-    align-items: center;
-    padding: 0.4rem;
-    border: 1px solid rgba(249, 115, 22, 0.28);
-    border-top: 0;
-    border-radius: 0 0 0.5rem 0.5rem;
-    background: rgba(15, 23, 42, 0.86);
-}
-.wf-cli-key-panel.is-open {
-    display: flex;
 }
 .wf-cli-recovery {
     display: none;
@@ -2035,34 +2211,6 @@ body.wf-board-pointer-dragging * {
     background: rgba(180, 83, 9, 0.45);
     color: #fff;
 }
-.wf-cli-key-meta {
-    min-width: 12rem;
-    color: #d1d5db;
-    font-size: 0.72rem;
-    line-height: 1.25;
-}
-.wf-cli-key-meta strong {
-    display: block;
-    color: #fff;
-    font-size: 0.75rem;
-}
-.wf-cli-key-meta span {
-    color: #9ca3af;
-}
-.wf-cli-key-input {
-    flex: 1 1 auto;
-    min-width: 12rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 0.375rem;
-    background: #152054;
-    color: #fff;
-    font-size: 0.8rem;
-}
-.wf-cli-key-input:focus {
-    border-color: #f97316;
-    outline: none;
-}
 .wf-cli-status-pill {
     position: absolute;
     top: 0.75rem;
@@ -2077,6 +2225,10 @@ body.wf-board-pointer-dragging * {
     .wf-cli-input-row,
     .wf-cli-workspace {
         grid-template-columns: 1fr;
+    }
+    .wf-cli-backend-shell {
+        width: 100%;
+        flex-basis: auto;
     }
     .wf-cli-workspace {
         flex-direction: column;
@@ -2094,7 +2246,11 @@ body.wf-board-pointer-dragging * {
     .wf-cli-model-inventory {
         max-height: 12rem;
     }
-    .wf-cli-key-panel {
+    .wf-cli-input-models {
+        justify-content: stretch;
+    }
+    .wf-cli-model-capability-row.is-visible {
+        width: 100%;
         flex-wrap: wrap;
     }
 }
@@ -2113,6 +2269,107 @@ body.wf-board-pointer-dragging * {
 .wf-cli-panel.is-error .wf-cli-status-dot {
     background: #ef4444;
     box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
+}
+.wf-cli-activity {
+    display: none;
+}
+.wf-cli-activity.is-visible {
+    display: inline-flex;
+}
+.wf-cli-model-context-menu {
+    position: fixed;
+    z-index: 2147483000;
+    display: none;
+    min-width: 12.5rem;
+    padding: 0.35rem;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 0.6rem;
+    background: rgba(9, 13, 25, 0.98);
+    box-shadow: 0 16px 40px rgba(0,0,0,0.42);
+}
+.wf-cli-model-context-menu.is-open {
+    display: block;
+}
+.wf-cli-model-context-item {
+    width: 100%;
+    display: block;
+    padding: 0.55rem 0.65rem;
+    border: 0;
+    border-radius: 0.42rem;
+    background: transparent;
+    color: #e5e7eb;
+    text-align: left;
+    font-size: 0.73rem;
+}
+.wf-cli-model-context-item:hover {
+    background: rgba(249,115,22,0.12);
+    color: #fff;
+}
+.wf-cli-key-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483001;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(0,0,0,0.62);
+}
+.wf-cli-key-modal.is-open {
+    display: flex;
+}
+.wf-cli-key-modal-card {
+    width: min(34rem, calc(100vw - 2rem));
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1rem;
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 0.85rem;
+    background: #0b1120;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+}
+.wf-cli-key-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+.wf-cli-key-modal-title {
+    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+.wf-cli-key-modal-status {
+    margin-top: 0.2rem;
+    color: #94a3b8;
+    font-size: 0.73rem;
+    line-height: 1.45;
+}
+.wf-cli-key-modal-copy {
+    color: #cbd5e1;
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+.wf-cli-key-input {
+    width: 100%;
+    min-width: 0;
+    padding: 0.72rem 0.8rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.5rem;
+    background: #152054;
+    color: #fff;
+    font-size: 0.8rem;
+}
+.wf-cli-key-input:focus {
+    border-color: #f97316;
+    outline: none;
+}
+.wf-cli-key-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
 }
 .wf-loop-view-toggle {
     padding: 0.35rem 0.75rem;
@@ -2334,6 +2591,7 @@ body.wf-board-pointer-dragging * {
 @media (max-width: 900px) {
     .wf-loop-step-modal { height: auto; max-height: 92vh; }
     .wf-loop-step-layout { grid-template-columns: 1fr; height: auto; }
+    .wf-loop-step-route-preview { grid-template-columns: 1fr; }
 }
 .wf-loop-step-col {
     min-width: 0;
@@ -2399,6 +2657,108 @@ body.wf-board-pointer-dragging * {
     flex: 1 1 auto;
     min-height: 0;
     resize: none;
+}
+.wf-loop-step-route-card {
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.7rem;
+    background: rgba(21, 32, 84, 0.42);
+    padding: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.wf-loop-step-route-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+.wf-loop-step-route-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: #fff;
+    font-size: 0.86rem;
+}
+.wf-loop-step-route-toggle input {
+    accent-color: #f97316;
+}
+.wf-loop-step-route-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid rgba(249, 115, 22, 0.3);
+    background: rgba(249, 115, 22, 0.12);
+    color: #fdba74;
+    border-radius: 9999px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.68rem;
+}
+.wf-loop-step-route-select {
+    width: 100%;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 0.6rem;
+    background: #152054;
+    color: #fff;
+    font-size: 0.82rem;
+}
+.wf-loop-step-route-help {
+    color: #94a3b8;
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+.wf-loop-step-route-empty,
+.wf-loop-step-route-warning {
+    border-radius: 0.6rem;
+    padding: 0.65rem 0.75rem;
+    font-size: 0.74rem;
+    line-height: 1.45;
+}
+.wf-loop-step-route-empty {
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    color: #94a3b8;
+}
+.wf-loop-step-route-warning {
+    border: 1px solid rgba(245, 158, 11, 0.34);
+    background: rgba(245, 158, 11, 0.11);
+    color: #fcd34d;
+}
+.wf-loop-step-route-preview {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0.65rem;
+    background: rgba(8, 12, 23, 0.42);
+    padding: 0.8rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem 0.85rem;
+}
+.wf-loop-step-route-preview.is-disabled {
+    opacity: 0.58;
+}
+.wf-loop-step-route-preview-row {
+    min-width: 0;
+}
+.wf-loop-step-route-preview-label {
+    color: #94a3b8;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.16rem;
+}
+.wf-loop-step-route-preview-value {
+    color: #fff;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    word-break: break-word;
+}
+.wf-loop-step-route-preview-row--full {
+    grid-column: 1 / -1;
+}
+.wf-loop-step-route-note {
+    color: #94a3b8;
+    font-size: 0.72rem;
+    line-height: 1.45;
 }
 .wf-loop-step-side-head {
     display: flex;
@@ -2734,27 +3094,47 @@ body.wf-split-dragging * {
                         <div id="wf-cli-panel" class="wf-cli-panel">
                             <div class="wf-cli-input-row">
                                 <div class="wf-cli-input-main">
-                                    <select id="wf-cli-backend-select" class="wf-cli-backend-select px-2 py-2 bg-[#152054] border border-white/20 rounded text-white text-xs" title="Coding backend" disabled>
-                                        <option value="pi">Pi</option>
-                                    </select>
-                                    <button type="button" id="wf-cli-connect" class="wf-cli-connect-btn px-2.5 py-2 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Connect</button>
-                                    <input type="text" id="wf-cli-input" class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Choose a CLI and click Connect to load models and send prompts." disabled>
+                                    <div class="wf-cli-backend-shell">
+                                        <select id="wf-cli-backend-select" class="wf-cli-backend-select" title="Coding backend" disabled>
+                                            <option value="codex">Codex</option>
+                                        </select>
+                                        <button type="button" id="wf-cli-backend-trigger" class="wf-cli-backend-trigger" aria-haspopup="listbox" aria-expanded="false" disabled>
+                                            <span class="wf-cli-backend-trigger-main">
+                                                <span id="wf-cli-backend-trigger-dot" class="wf-cli-backend-dot" aria-hidden="true"></span>
+                                                <span class="wf-cli-backend-trigger-copy">
+                                                    <span id="wf-cli-backend-trigger-name" class="wf-cli-backend-trigger-name">Codex</span>
+                                                </span>
+                                            </span>
+                                            <span class="wf-cli-backend-trigger-caret" aria-hidden="true">▾</span>
+                                        </button>
+                                        <div id="wf-cli-backend-menu" class="wf-cli-backend-menu" role="listbox" aria-label="Workflow CLI backends"></div>
+                                    </div>
+                                    <button type="button" id="wf-cli-key-toggle" class="wf-cli-key-toggle rounded border border-white/20 text-gray-200 hover:border-[#f97316]/60 hover:text-[#fdba74]" title="Configure credential or endpoint for this CLI/model" aria-label="Configure credential or endpoint" hidden>
+                                        <span aria-hidden="true">🔑</span>
+                                    </button>
+                                    <input type="text" id="wf-cli-input" class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Choose a CLI to load models, then open a session to send prompts." disabled>
                                 </div>
                                 <div class="wf-cli-input-models">
-                                    <select id="wf-cli-model-select" class="wf-cli-model-select px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs" disabled title="Available after Connect">
-                                        <option value="">Connect CLI first</option>
+                                    <select id="wf-cli-model-select" class="wf-cli-model-select px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs" disabled title="Available after loading CLI models">
+                                        <option value="">Choose a CLI first</option>
                                     </select>
-                                    <button type="button" id="wf-cli-key-toggle" class="wf-cli-key-toggle px-2.5 py-2 rounded border border-white/20 text-gray-200 text-xs font-medium hover:border-[#f97316]/60 hover:text-[#fdba74]" title="Swap API key or local endpoint for this CLI/model">Key</button>
+                                    <div id="wf-cli-model-capability-row" class="wf-cli-model-capability-row" hidden>
+                                        <div id="wf-cli-capability-level-field" class="wf-cli-capability-field" hidden>
+                                            <label for="wf-cli-capability-level">Level</label>
+                                            <select id="wf-cli-capability-level" aria-label="Level"></select>
+                                        </div>
+                                        <div id="wf-cli-capability-speed-field" class="wf-cli-capability-field" hidden>
+                                            <label for="wf-cli-capability-speed">Speed</label>
+                                            <select id="wf-cli-capability-speed" aria-label="Speed"></select>
+                                        </div>
+                                        <div id="wf-cli-capability-variant-field" class="wf-cli-capability-field" hidden>
+                                            <label for="wf-cli-capability-variant">Variant</label>
+                                            <select id="wf-cli-capability-variant" aria-label="Variant"></select>
+                                        </div>
+                                        <div id="wf-cli-capability-hint" class="wf-cli-capability-hint"></div>
+                                    </div>
                                     <button type="button" id="wf-cli-send" class="wf-cli-send-btn px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c] disabled:opacity-40" disabled>Send</button>
                                 </div>
-                            </div>
-                            <div id="wf-cli-key-panel" class="wf-cli-key-panel" hidden>
-                                <div class="wf-cli-key-meta">
-                                    <strong id="wf-cli-key-title">CLI key</strong>
-                                    <span id="wf-cli-key-status">Choose a CLI or model.</span>
-                                </div>
-                                <input id="wf-cli-key-input" class="wf-cli-key-input" type="password" autocomplete="off" placeholder="Paste replacement key or endpoint">
-                                <button type="button" id="wf-cli-key-save" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]">Save & reconnect</button>
                             </div>
                             <div id="wf-cli-recovery-panel" class="wf-cli-recovery" aria-live="polite">
                                 <div class="wf-cli-recovery-head">
@@ -2795,7 +3175,7 @@ body.wf-split-dragging * {
                                                     <span>Models</span>
                                                 </div>
                                                 <div id="wf-cli-model-list" class="wf-cli-model-list">
-                                                    <p class="text-xs text-gray-500 italic">Connect a CLI to load its models.</p>
+                                                    <p class="text-xs text-gray-500 italic">Choose a CLI to load its models.</p>
                                                 </div>
                                             </section>
                                             <section class="wf-cli-model-inventory wf-cli-model-inventory--chosen" aria-label="Chosen models">
@@ -2821,10 +3201,28 @@ body.wf-split-dragging * {
                                     </div>
                                     <div id="wf-cli-activity" class="wf-cli-activity is-ready">
                                         <span class="wf-cli-activity-dot" aria-hidden="true"></span>
-                                        <span id="wf-cli-activity-text">Idle. Connect a CLI, then send a prompt.</span>
+                                        <span id="wf-cli-activity-text">Idle. Choose a CLI, then open a session when you want to send a prompt.</span>
                                     </div>
                                     <div id="wf-cli-transcript" class="wf-cli-transcript">
                                         <div class="wf-cli-line-system">Output appears here when you send a prompt or when a workflow run dispatches work.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="wf-cli-model-context-menu" class="wf-cli-model-context-menu" role="menu" aria-label="Step model actions"></div>
+                            <div id="wf-cli-key-modal" class="wf-cli-key-modal" hidden>
+                                <div class="wf-cli-key-modal-card" role="dialog" aria-modal="true" aria-labelledby="wf-cli-key-title">
+                                    <div class="wf-cli-key-modal-head">
+                                        <div>
+                                            <div id="wf-cli-key-title" class="wf-cli-key-modal-title">CLI credential</div>
+                                            <div id="wf-cli-key-status" class="wf-cli-key-modal-status">Choose a CLI or provider.</div>
+                                        </div>
+                                        <button type="button" id="wf-cli-key-close" class="wf-cli-recovery-dismiss" aria-label="Close credential modal">&times;</button>
+                                    </div>
+                                    <div id="wf-cli-key-copy" class="wf-cli-key-modal-copy">Save a credential or endpoint for the selected CLI or routed provider.</div>
+                                    <input id="wf-cli-key-input" class="wf-cli-key-input" type="password" autocomplete="off" placeholder="Paste replacement credential or endpoint">
+                                    <div class="wf-cli-key-modal-actions">
+                                        <button type="button" id="wf-cli-key-cancel" class="px-3 py-2 rounded border border-white/15 text-gray-200 text-xs font-medium hover:bg-white/10">Cancel</button>
+                                        <button type="button" id="wf-cli-key-save" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]">Save & reconnect</button>
                                     </div>
                                 </div>
                             </div>
@@ -3049,6 +3447,7 @@ body.wf-split-dragging * {
                         <button type="button" class="wf-loop-step-tab is-active" data-loop-step-tab="instruction" role="tab" aria-selected="true">Instruction</button>
                         <button type="button" class="wf-loop-step-tab" data-loop-step-tab="guardrail" role="tab" aria-selected="false">Guardrails</button>
                         <button type="button" class="wf-loop-step-tab" data-loop-step-tab="validation" role="tab" aria-selected="false">Validation</button>
+                        <button type="button" class="wf-loop-step-tab" data-loop-step-tab="execution-route" role="tab" aria-selected="false">Execution Route</button>
                     </div>
                     <div class="wf-loop-step-tab-panels">
                         <div id="wf-loop-step-pane-instruction" class="wf-loop-step-tab-pane is-active" role="tabpanel">
@@ -3062,6 +3461,47 @@ body.wf-split-dragging * {
                         <div id="wf-loop-step-pane-validation" class="wf-loop-step-tab-pane" role="tabpanel">
                             <p class="wf-loop-step-tab-help">Explicit pass/fail criteria the orchestrator uses after the step runs.</p>
                             <textarea id="wf-loop-step-validation" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Checkout completes without errors; Playwright smoke test passes; no console errors on the login page…"></textarea>
+                        </div>
+                        <div id="wf-loop-step-pane-execution-route" class="wf-loop-step-tab-pane" role="tabpanel">
+                            <p class="wf-loop-step-tab-help">Choose a workflow-scoped route bundle to switch the active CLI/backend/model for this run from this step onward.</p>
+                            <div class="wf-loop-step-route-card">
+                                <div class="wf-loop-step-route-row">
+                                    <label class="wf-loop-step-route-toggle">
+                                        <input type="checkbox" id="wf-loop-step-route-enabled">
+                                        <span>Switch active run route in this step</span>
+                                    </label>
+                                    <span class="wf-loop-step-route-badge">Scoped route</span>
+                                </div>
+                                <select id="wf-loop-step-route-select" class="wf-loop-step-route-select" disabled>
+                                    <option value="">Use the current run route</option>
+                                </select>
+                                <div id="wf-loop-step-route-help" class="wf-loop-step-route-help">If left off, the step uses the run’s current execution route. Turning this on switches the route for later CLI steps in the same run.</div>
+                                <div id="wf-loop-step-route-empty" class="wf-loop-step-route-empty hidden">No scoped workflow models have been saved yet. Add chosen models in the workflow CLI inspector first.</div>
+                                <div id="wf-loop-step-route-warning" class="wf-loop-step-route-warning hidden"></div>
+                                <div id="wf-loop-step-route-preview" class="wf-loop-step-route-preview is-disabled">
+                                    <div class="wf-loop-step-route-preview-row">
+                                        <div class="wf-loop-step-route-preview-label">CLI</div>
+                                        <div id="wf-loop-step-route-preview-backend" class="wf-loop-step-route-preview-value">Current run route</div>
+                                    </div>
+                                    <div class="wf-loop-step-route-preview-row">
+                                        <div class="wf-loop-step-route-preview-label">Provider</div>
+                                        <div id="wf-loop-step-route-preview-provider" class="wf-loop-step-route-preview-value">Inherited</div>
+                                    </div>
+                                    <div class="wf-loop-step-route-preview-row">
+                                        <div class="wf-loop-step-route-preview-label">Model</div>
+                                        <div id="wf-loop-step-route-preview-model" class="wf-loop-step-route-preview-value">Inherited</div>
+                                    </div>
+                                    <div class="wf-loop-step-route-preview-row">
+                                        <div class="wf-loop-step-route-preview-label">Capabilities</div>
+                                        <div id="wf-loop-step-route-preview-capabilities" class="wf-loop-step-route-preview-value">Inherited</div>
+                                    </div>
+                                    <div class="wf-loop-step-route-preview-row wf-loop-step-route-preview-row--full">
+                                        <div class="wf-loop-step-route-preview-label">Details</div>
+                                        <div id="wf-loop-step-route-preview-details" class="wf-loop-step-route-preview-value">This step will continue using the current route until you explicitly switch it.</div>
+                                    </div>
+                                </div>
+                                <div id="wf-loop-step-route-note" class="wf-loop-step-route-note">The file-based workflow memory stays shared across route changes, so a new CLI can continue from the same project and workflow context.</div>
+                            </div>
                         </div>
                     </div>
                     <p id="wf-loop-step-orchestrator-note" class="hidden text-[11px] text-gray-500 flex-shrink-0"></p>

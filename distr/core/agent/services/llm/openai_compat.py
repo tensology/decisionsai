@@ -119,6 +119,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
             _t3 = _time.time()
             full_content, tool_calls = await self._consume_stream(stream)
+            if getattr(self, '_prompt_leak_blocked', False):
+                logger.warning("%s: blocked probable prompt leak from model output", self.SERVICE_NAME)
+                full_content = ""
+                tool_calls = []
+                await self._push_pipeline_frame(LLMFullResponseEndFrame())
+                end_frame_sent = True
+                return
             logger.info("%s: [4] consume_stream: %.3fs (%d chars, %d tool_calls)",
                         self.SERVICE_NAME, _time.time() - _t3, len(full_content), len(tool_calls))
 
@@ -401,6 +408,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         generation_start = time.time()
         self._last_tool_call_time = None
+        self._prompt_leak_blocked = False
 
         async def watchdog():
             try:
@@ -432,6 +440,14 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     content_chunks += 1
                     wd_content_len[0] = len(full_content)
                     wd_content_chunks[0] = content_chunks
+
+                    from distr.core.agent.services.llm.text_utils import looks_like_prompt_leak
+                    if looks_like_prompt_leak(full_content):
+                        logger.warning("%s: probable prompt leak detected at stream start; suppressing response", self.SERVICE_NAME)
+                        self._prompt_leak_blocked = True
+                        full_content = ""
+                        tool_calls = []
+                        break
 
                     if not tool_call_detected:
                         if '<tool_call>' in full_content or '<think>' in full_content:

@@ -1531,7 +1531,7 @@ class AgentSession:
                     )
                     
                     full_message = " ".join(welcome_sentences)
-                    self.logger.info("WELCOME: %s", full_message)
+                    self.logger.info("AGENT_WELCOME_TTS_TEXT: %s", full_message)
 
                     # Same as _cmd_speak_text_directly: ensure Kokoro pushes audio to desktop even if
                     # another thread left telegram_request=True (welcome runs concurrently with pipeline).
@@ -1542,15 +1542,12 @@ class AgentSession:
                     tts._force_desktop_tts = True
                     try:
                         await tts.process_frame(LLMFullResponseStartFrame(), direction)
-                        
-                        for sentence in welcome_sentences:
-                            if getattr(self, '_welcome_task', None) and self._welcome_task.cancelled():
-                                break
-                            if hasattr(tts, '_cancelled') and tts._cancelled:
-                                break
-                            await tts.process_frame(TextFrame(text=sentence), direction)
-                            await asyncio.sleep(0.15)
-                        
+                        if not (
+                            getattr(self, '_welcome_task', None) and self._welcome_task.cancelled()
+                        ) and not (hasattr(tts, '_cancelled') and tts._cancelled):
+                            self.logger.info("AGENT_WELCOME_TTS_OUT: %s", full_message)
+                            await tts.process_frame(TextFrame(text=full_message), direction)
+
                         await tts.process_frame(LLMFullResponseEndFrame(), direction)
                         if hasattr(tts, "_drain_speak_queue"):
                             await tts._drain_speak_queue()

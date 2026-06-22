@@ -1797,20 +1797,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return
 
         full_message = " ".join(welcome_sentences)
-        logger.info("WELCOME: %s", full_message)
+        logger.info("AGENT_WELCOME_TEXT: %s", full_message)
 
         await self.push_frame(LLMFullResponseStartFrame(), getattr(self, '_pipeline_direction', None))
 
         try:
             if self._speaker_enabled and not self._cancelled:
-                for sentence in welcome_sentences:
-                    if self._cancelled:
-                        break
-                    await self.push_frame(TextFrame(text=sentence), getattr(self, '_pipeline_direction', None))
-                    await asyncio.sleep(0.15)
-                    if self._cancelled:
-                        break
-
+                await self.push_frame(TextFrame(text=full_message), getattr(self, '_pipeline_direction', None))
                 wait_time = max(1.0, len(welcome_sentences) * 0.5)
                 await asyncio.sleep(wait_time)
         except asyncio.CancelledError:
@@ -1825,7 +1818,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         self._apply_context_window()
 
     async def _build_welcome_sentences(self, agent_name: str) -> list:
-        """Build welcome sentences, including conversation summary if available."""
+        """Build a short spoken startup greeting.
+
+        Startup should feel like the assistant has arrived, not like a transcript
+        report. Keep previous-chat summaries out of TTS so we never speak
+        meta text such as "The conversation..." or "the user said...".
+        """
         include_interaction = not (hasattr(self, 'event_queue') and self.event_queue is not None)
 
         def _add_interaction(sentences):
@@ -1836,107 +1834,26 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     sentences.append("To talk to me, just hold down on the oracle and then speak.")
             return sentences
 
-        default_welcome = _add_interaction([
-            "I'm back online.",
-            "I'm ready when you need me.",
-        ])
-
-        if not self.chat_manager:
-            return default_welcome
-
-        current_chat_id = self.chat_manager.get_current_chat()
-        if not current_chat_id:
-            return default_welcome
-
         try:
-            history = self.chat_manager.get_chat_history(current_chat_id)
-            conversation_messages = []
-            for msg in history:
-                role = msg.get('role')
-                content = (msg.get('content') or '').strip()
-                if role == 'system' or not content:
-                    continue
-                # Guard against stale/noisy welcome/system-like assistant text
-                # polluting the next welcome summary.
-                if role == 'assistant':
-                    content_lower = content.lower()
-                    is_welcome_like = (
-                        'welcome back' in content_lower
-                        or "i'm back online" in content_lower
-                        or "i'm your ai assistant" in content_lower
-                        or "what would you like to talk about or do today" in content_lower
-                    )
-                    if is_welcome_like:
-                        continue
-                conversation_messages.append(msg)
+            import getpass
+            user_name = getpass.getuser().replace("_", " ").replace(".", " ").strip().title()
+        except Exception:
+            user_name = ""
 
-            if not conversation_messages:
-                return default_welcome
-
-            conversation_text = ""
-            for msg in conversation_messages[-6:]:
-                role = msg.get('role', 'user')
-                content = msg.get('content', '').strip()
-                if content:
-                    prefix = "You" if role == 'user' else agent_name
-                    conversation_text += f"{prefix}: {content}\n"
-
-            if not conversation_text.strip():
-                return default_welcome
-
-            if self._cancelled:
-                return default_welcome
-
-            summary = await self._generate_welcome_summary(conversation_text, agent_name)
-
-            if self._cancelled:
-                return default_welcome
-
-            if summary and summary.lower() not in ('nothing', 'we discussed nothing', 'we talked about nothing'):
-                return _add_interaction([
-                    "I'm back online.",
-                    summary,
-                ])
-
-            return _add_interaction([
-                "I'm back online.",
-                "I'll pick up where we left off when you are ready.",
-            ])
-
-        except Exception as e:
-            logger.error("Error building welcome sentences: %s", e, exc_info=True)
-
-            if self.event_queue:
-                try:
-                    from distr.core.llm_errors import format_model_error
-
-                    current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-                    self.event_queue.put(('chat_stream_error', {
-                        'error': format_model_error(
-                            e,
-                            provider=self._get_provider_name(),
-                            model=getattr(self, "_model_name", ""),
-                            operation="generate the welcome response",
-                        ),
-                        'chat_id': current_chat_id,
-                    }), block=False)
-                except Exception:
-                    pass
-
-            return _add_interaction([
-                "I'm back online.",
-                "I'll pick up where we left off when you are ready.",
-            ])
+        greeting = f"Hey {user_name}." if user_name and user_name.lower() not in ("user", "root") else "Hey."
+        return _add_interaction([
+            greeting,
+            "I'm here.",
+        ])
 
     async def _generate_welcome_summary(self, conversation_text: str, agent_name: str) -> str:
         """Generate a welcome summary. Default uses Ollama. Override for other providers."""
         summary_prompt = (
-            f"You are summarizing a previous conversation between you and the user.\n\n"
+            "Summarize the latest context as a neutral continuity note for the assistant.\n\n"
             f"IMPORTANT:\n"
-            f"- Summarize what you and the user were TALKING ABOUT — topics, questions, stories, tasks.\n"
-            f"- ALWAYS refer to the user as \"You\" (second person).\n"
-            f"- ALWAYS refer to yourself as \"I\" (first person).\n"
-            f"- Use \"You and I\" or \"We\" when referring to shared actions.\n\n"
+            f"- Do not include role tags or labels.\n"
+            f"- Do not output text like \"User said\" or \"Assistant said\".\n"
+            f"- Keep it short and objective, in first-person where needed.\n\n"
             f"Conversation history:\n{conversation_text}\n\n"
             f"Provide a brief, natural summary (max 2 sentences). Just the summary, no explanations:"
         )

@@ -51,6 +51,12 @@ You MUST complete each phase before proceeding to the next.
 
 **BEFORE attempting ANY fix:**
 
+0. **Build a tight feedback loop**
+   - Create one command that can catch the user's exact symptom.
+   - Prefer, in order: failing test, HTTP/curl script, CLI fixture, browser script, trace replay, throwaway harness, property/fuzz loop, bisection, differential check, structured human-in-the-loop script.
+   - Tighten it until it is fast, deterministic, red-capable, and agent-runnable.
+   - If no feedback loop is possible, stop and ask for the missing artifact or environment. Do not hypothesize from vibes.
+
 1. **Read Error Messages Carefully**
    - Don't skip past errors or warnings
    - They often contain the exact solution
@@ -119,6 +125,11 @@ You MUST complete each phase before proceeding to the next.
    - Keep tracing up until you find the source
    - Fix at source, not at symptom
 
+6. **Minimise the repro**
+   - Once the loop is red, remove inputs, callers, config, and data one at a time.
+   - Keep only elements that are load-bearing for the failure.
+   - The minimized repro becomes the best regression test candidate.
+
 ### Phase 2: Pattern Analysis
 
 **Find the pattern before fixing:**
@@ -146,10 +157,10 @@ You MUST complete each phase before proceeding to the next.
 
 **Scientific method:**
 
-1. **Form Single Hypothesis**
-   - State clearly: "I think X is the root cause because Y"
-   - Write it down
-   - Be specific, not vague
+1. **Form Ranked Hypotheses**
+   - Generate 3-5 ranked hypotheses before testing.
+   - State each as: "If X is the cause, then changing or observing Y will prove or disprove it."
+   - Share the ranked hypotheses when useful; domain context can re-rank them quickly.
 
 2. **Test Minimally**
    - Make the SMALLEST possible change to test hypothesis
@@ -211,6 +222,17 @@ You MUST complete each phase before proceeding to the next.
    **Discuss with your human partner before attempting more fixes**
 
    This is NOT a failed hypothesis - this is a wrong architecture.
+
+### Phase 5: Cleanup and Post-Mortem
+
+Before declaring done:
+
+- Re-run the original feedback loop.
+- Run the regression test or document why no correct test seam exists.
+- Remove temporary instrumentation and tagged debug output.
+- Delete or archive throwaway repro harnesses.
+- Record the confirmed hypothesis in the commit, PR, or workflow evidence.
+- Note what would have prevented the bug, especially missing seams, weak interfaces, or absent observability.
 
 ## Red Flags - STOP and Follow Process
 

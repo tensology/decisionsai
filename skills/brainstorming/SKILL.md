@@ -77,6 +77,14 @@ digraph brainstorming {
 - Only one question per message - if a topic needs more exploration, break it into multiple questions
 - Focus on understanding: purpose, constraints, success criteria
 
+**Grilling discipline:**
+
+- Treat brainstorming as a constructive grilling session: walk one branch of the design tree at a time until it is resolved.
+- Ask one question at a time, and include the recommended answer when a recommendation is honest.
+- If a question can be answered by exploring the codebase, explore instead of asking.
+- Resolve dependencies between choices before moving deeper; do not ask downstream questions while an upstream decision is still ambiguous.
+- Stop grilling when goal, success criteria, audience, in/out of scope, constraints, current state, and key tradeoffs are clear enough for a decision-complete design.
+
 **Exploring approaches:**
 
 - Propose 2-3 different approaches with trade-offs

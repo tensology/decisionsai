@@ -59,6 +59,8 @@ def configured_tier_for_action(
         return PermissionTier.APPROVE
     if at == "project_cli_task":
         return PermissionTier.APPROVE
+    if at == "automation_recommendation":
+        return PermissionTier.APPROVE
     if at == "external_comms":
         return PermissionTier.APPROVE
     if at == "file_change":

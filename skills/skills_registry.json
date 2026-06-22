@@ -736,6 +736,96 @@
     "path": "writing-skills"
   },
   {
+    "id": "architecture-deepening-review",
+    "name": "architecture-deepening-review",
+    "description": "Use when reviewing a codebase for architectural friction, shallow modules, poor test seams, scattered behavior, duplicated orchestration, or opportunities to deepen modules before implementing a ticket or workflow.",
+    "path": "architecture-deepening-review",
+    "source": "reference-adapted",
+    "provenance": {
+      "repo": "https://github.com/mattpocock/skills",
+      "commit": "6eeb81b",
+      "adapted_from": "skills/engineering/improve-codebase-architecture/SKILL.md"
+    },
+    "conflict_policy": "merged_selectively",
+    "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
+    "tags": ["architecture", "reference-adapted"]
+  },
+  {
+    "id": "codebase-design",
+    "name": "codebase-design",
+    "description": "Use when designing or improving a module interface, choosing a seam, reducing shallow modules, making code easier to test, or reviewing architecture for locality, leverage, adapters, and deep-module design.",
+    "path": "codebase-design",
+    "source": "reference-adapted",
+    "provenance": {
+      "repo": "https://github.com/mattpocock/skills",
+      "commit": "6eeb81b",
+      "adapted_from": "skills/engineering/codebase-design/SKILL.md"
+    },
+    "conflict_policy": "merged_selectively",
+    "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
+    "tags": ["architecture", "reference-adapted"]
+  },
+  {
+    "id": "decisions-frontier-prep",
+    "name": "decisions-frontier-prep",
+    "description": "Use when preparing hardest high-leverage work for a stronger or scarce model, building a ranked execution queue, asking for fable prep, frontier prep, round-collapse, wave queue, or model-upgrade readiness across code, design, copy, marketing, or architecture work.",
+    "path": "decisions-frontier-prep",
+    "source": "reference-adapted",
+    "provenance": {
+      "repo": "https://github.com/Dallionking/fable-prep",
+      "commit": "3a357c1",
+      "adapted_from": "SKILL.md"
+    },
+    "conflict_policy": "local_preferred",
+    "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
+    "tags": ["workflow", "frontier", "reference-adapted"]
+  },
+  {
+    "id": "decisions-harness-audit",
+    "name": "decisions-harness-audit",
+    "description": "Use when auditing DecisionsAI, Codex, Claude, Cursor, Gemini, Pi, Cline, RTK, workflow pre_chain skills, hooks, projected commands, skill routing, or harness setup for drift, duplication, dead references, slow hooks, bloated context, or stale config.",
+    "path": "decisions-harness-audit",
+    "source": "reference-adapted",
+    "provenance": {
+      "repo": "https://github.com/Dallionking/claude-harness-audit",
+      "commit": "05de208",
+      "adapted_from": "skills/harness-audit/SKILL.md"
+    },
+    "conflict_policy": "local_preferred",
+    "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
+    "tags": ["harness", "audit", "reference-adapted"]
+  },
+  {
+    "id": "decisions-harness-optimize",
+    "name": "decisions-harness-optimize",
+    "description": "Use after a verified Decisions harness audit when the user asks to apply safe fixes to harness drift, dead references, stale projected skills, duplicate routing, bloated state files, or invalid local config.",
+    "path": "decisions-harness-optimize",
+    "source": "reference-adapted",
+    "provenance": {
+      "repo": "https://github.com/Dallionking/claude-harness-audit",
+      "commit": "05de208",
+      "adapted_from": "skills/harness-optimize/SKILL.md"
+    },
+    "conflict_policy": "local_preferred",
+    "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
+    "tags": ["harness", "audit", "reference-adapted"]
+  },
+  {
+    "id": "domain-modeling",
+    "name": "domain-modeling",
+    "description": "Use when a project needs shared terminology, glossary updates, ADRs, clearer domain language, or when user language conflicts with existing code, ticket, board, project, workflow, or CONTEXT.md terms.",
+    "path": "domain-modeling",
+    "source": "reference-adapted",
+    "provenance": {
+      "repo": "https://github.com/mattpocock/skills",
+      "commit": "6eeb81b",
+      "adapted_from": "skills/engineering/domain-modeling/SKILL.md"
+    },
+    "conflict_policy": "merged_selectively",
+    "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
+    "tags": ["domain-modeling", "reference-adapted"]
+  },
+  {
     "id": "xlsx",
     "name": "xlsx",
     "description": "Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \\\"the xlsx in my downloads\\\") — and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved.",

@@ -50,13 +50,17 @@ def maybe_suggest_daily_plan_automation(service, settings: dict) -> None:
     from distr.core.initiative.proposed_action import ProposedAction
 
     action = ProposedAction(
-        action_type="suggestion",
+        action_type="automation_recommendation",
         description=_SUGGESTION_TEXT,
-        payload={"source": "daily_plan_preset_offer", "preset_id": "daily_plan"},
+        payload={
+            "source": "daily_plan_preset_offer",
+            "preset_id": "daily_plan",
+            "preset_name": "Daily plan",
+        },
         telegram_message=_SUGGESTION_TEXT,
         requires_confirmation=True,
     )
     try:
-        service._draft_and_ask(action, settings, tier=PermissionTier.ASSIST)
+        service._draft_and_ask(action, settings, tier=PermissionTier.APPROVE)
     except Exception:
         logger.debug("daily plan suggestion draft failed", exc_info=True)

@@ -86,7 +86,7 @@
         { id: "playwright", label: "Playwright", emoji: "🎭" },
         { id: "browser_use", label: "Browser use", emoji: "🌐" },
         { id: "computer_use", label: "Computer use", emoji: "🖥️" },
-        { id: "cli", label: "CLI", emoji: "⌨️" },
+        { id: "cli", label: "CLI", emoji: "🔑" },
         { id: "python", label: "Python", emoji: "Py" },
         { id: "shell", label: "Shell", emoji: "$" },
         { id: "http", label: "HTTP", emoji: "↗" },
@@ -1879,15 +1879,23 @@
         high: { backend: "codex", model: "gpt-5.3-codex" }
     };
     var WORKFLOW_EXEC_BACKEND_OPTIONS = [
-        { id: "pi", label: "Pi" },
-        { id: "opencode", label: "OpenCode" },
-        { id: "cursor", label: "Cursor CLI" },
         { id: "codex", label: "Codex CLI" },
         { id: "claude_code", label: "Claude Code" },
+        { id: "opencode", label: "OpenCode" },
+        { id: "kiro", label: "Kiro CLI" },
+        { id: "cursor", label: "Cursor CLI" },
         { id: "cline", label: "Cline" },
-        { id: "hermes_agent", label: "External agent (optional)" }
+        { id: "hermes_agent", label: "External agent (optional)" },
+        { id: "pi", label: "Pi" }
     ];
     var WORKFLOW_EXEC_IDE_BACKEND_IDS = { cursor_ide: true, codex_ide: true };
+    var WORKFLOW_CLI_BACKEND_ORDER = {
+        codex: 0,
+        claude_code: 1,
+        opencode: 2,
+        kiro: 3,
+        pi: 99
+    };
 
     function workflowExecBackendIsIde(backendId) {
         return !!WORKFLOW_EXEC_IDE_BACKEND_IDS[(backendId || "").trim()];
@@ -1968,8 +1976,7 @@
         if (includeAuto) {
             var autoOpt = document.createElement("option");
             autoOpt.value = "auto";
-            var rec = data.recommended_model || {};
-            autoOpt.textContent = rec.id ? ("Auto - recommended: " + (rec.name || rec.id)) : "Auto";
+            autoOpt.textContent = "Auto";
             autoOpt.dataset.provider = "";
             select.appendChild(autoOpt);
         }
@@ -1986,7 +1993,7 @@
             var cur = document.createElement("option");
             cur.value = current;
             cur.dataset.provider = data.current_provider || "";
-            cur.textContent = current + " (current)";
+            cur.textContent = current;
             cur.selected = true;
             select.insertBefore(cur, select.firstChild);
         }
@@ -2129,7 +2136,7 @@
         root = root || document;
         var readyMap = {};
         (backends || []).forEach(function (row) {
-            readyMap[row.id] = !!(row.ready || row.available);
+            readyMap[row.id] = workflowCliBackendWorkflowReady(row);
         });
         var optionsHtml = workflowExecRouteBackendOptionsHtml(readyMap);
         var fallbackOptionsHtml = workflowExecCliBackendOptionsHtml(readyMap, true);
@@ -2443,7 +2450,9 @@
 
     function fetchWorkflowProjectCliBackends(projectId) {
         if (projectId) {
-            return api("GET", "/projects/" + encodeURIComponent(projectId) + "/cli-backends").catch(function () {
+            var ctx = workflowCliAreaContext();
+            var query = ctx && ctx.board_id ? ("?board_id=" + encodeURIComponent(ctx.board_id)) : "";
+            return api("GET", "/projects/" + encodeURIComponent(projectId) + "/cli-backends" + query).catch(function () {
                 return api("GET", "/projects/cli-backends");
             });
         }
@@ -2464,10 +2473,10 @@
         var rows = _wfExecutorInstallContext.backendRows || [];
         var row = rows.find(function (b) { return String(b.id) === String(backendId); }) || {};
         var optional = (_wfExecutorInstallContext.optionalBackends || {})[backendId] || {};
-        var ready = !!(row.ready || row.available || optional.ready);
+        var ready = workflowCliBackendWorkflowReady(row) || optional.ready;
         if (ready) return null;
         var name = row.name || optional.name || backendId;
-        var message = optional.message || row.message || row.setup_instructions || (name + " is not installed.");
+        var message = optional.message || row.health_message || row.message || row.setup_instructions || (name + " is not installed.");
         var setupCommand = optional.setup_command || row.setup_command || "";
         return { name: name, message: message, setupCommand: setupCommand };
     }
@@ -2535,13 +2544,13 @@
             _wfExecutorInstallContext.optionalBackends = optionalBackends;
         }
         container.innerHTML = backends.map(function (row) {
-            var ready = !!(row.ready || row.available);
+            var ready = workflowCliBackendWorkflowReady(row);
             var setupRequired = !!row.setup_required && !ready;
             var cls = "wf-config-exec-pill";
             if (ready) cls += " is-ready";
             if (setupRequired) cls += " is-setup";
             if (routeIds[row.id]) cls += " is-active-route";
-            var title = row.message || row.setup_instructions || "";
+            var title = row.health_message || row.message || row.setup_instructions || "";
             return '<button type="button" class="' + cls + '" data-backend-id="' + esc(row.id) + '" title="' + esc(title) + '">' +
                 '<span class="wf-config-exec-pill-dot" aria-hidden="true"></span>' +
                 '<span>' + esc(row.name || row.id) + "</span>" +
@@ -2584,11 +2593,19 @@
     var _wfCliTicketTimerStartedAt = null;
     var _wfCliRecoveryActions = [];
     var _wfCliInventoryById = {};
+    var _wfCliInventoryMeta = { source: "", message: "" };
     var _wfCliChosenModels = [];
+    var _wfCliBackendRows = [];
+    var _wfCliModelContextTargetId = "";
     var _wfCliDraggedModelId = "";
     var _wfCliDraggedChosenIndex = -1;
+    var _wfCliAreaPresent = false;
+    var _wfCliAreaHeartbeatTimer = null;
+    var _wfCliAreaEnsurePromise = null;
+    var WF_CLI_AREA_HEARTBEAT_MS = 30000;
     var WF_CLI_LOCKED_MODEL_STORAGE_KEY = "wf_cli_locked_pi_model_v1";
-    var WF_CLI_DISCONNECTED_PLACEHOLDER = "Choose a CLI and click Connect to load models and send prompts.";
+    var WF_CLI_BOARD_STATE_STORAGE_PREFIX = "wf_cli_board_state_v1";
+    var WF_CLI_DISCONNECTED_PLACEHOLDER = "Choose a CLI to load models. DecisionsAI will keep the board session warm while you stay in workflows.";
     var WF_CLI_CONNECTED_PLACEHOLDER = "Send a prompt...";
 
     function workflowCliBoundTicketLabel() {
@@ -2635,10 +2652,74 @@
         return name.replace(/\s+CLI$/i, "") || name;
     }
 
+    function workflowCliBackendWorkflowReady(backend) {
+        if (!backend) return false;
+        if (typeof backend.workflow_ready === "boolean") return backend.workflow_ready;
+        return !!backend.ready;
+    }
+
+    function workflowCliBackendVisualState(backend) {
+        if (!backend) return "missing";
+        if (backend.running) return "running";
+        if (backend.connected) return "connected";
+        if (backend.health_state) return String(backend.health_state);
+        if (workflowCliBackendWorkflowReady(backend)) return "ready";
+        if (backend.installed || backend.state === "auth_required" || backend.state === "not_ready") return "setup";
+        return "missing";
+    }
+
+    function workflowCliBackendDotHtml(state) {
+        state = String(state || "missing");
+        return '<span class="wf-cli-backend-dot is-' + esc(state) + '" aria-hidden="true"></span>';
+    }
+
     function workflowCliTabBackends(backends) {
         return (backends || []).filter(function (b) {
             return !workflowExecBackendIsIde(b.id) && b.id !== "hermes_agent";
+        }).sort(function (a, b) {
+            var aId = String((a && a.id) || "").trim();
+            var bId = String((b && b.id) || "").trim();
+            var aRank = Object.prototype.hasOwnProperty.call(WORKFLOW_CLI_BACKEND_ORDER, aId) ? WORKFLOW_CLI_BACKEND_ORDER[aId] : 50;
+            var bRank = Object.prototype.hasOwnProperty.call(WORKFLOW_CLI_BACKEND_ORDER, bId) ? WORKFLOW_CLI_BACKEND_ORDER[bId] : 50;
+            if (aRank !== bRank) return aRank - bRank;
+            return workflowCliBackendDisplayName(a).localeCompare(workflowCliBackendDisplayName(b));
         });
+    }
+
+    function renderWorkflowCliBackendMenu(backends, activeId) {
+        var menu = document.getElementById("wf-cli-backend-menu");
+        var trigger = document.getElementById("wf-cli-backend-trigger");
+        var nameEl = document.getElementById("wf-cli-backend-trigger-name");
+        var dotEl = document.getElementById("wf-cli-backend-trigger-dot");
+        backends = workflowCliTabBackends(backends);
+        _wfCliBackendRows = backends.slice();
+        var active = workflowCliBackendRow(backends, activeId) || backends[0] || null;
+        if (nameEl) nameEl.textContent = active ? workflowCliBackendDisplayName(active) : "Choose CLI";
+        if (dotEl) {
+            dotEl.className = "wf-cli-backend-dot";
+            dotEl.classList.add("is-" + workflowCliBackendVisualState(active));
+        }
+        if (!menu) return;
+        menu.innerHTML = backends.map(function (backend) {
+            var state = workflowCliBackendVisualState(backend);
+            var activeClass = String(backend.id) === String(activeId) ? " is-active" : "";
+            return '<button type="button" class="wf-cli-backend-menu-item' + activeClass + '" data-wf-cli-backend-option="' + esc(backend.id) + '" role="option" aria-selected="' + (String(backend.id) === String(activeId) ? "true" : "false") + '">' +
+                '<span class="wf-cli-backend-menu-item-copy">' +
+                    workflowCliBackendDotHtml(state) +
+                    '<span class="wf-cli-backend-menu-item-name">' + esc(workflowCliBackendDisplayName(backend)) + '</span>' +
+                '</span>' +
+                '<span class="wf-cli-backend-menu-item-check">' + (String(backend.id) === String(activeId) ? "✓" : "") + '</span>' +
+            '</button>';
+        }).join("");
+        if (trigger) trigger.disabled = !backends.length || !workflowBoardProjectId();
+    }
+
+    function setWorkflowCliBackendMenuOpen(open) {
+        var menu = document.getElementById("wf-cli-backend-menu");
+        var trigger = document.getElementById("wf-cli-backend-trigger");
+        if (!menu || !trigger) return;
+        menu.classList.toggle("is-open", !!open);
+        trigger.setAttribute("aria-expanded", open ? "true" : "false");
     }
 
     function workflowCliResolveActiveBackend(backends, preferred) {
@@ -2660,7 +2741,111 @@
 
     function workflowCliActiveBackend() {
         var sel = document.getElementById("wf-cli-backend-select");
-        return sel ? (sel.value || "pi") : "pi";
+        var current = sel ? String(sel.value || "").trim() : "";
+        if (sel && !sel.disabled && current) return current;
+        var saved = workflowCliStoredState();
+        return String(saved.backend_id || current || "pi").trim() || "pi";
+    }
+
+    function workflowCliBoardStateStorageKey() {
+        var opt = currentWorkflowBoardOption();
+        if (!opt) return "";
+        var boardKey = String(opt.value || opt.local_id || opt.id || "").trim();
+        var workflowKey = String(currentWorkflowId || 0);
+        var projectKey = String(workflowBoardProjectId() || 0);
+        if (!boardKey && !projectKey) return "";
+        return [WF_CLI_BOARD_STATE_STORAGE_PREFIX, workflowKey, projectKey, boardKey || "board"].join("::");
+    }
+
+    function workflowCliStoredState() {
+        try {
+            var key = workflowCliBoardStateStorageKey();
+            if (!key) return {};
+            var raw = localStorage.getItem(key) || "";
+            if (!raw) return {};
+            var parsed = JSON.parse(raw);
+            return parsed && typeof parsed === "object" ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function workflowCliSelectedModelValue() {
+        var modelSel = document.getElementById("wf-cli-model-select");
+        return modelSel ? String(modelSel.value || "").trim() : "";
+    }
+
+    function persistWorkflowCliBoardState(overrides) {
+        try {
+        var key = workflowCliBoardStateStorageKey();
+        if (!key) return;
+        var next = workflowCliStoredState();
+        var capabilities = workflowCliSelectedCapabilities();
+        overrides = overrides || {};
+            next.backend_id = String(
+                overrides.backend_id != null ? overrides.backend_id : workflowCliActiveBackend()
+            ).trim() || "pi";
+        next.model = String(
+            overrides.model != null ? overrides.model : workflowCliSelectedModelValue()
+        ).trim();
+        next.codex_reasoning_effort = String(
+            overrides.codex_reasoning_effort != null ? overrides.codex_reasoning_effort : capabilities.codex_reasoning_effort
+        ).trim();
+            next.codex_service_tier = String(
+                overrides.codex_service_tier != null ? overrides.codex_service_tier : capabilities.codex_service_tier
+            ).trim();
+            if (Object.prototype.hasOwnProperty.call(overrides, "connected")) {
+                next.connected = !!overrides.connected;
+            }
+            next.project_id = workflowBoardProjectId() || null;
+            next.saved_at = new Date().toISOString();
+            localStorage.setItem(key, JSON.stringify(next));
+        } catch (e) {}
+    }
+
+    function workflowCliTabIsActive() {
+        var cliTab = document.getElementById("wf-tab-cli");
+        return !!(cliTab && !cliTab.hidden && !cliTab.classList.contains("hidden"));
+    }
+
+    function workflowCliShouldWarmOnPresence() {
+        return workflowCliTabIsActive();
+    }
+
+    function workflowActiveDetailTab() {
+        var active = document.querySelector('.tab-btn.active[data-tab]');
+        return active ? String(active.dataset.tab || "").trim() : "";
+    }
+
+    function fetchWorkflowCliTerminalState(projectId) {
+        if (!projectId) return Promise.resolve({ alive: false, connected: false, backend_id: "", external_thread_id: "", supports_rpc: false, buffer: "" });
+        var ctx = workflowCliAreaContext();
+        var query = "lines=160";
+        if (ctx && ctx.board_id) query += "&board_id=" + encodeURIComponent(ctx.board_id);
+        return api("GET", "/projects/" + encodeURIComponent(projectId) + "/terminal/buffer?" + query)
+            .catch(function () { return { alive: false, connected: false, backend_id: "", external_thread_id: "", supports_rpc: false, buffer: "" }; });
+    }
+
+    function workflowCliBufferEntryUserText(entry) {
+        if (!entry || String(entry.role || "") !== "user") return "";
+        if (typeof entry.content === "string") return entry.content;
+        if (Array.isArray(entry.content)) {
+            return entry.content.filter(function (block) { return block && block.type === "text"; })
+                .map(function (block) { return block.text || ""; }).join("");
+        }
+        return "";
+    }
+
+    function renderWorkflowCliBufferEntry(entry) {
+        if (!entry) return;
+        var role = String(entry.role || "").trim();
+        if (role === "user") {
+            appendWorkflowCliLine("user", workflowCliBufferEntryUserText(entry));
+            return;
+        }
+        if (role === "assistant" && entry.content) {
+            appendWorkflowCliLine("assistant", entry.content);
+        }
     }
 
     function workflowCliActiveSupportsRpc() {
@@ -2678,24 +2863,20 @@
         var input = document.getElementById("wf-cli-input");
         var sendBtn = document.getElementById("wf-cli-send");
         var modelSel = document.getElementById("wf-cli-model-select");
-        var connectBtn = document.getElementById("wf-cli-connect");
         if (input) input.disabled = !ready;
         if (sendBtn) sendBtn.disabled = !ready;
         if (modelSel) modelSel.disabled = !ready;
         workflowCliInputPlaceholder(ready);
-        if (connectBtn) {
-            connectBtn.textContent = (ready || _wfCliWs) ? "Disconnect" : "Connect";
-            connectBtn.disabled = !workflowBoardProjectId();
-        }
     }
 
     function resetWorkflowCliModelSelect(message) {
         var select = document.getElementById("wf-cli-model-select");
         if (!select) return;
-        select.innerHTML = '<option value="">' + esc(message || "Connect CLI first") + "</option>";
+        select.innerHTML = '<option value="">' + esc(message || "Choose a CLI first") + "</option>";
         select.disabled = true;
         _wfCliInventoryById = {};
-        renderWorkflowCliModelInventory({ models: [] }, message || "Connect a CLI to load its models.");
+        _wfCliInventoryMeta = { source: "", message: "" };
+        renderWorkflowCliModelInventory({ models: [] }, message || "Choose a CLI to load its models.");
     }
 
     function workflowCliChosenModelKey(model) {
@@ -2735,12 +2916,18 @@
         return String(model.name || model.id || model.model || "Model").trim() || "Model";
     }
 
+    function workflowCliCompactModelLabel(value) {
+        return String(value || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "");
+    }
+
     function workflowCliModelSecondaryLabel(model) {
         if (!model) return "";
-        var primary = workflowCliModelPrimaryLabel(model).toLowerCase().replace(/\s+/g, "");
+        var primary = workflowCliCompactModelLabel(workflowCliModelPrimaryLabel(model));
         var id = String(model.id || model.model || "").trim();
         if (!id) return "";
-        var compactId = id.toLowerCase().replace(/\s+/g, "");
+        var compactId = workflowCliCompactModelLabel(id);
         if (compactId === primary) return "";
         if (compactId.indexOf(primary) >= 0 || primary.indexOf(compactId) >= 0) return "";
         return id;
@@ -2815,9 +3002,10 @@
             if (model.local) flags.push("local");
             if (model.tier) flags.push(model.tier);
             if (model.supports_chat === false) flags.push("no chat");
+            var subtitle = workflowCliModelSecondaryLabel(model);
             return '<tr class="wf-cli-chosen-row">' +
                 '<td><div class="wf-cli-model-name" title="' + esc(model.name || model.id) + '">' + esc(model.name || model.id) + '</div>' +
-                    '<div class="wf-cli-model-id" title="' + esc(model.id || model.model || "") + '">' + esc(model.id || model.model || "") + '</div></td>' +
+                    (subtitle ? ('<div class="wf-cli-model-id" title="' + esc(subtitle) + '">' + esc(subtitle) + '</div>') : '') + '</td>' +
                 '<td>' + esc(model.backend_id || "pi") + '</td>' +
                 '<td>' + esc(model.provider || "unknown") + '</td>' +
                 '<td><span class="wf-cli-model-flags">' + esc(flags.join(" / ") || "saved") + '</span></td>' +
@@ -2884,7 +3072,12 @@
         var activeModel = select ? String(select.value || "") : "";
         if (!list) return;
         var models = Array.isArray(data && data.models) ? data.models : [];
+        var message = String(data && data.message || "").trim();
         _wfCliInventoryById = {};
+        _wfCliInventoryMeta = {
+            source: String(data && data.source || "").trim(),
+            message: message
+        };
         models.forEach(function (model) {
             var snapshot = workflowCliSnapshotModelMeta(model, workflowCliActiveBackend());
             if (snapshot) _wfCliInventoryById[snapshot.id] = snapshot;
@@ -2893,7 +3086,10 @@
             list.innerHTML = '<p class="text-xs text-gray-500 italic">' + esc(emptyMessage || "No models returned for this CLI.") + "</p>";
             return;
         }
-        list.innerHTML = '<table class="wf-cli-model-table wf-cli-available-table">' +
+        var noticeHtml = message
+            ? ('<div class="text-[11px] text-amber-200/90 rounded border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 mb-2">' + esc(message) + '</div>')
+            : "";
+        list.innerHTML = noticeHtml + '<table class="wf-cli-model-table wf-cli-available-table">' +
             '<thead><tr>' +
                 '<th>Model</th>' +
                 '<th style="width: 4.75rem;">Level</th>' +
@@ -2917,6 +3113,114 @@
         }).join("") + '</tbody></table>';
     }
 
+    function workflowCliCapabilityElements() {
+        return {
+            row: document.getElementById("wf-cli-model-capability-row"),
+            levelField: document.getElementById("wf-cli-capability-level-field"),
+            speedField: document.getElementById("wf-cli-capability-speed-field"),
+            variantField: document.getElementById("wf-cli-capability-variant-field"),
+            level: document.getElementById("wf-cli-capability-level"),
+            speed: document.getElementById("wf-cli-capability-speed"),
+            variant: document.getElementById("wf-cli-capability-variant"),
+            hint: document.getElementById("wf-cli-capability-hint")
+        };
+    }
+
+    function workflowCliCapabilityConfig(backendId) {
+        backendId = String(backendId || "").trim();
+        if (backendId === "codex" && _wfCliInventoryMeta.source !== "codex-unverified") {
+            return {
+                level: [
+                    { value: "", label: "Auto" },
+                    { value: "low", label: "Low" },
+                    { value: "medium", label: "Medium" },
+                    { value: "high", label: "High" }
+                ],
+                speed: [
+                    { value: "", label: "Default" },
+                    { value: "flex", label: "Flex" },
+                    { value: "fast", label: "Fast" }
+                ],
+                hint: "Codex only. Level maps to reasoning effort and speed maps to service tier for workflow CLI prompts."
+            };
+        }
+        return null;
+    }
+
+    function workflowCliFillCapabilitySelect(select, items, selectedValue) {
+        if (!select) return;
+        select.innerHTML = (items || []).map(function (item) {
+            return '<option value="' + esc(item.value || "") + '">' + esc(item.label || item.value || "") + '</option>';
+        }).join("");
+        select.value = selectedValue != null ? String(selectedValue) : "";
+    }
+
+    function workflowCliApplyStoredCapabilities(state) {
+        var els = workflowCliCapabilityElements();
+        state = state || {};
+        if (els.level && state.codex_reasoning_effort != null) {
+            els.level.value = String(state.codex_reasoning_effort || "");
+        }
+        if (els.speed && state.codex_service_tier != null) {
+            els.speed.value = String(state.codex_service_tier || "");
+        }
+    }
+
+    function workflowCliApplyModelSelection(modelId, options) {
+        options = options || {};
+        var modelSel = document.getElementById("wf-cli-model-select");
+        if (!modelSel || !modelId) return;
+        modelSel.value = modelId;
+        var model = _wfCliInventoryById[modelId] || null;
+        syncWorkflowCliCapabilityControls(model);
+        refreshWorkflowCliModelCardSelection();
+        if (options.persistOnly) {
+            persistWorkflowCliBoardState({ model: modelSel.value || "" });
+            return;
+        }
+        modelSel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    function syncWorkflowCliCapabilityControls(model) {
+        var els = workflowCliCapabilityElements();
+        var config = workflowCliCapabilityConfig(workflowCliActiveBackend());
+        var levelGuess = workflowCliLevelLabel(model || {}).toLowerCase();
+        var speedGuess = workflowCliSpeedLabel(model || {}).toLowerCase();
+        var levelOptions = config && Array.isArray(config.level) ? config.level.filter(function (item) { return String(item.label || item.value || "").trim() !== ""; }) : [];
+        var speedOptions = config && Array.isArray(config.speed) ? config.speed.filter(function (item) { return String(item.label || item.value || "").trim() !== ""; }) : [];
+        var variantOptions = config && Array.isArray(config.variant) ? config.variant.filter(function (item) { return String(item.label || item.value || "").trim() !== ""; }) : [];
+        var showLevel = levelOptions.length > 1;
+        var showSpeed = speedOptions.length > 1;
+        var showVariant = variantOptions.length > 1;
+        if (!els.row) return;
+        if (!config || (!showLevel && !showSpeed && !showVariant)) {
+            els.row.hidden = true;
+            els.row.classList.remove("is-visible");
+            if (els.levelField) els.levelField.hidden = true;
+            if (els.speedField) els.speedField.hidden = true;
+            if (els.variantField) els.variantField.hidden = true;
+            return;
+        }
+        els.row.hidden = false;
+        els.row.classList.add("is-visible");
+        if (els.levelField) els.levelField.hidden = !showLevel;
+        if (els.speedField) els.speedField.hidden = !showSpeed;
+        if (els.variantField) els.variantField.hidden = !showVariant;
+        if (showLevel) workflowCliFillCapabilitySelect(els.level, levelOptions, /low|medium|high/.test(levelGuess) ? levelGuess : "");
+        if (showSpeed) workflowCliFillCapabilitySelect(els.speed, speedOptions, /fast/.test(speedGuess) ? "fast" : "");
+        if (showVariant) workflowCliFillCapabilitySelect(els.variant, variantOptions, "");
+        if (els.hint) els.hint.textContent = "";
+        workflowCliApplyStoredCapabilities(workflowCliStoredState());
+    }
+
+    function workflowCliSelectedCapabilities() {
+        var els = workflowCliCapabilityElements();
+        return {
+            codex_reasoning_effort: els.level ? String(els.level.value || "").trim() : "",
+            codex_service_tier: els.speed ? String(els.speed.value || "").trim() : ""
+        };
+    }
+
     function setWorkflowCliActivity(state, text) {
         var box = document.getElementById("wf-cli-activity");
         var label = document.getElementById("wf-cli-activity-text");
@@ -2924,6 +3228,7 @@
         box.classList.toggle("is-busy", state === "busy");
         box.classList.toggle("is-editing", state === "editing");
         box.classList.toggle("is-ready", state === "ready");
+        box.classList.toggle("is-visible", state === "busy" || state === "editing");
         if (label) label.textContent = text || "Idle.";
     }
 
@@ -3118,7 +3423,7 @@
         if (row.id === "cursor" || row.id === "codex" || row.id === "claude_code" || row.id === "opencode" || row.id === "cline") {
             actions.push({ action: "open_key_panel", label: "Open key / provider panel" });
         }
-        actions.push({ action: "reconnect", label: "Try Connect again" });
+        actions.push({ action: "reconnect", label: "Try opening the session again" });
         return {
             title: (row.name || "CLI") + " needs setup",
             summary: summary,
@@ -3173,14 +3478,14 @@
                 model: payload.model
             }).then(function () {
                 snack("Switched Pi to " + (payload.provider || "ollama") + "/" + payload.model, "success");
-                return startWorkflowCliSession();
+                return ensureWorkflowCliSessionForArea({ reason: "model-switch" });
             }).catch(function (e) {
                 snack(workflowCliErrorMessage(e, "Could not switch Pi model"), "error");
             });
             return;
         }
         if (action.action === "recheck" || action.action === "reconnect") {
-            startWorkflowCliSession().catch(function () {});
+            ensureWorkflowCliSessionForArea({ reason: action.action }).catch(function () {});
         }
     }
 
@@ -3205,7 +3510,7 @@
     function workflowCliErrorMessage(err, fallback) {
         var msg = (err && err.message) ? String(err.message) : String(err || fallback || "CLI error");
         if (/failed to fetch/i.test(msg)) {
-            return "Could not reach the DecisionsAI backend API. Refresh the page after the local server reloads, then try Connect again.";
+            return "Could not reach the DecisionsAI backend API. Refresh the page after the local server reloads, then try opening the session again.";
         }
         try {
             var parsed = JSON.parse(msg);
@@ -3228,6 +3533,10 @@
             clearWorkflowCliRecovery();
             setWorkflowCliStatus("connected", workflowCliReadyLabel());
             setWorkflowCliActivity("ready", "Connected. Ready for a prompt.");
+            if (Array.isArray(msg.buffer)) {
+                clearWorkflowCliTranscript();
+                msg.buffer.forEach(renderWorkflowCliBufferEntry);
+            }
             return;
         }
         if (msg.type === "preflight") {
@@ -3303,10 +3612,9 @@
         _wfCliConnectPromise = null;
         _wfCliSessionReady = false;
         setWorkflowCliSessionReady(false);
-        resetWorkflowCliModelSelect("Connect CLI first");
         clearWorkflowCliRecovery();
         setWorkflowCliStatus("idle", "Not connected");
-        setWorkflowCliActivity("ready", "Idle. Connect a CLI, then send a prompt.");
+        setWorkflowCliActivity("ready", "Idle. This board session will reconnect automatically while you stay in workflows.");
         workflowCliInputPlaceholder(false);
     }
 
@@ -3468,6 +3776,7 @@
             _wfCliSessionReady = true;
             setWorkflowCliSessionReady(true);
             clearWorkflowCliRecovery();
+            persistWorkflowCliBoardState({ connected: true });
             setWorkflowCliStatus("connected", workflowCliReadyLabel());
         });
     }
@@ -3489,8 +3798,8 @@
         }
         return fetchWorkflowProjectCliBackends(projectId).then(function (data) {
             var row = workflowCliBackendRow(data.backends || [], backendId);
-            if (row && row.ready === false) {
-                var err = new Error(row.message || row.setup_instructions || (backendId + " is not ready"));
+            if (row && !workflowCliBackendWorkflowReady(row)) {
+                var err = new Error(row.health_message || row.message || row.setup_instructions || (backendId + " is not ready"));
                 err.workflowCliRecovery = workflowCliBackendRecovery(row);
                 throw err;
             }
@@ -3518,7 +3827,12 @@
             var token = (window.DECISIONSAI_INTERNAL_API_TOKEN || "").trim();
             var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
             var wsUrl = wsProtocol + "//" + window.location.host + "/api/projects/" + projectId + "/terminal/ws";
-            if (token) wsUrl += "?internal_token=" + encodeURIComponent(token);
+            var ctx = workflowCliAreaContext();
+            var params = [];
+            if (token) params.push("internal_token=" + encodeURIComponent(token));
+            if (ctx && ctx.board_id) params.push("board_id=" + encodeURIComponent(ctx.board_id));
+            if (ctx && ctx.workflow_id) params.push("workflow_id=" + encodeURIComponent(ctx.workflow_id));
+            if (params.length) wsUrl += "?" + params.join("&");
             setWorkflowCliStatus("connecting", "Connecting");
             var ws = new WebSocket(wsUrl);
             ws.onopen = function () {
@@ -3540,7 +3854,6 @@
                         flushWorkflowCliTicketTimer();
                         _wfCliSessionReady = false;
                         setWorkflowCliSessionReady(false);
-                        resetWorkflowCliModelSelect("Connect CLI first");
                         setWorkflowCliStatus("idle", "Disconnected");
                     }
                 }
@@ -3551,10 +3864,62 @@
         return _wfCliConnectPromise;
     }
 
-    function startWorkflowCliSession() {
+    function workflowCliAreaContext() {
+        var opt = currentWorkflowBoardOption();
+        var projectId = workflowBoardProjectId();
+        var detail = document.getElementById("wf-detail");
+        if (!currentWorkflowId || !opt || !projectId || !detail || detail.classList.contains("hidden")) return null;
+        return {
+            workflow_id: parseInt(currentWorkflowId, 10) || currentWorkflowId,
+            board_id: parseInt(opt.local_id || opt.id || "", 10) || _coerceWorkflowCliInt(opt.local_id || opt.id),
+            project_id: projectId,
+            backend_id: workflowCliActiveBackend() || "pi",
+        };
+    }
+
+    function _coerceWorkflowCliInt(value) {
+        var n = parseInt(value, 10);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    function workflowCliAreaShouldPing() {
+        return !!workflowCliAreaContext() && !document.hidden;
+    }
+
+    function workflowCliSendKeepalive(present) {
+        var ctx = workflowCliAreaContext();
+        if (!ctx) return Promise.resolve();
+        return api("POST", "/projects/" + encodeURIComponent(ctx.project_id) + "/terminal/keepalive", {
+            backend_id: ctx.backend_id,
+            workflow_id: ctx.workflow_id,
+            board_id: ctx.board_id,
+            present: present !== false,
+        }).catch(function () {});
+    }
+
+    function workflowCliAreaHeartbeatTick() {
+        if (!_wfCliAreaPresent || !workflowCliAreaShouldPing()) return;
+        workflowCliSendKeepalive(true);
+    }
+
+    function stopWorkflowCliAreaHeartbeat() {
+        if (_wfCliAreaHeartbeatTimer) {
+            clearInterval(_wfCliAreaHeartbeatTimer);
+            _wfCliAreaHeartbeatTimer = null;
+        }
+    }
+
+    function startWorkflowCliAreaHeartbeat() {
+        stopWorkflowCliAreaHeartbeat();
+        if (!_wfCliAreaPresent || !workflowCliAreaShouldPing()) return;
+        workflowCliSendKeepalive(true);
+        _wfCliAreaHeartbeatTimer = setInterval(workflowCliAreaHeartbeatTick, WF_CLI_AREA_HEARTBEAT_MS);
+    }
+
+    function startWorkflowCliSession(options) {
+        options = options || {};
         var projectId = workflowBoardProjectId();
         var backendId = workflowCliActiveBackend();
-        var connectBtn = document.getElementById("wf-cli-connect");
         if (!projectId) {
             snack("Link the board to a project first", "error");
             return Promise.reject(new Error("No project"));
@@ -3566,15 +3931,14 @@
         _wfCliConnectPromise = null;
         clearWorkflowCliTranscript();
         clearWorkflowCliRecovery();
-        if (connectBtn) connectBtn.disabled = true;
         _wfCliSessionReady = false;
         setWorkflowCliSessionReady(false);
         resetWorkflowCliModelSelect("Connecting...");
         setWorkflowCliStatus("connecting", "Starting");
         return fetchWorkflowProjectCliBackends(projectId).then(function (data) {
             var row = workflowCliBackendRow(data.backends || [], backendId);
-            if (row && row.ready === false) {
-                var err = new Error(row.message || row.setup_instructions || (backendId + " is not installed or configured"));
+            if (row && !workflowCliBackendWorkflowReady(row)) {
+                var err = new Error(row.health_message || row.message || row.setup_instructions || (backendId + " is not installed or configured"));
                 err.workflowCliRecovery = workflowCliBackendRecovery(row);
                 throw err;
             }
@@ -3587,25 +3951,49 @@
             return verifyWorkflowCliReady(projectId, backendId);
         }).then(function () {
             return markWorkflowCliSessionReady();
+        }).then(function () {
+            return workflowCliSendKeepalive(true);
         }).catch(function (e) {
             var msg = workflowCliErrorMessage(e, "Could not start CLI");
             disconnectWorkflowCliWs();
             appendWorkflowCliLine("system", msg);
             if (e && e.workflowCliRecovery) showWorkflowCliRecovery(e.workflowCliRecovery);
             setWorkflowCliStatus("error", "Not ready");
-            snack(msg, "error");
+            persistWorkflowCliBoardState({ connected: false });
+            if (!options.quiet) snack(msg, "error");
             throw e;
-        }).finally(function () {
-            if (connectBtn) connectBtn.disabled = !workflowBoardProjectId();
         });
     }
 
-    function toggleWorkflowCliSession() {
-        if (_wfCliWs || _wfCliConnectPromise || _wfCliSessionReady) {
-            disconnectWorkflowCliWs();
-            return;
+    function ensureWorkflowCliSessionForArea(options) {
+        options = options || {};
+        if (_wfCliAreaEnsurePromise) return _wfCliAreaEnsurePromise;
+        if (!workflowCliAreaShouldPing()) return Promise.resolve();
+        _wfCliAreaEnsurePromise = loadWorkflowCliBackends().then(function (data) {
+            return restoreWorkflowCliBoardState(data, options);
+        }).then(function () {
+            if (_wfCliSessionReady || _wfCliConnectPromise || (_wfCliWs && _wfCliWs.readyState === WebSocket.OPEN)) {
+                return workflowCliSendKeepalive(true);
+            }
+            return startWorkflowCliSession({ automatic: true, quiet: true });
+        }).finally(function () {
+            _wfCliAreaEnsurePromise = null;
+        });
+        return _wfCliAreaEnsurePromise;
+    }
+
+    function setWorkflowCliAreaPresence(present, options) {
+        options = options || {};
+        _wfCliAreaPresent = !!present;
+        if (_wfCliAreaPresent) {
+            startWorkflowCliAreaHeartbeat();
+            if (options.eager || workflowCliShouldWarmOnPresence()) {
+                return ensureWorkflowCliSessionForArea(options || {});
+            }
+            return workflowCliSendKeepalive(true);
         }
-        startWorkflowCliSession();
+        stopWorkflowCliAreaHeartbeat();
+        return workflowCliSendKeepalive(false);
     }
 
     function ensureWorkflowCliWs(projectId) {
@@ -3654,7 +4042,7 @@
         var modelSel = document.getElementById("wf-cli-model-select");
         var model = modelSel ? (modelSel.value || "auto") : "auto";
         if (!_wfCliSessionReady) {
-            return Promise.reject(new Error("Connect the CLI first"));
+            return Promise.reject(new Error("The board session is still starting. Try again in a moment."));
         }
         return syncWorkflowCliProjectModel(projectId, backendId);
     }
@@ -3669,7 +4057,7 @@
             return;
         }
         if (!_wfCliSessionReady) {
-            snack("Connect the CLI first", "error");
+            snack("The board session is still starting. Try again in a moment.", "error");
             return;
         }
         if (!message) return;
@@ -3678,9 +4066,10 @@
         setWorkflowCliActivity("busy", "Thinking. Waiting for the CLI agent to respond.");
         if (input) input.value = "";
         var model = modelSel ? (modelSel.value || "auto") : "auto";
+        var capabilities = workflowCliSelectedCapabilities();
         prepareWorkflowCliSend(projectId).then(function () {
             if (!_wfCliWs || _wfCliWs.readyState !== WebSocket.OPEN) {
-                throw new Error("CLI disconnected — click Connect again");
+                throw new Error("CLI disconnected — open the session again");
             }
             return _wfCliWs;
         }).then(function (ws) {
@@ -3688,7 +4077,9 @@
             ws.send(JSON.stringify({
                 type: "prompt",
                 message: message,
-                model: model && model !== "auto" ? model : ""
+                model: model && model !== "auto" ? model : "",
+                codex_reasoning_effort: capabilities.codex_reasoning_effort || "",
+                codex_service_tier: capabilities.codex_service_tier || ""
             }));
         }).catch(function (e) {
             var msg = workflowCliErrorMessage(e, "Could not send to project CLI");
@@ -3716,7 +4107,7 @@
             switchTab("cli", { persist: true });
             return loadWorkflowCliBackends().then(function () {
                 setWorkflowCliBackendAndModel(ctx.backend_id || "", ctx.model || "auto");
-                return startWorkflowCliSession();
+                return ensureWorkflowCliSessionForArea({ reason: "ticket-open" });
             }).then(function () {
                 bindWorkflowCliTicket(ticket);
                 setWorkflowCliBackendAndModel(ctx.backend_id || "", ctx.model || "auto");
@@ -3731,8 +4122,8 @@
         options = options || {};
         var select = document.getElementById("wf-cli-model-select");
         if (!select) return Promise.resolve();
-        if (!options.force && !_wfCliSessionReady) {
-            resetWorkflowCliModelSelect("Connect CLI first");
+        if (!options.force && !options.allowDisconnected && !_wfCliSessionReady) {
+            resetWorkflowCliModelSelect("Choose a CLI first");
             return Promise.resolve();
         }
         var projectId = workflowBoardProjectId();
@@ -3740,12 +4131,22 @@
         if (projectId) params += "&project_id=" + encodeURIComponent(projectId);
         return api("GET", "/projects/cli-models?" + params).then(function (data) {
             populateCliModelSelect(select, data, { includeAuto: true });
+            var preferredModel = String(options.preferredModel || "").trim();
+            if (preferredModel) {
+                var hasPreferred = Array.prototype.some.call(select.options || [], function (opt) {
+                    return String(opt.value || "").trim() === preferredModel;
+                });
+                if (hasPreferred) select.value = preferredModel;
+            }
             renderWorkflowCliModelInventory(data, data.message || "No models returned for this CLI.");
+            syncWorkflowCliCapabilityControls(_wfCliInventoryById[select.value || ""] || null);
             if (!data.models || !data.models.length) {
                 if (data.message) appendWorkflowCliLine("system", data.message);
             }
-            select.disabled = false;
+            select.disabled = !_wfCliSessionReady && !options.keepEnabled;
             refreshWorkflowCliKeyPanel();
+            refreshWorkflowCliModelCardSelection();
+            persistWorkflowCliBoardState({ backend_id: backendId || "pi", model: select.value || "" });
         }).catch(function (e) {
             select.innerHTML = "";
             var opt = document.createElement("option");
@@ -3753,9 +4154,10 @@
             opt.textContent = "Auto";
             select.appendChild(opt);
             select.value = "auto";
-            select.disabled = false;
+            select.disabled = !_wfCliSessionReady && !options.keepEnabled;
             renderWorkflowCliModelInventory({ models: [] }, "Could not load models; using Auto.");
-            appendWorkflowCliLine("system", (e && e.message) || "Could not load models; using Auto.");
+            syncWorkflowCliCapabilityControls(null);
+            if (!options.quiet) appendWorkflowCliLine("system", (e && e.message) || "Could not load models; using Auto.");
             refreshWorkflowCliKeyPanel();
         });
     }
@@ -3763,23 +4165,32 @@
     function loadWorkflowCliBackends() {
         var projectId = workflowBoardProjectId();
         var select = document.getElementById("wf-cli-backend-select");
-        var connectBtn = document.getElementById("wf-cli-connect");
+        var backendTrigger = document.getElementById("wf-cli-backend-trigger");
+        var backendTriggerName = document.getElementById("wf-cli-backend-trigger-name");
+        var backendTriggerDot = document.getElementById("wf-cli-backend-trigger-dot");
         if (!projectId) {
             if (select) select.disabled = true;
-            if (connectBtn) connectBtn.disabled = true;
+            if (backendTrigger) backendTrigger.disabled = true;
             disconnectWorkflowCliWs();
+            resetWorkflowCliModelSelect("Choose a CLI first");
             return Promise.resolve();
         }
         if (_wfCliProjectId && _wfCliProjectId !== projectId) disconnectWorkflowCliWs();
-        if (connectBtn) connectBtn.disabled = false;
+        if (backendTriggerName) backendTriggerName.textContent = "Connecting...";
+        if (backendTriggerDot) {
+            backendTriggerDot.className = "wf-cli-backend-dot";
+            backendTriggerDot.classList.add("is-missing");
+        }
         return fetchWorkflowProjectCliBackends(projectId).then(function (data) {
             var backends = data.backends || [];
             var cliBackends = workflowCliTabBackends(backends);
+            var saved = workflowCliStoredState();
             var currentSelection = select && select.value ? select.value : "";
-            var active = workflowCliResolveActiveBackend(backends, currentSelection || data.active_backend || "pi");
+            var preferred = saved.backend_id || currentSelection || data.active_backend || "pi";
+            var active = workflowCliResolveActiveBackend(backends, preferred);
             if (select) {
                 select.innerHTML = cliBackends.map(function (b) {
-                    return '<option value="' + esc(b.id) + '" data-supports-rpc="' + (b.supports_rpc ? "true" : "false") + '" data-ready="' + (b.ready ? "true" : "false") + '">' + esc(workflowCliBackendDisplayName(b)) + "</option>";
+                    return '<option value="' + esc(b.id) + '" data-supports-rpc="' + (b.supports_rpc ? "true" : "false") + '" data-ready="' + (workflowCliBackendWorkflowReady(b) ? "true" : "false") + '">' + esc(workflowCliBackendDisplayName(b)) + "</option>";
                 }).join("");
                 if (!cliBackends.length) {
                     select.innerHTML = '<option value="pi" data-supports-rpc="true">Pi</option>';
@@ -3787,15 +4198,51 @@
                 select.value = active;
                 select.disabled = false;
             }
+            renderWorkflowCliBackendMenu(cliBackends.length ? cliBackends : backends, active);
             var activeRow = workflowCliBackendRow(cliBackends.length ? cliBackends : backends, active);
             if (!_wfCliSessionReady) {
                 setWorkflowCliSessionReady(false);
-                resetWorkflowCliModelSelect("Connect CLI first");
                 setWorkflowCliStatus("idle", "Not connected");
                 setWorkflowCliBackendSetupStatus(activeRow);
             }
             refreshWorkflowCliKeyPanel();
+            persistWorkflowCliBoardState({ backend_id: active });
             return data;
+        });
+    }
+
+    function restoreWorkflowCliBoardState(backendsData, options) {
+        options = options || {};
+        var projectId = workflowBoardProjectId();
+        var backendSel = document.getElementById("wf-cli-backend-select");
+        if (!projectId || !backendSel) return Promise.resolve();
+        var saved = workflowCliStoredState();
+        var backendId = String(saved.backend_id || backendSel.value || "pi").trim() || "pi";
+        return fetchWorkflowCliTerminalState(projectId).then(function (terminalState) {
+            var liveBackendId = String(terminalState && terminalState.backend_id || "").trim();
+            var shouldReattach = !!(terminalState && (terminalState.connected || terminalState.alive));
+            if (liveBackendId) backendId = liveBackendId;
+            backendSel.value = backendId;
+            renderWorkflowCliBackendMenu(_wfCliBackendRows, backendId);
+            return loadWorkflowCliModels(backendId, {
+                allowDisconnected: true,
+                preferredModel: saved.model || "",
+                quiet: true
+            }).then(function () {
+                if (!shouldReattach) return;
+                if (liveBackendId && liveBackendId !== backendId) return;
+                appendWorkflowCliLine("system", "Reattached to the saved workflow CLI session.");
+                return openWorkflowCliWebSocket(projectId).then(function () {
+                    return markWorkflowCliSessionReady();
+                }).catch(function (e) {
+                    appendWorkflowCliLine("system", workflowCliErrorMessage(e, "Could not reattach CLI session"));
+                    persistWorkflowCliBoardState({ connected: false });
+                });
+            }).finally(function () {
+                persistWorkflowCliBoardState({ connected: shouldReattach });
+            });
+        }).then(function () {
+            return;
         });
     }
 
@@ -3803,7 +4250,9 @@
         syncWorkflowCliLayoutHeight();
         return loadWorkflowCliBackends().then(function (data) {
             syncWorkflowCliLayoutHeight();
-            return data;
+            return restoreWorkflowCliBoardState(data).then(function () {
+                return data;
+            });
         });
     }
 
@@ -3843,66 +4292,134 @@
 
     function workflowCliKeyPanelElements() {
         return {
-            panel: document.getElementById("wf-cli-key-panel"),
+            panel: document.getElementById("wf-cli-key-modal"),
             title: document.getElementById("wf-cli-key-title"),
             status: document.getElementById("wf-cli-key-status"),
+            copy: document.getElementById("wf-cli-key-copy"),
             input: document.getElementById("wf-cli-key-input"),
-            save: document.getElementById("wf-cli-key-save")
+            save: document.getElementById("wf-cli-key-save"),
+            toggle: document.getElementById("wf-cli-key-toggle")
         };
     }
 
     function setWorkflowCliKeyPanelOpen(open) {
         var els = workflowCliKeyPanelElements();
         if (!els.panel) return;
-        els.panel.hidden = !open;
         els.panel.classList.toggle("is-open", !!open);
+        els.panel.hidden = !open;
         if (open) refreshWorkflowCliKeyPanel();
-        syncWorkflowCliLayoutHeight();
+    }
+
+    function openWorkflowCliKeyModal() {
+        setWorkflowCliKeyPanelOpen(true);
+    }
+
+    function closeWorkflowCliKeyModal() {
+        setWorkflowCliKeyPanelOpen(false);
     }
 
     function refreshWorkflowCliKeyPanel() {
         var els = workflowCliKeyPanelElements();
-        if (!els.panel || els.panel.hidden) return Promise.resolve();
+        if (!els.panel) return Promise.resolve();
         var target = workflowCliKeyTargetId();
+        if (els.toggle) els.toggle.hidden = true;
         if (els.title) els.title.textContent = "Loading key target...";
         if (els.status) els.status.textContent = target;
+        if (els.copy) els.copy.textContent = "Save a credential or endpoint for the selected CLI or routed provider.";
         if (els.input) {
             els.input.value = "";
-            els.input.placeholder = "Paste replacement key or endpoint";
+            els.input.placeholder = "Paste replacement credential or endpoint";
+            els.input.hidden = false;
+            els.input.disabled = false;
+        }
+        if (els.save) {
+            els.save.hidden = false;
+            els.save.disabled = false;
+            els.save.textContent = "Save & reconnect";
+            els.save.dataset.mode = "save";
         }
         return api("GET", "/projects/cli-setup?backend_id=" + encodeURIComponent(target)).then(function (data) {
             var rows = Array.isArray(data && data.clis) ? data.clis : [];
             var row = rows.filter(function (item) { return String(item.id) === String(target); })[0];
             if (!row) {
                 if (els.title) els.title.textContent = "No key target";
-                if (els.status) els.status.textContent = "This CLI/model provider does not expose a swappable key here.";
-                if (els.input) els.input.disabled = true;
-                if (els.save) els.save.disabled = true;
+                if (els.status) els.status.textContent = "This CLI or provider handles auth elsewhere, so there is nothing swappable here.";
+                if (els.copy) els.copy.textContent = "This backend does not expose a configurable credential in the workflow CLI.";
+                if (els.input) {
+                    els.input.disabled = true;
+                    els.input.hidden = true;
+                }
+                if (els.save) els.save.hidden = true;
                 return;
             }
+            if (els.toggle) els.toggle.hidden = false;
             if (els.title) els.title.textContent = row.name || target;
+            var hasOptionalCliAuth = !!row.credential_optional && workflowCliBackendWorkflowReady(row);
+            var hasExistingSecret = !!row.key_set;
+            var hasExistingAuth = hasExistingSecret || hasOptionalCliAuth;
             if (els.status) {
-                els.status.textContent = (row.key_set ? ("Current: " + (row.masked || "saved")) : "No key saved") + " | " + (row.credential_label || "Credential");
+                var authStatus = "";
+                if (hasExistingSecret) {
+                    authStatus = "Saved credential: " + (row.masked || "saved");
+                } else if (hasOptionalCliAuth) {
+                    authStatus = "CLI auth already available";
+                } else if (row.credential_optional) {
+                    authStatus = "No saved API key";
+                } else {
+                    authStatus = "No saved credential";
+                }
+                els.status.textContent = authStatus + (row.credential_label ? " " + row.credential_label : "");
+            }
+            if (els.copy) {
+                els.copy.textContent = hasExistingAuth
+                    ? ((row.notes || "This CLI is already authenticated.") + " No new key is needed unless you want to replace or add an override.")
+                    : (row.notes || "Save a credential or endpoint for this CLI.");
             }
             if (els.input) {
-                els.input.disabled = false;
-                els.input.placeholder = row.credential_type === "url" ? "http://localhost:11434/" : "Paste replacement API key";
+                els.input.disabled = hasExistingAuth;
+                els.input.hidden = hasExistingAuth;
+                els.input.placeholder = row.input_placeholder || (row.credential_type === "url" ? "http://localhost:11434/" : "Paste replacement credential");
             }
             if (els.save) {
-                els.save.disabled = false;
                 els.save.dataset.target = target;
+                els.save.dataset.mode = hasExistingAuth ? "reveal" : "save";
+                els.save.disabled = false;
+                els.save.hidden = false;
+                els.save.textContent = hasExistingAuth
+                    ? (hasExistingSecret ? "Replace saved key" : "Add API key override")
+                    : "Save & reconnect";
             }
         }).catch(function (e) {
+            if (els.toggle) els.toggle.hidden = true;
             if (els.title) els.title.textContent = "Key setup unavailable";
             if (els.status) els.status.textContent = workflowCliErrorMessage(e, "Could not load CLI key setup.");
-            if (els.input) els.input.disabled = true;
-            if (els.save) els.save.disabled = true;
+            if (els.copy) els.copy.textContent = "The workflow CLI could not load setup details for this backend right now.";
+            if (els.input) {
+                els.input.disabled = true;
+                els.input.hidden = true;
+            }
+            if (els.save) els.save.hidden = true;
         });
     }
 
     function saveWorkflowCliKeyAndReconnect() {
         var els = workflowCliKeyPanelElements();
         var target = workflowCliKeyTargetId();
+        if (els.save && els.save.dataset.mode === "reveal") {
+            if (els.input) {
+                els.input.hidden = false;
+                els.input.disabled = false;
+                els.input.focus();
+            }
+            if (els.copy) {
+                els.copy.textContent = "Paste the replacement credential you want DecisionsAI to save for this CLI.";
+            }
+            if (els.save) {
+                els.save.dataset.mode = "save";
+                els.save.textContent = "Save & reconnect";
+            }
+            return;
+        }
         var value = els.input ? (els.input.value || "").trim() : "";
         if (!value) {
             snack("Paste the replacement key or endpoint first", "error");
@@ -3921,6 +4438,7 @@
         }).then(function () {
             return loadWorkflowCliModels(workflowCliActiveBackend(), { force: true });
         }).then(function () {
+            closeWorkflowCliKeyModal();
             return startWorkflowCliSession();
         }).catch(function (e) {
             var msg = workflowCliErrorMessage(e, "Could not save CLI credential");
@@ -3932,41 +4450,98 @@
         });
     }
 
+    function closeWorkflowCliModelContextMenu() {
+        var menu = document.getElementById("wf-cli-model-context-menu");
+        if (!menu) return;
+        menu.classList.remove("is-open");
+        menu.style.left = "";
+        menu.style.top = "";
+        _wfCliModelContextTargetId = "";
+    }
+
+    function openWorkflowCliModelContextMenu(evt, modelId) {
+        var menu = document.getElementById("wf-cli-model-context-menu");
+        if (!menu || !modelId) return;
+        evt.preventDefault();
+        _wfCliModelContextTargetId = modelId;
+        menu.innerHTML = '' +
+            '<button type="button" class="wf-cli-model-context-item" data-wf-cli-model-action="select" role="menuitem">Select model</button>' +
+            '<button type="button" class="wf-cli-model-context-item" data-wf-cli-model-action="add" role="menuitem">Add to chosen models</button>';
+        menu.style.left = Math.max(12, Math.min(window.innerWidth - 220, evt.clientX || 12)) + "px";
+        menu.style.top = Math.max(12, Math.min(window.innerHeight - 120, evt.clientY || 12)) + "px";
+        menu.classList.add("is-open");
+    }
+
     function bindWorkflowCliTabControls() {
         bindWorkflowCliRecoveryPanel();
-        var connectBtn = document.getElementById("wf-cli-connect");
-        if (connectBtn && connectBtn.dataset.bound !== "1") {
-            connectBtn.dataset.bound = "1";
-            connectBtn.addEventListener("click", toggleWorkflowCliSession);
-        }
         var backendSel = document.getElementById("wf-cli-backend-select");
+        var backendTrigger = document.getElementById("wf-cli-backend-trigger");
+        var backendMenu = document.getElementById("wf-cli-backend-menu");
         if (backendSel && backendSel.dataset.bound !== "1") {
             backendSel.dataset.bound = "1";
             backendSel.addEventListener("change", function () {
+                setWorkflowCliBackendMenuOpen(false);
                 disconnectWorkflowCliWs();
                 var projectId = workflowBoardProjectId();
                 var backend = backendSel.value || "pi";
+                persistWorkflowCliBoardState({ backend_id: backend });
                 if (!projectId) return;
                 fetchWorkflowProjectCliBackends(projectId).then(function (data) {
                     var cliBackends = workflowCliTabBackends(data.backends || []);
                     var row = workflowCliBackendRow(cliBackends.length ? cliBackends : (data.backends || []), backend);
                     setWorkflowCliBackendSetupStatus(row);
+                    renderWorkflowCliBackendMenu(cliBackends.length ? cliBackends : (data.backends || []), backend);
                     refreshWorkflowCliKeyPanel();
+                    return loadWorkflowCliModels(backend, { allowDisconnected: true, quiet: true });
+                }).then(function () {
+                    if (_wfCliAreaPresent) return ensureWorkflowCliSessionForArea({ reason: "backend-change" });
                 });
+            });
+        }
+        if (backendTrigger && backendTrigger.dataset.bound !== "1") {
+            backendTrigger.dataset.bound = "1";
+            backendTrigger.addEventListener("click", function () {
+                if (backendTrigger.disabled) return;
+                setWorkflowCliBackendMenuOpen(!(backendMenu && backendMenu.classList.contains("is-open")));
+            });
+        }
+        if (backendMenu && backendMenu.dataset.bound !== "1") {
+            backendMenu.dataset.bound = "1";
+            backendMenu.addEventListener("click", function (evt) {
+                var btn = evt.target.closest("[data-wf-cli-backend-option]");
+                if (!btn || !backendSel) return;
+                backendSel.value = btn.getAttribute("data-wf-cli-backend-option") || "pi";
+                backendSel.dispatchEvent(new Event("change", { bubbles: true }));
             });
         }
         var keyToggle = document.getElementById("wf-cli-key-toggle");
         if (keyToggle && keyToggle.dataset.bound !== "1") {
             keyToggle.dataset.bound = "1";
             keyToggle.addEventListener("click", function () {
-                var panel = document.getElementById("wf-cli-key-panel");
-                setWorkflowCliKeyPanelOpen(!(panel && !panel.hidden));
+                openWorkflowCliKeyModal();
             });
         }
         var keySave = document.getElementById("wf-cli-key-save");
         if (keySave && keySave.dataset.bound !== "1") {
             keySave.dataset.bound = "1";
             keySave.addEventListener("click", saveWorkflowCliKeyAndReconnect);
+        }
+        var keyClose = document.getElementById("wf-cli-key-close");
+        if (keyClose && keyClose.dataset.bound !== "1") {
+            keyClose.dataset.bound = "1";
+            keyClose.addEventListener("click", closeWorkflowCliKeyModal);
+        }
+        var keyCancel = document.getElementById("wf-cli-key-cancel");
+        if (keyCancel && keyCancel.dataset.bound !== "1") {
+            keyCancel.dataset.bound = "1";
+            keyCancel.addEventListener("click", closeWorkflowCliKeyModal);
+        }
+        var keyModal = document.getElementById("wf-cli-key-modal");
+        if (keyModal && keyModal.dataset.bound !== "1") {
+            keyModal.dataset.bound = "1";
+            keyModal.addEventListener("click", function (evt) {
+                if (evt.target === keyModal) closeWorkflowCliKeyModal();
+            });
         }
         var modelList = document.getElementById("wf-cli-model-list");
         if (modelList && modelList.dataset.bound !== "1") {
@@ -3984,11 +4559,8 @@
                 var item = evt.target.closest(".wf-cli-model-row");
                 if (!item || item.classList.contains("is-disabled")) return;
                 var modelId = item.dataset.modelId || "";
-                var modelSel = document.getElementById("wf-cli-model-select");
-                if (!modelSel || !modelId) return;
-                modelSel.value = modelId;
-                refreshWorkflowCliModelCardSelection();
-                modelSel.dispatchEvent(new Event("change", { bubbles: true }));
+                if (!modelId) return;
+                workflowCliApplyModelSelection(modelId);
             });
             modelList.addEventListener("keydown", function (evt) {
                 if (evt.key !== "Enter" && evt.key !== " ") return;
@@ -3996,6 +4568,17 @@
                 if (!item || item.classList.contains("is-disabled")) return;
                 evt.preventDefault();
                 item.click();
+            });
+            modelList.addEventListener("dblclick", function (evt) {
+                var item = evt.target.closest(".wf-cli-model-row");
+                if (!item || item.classList.contains("is-disabled")) return;
+                evt.preventDefault();
+                workflowCliApplyModelSelection(String(item.dataset.modelId || ""));
+            });
+            modelList.addEventListener("contextmenu", function (evt) {
+                var item = evt.target.closest(".wf-cli-model-row");
+                if (!item || item.classList.contains("is-disabled")) return;
+                openWorkflowCliModelContextMenu(evt, String(item.dataset.modelId || ""));
             });
             modelList.addEventListener("dragstart", function (evt) {
                 var item = evt.target.closest(".wf-cli-model-row");
@@ -4068,6 +4651,7 @@
         if (modelSel && modelSel.dataset.bound !== "1") {
             modelSel.dataset.bound = "1";
             modelSel.addEventListener("change", function () {
+                syncWorkflowCliCapabilityControls(_wfCliInventoryById[modelSel.value || ""] || null);
                 refreshWorkflowCliModelCardSelection();
                 refreshWorkflowCliKeyPanel();
                 var projectId = workflowBoardProjectId();
@@ -4081,6 +4665,7 @@
                         workflowCliForgetLockedModel(projectId);
                     }
                 }
+                persistWorkflowCliBoardState({ model: modelSel.value || "" });
                 if (!_wfCliSessionReady) return;
                 if (!projectId) return;
                 syncWorkflowCliProjectModel(
@@ -4088,6 +4673,58 @@
                     workflowCliActiveBackend(),
                     modelSel.value || "auto"
                 ).catch(function () {});
+                return;
+            });
+        }
+        ["wf-cli-capability-level", "wf-cli-capability-speed", "wf-cli-capability-variant"].forEach(function (id) {
+            var field = document.getElementById(id);
+            if (!field || field.dataset.bound === "1") return;
+            field.dataset.bound = "1";
+            field.addEventListener("change", function () {
+                var capabilities = workflowCliSelectedCapabilities();
+                persistWorkflowCliBoardState({
+                    codex_reasoning_effort: capabilities.codex_reasoning_effort,
+                    codex_service_tier: capabilities.codex_service_tier
+                });
+            });
+        });
+        if (!document.documentElement.dataset.wfCliGlobalBound) {
+            document.documentElement.dataset.wfCliGlobalBound = "1";
+            document.addEventListener("click", function (evt) {
+                var liveMenu = document.getElementById("wf-cli-backend-menu");
+                var liveTrigger = document.getElementById("wf-cli-backend-trigger");
+                if (liveMenu && liveMenu.classList.contains("is-open")) {
+                    if (!(liveMenu.contains(evt.target) || (liveTrigger && liveTrigger.contains(evt.target)))) {
+                        setWorkflowCliBackendMenuOpen(false);
+                    }
+                }
+                var menu = document.getElementById("wf-cli-model-context-menu");
+                if (menu && menu.classList.contains("is-open") && !menu.contains(evt.target)) {
+                    closeWorkflowCliModelContextMenu();
+                }
+            });
+            document.addEventListener("keydown", function (evt) {
+                if (evt.key === "Escape") {
+                    setWorkflowCliBackendMenuOpen(false);
+                    closeWorkflowCliModelContextMenu();
+                    closeWorkflowCliKeyModal();
+                }
+            });
+        }
+        var contextMenu = document.getElementById("wf-cli-model-context-menu");
+        if (contextMenu && contextMenu.dataset.bound !== "1") {
+            contextMenu.dataset.bound = "1";
+            contextMenu.addEventListener("click", function (evt) {
+                var action = evt.target.closest("[data-wf-cli-model-action]");
+                if (!action) return;
+                var model = _wfCliInventoryById[_wfCliModelContextTargetId] || null;
+                if (!model) return;
+                if (action.getAttribute("data-wf-cli-model-action") === "add") {
+                    workflowCliAddChosenModel(model);
+                } else {
+                    workflowCliApplyModelSelection(_wfCliModelContextTargetId);
+                }
+                closeWorkflowCliModelContextMenu();
             });
         }
     }
@@ -4156,6 +4793,11 @@
     function refreshWorkflowCliTabIfVisible() {
         var cliTab = document.getElementById("wf-tab-cli");
         if (cliTab && !cliTab.classList.contains("hidden")) refreshWorkflowCliTab();
+    }
+
+    function syncWorkflowCliAreaPresence(options) {
+        var shouldBePresent = workflowCliAreaShouldPing();
+        return setWorkflowCliAreaPresence(shouldBePresent, options || {});
     }
 
     function openWorkflowBoardEditModal() {
@@ -4733,21 +5375,38 @@
         restoreWorkflowDetailTab();
     }
 
+    function workflowDetailTargetTab(restoreTabAfterLoad) {
+        var tab = restoreTabAfterLoad ? readPersistedWorkflowDetailTab() : workflowActiveDetailTab();
+        if (tab === "activity") tab = "tickets";
+        if (["tickets", "loop", "cli", "runs"].indexOf(tab) < 0) tab = "tickets";
+        return tab;
+    }
+
     function loadDetail(id) {
         var restoreTabAfterLoad = shouldRestoreDetailTabOnce;
         api("GET", "/workflows/" + id).then(function (data) {
+            var targetTab = workflowDetailTargetTab(restoreTabAfterLoad);
+            var eagerRunsData = targetTab === "runs";
+            var eagerCliData = targetTab === "cli";
             currentWorkflow = data;
             document.getElementById("wf-empty").classList.add("hidden");
             document.getElementById("wf-detail").classList.remove("hidden");
             renderSteps(data.steps || []);
             renderRuns(data.runs || []);
             renderRunSettings(data);
-            var activeRunsPromise = loadActiveRuns();
-            loadWorkflowExecutionSessions();
             loadWorkflowTicketQueue();
-            loadWorkflowRunHistory({ quiet: true });
-            loadOrchestratorTimeline({ quiet: true });
-            checkActiveRun();
+            var activeRunsPromise = eagerRunsData ? loadActiveRuns() : Promise.resolve();
+            if (eagerRunsData || eagerCliData) loadWorkflowExecutionSessions({ quiet: !eagerRunsData });
+            if (eagerRunsData) {
+                loadWorkflowRunHistory({ quiet: true });
+                loadOrchestratorTimeline({ quiet: true });
+                checkActiveRun();
+            } else {
+                requestAnimationFrame(function () {
+                    loadActiveRuns();
+                    checkActiveRun();
+                });
+            }
             syncWorkflowRunsTabVisibility();
             scheduleWorkflowTabMarquees();
             syncWorkflowHarnessHandoffButton();
@@ -4757,6 +5416,7 @@
                 var paths = (mem && mem.workspace && mem.workspace.companion_paths) || {};
                 el.value = paths.workflow ? (paths.workflow + "/agents.md") : "";
             }).catch(function () {});
+            syncWorkflowCliAreaPresence({ reason: "load-detail", eager: eagerCliData });
             if (restoreTabAfterLoad) {
                 if (activeRunsPromise && typeof activeRunsPromise.then === "function") {
                     activeRunsPromise.finally(finishDetailTabRestore);
@@ -4786,9 +5446,10 @@
         };
     }
 
-    function renderWorkflowBoardSelect(options) {
+    function renderWorkflowBoardSelect(options, preferredValue, renderOptions) {
         var select = document.getElementById("wf-board-select");
         if (!select) return;
+        renderOptions = renderOptions || {};
         workflowBoardOptions = options || [];
         if (!workflowBoardOptions.length) {
             select.innerHTML = '<option value="">No boards available</option>';
@@ -4812,12 +5473,70 @@
             }).join("");
             html += '</optgroup>';
         });
+        var currentValue = select.value || "";
         select.innerHTML = html;
         var saved = "";
         try { saved = localStorage.getItem("wf_board_selected") || ""; } catch (e) {}
-        var selected = workflowBoardOptions.some(function (opt) { return opt.value === saved; }) ? saved : workflowBoardOptions[0].value;
+        var selected = "";
+        if (preferredValue && workflowBoardOptions.some(function (opt) { return opt.value === preferredValue; })) {
+            selected = preferredValue;
+        } else if (currentValue && workflowBoardOptions.some(function (opt) { return opt.value === currentValue; })) {
+            selected = currentValue;
+        } else if (workflowBoardOptions.some(function (opt) { return opt.value === saved; })) {
+            selected = saved;
+        } else {
+            selected = workflowBoardOptions[0].value;
+        }
         select.value = selected;
+        if (
+            renderOptions.skipReloadIfUnchanged &&
+            currentValue &&
+            currentValue === selected &&
+            workflowBoardRenderState &&
+            workflowBoardRenderState.selected &&
+            workflowBoardRenderState.selected.value === selected
+        ) {
+            return;
+        }
         loadWorkflowBoardTickets(selected);
+    }
+
+    function buildWorkflowBoardOptions(localBoards, external) {
+        var options = [];
+        var seen = {};
+        localBoards = Array.isArray(localBoards) ? localBoards : [];
+        external = external || {};
+
+        workflowDatabaseBoards = localBoards.filter(function (b) { return (b.source || "database") === "database"; });
+        workflowDatabaseBoards.forEach(function (b) {
+            var opt = normalizeWorkflowBoardOption("database", b);
+            if (opt) { options.push(opt); seen[opt.value] = true; }
+        });
+        (external.trello || []).forEach(function (b) {
+            var opt = normalizeWorkflowBoardOption("trello", b);
+            if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
+        });
+        (external.jira || []).forEach(function (b) {
+            var opt = normalizeWorkflowBoardOption("jira", b);
+            if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
+        });
+        localBoards.filter(function (b) {
+            var source = (b.source || "").toLowerCase();
+            return source === "trello" || source === "jira";
+        }).forEach(function (b) {
+            var opt = normalizeWorkflowBoardOption(b.source, {
+                id: b.external_board_id || b.id,
+                name: b.name,
+                url: b.external_url,
+                local_id: b.id,
+                default_project_id: b.default_project_id,
+                default_workflow_id: b.default_workflow_id,
+                color: b.color,
+                whatsapp_links: b.whatsapp_links || []
+            });
+            if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
+        });
+        return options;
     }
 
     function renderWorkflowBoardSpinner(label) {
@@ -4846,6 +5565,24 @@
                 return merged;
             })
             .catch(function () { return data || {}; });
+    }
+
+    function refreshWorkflowExternalBoards(localBoards, preferredValue, attempt) {
+        attempt = attempt || 0;
+        return api("GET", "/tickets/external-boards").catch(function () {
+            return { trello: [], jira: [], cache_ready: true, cache_stale: false };
+        }).then(function (external) {
+            external = external || {};
+            renderWorkflowBoardSelect(buildWorkflowBoardOptions(localBoards, external), preferredValue, {
+                skipReloadIfUnchanged: true
+            });
+            if (external.cache_ready === false && attempt < 30) {
+                setTimeout(function () {
+                    refreshWorkflowExternalBoards(localBoards, preferredValue, attempt + 1);
+                }, 500);
+            }
+            return external;
+        });
     }
 
     function stopWorkflowWhatsappProgress(finalValue) {
@@ -5240,54 +5977,28 @@
 
     function loadWorkflowBoards() {
         var select = document.getElementById("wf-board-select");
-        if (select) select.innerHTML = '<option value="">Loading boards...</option>';
+        var preferredValue = "";
+        if (select) {
+            preferredValue = select.value || "";
+            if (!preferredValue) {
+                try { preferredValue = localStorage.getItem("wf_board_selected") || ""; } catch (e) {}
+            }
+            select.innerHTML = '<option value="">Loading boards...</option>';
+        }
 
-        Promise.all([
-            api("GET", "/tickets/boards").catch(function () { return []; }),
-            api("GET", "/tickets/external-boards").catch(function () { return { trello: [], jira: [] }; }),
-            api("GET", "/tickets/linkable").catch(function () { return { projects: [], workflows: [] }; })
-        ]).then(function (results) {
-            var localBoards = Array.isArray(results[0]) ? results[0] : [];
-            var external = results[1] || {};
-            workflowLinkable = results[2] || { projects: [], workflows: [] };
-            workflowDatabaseBoards = localBoards.filter(function (b) { return (b.source || "database") === "database"; });
-            var options = [];
-            var seen = {};
-
-            workflowDatabaseBoards.forEach(function (b) {
-                var opt = normalizeWorkflowBoardOption("database", b);
-                if (opt) { options.push(opt); seen[opt.value] = true; }
-            });
-            (external.trello || []).forEach(function (b) {
-                var opt = normalizeWorkflowBoardOption("trello", b);
-                if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
-            });
-            (external.jira || []).forEach(function (b) {
-                var opt = normalizeWorkflowBoardOption("jira", b);
-                if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
-            });
-
-            localBoards.filter(function (b) {
-                var source = (b.source || "").toLowerCase();
-                return source === "trello" || source === "jira";
-            }).forEach(function (b) {
-                var opt = normalizeWorkflowBoardOption(b.source, {
-                    id: b.external_board_id || b.id,
-                    name: b.name,
-                    url: b.external_url,
-                    local_id: b.id,
-                    default_project_id: b.default_project_id,
-                    default_workflow_id: b.default_workflow_id,
-                    color: b.color,
-                    whatsapp_links: b.whatsapp_links || []
-                });
-                if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
-            });
-
-            renderWorkflowBoardSelect(options);
+        api("GET", "/tickets/boards").then(function (localBoards) {
+            localBoards = Array.isArray(localBoards) ? localBoards : [];
+            renderWorkflowBoardSelect(buildWorkflowBoardOptions(localBoards, null), preferredValue);
+            refreshWorkflowExternalBoards(localBoards, preferredValue);
         }).catch(function () {
             if (select) select.innerHTML = '<option value="">Failed to load boards</option>';
             renderWorkflowBoardTickets(null, null, "Failed to load boards.");
+        });
+
+        api("GET", "/tickets/linkable").then(function (data) {
+            workflowLinkable = data || { projects: [], workflows: [] };
+        }).catch(function () {
+            workflowLinkable = { projects: [], workflows: [] };
         });
     }
 
@@ -5304,12 +6015,13 @@
         var token = workflowBoardLoadToken;
 
         var path = selected.source === "database"
-            ? "/tickets/boards/" + encodeURIComponent(selected.id)
+            ? "/tickets/boards/" + encodeURIComponent(selected.id) + "/workflow-view"
             : "/tickets/external-boards/" + encodeURIComponent(selected.source) + "/" + encodeURIComponent(selected.id);
 
         api("GET", path).then(function (data) {
             if (token !== workflowBoardLoadToken) return;
-            if (selected.source !== "database" && data && data.cache_ready === false && attempt < 60) {
+            var hasLaneData = !!(data && Array.isArray(data.lanes) && data.lanes.length);
+            if (selected.source !== "database" && data && data.cache_ready === false && !hasLaneData && attempt < 60) {
                 renderWorkflowBoardSpinner("Syncing board tickets...");
                 setTimeout(function () {
                     if (token !== workflowBoardLoadToken) return;
@@ -5319,7 +6031,11 @@
             }
             attachWorkflowBoardWhatsappLinks(data, selected).then(function (merged) {
                 if (token !== workflowBoardLoadToken) return;
-                renderWorkflowBoardTickets(merged, selected);
+                var note = "";
+                if (selected.source !== "database" && merged && merged.cache_stale) {
+                    note = "Refreshing board tickets in the background...";
+                }
+                renderWorkflowBoardTickets(merged, selected, note);
             });
         }).catch(function (e) {
             if (token !== workflowBoardLoadToken) return;
@@ -5855,6 +6571,31 @@
         }
     }
 
+    function stopWorkflowRealtime() {
+        stopPolling();
+        stopExecutionSessionPolling();
+        stopVersionPolling();
+        if (wsReconnectTimer) {
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
+        }
+        if (ws) {
+            try { ws.onopen = null; ws.onmessage = null; ws.onerror = null; ws.onclose = null; ws.close(); } catch (e) {}
+            ws = null;
+        }
+    }
+
+    function resumeWorkflowRealtime() {
+        connectWebSocket();
+        startVersionPolling();
+        if (currentWorkflowId) {
+            checkActiveRun();
+            if (workflowActiveDetailTab() === "runs") {
+                loadWorkflowExecutionSessions({ quiet: true });
+            }
+        }
+    }
+
     function syncExecutionSessionPolling() {
         if ((latestWorkflowExecutionSessions || []).some(executionSessionIsActive)) {
             startExecutionSessionPolling();
@@ -6332,6 +7073,7 @@
         emptyEl.classList.add("hidden");
         listEl.innerHTML = sessions.map(function (session) {
             var active = executionSessionIsActive(session);
+            var liveConnected = !!session.live_connected;
             var status = session.status || "session";
             var expanded = String(expandedWorkflowExecutionSessionId || "") === String(session.id || "");
             var timeLabel = active
@@ -6380,6 +7122,7 @@
                             '<span class="text-[11px] px-1.5 py-0.5 rounded ' + executionSessionStatusClass(status) + '">' + esc(status) + '</span>' +
                             '<span class="text-[11px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300">' + esc(session.backend_id || session.route_backend || "backend") + '</span>' +
                             '<span class="text-[11px] text-gray-500 truncate">' + esc(session.model || session.selected_model || "auto") + '</span>' +
+                            (session.external_thread_id ? '<span class="text-[11px] text-gray-500 truncate">thread ' + esc(session.external_thread_id) + '</span>' : '') +
                             (timeLabel ? '<span class="ml-auto text-xs text-gray-500">' + esc(timeLabel) + '</span>' : '') +
                         '</div>' +
                         '<div class="mt-1 text-sm text-white truncate">' + esc(session.ticket_title || ("Ticket #" + (session.ticket_id || ""))) + '</div>' +
@@ -6394,6 +7137,7 @@
                     '</div>' +
                     '<div class="flex flex-col items-end gap-1 flex-shrink-0">' +
                         '<button type="button" class="wf-execution-session-toggle px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" data-session-id="' + esc(session.id) + '">' + (expanded ? "Hide" : "Details") + '</button>' +
+                        ((active || liveConnected) && session.project_id && (session.backend_id || session.route_backend) ? '<button type="button" class="wf-execution-session-disconnect px-2 py-1 rounded border border-red-500/40 text-red-200 text-xs hover:bg-red-500/10" data-project-id="' + esc(session.project_id) + '" data-backend-id="' + esc(session.backend_id || session.route_backend || "") + '" data-board-id="' + esc(session.board_id || "") + '">Disconnect</button>' : '') +
                         (session.ticket_id ? '<button type="button" class="wf-execution-session-ticket px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" data-ticket-id="' + esc(session.ticket_id) + '">Open ticket</button>' : '') +
                     '</div>' +
                 '</div>' +
@@ -6415,6 +7159,30 @@
                         openWorkflowTicketModal(ticket, { selected: { source: "database", value: "", label: ticket.board_name || "Workflow execution" } });
                     })
                     .catch(function (e) { snack(e.message || "Failed to open ticket", "error"); });
+            });
+        });
+        listEl.querySelectorAll(".wf-execution-session-disconnect").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var projectId = btn.dataset.projectId || "";
+                var backendId = btn.dataset.backendId || "";
+                var boardId = btn.dataset.boardId || "";
+                if (!projectId || !backendId) return;
+                api("POST", "/projects/" + encodeURIComponent(projectId) + "/cli-session/disconnect", {
+                    backend_id: backendId,
+                    board_id: boardId || null
+                }).then(function (data) {
+                    snack((data && data.message) || "Session disconnected", "success");
+                    loadWorkflowExecutionSessions({ quiet: true });
+                    if (
+                        String(workflowBoardProjectId() || "") === String(projectId) &&
+                        String(workflowCliActiveBackend() || "") === String(backendId) &&
+                        String(((workflowCliAreaContext() || {}).board_id) || "") === String(boardId || "")
+                    ) {
+                        disconnectWorkflowCliWs();
+                    }
+                }).catch(function (e) {
+                    snack(e.message || "Failed to disconnect session", "error");
+                });
             });
         });
     }
@@ -7240,9 +8008,7 @@
         var listWrap = document.createElement("div");
         listWrap.className = "wf-workflow-queue-list space-y-1";
         visibleTickets.forEach(function (ticket, idx) {
-            var queueIndex = tickets.findIndex(function (item) { return String(item.id) === String(ticket.id); });
-            var queueId = queueIndex >= 0 ? queueIndex + 1 : idx + 1;
-            listWrap.appendChild(createWorkflowQueueListRow(ticket, queueId));
+            listWrap.appendChild(createWorkflowQueueListRow(ticket, idx + 1));
         });
         listEl.innerHTML = "";
         listEl.appendChild(listWrap);
@@ -8525,8 +9291,139 @@
         return loopStepToolsFromStep({ action_type: suggestion.action_type || "", config: { tools: [] } });
     }
 
+    function loopStepChosenModels() {
+        var settings = normalizedRunSettings(currentWorkflow || {});
+        return workflowCliNormalizeChosenModels(settings.chosen_models || []);
+    }
+
+    function loopStepExecutionRouteConfig(cfg) {
+        var route = cfg && cfg.execution_route && typeof cfg.execution_route === "object" ? cfg.execution_route : {};
+        return {
+            enabled: route.enabled === true,
+            mode: route.mode === "scoped" ? "scoped" : "scoped",
+            scoped_model_key: String(route.scoped_model_key || "").trim(),
+            route_snapshot: route.route_snapshot && typeof route.route_snapshot === "object" ? Object.assign({}, route.route_snapshot) : {}
+        };
+    }
+
+    function loopStepRouteCapabilityText(route) {
+        if (!route) return "Inherited";
+        var parts = [];
+        if (route.intelligence_hint) parts.push(String(route.intelligence_hint));
+        if (route.speed_hint) parts.push(String(route.speed_hint));
+        if (route.tier) parts.push(String(route.tier));
+        if (route.codex_reasoning_effort) parts.push("reasoning " + String(route.codex_reasoning_effort));
+        if (route.codex_service_tier) parts.push("service " + String(route.codex_service_tier));
+        return parts.length ? parts.join(" · ") : "Default";
+    }
+
+    function loopStepScopedRouteSnapshot(model) {
+        if (!model) return {};
+        return {
+            key: workflowCliChosenModelKey(model),
+            backend_id: String(model.backend_id || "").trim(),
+            provider: String(model.provider || "").trim(),
+            model: String(model.id || model.model || "").trim(),
+            name: String(model.name || model.id || model.model || "").trim(),
+            scope: String(model.scope || "").trim(),
+            tier: String(model.tier || "").trim(),
+            speed_hint: String(model.speed_hint || "").trim(),
+            intelligence_hint: String(model.intelligence_hint || "").trim()
+        };
+    }
+
+    function findLoopStepScopedModel(routeConfig) {
+        routeConfig = routeConfig || loopStepExecutionRouteConfig({});
+        var models = loopStepChosenModels();
+        var key = String(routeConfig.scoped_model_key || "").trim();
+        var snapshot = routeConfig.route_snapshot || {};
+        var model = null;
+        if (key) {
+            model = models.filter(function (item) {
+                return workflowCliChosenModelKey(item) === key;
+            })[0] || null;
+        }
+        if (model) return { model: model, missing: false, snapshot: loopStepScopedRouteSnapshot(model) };
+        if (snapshot && snapshot.model) return { model: null, missing: !!key, snapshot: snapshot };
+        return { model: null, missing: false, snapshot: {} };
+    }
+
+    function renderLoopStepExecutionRouteEditor(routeConfig) {
+        var enabledEl = document.getElementById("wf-loop-step-route-enabled");
+        var selectEl = document.getElementById("wf-loop-step-route-select");
+        var emptyEl = document.getElementById("wf-loop-step-route-empty");
+        var warningEl = document.getElementById("wf-loop-step-route-warning");
+        var previewEl = document.getElementById("wf-loop-step-route-preview");
+        var backendEl = document.getElementById("wf-loop-step-route-preview-backend");
+        var providerEl = document.getElementById("wf-loop-step-route-preview-provider");
+        var modelEl = document.getElementById("wf-loop-step-route-preview-model");
+        var capabilitiesEl = document.getElementById("wf-loop-step-route-preview-capabilities");
+        var detailsEl = document.getElementById("wf-loop-step-route-preview-details");
+        if (!enabledEl || !selectEl) return;
+        routeConfig = routeConfig || loopStepExecutionRouteConfig({});
+        var scoped = loopStepChosenModels();
+        var selected = findLoopStepScopedModel(routeConfig);
+        enabledEl.checked = !!routeConfig.enabled;
+        selectEl.disabled = !routeConfig.enabled || !scoped.length;
+        selectEl.innerHTML = '<option value="">Choose a scoped route</option>' + scoped.map(function (model) {
+            var snapshot = loopStepScopedRouteSnapshot(model);
+            var detail = [snapshot.backend_id || "cli", snapshot.provider || "provider", snapshot.model || "auto"].filter(Boolean).join(" / ");
+            return '<option value="' + esc(snapshot.key) + '">' + esc(snapshot.name || snapshot.model || "Scoped route") + (detail ? " - " + esc(detail) : "") + '</option>';
+        }).join("");
+        selectEl.value = selected.model ? workflowCliChosenModelKey(selected.model) : (routeConfig.scoped_model_key || "");
+        if (emptyEl) emptyEl.classList.toggle("hidden", !!scoped.length);
+        if (warningEl) {
+            if (routeConfig.enabled && routeConfig.scoped_model_key && selected.missing) {
+                warningEl.textContent = "This scoped route is no longer in the workflow chosen-model catalog. The saved snapshot will still be used unless you pick a replacement.";
+                warningEl.classList.remove("hidden");
+            } else {
+                warningEl.textContent = "";
+                warningEl.classList.add("hidden");
+            }
+        }
+        var snapshot = selected.snapshot || {};
+        var isEnabled = !!routeConfig.enabled;
+        if (previewEl) previewEl.classList.toggle("is-disabled", !isEnabled);
+        if (backendEl) backendEl.textContent = isEnabled ? (snapshot.backend_id || "Unknown") : "Current run route";
+        if (providerEl) providerEl.textContent = isEnabled ? (snapshot.provider || "Inherited provider") : "Inherited";
+        if (modelEl) modelEl.textContent = isEnabled ? (snapshot.name || snapshot.model || "Inherited model") : "Inherited";
+        if (capabilitiesEl) capabilitiesEl.textContent = isEnabled ? loopStepRouteCapabilityText(snapshot) : "Inherited";
+        if (detailsEl) {
+            if (!isEnabled) {
+                detailsEl.textContent = "This step will continue using the current route until you explicitly switch it.";
+            } else {
+                var pieces = [];
+                if (snapshot.scope) pieces.push("scope " + snapshot.scope);
+                if (snapshot.backend_id) pieces.push("CLI " + snapshot.backend_id);
+                if (snapshot.provider) pieces.push("provider " + snapshot.provider);
+                if (snapshot.model) pieces.push("model " + snapshot.model);
+                detailsEl.textContent = pieces.length ? pieces.join(" · ") : "Saved scoped route snapshot";
+            }
+        }
+    }
+
+    function loopStepExecutionRouteValue() {
+        var enabledEl = document.getElementById("wf-loop-step-route-enabled");
+        var selectEl = document.getElementById("wf-loop-step-route-select");
+        var enabled = !!(enabledEl && enabledEl.checked);
+        var key = String((selectEl && selectEl.value) || "").trim();
+        if (!enabled) return { enabled: false, mode: "scoped", scoped_model_key: "", route_snapshot: {} };
+        if (!key) return { enabled: true, mode: "scoped", scoped_model_key: "", route_snapshot: {} };
+        var models = loopStepChosenModels();
+        var model = models.filter(function (item) {
+            return workflowCliChosenModelKey(item) === key;
+        })[0] || null;
+        var snapshot = model ? loopStepScopedRouteSnapshot(model) : findLoopStepScopedModel({ scoped_model_key: key, route_snapshot: {} }).snapshot;
+        return {
+            enabled: true,
+            mode: "scoped",
+            scoped_model_key: key,
+            route_snapshot: snapshot || {}
+        };
+    }
+
     function switchLoopStepContentTab(tab) {
-        tab = tab === "guardrail" || tab === "validation" ? tab : "instruction";
+        tab = tab === "guardrail" || tab === "validation" || tab === "execution-route" ? tab : "instruction";
         workflowLoopStepContentTab = tab;
         document.querySelectorAll(".wf-loop-step-tab").forEach(function (btn) {
             var active = (btn.getAttribute("data-loop-step-tab") || "instruction") === tab;
@@ -8637,6 +9534,8 @@
         var guardrailText = String((guardrailEl && guardrailEl.value) || "").trim();
         var cfg = { skills: skills, tools: tools };
         if (guardrailText) cfg.guardrail = guardrailText;
+        var executionRoute = loopStepExecutionRouteValue();
+        if (executionRoute.enabled && executionRoute.scoped_model_key) cfg.execution_route = executionRoute;
         var clarify = (workflowLoopStepModalState && workflowLoopStepModalState.clarifyQuestions) || [];
         if (clarify.length) cfg.clarify_questions = clarify;
         return cfg;
@@ -8771,6 +9670,7 @@
         if (validationEl) {
             validationEl.value = (step && (step.validation_prompt || step.verification)) || "";
         }
+        renderLoopStepExecutionRouteEditor(loopStepExecutionRouteConfig(cfg));
         if (clarifyEl) clarifyEl.classList.add("hidden");
         var stored = cfg.clarify_questions || [];
         workflowLoopStepModalState.clarifyQuestions = Array.isArray(stored) ? stored : [];
@@ -9118,6 +10018,23 @@
         if (determineSkillsBtn) {
             determineSkillsBtn.addEventListener("click", determineLoopStepSkills);
         }
+        var routeEnabled = document.getElementById("wf-loop-step-route-enabled");
+        var routeSelect = document.getElementById("wf-loop-step-route-select");
+        if (routeEnabled) {
+            routeEnabled.addEventListener("change", function () {
+                renderLoopStepExecutionRouteEditor({
+                    enabled: !!routeEnabled.checked,
+                    mode: "scoped",
+                    scoped_model_key: String((routeSelect && routeSelect.value) || "").trim(),
+                    route_snapshot: loopStepExecutionRouteValue().route_snapshot || {}
+                });
+            });
+        }
+        if (routeSelect) {
+            routeSelect.addEventListener("change", function () {
+                renderLoopStepExecutionRouteEditor(loopStepExecutionRouteValue());
+            });
+        }
         if (deleteBtn) {
             deleteBtn.addEventListener("click", function () {
                 if (!workflowLoopStepModalState || workflowLoopStepModalState.stepId == null) return;
@@ -9350,6 +10267,7 @@
     // ── WebSocket for real-time workflow updates ──
     function connectWebSocket() {
         if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+        if (document.hidden) return;
         var proto = location.protocol === "https:" ? "wss:" : "ws:";
         var url = proto + "//" + location.host + "/api/workflows/ws";
         try {
@@ -11473,14 +12391,18 @@
         }
         if (tab === "cli") {
             refreshWorkflowCliTab();
+            loadWorkflowExecutionSessions({ quiet: true });
             requestAnimationFrame(syncWorkflowCliLayoutHeight);
         }
         if (tab === "runs") {
             loadActiveRuns();
             loadWorkflowExecutionSessions();
+            loadWorkflowRunHistory({ quiet: true });
+            loadOrchestratorTimeline({ quiet: true });
         }
         if (tab === "tickets") loadWorkflowTicketQueue();
         if (options.persist !== false) persistWorkflowDetailTab(tab);
+        syncWorkflowCliAreaPresence({ reason: "switch-tab" });
     }
 
     // ── Presets ──
@@ -11879,6 +12801,7 @@
                 if (workflowBoardSelect.value) loadWorkflowBoardTickets(workflowBoardSelect.value);
                 renderWorkflowTickets(workflowQueueTickets);
                 disconnectWorkflowCliWs();
+                syncWorkflowCliAreaPresence({ reason: "board-change" });
                 refreshWorkflowCliTabIfVisible();
             });
         }
@@ -12086,6 +13009,22 @@
             });
         });
         bindWorkflowCliTabControls();
+        document.addEventListener("visibilitychange", function () {
+            if (document.hidden) {
+                stopWorkflowRealtime();
+                setWorkflowCliAreaPresence(false, { reason: "hidden" });
+                return;
+            }
+            resumeWorkflowRealtime();
+            syncWorkflowCliAreaPresence({ reason: "visible" });
+        });
+        window.addEventListener("pagehide", function () {
+            stopWorkflowRealtime();
+            setWorkflowCliAreaPresence(false, { reason: "pagehide" });
+        });
+        window.addEventListener("beforeunload", function () {
+            stopWorkflowRealtime();
+        });
 
         // Add step
         var addStepBtn = document.getElementById("wf-add-step-btn");
@@ -12203,6 +13142,7 @@
         setWorkflowCliInspectorTab(workflowCliInspectorTab, false);
         setWorkflowCliInspectorOpen(workflowCliInspectorOpen, false);
         setWorkflowStepModelsCalloutVisible(workflowStepModelsCalloutVisible, false);
+        syncWorkflowCliAreaPresence({ reason: "init" });
         setWorkflowBoardPaneCollapsed(workflowBoardPaneCollapsed, false);
         bindWorkflowSplitResizer();
         window.addEventListener("resize", function () {

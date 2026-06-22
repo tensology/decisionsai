@@ -9,6 +9,7 @@ import json
 import re
 import time
 import threading
+import asyncio
 
 from ._shared import logger
 
@@ -489,7 +490,8 @@ def register_routes(router, templates):
     async def workflow_list(limit: int = 50, search: Optional[str] = None, type: Optional[str] = None):
         try:
             from distr.core.workflow.service import list_workflows
-            return JSONResponse(list_workflows(limit=limit, search=search, workflow_type=type))
+            rows = await asyncio.to_thread(list_workflows, limit=limit, search=search, workflow_type=type)
+            return JSONResponse(rows)
         except Exception as e:
             logger.error("Workflow list failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -1456,7 +1458,8 @@ def register_routes(router, templates):
     async def workflow_active_runs(limit: int = 50, workflow_id: Optional[int] = None):
         try:
             from distr.core.workflow.service import get_active_runs
-            return JSONResponse(get_active_runs(limit=limit, workflow_id=workflow_id))
+            rows = await asyncio.to_thread(get_active_runs, limit=limit, workflow_id=workflow_id)
+            return JSONResponse(rows)
         except Exception as e:
             logger.error("Workflow active runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -1465,7 +1468,7 @@ def register_routes(router, templates):
     async def workflow_get(workflow_id: int):
         try:
             from distr.core.workflow.service import get_workflow
-            data = get_workflow(workflow_id)
+            data = await asyncio.to_thread(get_workflow, workflow_id)
             if not data:
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
             return JSONResponse(data)

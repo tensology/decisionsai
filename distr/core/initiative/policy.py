@@ -229,6 +229,9 @@ def evaluate(action, level: str, boundaries: dict, policy_context: dict | None =
     action_type = action.action_type
     policy = _read_policy_context(action, boundaries, policy_context)
 
+    if action_type == "automation_recommendation":
+        return PolicyDecision.SKIP if level == "observe" else PolicyDecision.DRAFT_AND_ASK
+
     if action_type in policy["always_block_action_types"]:
         return PolicyDecision.SKIP
     if policy["cooldown_active"] or policy["duplicate_recent"]:

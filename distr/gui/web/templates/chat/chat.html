@@ -64,6 +64,9 @@
         <div class="chat-settings-header" id="chatSettingsHeader" style="display: none;">
             <div class="chat-settings-header-row">
                 <div class="chat-header-left">
+                    <button type="button" class="header-icon-btn chat-header-tooltip" id="benchmarkInfoButton" aria-label="Benchmark information" data-tooltip="Benchmark information">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4m0-4h.01"/></svg>
+                    </button>
                     <button type="button" class="header-icon-btn chat-header-tooltip" id="compactChatButton" aria-label="Compact context" data-tooltip="Compact context">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="M14 10l6-6"/><path d="M10 14l-6 6"/></svg>
                     </button>
@@ -85,6 +88,12 @@
                     <div class="chat-header-summary-group" id="headerVoiceGroup" title="Voice for this chat">
                         <span class="chat-header-control-label">Voice</span>
                         <span class="chat-header-summary" id="headerVoiceSummary" aria-label="Voice provider and voice">—</span>
+                    </div>
+                    <div class="chat-header-usage chat-header-tooltip" id="voiceUsageMeter" data-tooltip="" aria-label="ElevenLabs usage" role="status" hidden>
+                        <span class="chat-header-usage__track" aria-hidden="true">
+                            <span class="chat-header-usage__fill" id="voiceUsageFill"></span>
+                        </span>
+                        <span class="chat-header-usage__text" id="voiceUsageText">—</span>
                     </div>
                     <div class="chat-header-actions">
                         <button type="button" class="header-icon-btn chat-header-tooltip" id="configureChatButton" aria-label="Configure chat" data-tooltip="Configure chat">
@@ -407,6 +416,7 @@
 
 {% block body_scripts %}
 <script src="/static/shared/js/mermaid_viewer.js"></script>
+<script src="/settings/static/js/llms.js"></script>
 <script src="{{ base_path }}/static/js/chat.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 {% endblock %}

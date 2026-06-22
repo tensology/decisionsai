@@ -111,3 +111,11 @@ class ProjectCliBackend:
             engine=self.id,
             error=f"{self.name} does not support a persistent terminal session.",
         )
+
+    async def disconnect_session(self, project_id: int, folder: str) -> BackendTaskResult:
+        return BackendTaskResult(
+            success=True,
+            backend_id=self.id,
+            engine=self.id,
+            output="Session disconnected.",
+        )

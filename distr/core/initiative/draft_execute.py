@@ -94,6 +94,10 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
             settings=settings,
         )
         return
+    if kind == "automation_preset_install":
+        preset_id = str(payload.get("preset_id") or "").strip()
+        install_automation_preset(preset_id)
+        return
     if kind == "orchestrator_triage_ack":
         from distr.core.orchestrator import emit_event
 
@@ -108,6 +112,33 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
         )
         return
     raise ValueError(f"unknown execute_payload kind: {kind!r}")
+
+
+def install_automation_preset(preset_id: str) -> dict[str, Any]:
+    """Create an active automation from a preset unless it already exists."""
+    from distr.core.automation_resolver import find_automations_by_preset
+    from distr.core.automation.store import create_automation
+    from distr.core.automation_presets import get_automation_preset
+
+    preset_id = str(preset_id or "").strip()
+    preset = get_automation_preset(preset_id)
+    if not preset:
+        raise ValueError(f"unknown automation preset: {preset_id!r}")
+
+    existing = find_automations_by_preset(preset_id, active_only=True)
+    if existing:
+        return {"status": "exists", "automation": existing[0]}
+
+    automation = create_automation(
+        name=str(preset.get("name") or "New Automation"),
+        automation_type=str(preset.get("automation_type") or "scheduled_instruction"),
+        status="active",
+        instruction=str(preset.get("instruction") or ""),
+        preset_id=preset_id,
+        schedule=preset.get("schedule") if isinstance(preset.get("schedule"), dict) else {"kind": "daily", "time": "09:00"},
+        action_config=preset.get("action_config") if isinstance(preset.get("action_config"), dict) else {},
+    )
+    return {"status": "created", "automation": automation}
 
 
 def _execute_orchestrator_triage_candidate(candidate: dict[str, Any]) -> dict[str, Any]:

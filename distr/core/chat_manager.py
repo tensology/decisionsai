@@ -17,7 +17,11 @@ from typing import List, Optional, Callable, Any
 from sqlalchemy import text
 
 from distr.core.db import get_session, Chat, Settings
-from distr.core.agent.constants import DEFAULT_MODELS
+from distr.core.agent.constants import (
+    DEFAULT_KOKORO_AGENT,
+    DEFAULT_MODELS,
+    KOKORO_VOICES,
+)
 from distr.core.chat import (
     ChatService,
     _normalize_provider,
@@ -201,11 +205,12 @@ class ChatManagerCore:
                 if settings:
                     tts_provider = settings.tts_provider or ""
                     if tts_provider == "Kokoro (Offline)":
-                        from distr.core.agent.constants import KOKORO_VOICES
                         kokoro_voice = (
                             getattr(settings, "kokoro_voice", "af_heart") or "af_heart"
                         )
-                        agent_name = KOKORO_VOICES.get(kokoro_voice, "Heart")
+                        agent_name = KOKORO_VOICES.get(
+                            kokoro_voice, DEFAULT_KOKORO_AGENT
+                        )
                     elif tts_provider == "ElevenLabs (Online)":
                         agent_name = (
                             getattr(settings, "elevenlabs_voice", None)
@@ -240,8 +245,10 @@ class ChatManagerCore:
                         except Exception:
                             agent_name = supertonic_voice
         except Exception as e:
-            logger.warning(
-                "ChatManagerCore: Could not determine agent from settings: %s", e
+            logger.debug(
+                "ChatManagerCore: Agent name from settings unavailable; using fallback: %s",
+                e,
+                exc_info=True,
             )
 
         persona = DEFAULT_PERSONA

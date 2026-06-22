@@ -86,6 +86,10 @@ db/whatsapp_media/
 docs/*
 !docs/orchestrator.md
 !docs/nous-hermes-agent.md
+!docs/skills/
+docs/skills/*
+!docs/skills/reference-skill-integration-assessment.md
+!docs/skills/jcode-agentmanager-harness-assessment.md
 
 # --- Dev scratch at repo root ---
 test.js

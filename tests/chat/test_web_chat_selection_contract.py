@@ -284,6 +284,22 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
     assert "promoteTranscriptionPreviewToUserMessage(trimmed);" in status_block
 
 
+def test_voice_stream_start_repairs_missing_user_transcript_from_chat_state():
+    src = _chat_js_source()
+    repair_block = src.split("function repairMissingUserMessageForStream", 1)[1].split(
+        "function handleChatEventStreamStarted",
+        1,
+    )[0]
+    start_block = src.split("function handleChatEventStreamStarted", 1)[1].split(
+        "function handleChatEventStreamToken",
+        1,
+    )[0]
+
+    assert "fetch(`${API_BASE}/chats/${chatId}`)" in repair_block
+    assert "mergeChatUpdatedDuringStream(data.messages || []);" in repair_block
+    assert "repairMissingUserMessageForStream(msg.chat_id);" in start_block
+
+
 def test_live_tool_activity_keeps_turn_anchor_for_voice_transcript_merge():
     src = _chat_js_source()
     tool_block = src.split("function handleChatEventToolExecuted(msg) {", 1)[1].split(

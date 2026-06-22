@@ -26,13 +26,23 @@
     var _currentProviderData = null;
     var _currentProviderKey = null;
     var _currentLastUpdated = null;
+    function hasSharedModelPopupStyles() {
+        return Boolean(
+            document.querySelector("link[href*='model_popups.css']") ||
+            document.querySelector('style[data-model-popups-styles]')
+        );
+    }
 
     /* ── CSS ───────────────────────────────────────────────────── */
     function injectStyles() {
         if (styleInjected) return;
+        if (hasSharedModelPopupStyles()) {
+            styleInjected = true;
+            return;
+        }
         styleInjected = true;
         var css = [
-            '.model-info-btn{background:#1a1f3a;border:1px solid #565869;border-right:none;border-radius:6px 0 0 6px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;box-sizing:border-box}',
+            '.model-info-btn{background:#1a1f3a;border:1px solid #565869;border-left:none;border-radius:0 6px 6px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;box-sizing:border-box}',
             '.model-info-btn:hover{border-color:#10a37f;color:#10a37f}',
             '.model-info-btn svg{width:14px;height:14px;pointer-events:none}',
             '.mr-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;animation:mrFadeIn .15s ease}',
@@ -99,6 +109,7 @@
             '.mr-empty button:hover{background:#ea580c}'
         ].join('\n');
         var style = document.createElement('style');
+        style.setAttribute('data-model-popups-styles', '1');
         style.textContent = css;
         document.head.appendChild(style);
     }
@@ -108,18 +119,32 @@
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'model-info-btn';
-        btn.title = 'Model recommendations';
+        btn.title = 'Model benchmarks';
         btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
         btn.addEventListener('click', function () {
             var selectId = selectEl.id || '';
+            var modelId = selectId.replace(/_provider$/, '_model');
+            var modelEl = document.getElementById(modelId);
+            var selectedModel = modelEl && modelEl.value ? modelEl.value : '';
             if (/_provider$/.test(selectId) && typeof window.openLLMBenchmarkModal === 'function') {
-                window.openLLMBenchmarkModal(selectId.replace(/_provider$/, ''));
+                window.openLLMBenchmarkModal(selectId.replace(/_provider$/, ''), {
+                    provider: selectEl.value || '',
+                    model: selectedModel,
+                    compareProvider: selectEl.value || '',
+                    compareModel: selectedModel
+                });
                 return;
             }
             if (/_provider$/.test(selectId)) {
                 try {
                     window.dispatchEvent(new CustomEvent('open-llm-benchmark', {
-                        detail: { type: selectId.replace(/_provider$/, '') }
+                        detail: {
+                            type: selectId.replace(/_provider$/, ''),
+                            provider: selectEl.value || '',
+                            model: selectedModel,
+                            compareProvider: selectEl.value || '',
+                            compareModel: selectedModel
+                        }
                     }));
                     return;
                 } catch (err) {}
@@ -150,13 +175,15 @@
                 btn.style.height = selHeight + 'px';
             }
 
-            // Remove left border/radius on select, it joins to the button
-            sel.style.borderRadius = '0 6px 6px 0';
-            sel.style.borderLeft = 'none';
+            // Remove right border/radius on select, it joins to the trailing info button.
+            sel.style.borderRadius = '6px 0 0 6px';
+            sel.style.borderRight = 'none';
+            sel.style.flex = '1 1 0';
+            sel.style.minWidth = '0';
 
             parent.replaceChild(wrapper, sel);
-            wrapper.appendChild(btn);
             wrapper.appendChild(sel);
+            wrapper.appendChild(btn);
         }
     }
 

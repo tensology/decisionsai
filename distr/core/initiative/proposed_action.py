@@ -23,6 +23,7 @@ VALID_ACTION_TYPES = frozenset(
         "ticket_lane_move",
         "workflow_start",
         "project_cli_task",
+        "automation_recommendation",
         "message_triage",
         "email_triage",
         "external_comms",

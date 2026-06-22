@@ -357,6 +357,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         # Stream health tracking — detect dead PortAudio streams and recover
         self._stream_error_count = 0
         self._stream_error_logged = False  # Only log the first error per failure burst
+        self._failed_output_device_index = None
         
         # State machine
         self._state = AudioPlaybackState.IDLE
@@ -457,6 +458,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             and not default_name_changed
         ):
             return
+        if (
+            self._output_stream_is_active()
+            and getattr(self, "_failed_output_device_index", None) == target_index
+            and not default_name_changed
+        ):
+            return
 
         logger.info(
             "Transport: Refreshing output stream for %s: configured='%s' current=%s target=%s (%s)",
@@ -467,7 +474,9 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._describe_output_device(target_index),
         )
         self._params.output_device_index = target_index
-        self._reopen_output_stream(target_index)
+        if not self._reopen_output_stream(target_index):
+            self._failed_output_device_index = target_index
+            self._try_fallback_output_stream(target_index)
         if configured_name == "System Default":
             self._last_opened_default_output_name = getattr(self, "_resolved_default_output_name", None)
 
@@ -1153,7 +1162,30 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         else:
             await super().process_frame(frame, direction)
 
-    def _reopen_output_stream(self, device_index: Optional[int]) -> None:
+    def _fallback_output_device_indices(self, preferred_index: Optional[int]):
+        seen = {preferred_index}
+        for index, _name, _info in self._iter_output_devices():
+            if index in seen:
+                continue
+            seen.add(index)
+            yield index
+
+    def _try_fallback_output_stream(self, preferred_index: Optional[int]) -> bool:
+        for fallback_index in self._fallback_output_device_indices(preferred_index):
+            logger.warning(
+                "Transport: Output device %s failed; trying fallback %s (%s)",
+                preferred_index,
+                fallback_index,
+                self._describe_output_device(fallback_index),
+            )
+            self._params.output_device_index = fallback_index
+            if self._reopen_output_stream(fallback_index):
+                return True
+        logger.error("Transport: No fallback output device could be opened")
+        self._params.output_device_index = preferred_index
+        return False
+
+    def _reopen_output_stream(self, device_index: Optional[int]) -> bool:
         """Recreate the PortAudio output stream (must run off the asyncio event loop)."""
         if not self._sample_rate:
             self._sample_rate = (
@@ -1185,6 +1217,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._stream_error_count = 0
             self._stream_error_logged = False
             self._resolved_output_device_index = device_index
+            if getattr(self, "_failed_output_device_index", None) == device_index:
+                self._failed_output_device_index = None
             configured_name = _normalize_output_device_name(getattr(self, "_output_device_name", None))
             if configured_name == "System Default":
                 self._last_opened_default_output_name = getattr(self, "_resolved_default_output_name", None)
@@ -1192,9 +1226,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 "Output device switched successfully to %s",
                 self._describe_output_device(device_index),
             )
+            return True
         except Exception as e:
             logger.error(f"Error opening new output stream: {e}")
             self._out_stream = None
+            return False
 
     def set_device(self, device_index: Optional[int], device_name: Optional[str] = None):
         """Switch the output device on the fly."""
@@ -1204,6 +1240,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._output_device_name = _normalize_output_device_name(device_name)
         elif device_index is None:
             self._output_device_name = "System Default"
+        self._failed_output_device_index = None
 
         target_index = self._resolve_configured_output_device_index()
 

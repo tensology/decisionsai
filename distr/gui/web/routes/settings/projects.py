@@ -3,14 +3,18 @@ Projects routes — /projects/*, /browse-folder
 """
 from fastapi import HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from typing import Optional
+from typing import Optional, Any
 from pathlib import Path
+from dataclasses import dataclass, field
+from collections import deque
+import asyncio
 import json
 import os
 import shutil
 import subprocess
 import sys
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -25,6 +29,108 @@ def _backend_id_for_project(project) -> str:
     from distr.core.project_cli_backends import get_project_backend_id
 
     return get_project_backend_id(project)
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    try:
+        if value in (None, "", False):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+@dataclass
+class _SharedProjectTerminalSession:
+    project_id: int
+    backend_id: str
+    replay_buffer: deque = field(default_factory=lambda: deque(maxlen=80))
+    listeners: set[asyncio.Queue] = field(default_factory=set)
+    running_task: Optional[asyncio.Task] = None
+    assistant_buffer: str = ""
+    last_activity: float = field(default_factory=time.time)
+
+    def is_alive(self) -> bool:
+        return bool(self.running_task and not self.running_task.done())
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        items = list(self.replay_buffer)
+        if self.assistant_buffer.strip():
+            items.append({"role": "assistant", "content": self.assistant_buffer})
+        return items
+
+
+_PROJECT_TERMINAL_SESSIONS: dict[tuple[int, str], _SharedProjectTerminalSession] = {}
+
+
+def _project_terminal_session_key(project_id: int, backend_id: str) -> tuple[int, str]:
+    return int(project_id), str(backend_id or "").strip()
+
+
+def _get_project_terminal_session(
+    project_id: int,
+    backend_id: str,
+    *,
+    create: bool = True,
+) -> Optional[_SharedProjectTerminalSession]:
+    key = _project_terminal_session_key(project_id, backend_id)
+    session = _PROJECT_TERMINAL_SESSIONS.get(key)
+    if session or not create:
+        return session
+    session = _SharedProjectTerminalSession(project_id=int(project_id), backend_id=str(backend_id or "").strip())
+    _PROJECT_TERMINAL_SESSIONS[key] = session
+    return session
+
+
+def _project_terminal_publish(session: _SharedProjectTerminalSession, event_dict: dict[str, Any]) -> None:
+    session.last_activity = time.time()
+    evt_type = str((event_dict or {}).get("type") or "").strip()
+    if evt_type == "message_end":
+        message = event_dict.get("message") or {}
+        role = str(message.get("role") or "").strip()
+        content = message.get("content") or ""
+        if role == "user" and content:
+            session.replay_buffer.append({"role": "user", "content": content})
+    elif evt_type == "message_update":
+        assistant_event = event_dict.get("assistantMessageEvent") or {}
+        assistant_type = str(assistant_event.get("type") or "").strip()
+        if assistant_type == "text_delta":
+            session.assistant_buffer += str(assistant_event.get("delta") or "")
+        elif assistant_type == "done":
+            if session.assistant_buffer.strip():
+                session.replay_buffer.append({"role": "assistant", "content": session.assistant_buffer})
+            session.assistant_buffer = ""
+    elif evt_type == "error":
+        message = str(event_dict.get("message") or "").strip()
+        if message:
+            session.replay_buffer.append({"role": "assistant", "content": message})
+            session.assistant_buffer = ""
+
+    stale = []
+    for queue in list(session.listeners):
+        try:
+            queue.put_nowait(event_dict)
+        except Exception:
+            stale.append(queue)
+    for queue in stale:
+        session.listeners.discard(queue)
+
+
+def _project_terminal_replay_text(entries: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for entry in entries or []:
+        role = str((entry or {}).get("role") or "").strip()
+        content = entry.get("content") if isinstance(entry, dict) else ""
+        content = str(content or "").strip()
+        if not content:
+            continue
+        if role == "user":
+            lines.append(f"> {content}")
+        elif role == "assistant":
+            lines.append(content)
+        else:
+            lines.append(content)
+    return "\n\n".join(lines).strip()
 
 
 def _codex_plugin_candidates() -> list[Path]:
@@ -467,179 +573,47 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends.models_catalog import opencode_models
         return opencode_models(settings)
 
-    def _cli_model_metadata(models: list[dict], *, complexity: str = "medium") -> dict:
-        from distr.core.project_cli_backends.models_catalog import model_catalog_summary, recommend_cli_model
+    def _kiro_models(settings: dict) -> tuple[list[dict], str, str]:
+        from distr.core.project_cli_backends.catalog_probe import kiro_models
+        return kiro_models(settings)
 
-        return {
-            "summary": model_catalog_summary(models),
-            "recommended_model": recommend_cli_model(models, complexity=complexity),
-        }
+    def _cli_model_metadata(models: list[dict], *, complexity: str = "medium") -> dict:
+        from distr.core.project_cli_backends.catalog_probe import cli_model_metadata
+        return cli_model_metadata(models, complexity=complexity)
 
     def _cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
-        from distr.core.project_cli_backends.registry import _cursor_api_key
-
-        fallback = [
-            _model_entry("auto", "cursor", "Auto", scope="scoped"),
-            _model_entry("composer-2.5", "cursor", scope="scoped"),
-            _model_entry("composer-2.5-fast", "cursor", scope="scoped", tier="low"),
-            _model_entry("gpt-5.3-codex", "cursor", scope="available", free=False),
-            _model_entry("gpt-5.5-medium", "cursor", scope="available", free=False),
-        ]
-        api_key = _cursor_api_key()
-        if not api_key:
-            return fallback, "cursor-defaults", "No Cursor API key configured; showing Cursor defaults."
-        req = urllib.request.Request(
-            "https://api.cursor.com/v0/models",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "accept": "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            return fallback, "cursor-defaults", f"Cursor models API returned HTTP {exc.code}; showing defaults."
-        except Exception as exc:
-            return fallback, "cursor-defaults", f"Could not fetch Cursor models API: {exc}; showing defaults."
-        raw_models = payload.get("models") or payload.get("data") or []
-        models = []
-        for raw in raw_models:
-            if isinstance(raw, str):
-                mid = raw
-                name = raw
-                scoped = True
-            elif isinstance(raw, dict):
-                mid = raw.get("id") or raw.get("name") or raw.get("model") or ""
-                name = raw.get("display_name") or raw.get("name") or mid
-                scoped = bool(raw.get("scoped") or raw.get("enabled") or raw.get("selected"))
-            else:
-                continue
-            if mid:
-                models.append(_model_entry(mid, "cursor", name, scope="scoped" if scoped else "available", free=False))
-        if not models:
-            return fallback, "cursor-defaults", "Cursor models API returned no models; showing defaults."
-        return _dedupe_model_entries([fallback[0]] + models), "cursor-api", ""
+        from distr.core.project_cli_backends.catalog_probe import cursor_api_models
+        return cursor_api_models(settings)
 
     def _anthropic_models(settings: dict) -> tuple[list[dict], str, str]:
-        api_key = (os.environ.get("ANTHROPIC_API_KEY") or settings.get("anthropic_key") or "").strip()
-        aliases = [
-            _model_entry("default", "claude_code", "Default", scope="scoped"),
-            _model_entry("sonnet", "claude_code", "Sonnet", scope="scoped"),
-            _model_entry("opus", "claude_code", "Opus", scope="scoped", tier="high"),
-            _model_entry("haiku", "claude_code", "Haiku", scope="scoped", tier="low"),
-            _model_entry("sonnet[1m]", "claude_code", "Sonnet 1M", scope="scoped", tier="high"),
-            _model_entry("opusplan", "claude_code", "Opus plan", scope="scoped", tier="high"),
-        ]
-        if not api_key:
-            return aliases, "claude-code-aliases", "No Anthropic API key configured; showing Claude Code aliases only."
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/models",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            return aliases, "claude-code-aliases", f"Anthropic models API returned HTTP {exc.code}; showing aliases."
-        except Exception as exc:
-            return aliases, "claude-code-aliases", f"Could not fetch Anthropic models: {exc}; showing aliases."
-        models = [
-            _model_entry(item.get("id") or "", "anthropic", item.get("display_name"), free=False, scope="available")
-            for item in payload.get("data") or []
-            if item.get("id")
-        ]
-        return _dedupe_model_entries(aliases + models), "anthropic-api", ""
+        from distr.core.project_cli_backends.catalog_probe import anthropic_models
+        return anthropic_models(settings)
 
     def _codex_models(settings: dict) -> tuple[list[dict], str, str]:
-        try:
-            import subprocess
-
-            result = subprocess.run(
-                ["codex", "models"],
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-            if result.returncode == 0:
-                text = (result.stdout or "").strip()
-                models = []
-                for line in text.splitlines():
-                    mid = line.strip().split()[0] if line.strip() else ""
-                    if mid and not mid.lower().startswith(("-", "usage", "error")):
-                        models.append(_model_entry(mid, "codex"))
-                if models:
-                    return _dedupe_model_entries(models), "codex-cli", ""
-        except Exception:
-            pass
-
-        api_key = (
-            os.environ.get("OPENAI_API_KEY")
-            or settings.get("openai_key")
-            or settings.get("openai_api_key")
-            or ""
-        ).strip()
-        fallback = [
-            _model_entry("auto", "codex", "Auto", scope="scoped"),
-            _model_entry("gpt-5.3-codex", "openai", free=False, scope="available"),
-            _model_entry("gpt-5.3-codex-spark", "openai", free=False, scope="available"),
-            _model_entry("gpt-5.2-codex", "openai", free=False, scope="available"),
-        ]
-        if not api_key:
-            return fallback, "codex-defaults", "Using Codex default models. Add an OpenAI key to unlock configured Codex models."
-        return fallback, "codex-defaults", "Using Codex default models because the Codex CLI did not return a model list."
+        from distr.core.project_cli_backends.catalog_probe import codex_models
+        return codex_models(settings)
 
     def _models_for_cli_backend(backend_id: str, settings: dict | None = None):
+        from distr.core.project_cli_backends.catalog_probe import models_for_cli_backend
+        return models_for_cli_backend(backend_id, settings)
+
+    def _backend_truth(status_payload: dict | None, model_result: dict | None = None):
+        from types import SimpleNamespace
+        from distr.core.project_cli_backends.catalog_probe import backend_truth_contract
+
+        return backend_truth_contract(SimpleNamespace(**(status_payload or {})), model_result or {})
+
+    def _enrich_backend_rows(
+        backends: list[dict],
+        settings: dict | None = None,
+        *,
+        project_id: int | None = None,
+        board_id: int | None = None,
+    ) -> list[dict]:
         from distr.core.project_cli_backends import normalize_backend_id
         from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
-        backend_id = normalize_backend_id(backend_id)
-        settings = settings or {}
-        if is_ide_backend(backend_id):
-            return {
-                "models": [],
-                "source": "ide",
-                "message": "IDE backends choose the model inside the editor.",
-                "kind": "ide",
-                "supports_model_picker": False,
-            }
-        model_backend = backend_id
-        if model_backend == "cursor":
-            models, source, message = _cursor_api_models(settings)
-            for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
-        if model_backend == "claude_code":
-            models, source, message = _anthropic_models(settings)
-            for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
-        if model_backend == "codex":
-            models, source, message = _codex_models(settings)
-            for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
-        if model_backend == "cline":
-            return {
-                "models": [{"id": "auto", "name": "Auto", "provider": "cline", "backend_id": backend_id}],
-                "source": "cline-config",
-                "message": "Default model comes from cline auth; override per task with -m.",
-                "kind": "cli",
-                "supports_model_picker": True,
-            }
-        if model_backend == "opencode":
-            models, source, message = _opencode_models(settings)
-            for model in models: model["backend_id"] = backend_id
-            return {"models": models, "source": source, "message": message, "kind": "cli", "supports_model_picker": True}
-        models = _pi_cli_models(settings)
-        for model in models: model["backend_id"] = backend_id
-        return {"models": models, "source": "pi-models", "message": "", "kind": "cli", "supports_model_picker": True}
-
-    def _enrich_backend_rows(backends: list[dict], settings: dict | None = None) -> list[dict]:
-        from distr.core.project_cli_backends import normalize_backend_id
-        from distr.core.project_cli_backends.ide_handoff import is_ide_backend
-
-        allowed_cli_backend_ids = {"pi", "cursor", "claude_code", "codex", "cline", "opencode"}
+        allowed_cli_backend_ids = {"pi", "cursor", "claude_code", "codex", "cline", "opencode", "kiro"}
         settings = settings or {}
         rows: list[dict] = []
         for backend in backends or []:
@@ -649,12 +623,55 @@ def register_routes(router, templates):
                 continue
             if backend_id not in allowed_cli_backend_ids:
                 continue
-            model_result = _models_for_cli_backend(backend_id, settings)
+            ready = bool(row.get("ready")) and str(row.get("state") or "") != "auth_required"
+            installed = bool(row.get("installed", ready))
+            if not installed:
+                health_state = "missing"
+                health_message = row.get("message") or "Backend is not installed."
+            elif not ready:
+                health_state = "setup"
+                health_message = row.get("message") or row.get("setup_instructions") or "Backend setup is incomplete."
+            else:
+                health_state = "ready"
+                health_message = row.get("message") or "Backend is ready."
+            connected = False
+            running = False
+            external_thread_id = ""
+            live_meta = {}
+            if project_id:
+                try:
+                    from distr.core.project_cli_backends.live_sessions import (
+                        live_session_connected,
+                        live_session_external_id,
+                        live_session_is_alive,
+                        snapshot_live_session_meta,
+                    )
+
+                    running = live_session_is_alive(project_id, backend_id, board_id=board_id)
+                    connected = live_session_connected(project_id, backend_id, board_id=board_id)
+                    external_thread_id = live_session_external_id(project_id, backend_id, board_id=board_id)
+                    live_meta = snapshot_live_session_meta(project_id, backend_id, board_id=board_id)
+                except Exception:
+                    connected = False
+                    running = False
+                    external_thread_id = ""
+                    live_meta = {}
             row["id"] = backend_id
             row["kind"] = "cli"
-            row["supports_model_picker"] = bool(model_result.get("supports_model_picker", True))
-            row["models_source"] = model_result.get("source") or ""
-            row["model_message"] = model_result.get("message") or ""
+            row["supports_model_picker"] = True
+            row["models_source"] = "runtime-snapshot"
+            row["model_message"] = "Model catalog loads on demand."
+            row["workflow_ready"] = ready
+            row["health_state"] = health_state
+            row["health_message"] = health_message
+            row["catalog_verified"] = False
+            row["model_catalog_state"] = "not_loaded"
+            row["auth_verified"] = ready
+            row["verified_model_count"] = 0
+            row["connected"] = connected
+            row["running"] = running
+            row["external_thread_id"] = external_thread_id
+            row["live_session"] = live_meta
             rows.append(row)
         return rows
 
@@ -699,11 +716,13 @@ def register_routes(router, templates):
                 "credential_label": "Cursor API key",
                 "credential_field": "cursor_key",
                 "credential_type": "secret",
+                "credential_optional": True,
+                "input_placeholder": "Paste optional Cursor API key",
                 "enabled_field": "cursor_enabled",
                 "enabled": bool(settings.get("cursor_enabled", False)),
                 "key_set": bool((settings.get("cursor_key") or os.environ.get("CURSOR_API_KEY") or "").strip()),
                 "masked": mask_secret(settings.get("cursor_key") or os.environ.get("CURSOR_API_KEY") or ""),
-                "notes": "Use Cursor's CLI directly; scoped models come from Cursor when the API is reachable.",
+                "notes": "Use Cursor's CLI directly; authenticate with cursor-agent login or an optional API key.",
             },
             {
                 "id": "codex",
@@ -711,11 +730,13 @@ def register_routes(router, templates):
                 "credential_label": "OpenAI API key",
                 "credential_field": "openai_key",
                 "credential_type": "secret",
+                "credential_optional": True,
+                "input_placeholder": "Paste optional OpenAI API key",
                 "enabled_field": "openai_enabled",
                 "enabled": bool(settings.get("openai_enabled", False)),
                 "key_set": bool((settings.get("openai_key") or os.environ.get("OPENAI_API_KEY") or "").strip()),
                 "masked": mask_secret(settings.get("openai_key") or os.environ.get("OPENAI_API_KEY") or ""),
-                "notes": "Use Codex CLI for implementation steps; model list falls back to Codex defaults if the CLI cannot list models.",
+                "notes": "Use Codex CLI for implementation steps; authenticate with codex login or an optional OpenAI API key.",
             },
             {
                 "id": "claude_code",
@@ -723,11 +744,13 @@ def register_routes(router, templates):
                 "credential_label": "Anthropic API key",
                 "credential_field": "anthropic_key",
                 "credential_type": "secret",
+                "credential_optional": True,
+                "input_placeholder": "Paste optional Anthropic API key",
                 "enabled_field": "anthropic_enabled",
                 "enabled": bool(settings.get("anthropic_enabled", False)),
                 "key_set": bool((settings.get("anthropic_key") or os.environ.get("ANTHROPIC_API_KEY") or "").strip()),
                 "masked": mask_secret(settings.get("anthropic_key") or os.environ.get("ANTHROPIC_API_KEY") or ""),
-                "notes": "Claude Code supports aliases such as Sonnet, Opus, and Haiku plus API-listed models when available.",
+                "notes": "Claude Code supports aliases such as Sonnet, Opus, and Haiku; authenticate with claude login or an optional Anthropic API key.",
             },
             {
                 "id": "openrouter",
@@ -735,6 +758,7 @@ def register_routes(router, templates):
                 "credential_label": "OpenRouter API key",
                 "credential_field": "openrouter_key",
                 "credential_type": "secret",
+                "input_placeholder": "Paste OpenRouter API key",
                 "enabled_field": "openrouter_enabled",
                 "enabled": bool(settings.get("openrouter_enabled", False)),
                 "key_set": bool((settings.get("openrouter_key") or "").strip()),
@@ -747,6 +771,7 @@ def register_routes(router, templates):
                 "credential_label": "Groq API key",
                 "credential_field": "groq_key",
                 "credential_type": "secret",
+                "input_placeholder": "Paste Groq API key",
                 "enabled_field": "groq_enabled",
                 "enabled": bool(settings.get("groq_enabled", False)),
                 "key_set": bool((settings.get("groq_key") or "").strip()),
@@ -759,6 +784,7 @@ def register_routes(router, templates):
                 "credential_label": "KiloCode API key",
                 "credential_field": "kilo_key",
                 "credential_type": "secret",
+                "input_placeholder": "Paste KiloCode API key",
                 "enabled_field": "kilo_enabled",
                 "enabled": bool(settings.get("kilo_enabled", False)),
                 "key_set": bool((settings.get("kilo_key") or "").strip()),
@@ -771,6 +797,7 @@ def register_routes(router, templates):
                 "credential_label": "Gemini API key",
                 "credential_field": "gemini_key",
                 "credential_type": "secret",
+                "input_placeholder": "Paste Gemini API key",
                 "enabled_field": "gemini_enabled",
                 "enabled": bool(settings.get("gemini_enabled", False)),
                 "key_set": bool((settings.get("gemini_key") or "").strip()),
@@ -783,6 +810,7 @@ def register_routes(router, templates):
                 "credential_label": "NVIDIA API key",
                 "credential_field": "nvidia_key",
                 "credential_type": "secret",
+                "input_placeholder": "Paste NVIDIA API key",
                 "enabled_field": "nvidia_enabled",
                 "enabled": bool(settings.get("nvidia_enabled", False)),
                 "key_set": bool((settings.get("nvidia_key") or "").strip()),
@@ -801,6 +829,8 @@ def register_routes(router, templates):
             row["model_summary"] = model_meta["summary"]
             row["recommended_model"] = model_meta["recommended_model"]
             row["models_source"] = model_result.get("source") or ""
+            row["model_message"] = model_result.get("message") or ""
+            row.update(_backend_truth(status, model_result))
         return rows
 
     @router.get("/projects/cli-setup")
@@ -814,6 +844,13 @@ def register_routes(router, templates):
             "active_backend": request.query_params.get("backend_id") or "",
             "clis": _cli_setup_rows(settings, request.query_params.get("backend_id") or ""),
         })
+
+    @router.get("/projects/harness-doctor")
+    async def get_harness_doctor():
+        """Return read-only harness pack, projection, and CLI setup health."""
+        from distr.core.harness_doctor import assess_harness_stack
+
+        return JSONResponse({"success": True, "report": assess_harness_stack()})
 
     @router.post("/projects/cli-setup")
     async def save_cli_setup(request: Request):
@@ -865,8 +902,9 @@ def register_routes(router, templates):
         status = get_backend(normalized).setup_status().to_dict()
         model_result = _models_for_cli_backend(normalized, settings)
         model_meta = _cli_model_metadata(model_result.get("models") or [])
+        truth = _backend_truth(status, model_result)
         return JSONResponse({
-            "success": bool(status.get("ready")),
+            "success": bool(truth.get("workflow_ready")),
             "backend_id": normalized,
             "status": status,
             "models": model_result.get("models") or [],
@@ -874,6 +912,7 @@ def register_routes(router, templates):
             "recommended_model": model_meta["recommended_model"],
             "source": model_result.get("source") or "",
             "message": model_result.get("message") or status.get("message") or "",
+            "truth": truth,
         })
 
     @router.get("/projects/cli-models")
@@ -888,50 +927,54 @@ def register_routes(router, templates):
             project_id = None
         from distr.core.settings import load_settings_from_db
 
-        settings = load_settings_from_db()
-        try:
-            model_result = _models_for_cli_backend(backend_id, settings)
-            models = model_result.get("models") or []
-        except Exception as exc:
-            logger.exception("cli-models failed for backend=%s", backend_id)
-            model_result = {"models": [], "source": "error", "message": str(exc)}
-            models = []
-        model_meta = _cli_model_metadata(models)
-        from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+        def _load_payload():
+            settings = load_settings_from_db()
+            try:
+                model_result = _models_for_cli_backend(backend_id, settings)
+                models = model_result.get("models") or []
+            except Exception as exc:
+                logger.exception("cli-models failed for backend=%s", backend_id)
+                model_result = {"models": [], "source": "error", "message": str(exc)}
+                models = []
+            model_meta = _cli_model_metadata(models)
+            from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
-        # Get current Pi model from settings as the legacy/global fallback.
-        try:
-            from distr.core.db import get_session as db_session
-            with db_session() as session:
-                from sqlalchemy import text
-                row = session.execute(text("SELECT coding_llm_provider, coding_llm_model FROM settings LIMIT 1")).first()
-                current_provider = (row[0] or "ollama") if row else "ollama"
-                current_model = (row[1] or "") if row else ""
-        except Exception:
-            current_provider = "ollama"
-            current_model = ""
-        if backend_id != "pi":
-            current_provider = backend_id
-        current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
-        if is_ide_backend(backend_id):
-            current_model = ""
-            current_provider = backend_id
-        elif not current_model:
-            current_model = "auto" if backend_id in ("cursor", "codex", "cline", "opencode") else ("default" if backend_id == "claude_code" else "")
-            current_provider = backend_id
+            # Get current Pi model from settings as the legacy/global fallback.
+            try:
+                from distr.core.db import get_session as db_session
+                with db_session() as session:
+                    from sqlalchemy import text
+                    row = session.execute(text("SELECT coding_llm_provider, coding_llm_model FROM settings LIMIT 1")).first()
+                    current_provider = (row[0] or "ollama") if row else "ollama"
+                    current_model = (row[1] or "") if row else ""
+            except Exception:
+                current_provider = "ollama"
+                current_model = ""
+            if backend_id != "pi":
+                current_provider = backend_id
+            current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
+            if is_ide_backend(backend_id):
+                current_model = ""
+                current_provider = backend_id
+            elif not current_model:
+                current_model = "auto" if backend_id in ("cursor", "codex", "cline", "opencode") else ("default" if backend_id == "claude_code" else "")
+                current_provider = backend_id
 
-        return JSONResponse({
-            "backend_id": backend_id,
-            "models": models,
-            "model_summary": model_meta["summary"],
-            "recommended_model": model_meta["recommended_model"],
-            "source": model_result.get("source") or "",
-            "message": model_result.get("message") or "",
-            "current_provider": current_provider,
-            "current_model": current_model,
-            "backend_kind": model_result.get("kind") or "cli",
-            "supports_model_picker": bool(model_result.get("supports_model_picker", True)),
-        })
+            return {
+                "backend_id": backend_id,
+                "models": models,
+                "model_summary": model_meta["summary"],
+                "recommended_model": model_meta["recommended_model"],
+                "source": model_result.get("source") or "",
+                "message": model_result.get("message") or "",
+                "current_provider": current_provider,
+                "current_model": current_model,
+                "backend_kind": model_result.get("kind") or "cli",
+                "supports_model_picker": bool(model_result.get("supports_model_picker", True)),
+                "truth": _backend_truth({"installed": True, "ready": True, "state": "ready", "message": ""}, model_result),
+            }
+
+        return JSONResponse(await asyncio.to_thread(_load_payload))
 
     @router.get("/projects/{project_id}/cli/preflight")
     async def get_cli_preflight(project_id: int, probe: bool = True):
@@ -1026,25 +1069,37 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import get_backend_statuses
         from distr.core.settings import load_settings_from_db
 
-        payload = get_backend_statuses()
-        payload["backends"] = _enrich_backend_rows(payload.get("backends") or [], load_settings_from_db())
+        def _load_payload():
+            payload = get_backend_statuses()
+            payload["backends"] = _enrich_backend_rows(payload.get("backends") or [], load_settings_from_db())
+            return payload
+
+        payload = await asyncio.to_thread(_load_payload)
         return JSONResponse(payload)
 
     @router.get("/projects/{project_id}/cli-backends")
-    async def get_project_cli_backends(project_id: int):
+    async def get_project_cli_backends(project_id: int, board_id: Optional[int] = None):
         """Return supported project coding CLI backends for a specific project."""
         from distr.core.db import get_session
         from distr.core.db.projects import Project
         from distr.core.project_cli_backends import get_backend_statuses
         from distr.core.settings import load_settings_from_db
 
-        with get_session() as session:
-            project = session.query(Project).filter(Project.id == project_id).first()
-            if not project:
-                raise HTTPException(status_code=404, detail="Project not found")
-            payload = get_backend_statuses(_backend_id_for_project(project))
-            payload["backends"] = _enrich_backend_rows(payload.get("backends") or [], load_settings_from_db())
-            return JSONResponse(payload)
+        def _load_payload():
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                payload = get_backend_statuses(_backend_id_for_project(project))
+                payload["backends"] = _enrich_backend_rows(
+                    payload.get("backends") or [],
+                    load_settings_from_db(),
+                    project_id=project_id,
+                    board_id=board_id,
+                )
+                return payload
+
+        return JSONResponse(await asyncio.to_thread(_load_payload))
 
     @router.post("/projects/{project_id}/cli-backends/{backend_id}/setup")
     async def setup_project_cli_backend(project_id: int, backend_id: str):
@@ -2006,8 +2061,18 @@ def register_routes(router, templates):
     @router.websocket("/projects/{project_id}/terminal/ws")
     async def terminal_websocket(websocket: WebSocket, project_id: int):
         """WebSocket for real-time pi RPC transcript. Connects to a pi --mode rpc session."""
-        import asyncio
         from distr.core.pi_rpc import get_or_create_rpc_session, kill_rpc_session
+        from distr.core.project_cli_backends.live_sessions import (
+            any_live_session_running,
+            clear_live_session_buffer,
+            live_session_is_alive,
+            set_live_session_connected,
+            publish_live_session_event,
+            register_live_session_listener,
+            set_live_session_running,
+            snapshot_live_session,
+            unregister_live_session_listener,
+        )
         from distr.gui.web.security import websocket_has_valid_internal_token, is_allowed_local_origin
 
         # Auth check
@@ -2020,6 +2085,8 @@ def register_routes(router, templates):
             return
 
         await websocket.accept()
+        websocket_board_id = _coerce_optional_int(websocket.query_params.get("board_id"))
+        websocket_workflow_id = _coerce_optional_int(websocket.query_params.get("workflow_id"))
 
         # Get project folder
         try:
@@ -2051,11 +2118,17 @@ def register_routes(router, templates):
 
         if not backend.supports_rpc:
             status = backend.setup_status()
+            event_queue: asyncio.Queue = asyncio.Queue()
+            register_live_session_listener(project_id, backend.id, event_queue, board_id=websocket_board_id)
             await websocket.send_json({
                 "type": "connected",
                 "project_id": project_id,
                 "backend": backend.id,
-                "buffer": [],
+                "board_id": websocket_board_id,
+                "workflow_id": websocket_workflow_id,
+                "supports_rpc": False,
+                "alive": live_session_is_alive(project_id, backend.id, board_id=websocket_board_id),
+                "buffer": snapshot_live_session(project_id, backend.id, board_id=websocket_board_id),
             })
             if not status.ready:
                 await websocket.send_json({
@@ -2063,13 +2136,18 @@ def register_routes(router, templates):
                     "message": f"{backend.name} is not ready: {status.message} {status.setup_instructions}".strip(),
                 })
 
-            running_task = None
-
             async def _send_event(event_dict):
                 try:
                     await websocket.send_json(event_dict)
                 except Exception:
                     pass
+
+            async def _forward_events():
+                while True:
+                    event = await event_queue.get()
+                    await _send_event(event)
+
+            forward_task = asyncio.create_task(_forward_events())
 
             try:
                 while True:
@@ -2084,6 +2162,8 @@ def register_routes(router, templates):
                         if not instruction:
                             continue
                         model_override = (msg.get("model") or msg.get("coding_backend_model") or "").strip() or None
+                        codex_reasoning_effort = (msg.get("codex_reasoning_effort") or "").strip() or None
+                        codex_service_tier = (msg.get("codex_service_tier") or "").strip() or None
                         setup = backend.setup_status()
                         if not setup.ready:
                             await websocket.send_json({
@@ -2091,27 +2171,29 @@ def register_routes(router, templates):
                                 "message": (setup.message or setup.setup_instructions or f"{backend.name} is not ready.").strip(),
                             })
                             continue
-                        if running_task and not running_task.done():
+                        if live_session_is_alive(project_id, backend.id, board_id=websocket_board_id):
                             await websocket.send_json({"type": "error", "message": f"{backend.name} is still running. Wait for it to finish before sending another task."})
+                            continue
+                        if any_live_session_running(project_id, board_id=websocket_board_id):
+                            await websocket.send_json({"type": "error", "message": "Another workflow CLI is already processing work for this board. Wait for it to finish before starting a different backend."})
                             continue
 
                         async def _run_one():
-                            queue: asyncio.Queue = asyncio.Queue()
+                            set_live_session_running(project_id, backend.id, True, board_id=websocket_board_id)
 
                             def _queue_event(event_dict):
                                 try:
-                                    loop.call_soon_threadsafe(queue.put_nowait, event_dict)
+                                    loop.call_soon_threadsafe(
+                                        lambda: publish_live_session_event(
+                                            project_id,
+                                            backend.id,
+                                            event_dict,
+                                            board_id=websocket_board_id,
+                                        )
+                                    )
                                 except Exception:
                                     pass
 
-                            async def _drain():
-                                while True:
-                                    event = await queue.get()
-                                    if event is None:
-                                        break
-                                    await _send_event(event)
-
-                            drain_task = asyncio.create_task(_drain())
                             try:
                                 from types import SimpleNamespace
                                 p = SimpleNamespace(
@@ -2126,21 +2208,46 @@ def register_routes(router, templates):
                                     instruction,
                                     on_event=_queue_event,
                                     origin="cli",
+                                    workflow_id=websocket_workflow_id,
                                     model_override=model_override,
+                                    codex_reasoning_effort_override=codex_reasoning_effort,
+                                    codex_service_tier_override=codex_service_tier,
+                                    board_id_override=websocket_board_id,
                                 )
                                 if not result.success:
-                                    await _send_event({"type": "error", "message": result.error or f"{backend.name} failed"})
+                                    _queue_event({"type": "error", "message": result.error or f"{backend.name} failed"})
+                                else:
+                                    set_live_session_connected(
+                                        project_id,
+                                        backend.id,
+                                        True,
+                                        board_id=websocket_board_id,
+                                        external_session_id="latest",
+                                    )
                             finally:
-                                await queue.put(None)
-                                await drain_task
+                                set_live_session_running(project_id, backend.id, False, board_id=websocket_board_id)
 
-                        running_task = asyncio.create_task(_run_one())
+                        asyncio.create_task(_run_one())
                     elif msg_type == "abort":
-                        if running_task and not running_task.done():
-                            running_task.cancel()
-                            await websocket.send_json({"type": "error", "message": f"{backend.name} task cancelled."})
+                        from distr.core.project_cli_backends.registry import abort_backend_process
+                        cancelled = await abort_backend_process(project_id, backend.id, board_id=websocket_board_id)
+                        if cancelled:
+                            publish_live_session_event(project_id, backend.id, {"type": "error", "message": f"{backend.name} task cancelled."}, board_id=websocket_board_id)
+                        else:
+                            publish_live_session_event(project_id, backend.id, {"type": "error", "message": f"{backend.name} was not running."}, board_id=websocket_board_id)
                     elif msg_type == "restart":
-                        await websocket.send_json({"type": "connected", "project_id": project_id, "backend": backend.id, "buffer": []})
+                        if not live_session_is_alive(project_id, backend.id, board_id=websocket_board_id):
+                            clear_live_session_buffer(project_id, backend.id, board_id=websocket_board_id)
+                        await websocket.send_json({
+                            "type": "connected",
+                            "project_id": project_id,
+                            "backend": backend.id,
+                            "board_id": websocket_board_id,
+                            "workflow_id": websocket_workflow_id,
+                            "supports_rpc": False,
+                            "alive": live_session_is_alive(project_id, backend.id, board_id=websocket_board_id),
+                            "buffer": snapshot_live_session(project_id, backend.id, board_id=websocket_board_id),
+                        })
                     elif msg_type == "ping":
                         await websocket.send_json({"type": "pong"})
             except WebSocketDisconnect:
@@ -2148,13 +2255,13 @@ def register_routes(router, templates):
             except Exception as e:
                 logger.debug(f"Generic CLI terminal WebSocket error: {e}")
             finally:
-                if running_task and not running_task.done():
-                    running_task.cancel()
+                unregister_live_session_listener(project_id, backend.id, event_queue, board_id=websocket_board_id)
+                forward_task.cancel()
             return
 
         # Create or get the pi RPC session (lazy: don't auto-start pi until first prompt)
         try:
-            rpc = await get_or_create_rpc_session(project_id, cwd, lazy_start=True)
+            rpc = await get_or_create_rpc_session(project_id, cwd, lazy_start=True, board_id=websocket_board_id)
         except Exception as e:
             logger.error(f"Terminal: failed to create pi RPC session: {e}")
             await websocket.send_json({"type": "error", "message": f"Failed to start pi: {e}"})
@@ -2178,7 +2285,7 @@ def register_routes(router, templates):
 
         # Send initial connection message + existing transcript
         buffer_messages = rpc.get_messages()
-        await websocket.send_json({"type": "connected", "project_id": project_id, "buffer": buffer_messages})
+        await websocket.send_json({"type": "connected", "project_id": project_id, "backend": backend.id, "board_id": websocket_board_id, "workflow_id": websocket_workflow_id, "supports_rpc": True, "alive": bool(getattr(rpc, "is_alive", False)), "buffer": buffer_messages})
 
         from distr.core.pi_preflight import preflight_pi_coding_cli
 
@@ -2239,11 +2346,11 @@ def register_routes(router, templates):
                     rpc.abort()
                 elif msg_type == "restart":
                     # Kill and restart pi RPC session
-                    await kill_rpc_session(project_id)
+                    await kill_rpc_session(project_id, board_id=websocket_board_id)
                     try:
-                        rpc = await get_or_create_rpc_session(project_id, cwd, lazy_start=True)
+                        rpc = await get_or_create_rpc_session(project_id, cwd, lazy_start=True, board_id=websocket_board_id)
                         rpc.add_event_callback(_on_event)
-                        await websocket.send_json({"type": "connected", "project_id": project_id, "buffer": rpc.get_messages()})
+                        await websocket.send_json({"type": "connected", "project_id": project_id, "backend": backend.id, "board_id": websocket_board_id, "workflow_id": websocket_workflow_id, "supports_rpc": True, "alive": bool(getattr(rpc, "is_alive", False)), "buffer": rpc.get_messages()})
                     except Exception as e:
                         await websocket.send_json({"type": "error", "message": f"Failed to restart: {e}"})
                 elif msg_type == "ping":
@@ -2257,25 +2364,129 @@ def register_routes(router, templates):
             rpc.remove_event_callback(_on_event)
 
     @router.get("/projects/{project_id}/terminal/buffer")
-    async def get_terminal_buffer(project_id: int, lines: int = 100):
+    async def get_terminal_buffer(project_id: int, lines: int = 100, board_id: int | None = None):
         """Get terminal buffer content from the selected backend when available."""
         from distr.core.db import get_session as db_session
         from distr.core.db.projects import Project
+        from distr.core.project_cli_backends.live_sessions import (
+            live_session_is_alive,
+            live_session_connected,
+            live_session_external_id,
+            live_session_should_expire,
+            set_live_session_connected,
+            replay_buffer_text,
+            snapshot_live_session,
+            snapshot_live_session_meta,
+        )
         from distr.core.project_cli_backends import get_backend
+        from distr.core.pi_rpc import get_rpc_session
 
+        board_id = _coerce_optional_int(board_id)
         with db_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
             if not project:
-                return JSONResponse({"buffer": "", "alive": False, "project_id": project_id})
-            backend = get_backend(_backend_id_for_project(project))
-        buffer_text = backend.get_buffer(project_id, lines)
-        if not buffer_text:
-            return JSONResponse({"buffer": "", "alive": False, "project_id": project_id})
+                return JSONResponse({"buffer": "", "alive": False, "project_id": project_id, "backend_id": "", "supports_rpc": False})
+            backend_id = _backend_id_for_project(project)
+            backend = get_backend(backend_id)
+            folder = project.folder_location or os.path.expanduser("~")
+
+        alive = False
+        connected = False
+        external_thread_id = ""
+        live_meta = snapshot_live_session_meta(project_id, backend_id, board_id=board_id)
+        if backend.supports_rpc:
+            rpc = get_rpc_session(project_id, board_id=board_id)
+            alive = bool(rpc and getattr(rpc, "is_alive", False))
+            connected = alive
+            buffer_text = rpc.get_buffer(lines) if rpc else backend.get_buffer(project_id, lines)
+        else:
+            if live_session_should_expire(project_id, backend_id, board_id=board_id):
+                try:
+                    await backend.disconnect_session(project_id, folder)
+                except Exception:
+                    pass
+                set_live_session_connected(project_id, backend_id, False, board_id=board_id, external_session_id="")
+                live_meta = snapshot_live_session_meta(project_id, backend_id, board_id=board_id)
+            alive = live_session_is_alive(project_id, backend_id, board_id=board_id)
+            connected = live_session_connected(project_id, backend_id, board_id=board_id)
+            external_thread_id = live_session_external_id(project_id, backend_id, board_id=board_id)
+            buffer_text = replay_buffer_text(snapshot_live_session(project_id, backend_id, board_id=board_id))
+        if not buffer_text and not alive:
+            return JSONResponse({
+                "buffer": "",
+                "alive": False,
+                "connected": connected,
+                "external_thread_id": external_thread_id,
+                "project_id": project_id,
+                "backend_id": backend_id,
+                "supports_rpc": bool(backend.supports_rpc),
+                **live_meta,
+            })
 
         return JSONResponse({
             "buffer": buffer_text,
-            "alive": True,
+            "alive": alive,
+            "connected": connected,
+            "external_thread_id": external_thread_id,
             "project_id": project_id,
+            "backend_id": backend_id,
+            "supports_rpc": bool(backend.supports_rpc),
+            **live_meta,
+        })
+
+    @router.post("/projects/{project_id}/terminal/keepalive")
+    async def keep_terminal_session_alive(project_id: int, request: Request):
+        from distr.core.project_cli_backends.live_sessions import mark_live_session_presence, snapshot_live_session_meta
+
+        body = await request.json()
+        backend_id = str(body.get("backend_id") or "").strip() or "pi"
+        workflow_id = _coerce_optional_int(body.get("workflow_id"))
+        board_id = _coerce_optional_int(body.get("board_id"))
+        present = bool(body.get("present", True))
+        mark_live_session_presence(
+            project_id,
+            backend_id,
+            workflow_id=workflow_id,
+            board_id=board_id,
+            present=present,
+        )
+        return JSONResponse({
+            "success": True,
+            "project_id": project_id,
+            "backend_id": backend_id,
+            **snapshot_live_session_meta(project_id, backend_id, board_id=board_id),
+        })
+
+    @router.post("/projects/{project_id}/cli-session/disconnect")
+    async def disconnect_project_cli_session(project_id: int, request: Request):
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend, normalize_backend_id
+        from distr.core.project_cli_backends.live_sessions import mark_live_session_presence, set_live_session_connected
+        from distr.core.project_cli_backends.registry import abort_backend_process
+
+        body = await request.json()
+        backend_id = normalize_backend_id(body.get("backend_id") or "")
+        with db_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return JSONResponse({"success": False, "error": "Project not found"}, status_code=404)
+            folder = project.folder_location or os.path.expanduser("~")
+        backend = get_backend(backend_id)
+        board_id = _coerce_optional_int(body.get("board_id"))
+        aborted = await abort_backend_process(project_id, backend_id, board_id=board_id)
+        try:
+            await backend.disconnect_session(project_id, folder)
+        except Exception:
+            pass
+        mark_live_session_presence(project_id, backend_id, workflow_id=None, board_id=board_id, present=False)
+        set_live_session_connected(project_id, backend_id, False, board_id=board_id, external_session_id="")
+        return JSONResponse({
+            "success": True,
+            "backend_id": backend_id,
+            "board_id": board_id,
+            "aborted": bool(aborted),
+            "message": f"{backend.name} session disconnected.",
         })
 
 

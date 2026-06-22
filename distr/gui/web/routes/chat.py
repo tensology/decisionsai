@@ -14,6 +14,9 @@ import json
 import re
 import asyncio
 import threading
+import time
+import urllib.parse
+import urllib.request
 from datetime import UTC, datetime
 
 # WebSocket connection manager: chat_id -> set of WebSocket instances subscribed to that chat
@@ -38,6 +41,10 @@ from distr.gui.web.security import (
 )
 
 logger = logging.getLogger(__name__)
+
+_usage_status_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_usage_status_lock = threading.Lock()
+_USAGE_STATUS_TTL_SEC = 90.0
 
 
 class ChatRequestModel(BaseModel):
@@ -257,6 +264,107 @@ def _context_stats(messages: List[Dict[str, Any]], provider: str, model_name: st
         "message_count": len([m for m in messages if m.get("role") in {"user", "assistant"}]),
         "auto_compact_threshold": 75,
     }
+
+
+def _cached_usage_status(cache_key: str, fetch_fn) -> Dict[str, Any]:
+    now = time.time()
+    with _usage_status_lock:
+        cached = _usage_status_cache.get(cache_key)
+        if cached and now - cached[0] < _USAGE_STATUS_TTL_SEC:
+            return dict(cached[1])
+    payload = fetch_fn()
+    with _usage_status_lock:
+        _usage_status_cache[cache_key] = (now, dict(payload))
+    return payload
+
+
+def _request_json(url: str, headers: Dict[str, str], timeout: float = 8.0) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+    parsed = json.loads(raw or "{}")
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _elevenlabs_usage_status(settings: Dict[str, Any]) -> Dict[str, Any]:
+    key = (settings.get("elevenlabs_key") or "").strip()
+    if not key:
+        return {"available": False, "provider": "elevenlabs", "error": "ElevenLabs API key is not configured."}
+
+    def _fetch() -> Dict[str, Any]:
+        try:
+            data = _request_json(
+                "https://api.elevenlabs.io/v1/user/subscription",
+                {"xi-api-key": key},
+            )
+            used = int(data.get("character_count") or 0)
+            limit = int(data.get("character_limit") or 0)
+            remaining = max(limit - used, 0) if limit else None
+            percent = round((used / limit) * 100) if limit else 0
+            reset = data.get("next_character_count_reset_unix")
+            return {
+                "available": True,
+                "provider": "elevenlabs",
+                "label": "ElevenLabs",
+                "used": used,
+                "limit": limit,
+                "remaining": remaining,
+                "percent_used": max(0, min(100, percent)),
+                "tier": data.get("tier") or "",
+                "status": data.get("status") or "",
+                "max_credit_limit_extension": data.get("max_credit_limit_extension"),
+                "current_overage": data.get("current_overage") or {},
+                "billing_period": data.get("billing_period") or "",
+                "character_refresh_period": data.get("character_refresh_period") or "",
+                "next_reset_unix": reset,
+            }
+        except Exception as exc:
+            logger.debug("ElevenLabs usage status unavailable: %s", exc)
+            return {"available": False, "provider": "elevenlabs", "error": "ElevenLabs usage unavailable."}
+
+    return _cached_usage_status("elevenlabs", _fetch)
+
+
+def _openai_usage_status(settings: Dict[str, Any]) -> Dict[str, Any]:
+    key = (settings.get("openai_key") or "").strip()
+    if not key:
+        return {"available": False, "provider": "openai", "error": "OpenAI API key is not configured."}
+
+    def _fetch() -> Dict[str, Any]:
+        end = int(time.time())
+        start_dt = datetime.now(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        start = int(start_dt.timestamp())
+        qs = urllib.parse.urlencode({"start_time": start, "end_time": end, "limit": 31})
+        try:
+            data = _request_json(
+                f"https://api.openai.com/v1/organization/costs?{qs}",
+                {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            )
+            total = 0.0
+            currency = "usd"
+            for bucket in data.get("data") or []:
+                for result in bucket.get("results") or []:
+                    amount = result.get("amount") or {}
+                    try:
+                        total += float(amount.get("value") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                    currency = amount.get("currency") or currency
+            return {
+                "available": True,
+                "provider": "openai",
+                "label": "OpenAI",
+                "period_cost": round(total, 4),
+                "currency": currency,
+                "period_start_unix": start,
+                "period_end_unix": end,
+                "note": "Costs endpoint does not expose remaining balance/cap for every account.",
+            }
+        except Exception as exc:
+            logger.debug("OpenAI usage status unavailable: %s", exc)
+            return {"available": False, "provider": "openai", "error": "OpenAI billing usage unavailable for this key."}
+
+    return _cached_usage_status("openai-costs", _fetch)
 
 
 def _effective_context_messages(
@@ -819,6 +927,38 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_model": "—",
                 }
             )
+
+    @router.get("/chats/usage-status")
+    async def get_chat_usage_status(
+        voice_provider: str = "",
+        llm_provider: str = "",
+    ):
+        """Provider quota/cost summaries for chat header indicators.
+
+        API keys are read server-side from settings and never returned.
+        """
+        try:
+            settings = load_settings_from_db()
+            voice_key = normalize_voice_provider((voice_provider or "").strip())
+            llm_key = (llm_provider or "").strip().lower()
+
+            voice_usage: Optional[Dict[str, Any]] = None
+            llm_usage: Optional[Dict[str, Any]] = None
+
+            if voice_key == "elevenlabs":
+                voice_usage = await asyncio.to_thread(_elevenlabs_usage_status, settings)
+            if llm_key == "openai":
+                llm_usage = await asyncio.to_thread(_openai_usage_status, settings)
+
+            return JSONResponse(
+                {
+                    "voice": voice_usage,
+                    "llm": llm_usage,
+                }
+            )
+        except Exception as e:
+            logger.debug("Usage status failed: %s", e, exc_info=True)
+            return JSONResponse({"voice": None, "llm": None}, status_code=200)
 
     @router.get("/chats/{chat_id}")
     async def get_chat(chat_id: int):

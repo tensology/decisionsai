@@ -7,12 +7,83 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .base import BackendStatus, BackendTaskResult, EventCallback, ProjectCliBackend, ProjectTask
 
 DEFAULT_BACKEND_ID = "pi"
+
+_ONE_SHOT_PROCESS_LOCK = threading.RLock()
+_ONE_SHOT_PROCESSES: dict[tuple[int, str, int | None], asyncio.subprocess.Process] = {}
+_KIRO_SESSION_CONNECTED: dict[int, bool] = {}
+
+
+def _normalize_board_id(board_id: int | None) -> int | None:
+    try:
+        if board_id in (None, "", False):
+            return None
+        return int(board_id)
+    except Exception:
+        return None
+
+
+def _oneshot_key(project_id: int, backend_id: str, board_id: int | None = None) -> tuple[int, str, int | None]:
+    return int(project_id), str(backend_id or "").strip(), _normalize_board_id(board_id)
+
+
+def _register_oneshot_process(
+    project_id: int,
+    backend_id: str,
+    process: asyncio.subprocess.Process,
+    *,
+    board_id: int | None = None,
+) -> None:
+    with _ONE_SHOT_PROCESS_LOCK:
+        _ONE_SHOT_PROCESSES[_oneshot_key(project_id, backend_id, board_id)] = process
+
+
+def _clear_oneshot_process(
+    project_id: int,
+    backend_id: str,
+    process: asyncio.subprocess.Process | None = None,
+    *,
+    board_id: int | None = None,
+) -> None:
+    key = _oneshot_key(project_id, backend_id, board_id)
+    with _ONE_SHOT_PROCESS_LOCK:
+        current = _ONE_SHOT_PROCESSES.get(key)
+        if process is not None and current is not process:
+            return
+        _ONE_SHOT_PROCESSES.pop(key, None)
+
+
+async def abort_backend_process(project_id: int, backend_id: str, *, board_id: int | None = None) -> bool:
+    key = _oneshot_key(project_id, backend_id, board_id)
+    with _ONE_SHOT_PROCESS_LOCK:
+        process = _ONE_SHOT_PROCESSES.get(key)
+    if not process:
+        return False
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        _clear_oneshot_process(project_id, backend_id, process, board_id=board_id)
+        return False
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+    try:
+        await asyncio.wait_for(process.wait(), timeout=3)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+    _clear_oneshot_process(project_id, backend_id, process, board_id=board_id)
+    return True
 
 
 def _decisions_api_base() -> str:
@@ -178,7 +249,7 @@ class PiBackend(ProjectCliBackend):
             return BackendTaskResult(False, self.id, "pi", error=self.setup_instructions, session_id=task.audit_id)
 
         try:
-            rpc = await get_or_create_rpc_session(task.project_id, task.folder)
+            rpc = await get_or_create_rpc_session(task.project_id, task.folder, board_id=task.board_id)
             if rpc.send_prompt(task.instruction, origin=task.origin):
                 return BackendTaskResult(True, self.id, "pi_rpc", session_id=task.audit_id)
         except Exception as exc:
@@ -295,6 +366,7 @@ class OneShotCliBackend(ProjectCliBackend):
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._subprocess_env(),
             )
+            _register_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
         except Exception as exc:
             msg = f"Failed to start {self.name}: {exc}"
             _emit(on_event, {"type": "error", "message": msg})
@@ -321,6 +393,7 @@ class OneShotCliBackend(ProjectCliBackend):
             chunks.append(f"\n{exc}")
 
         output = "".join(chunks).strip()
+        _clear_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
         _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "done"}})
         _emit(on_event, {"type": "message_end", "message": {"role": "assistant", "content": output}})
         _emit(on_event, {"type": "agent_end", "backend": self.id})
@@ -679,6 +752,41 @@ class OpenCodeBackend(OneShotCliBackend):
         return cmd + [task.instruction]
 
 
+class KiroBackend(OneShotCliBackend):
+    """Kiro headless CLI backend with per-project session resume."""
+
+    id = "kiro"
+    name = "Kiro CLI"
+    description = "Kiro CLI headless agent backend with resumable per-project sessions."
+    executable_candidates = ["kiro-cli"]
+    setup_instructions = (
+        "Install Kiro CLI and authenticate it, or provide KIRO_API_KEY for headless runs."
+    )
+
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable, "chat", "--no-interactive", "--trust-all-tools", "--mode", "agent", "--wrap", "never"]
+        if _KIRO_SESSION_CONNECTED.get(int(task.project_id)):
+            cmd.append("--resume")
+        if task.model and task.model not in ("auto", "default", ""):
+            cmd += ["--model", task.model]
+        return cmd + [task.instruction]
+
+    async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
+        result = await super().send_task(task, on_event=on_event)
+        if result.success:
+            _KIRO_SESSION_CONNECTED[int(task.project_id)] = True
+        return result
+
+    async def disconnect_session(self, project_id: int, folder: str) -> BackendTaskResult:
+        _KIRO_SESSION_CONNECTED.pop(int(project_id), None)
+        return BackendTaskResult(
+            success=True,
+            backend_id=self.id,
+            engine=self.id,
+            output="Kiro session disconnected.",
+        )
+
+
 class ClineBackend(OneShotCliBackend):
     """Cline terminal CLI (shared agent core with the VS Code extension)."""
 
@@ -730,6 +838,7 @@ _BACKENDS: dict[str, ProjectCliBackend] = {
     "codex": CodexBackend(),
     "codex_ide": CodexIdeBackend(),
     "hermes_agent": HermesAgentBackend(),
+    "kiro": KiroBackend(),
     "cline": ClineBackend(),
     "opencode": OpenCodeBackend(),
 }
@@ -759,6 +868,7 @@ def normalize_backend_id(value: str | None) -> str:
         "nous_hermes": "hermes_agent",
         "cline_cli": "cline",
         "open_code": "opencode",
+        "kiro_cli": "kiro",
     }
     backend_id = aliases.get(backend_id, backend_id)
     return backend_id if backend_id in _BACKENDS else DEFAULT_BACKEND_ID
@@ -933,15 +1043,17 @@ async def run_project_task(
     model_override: Optional[str] = None,
     codex_reasoning_effort_override: Optional[str] = None,
     codex_service_tier_override: Optional[str] = None,
+    board_id_override: Optional[int] = None,
 ) -> BackendTaskResult:
     from distr.core.kanban.project_execution import (
         append_execution_event,
         complete_execution_session,
         create_execution_session,
     )
+    from distr.core.project_cli_backends.live_sessions import any_live_session_running
 
-    board_id = None
-    if ticket_id:
+    board_id = _normalize_board_id(board_id_override)
+    if board_id is None and ticket_id:
         try:
             from distr.core.orchestrator import resolve_board_id_for_ticket
 
@@ -951,6 +1063,13 @@ async def run_project_task(
 
     backend_id = normalize_backend_id(backend_id_override) if backend_id_override else get_project_backend_id(project)
     backend = get_backend(backend_id)
+    if any_live_session_running(int(project.id), board_id=board_id):
+        return BackendTaskResult(
+            False,
+            backend_id,
+            backend_id,
+            error="Another workflow CLI is already processing work for this board. Wait for it to finish before starting a different backend.",
+        )
     setup_status = backend.setup_status()
     if not setup_status.ready:
         msg = (setup_status.message or setup_status.setup_instructions or f"{backend.name or backend_id} is not ready.").strip()
@@ -1033,6 +1152,7 @@ async def run_project_task(
             "ticket_id": ticket_id,
             "ticket_title": ticket_title,
             "workflow_id": workflow_id,
+            "board_id": board_id,
             "run_id": run_id,
             "step_id": step_id,
             "audit_id": audit_id,
@@ -1129,8 +1249,27 @@ async def run_project_task(
             "handoff_event_id": handoff_event_id,
         },
     )
+    try:
+        from distr.core.project_cli_backends.live_sessions import mark_live_session_presence, set_live_session_running
+
+        mark_live_session_presence(
+            task.project_id,
+            backend_id,
+            workflow_id=task.workflow_id,
+            board_id=task.board_id,
+            present=True,
+        )
+        set_live_session_running(task.project_id, backend_id, True, board_id=task.board_id)
+    except Exception:
+        pass
 
     def _tracked_event(event: dict[str, Any]) -> None:
+        try:
+            from distr.core.project_cli_backends.live_sessions import publish_live_session_event
+
+            publish_live_session_event(task.project_id, backend_id, event, board_id=task.board_id)
+        except Exception:
+            pass
         append_execution_event(
             execution_session_id,
             str((event or {}).get("type") or "event"),
@@ -1150,6 +1289,13 @@ async def run_project_task(
             error=str(exc),
         )
         raise
+    finally:
+        try:
+            from distr.core.project_cli_backends.live_sessions import set_live_session_running
+
+            set_live_session_running(task.project_id, backend_id, False, board_id=task.board_id)
+        except Exception:
+            pass
 
     result.execution_session_id = execution_session_id
     git_status_after = _git_status_short(task.folder)

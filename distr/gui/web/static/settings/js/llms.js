@@ -754,14 +754,60 @@ function ensureBenchmarkModal() {
         }
         const leaderboardRow = event.target.closest('[data-benchmark-compare]');
         if (leaderboardRow && benchmarkModalState) {
-            openBenchmarkModal(benchmarkModalState.type, {
-                model: benchmarkModalState.model,
-                compareProvider: leaderboardRow.getAttribute('data-benchmark-provider') || benchmarkModalState.compareProvider || benchmarkModalState.provider,
-                compareModel: leaderboardRow.getAttribute('data-benchmark-compare') || '',
-                sort: benchmarkModalState.sort,
-                tab: 'compare',
-            });
+            const compareProvider = leaderboardRow.getAttribute('data-benchmark-provider') || benchmarkModalState.compareProvider || benchmarkModalState.provider;
+            const compareModel = leaderboardRow.getAttribute('data-benchmark-compare') || '';
+            setBenchmarkCompareSelection(compareProvider, compareModel);
         }
+    });
+}
+
+function setBenchmarkCompareSelection(provider, model) {
+    if (!benchmarkModalState) return;
+    const modalType = benchmarkModalState.type;
+    const selectedModel = (model || '').toString();
+    const selectedProvider = (provider || '').toString();
+    benchmarkModalState.compareProvider = selectedProvider;
+    benchmarkModalState.compareModel = selectedModel;
+    benchmarkModalState.tab = 'compare';
+
+    const providerSelect = document.getElementById('llm_benchmark_compare_provider');
+    const modelSelect = document.getElementById('llm_benchmark_compare_model');
+    if (providerSelect) {
+        const canSetProvider = setSelectValueIfAvailable(providerSelect, selectedProvider);
+        if (canSetProvider) {
+            refreshBenchmarkCardProvider('compare', modalType, selectedProvider, selectedModel);
+            if (selectedModel) setActiveLeaderboardCompareRow(selectedModel);
+            return;
+        }
+    }
+    if (modelSelect && setSelectValueIfAvailable(modelSelect, selectedModel)) {
+        refreshBenchmarkCardProfile('compare', modalType, selectedProvider, selectedModel);
+        setActiveLeaderboardCompareRow(selectedModel);
+        return;
+    }
+
+    if (selectedModel) {
+        refreshBenchmarkCardProfile('compare', modalType, selectedProvider, selectedModel);
+        setActiveLeaderboardCompareRow(selectedModel);
+    }
+}
+
+function setSelectValueIfAvailable(selectEl, value) {
+    if (!selectEl || value === undefined || value === null) return false;
+    const stringValue = String(value);
+    const matchingOption = Array.prototype.find.call(selectEl.options || [], function (option) {
+        return String(option.value) === stringValue;
+    });
+    if (!matchingOption) return false;
+    selectEl.value = stringValue;
+    return true;
+}
+
+function setActiveLeaderboardCompareRow(compareModel) {
+    if (!benchmarkModalState) return;
+    const rows = document.querySelectorAll('[data-benchmark-compare]');
+    rows.forEach(function (row) {
+        row.classList.toggle('is-active', row.getAttribute('data-benchmark-compare') === compareModel);
     });
 }
 
@@ -789,13 +835,54 @@ function benchmarkSelectOptions(payload, selectedId, fallbackRow) {
     }).join('');
 }
 
-function benchmarkProviderOptions(type, selectedProvider) {
+function benchmarkProviderOptions(type, selectedProvider, payload) {
     const sourceSelect = document.getElementById(type + '_provider');
-    if (!sourceSelect) return '';
-    return Array.prototype.map.call(sourceSelect.options || [], function (option) {
-        const selected = option.value === selectedProvider ? ' selected' : '';
-        return '<option value="' + escapeHtml(option.value || '') + '"' + selected + '>' + escapeHtml(option.textContent || option.value || '') + '</option>';
+    const seen = new Set();
+    const items = [];
+    if (sourceSelect) {
+        Array.prototype.forEach.call(sourceSelect.options || [], function (option) {
+            const value = option.value || '';
+            if (seen.has(value)) return;
+            seen.add(value);
+            items.push({ id: value, name: option.textContent || value || 'Default' });
+        });
+    }
+    ((payload && payload.provider_options) || []).forEach(function (provider) {
+        const value = provider && (provider.id || provider.value || '');
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        items.push({ id: value, name: provider.name || provider.label || value });
+    });
+    if (selectedProvider && !seen.has(selectedProvider)) {
+        items.push({ id: selectedProvider, name: selectedProvider });
+    }
+    return items.map(function (provider) {
+        const selected = provider.id === selectedProvider ? ' selected' : '';
+        return '<option value="' + escapeHtml(provider.id || '') + '"' + selected + '>' + escapeHtml(provider.name || provider.id || '') + '</option>';
     }).join('');
+}
+
+async function loadBenchmarkProviderOptions(type) {
+    try {
+        const needsMedia = type === 'image' || type === 'video';
+        const [llmRes, mediaRes] = await Promise.all([
+            fetch('/api/llms/available-providers'),
+            needsMedia ? fetch('/api/llms/available-media-providers') : Promise.resolve(null)
+        ]);
+        const llmData = llmRes && llmRes.ok ? await llmRes.json() : { providers: [] };
+        const mediaData = mediaRes && mediaRes.ok ? await mediaRes.json() : { providers: [] };
+        const baseProviders = llmData.providers || [];
+        const mediaProviders = mediaData.providers || [];
+        if (type === 'video') return mediaProviders;
+        if (type === 'image') {
+            const seen = new Set(baseProviders.map(function (provider) { return provider.id; }));
+            return baseProviders.concat(mediaProviders.filter(function (provider) { return !seen.has(provider.id); }));
+        }
+        return baseProviders;
+    } catch (error) {
+        console.error('Error loading benchmark providers:', error);
+        return [];
+    }
 }
 
 function benchmarkProfileCapabilities(profile) {
@@ -849,37 +936,51 @@ function benchmarkSourcesMarkup(profile) {
     }).join('') + '</div>';
 }
 
-function renderBenchmarkCard(title, profile, accentClass, cardKey, type, modelOptionsHtml, providerOptionsHtml) {
+function benchmarkModelOptionsFromCatalog(payload) {
+    return ((payload && payload.models) || []).map(function (row) {
+        return {
+            id: (typeof row === 'object' && row != null && row.id != null) ? row.id : row,
+            label: (typeof row === 'object' && row != null && row.name != null) ? row.name : (row || '')
+        };
+    });
+}
+
+function renderBenchmarkCardBody(profile) {
     profile = profile || {};
-    const providerId = cardKey === 'primary' ? 'llm_benchmark_primary_provider' : 'llm_benchmark_compare_provider';
-    const modelId = cardKey === 'primary' ? 'llm_benchmark_primary_model' : 'llm_benchmark_compare_model';
     const metricRows = benchmarkMetricRows(profile);
-    return '<article class="llm-benchmark-card ' + accentClass + '">' +
-        '<div class="llm-benchmark-card__row">' +
-        '<div class="llm-benchmark-card__select-stack">' +
-        '<label class="llm-benchmark-card__select-label">' +
-        '<span>' + escapeHtml(title + ' provider') + '</span>' +
-        '<select class="llm-benchmark-card__select" id="' + providerId + '" data-benchmark-card="' + escapeHtml(cardKey) + '" data-benchmark-field="provider">' +
-        providerOptionsHtml +
-        '</select>' +
-        '</label>' +
-        '<label class="llm-benchmark-card__select-label">' +
-        '<span>' + escapeHtml(title + ' model') + '</span>' +
-        '<select class="llm-benchmark-card__select" id="' + modelId + '" data-benchmark-card="' + escapeHtml(cardKey) + '" data-benchmark-field="model">' +
-        modelOptionsHtml +
-        '</select>' +
-        '</label>' +
-        '</div>' +
-        '</div>' +
-        '<div class="llm-benchmark-card__body">' +
-        '<p class="llm-benchmark-card__model-name">' + escapeHtml(profile.model_label || profile.model_id || 'Select a model') + '</p>' +
+    return '<p class="llm-benchmark-card__model-name">' + escapeHtml(profile.model_label || profile.model_id || 'Select a model') + '</p>' +
         '<p class="llm-benchmark-card__provider">' + escapeHtml((profile.provider_label || profile.provider || '').toString()) + '</p>' +
         '<p class="llm-benchmark-card__summary">' + escapeHtml(profile.summary || '') + '</p>' +
         (metricRows ? '<dl class="llm-benchmark-card__stats">' + metricRows + '</dl>' : '') +
         benchmarkSourcesMarkup(profile) +
         '<p class="llm-benchmark-card__use-case"><strong>Best for:</strong> ' + escapeHtml(profile.best_for || 'No recommendation available yet') + '</p>' +
         '<div class="llm-benchmark-card__capabilities"><strong>Tooling:</strong> ' + benchmarkProfileCapabilities(profile) + '</div>' +
-        '<p class="llm-benchmark-card__footnote">Released: ' + escapeHtml(profile.released || 'n/a') + ' · Last benchmark: ' + escapeHtml(profile.last_benchmark_date || 'n/a') + '</p>' +
+        '<p class="llm-benchmark-card__footnote">Released: ' + escapeHtml(profile.released || 'n/a') + ' · Last benchmark: ' + escapeHtml(profile.last_benchmark_date || 'n/a') + '</p>';
+}
+
+function renderBenchmarkCard(profile, accentClass, cardKey, type, modelOptionsHtml, providerOptionsHtml) {
+    profile = profile || {};
+    const providerId = cardKey === 'primary' ? 'llm_benchmark_primary_provider' : 'llm_benchmark_compare_provider';
+    const modelId = cardKey === 'primary' ? 'llm_benchmark_primary_model' : 'llm_benchmark_compare_model';
+    return '<article class="llm-benchmark-card ' + accentClass + '">' +
+        '<div class="llm-benchmark-card__row">' +
+        '<div class="llm-benchmark-card__select-stack">' +
+        '<label class="llm-benchmark-card__select-label">' +
+        '<span>Provider</span>' +
+        '<select class="llm-benchmark-card__select" id="' + providerId + '" data-benchmark-card="' + escapeHtml(cardKey) + '" data-benchmark-field="provider">' +
+        providerOptionsHtml +
+        '</select>' +
+        '</label>' +
+        '<label class="llm-benchmark-card__select-label">' +
+        '<span>Model</span>' +
+        '<select class="llm-benchmark-card__select" id="' + modelId + '" data-benchmark-card="' + escapeHtml(cardKey) + '" data-benchmark-field="model">' +
+        modelOptionsHtml +
+        '</select>' +
+        '</label>' +
+        '</div>' +
+        '</div>' +
+        '<div class="llm-benchmark-card__body" data-benchmark-profile-body="' + escapeHtml(cardKey) + '">' +
+        renderBenchmarkCardBody(profile) +
         '</div>' +
         '</article>';
 }
@@ -891,6 +992,62 @@ async function loadBenchmarkModelProfile(type, provider, model) {
     const payload = response.ok ? await response.json() : null;
     if (!payload || !payload.profile) throw new Error('Failed to load model profile');
     return payload.profile;
+}
+
+async function loadBenchmarkProviderModels(type, provider) {
+    const response = await fetch('/api/llms/models?type=' + encodeURIComponent(type) +
+        '&provider=' + encodeURIComponent(provider || ''));
+    const payload = response.ok ? await response.json() : { models: [] };
+    return benchmarkModelOptionsFromCatalog(payload);
+}
+
+async function refreshBenchmarkCardProfile(cardKey, type, provider, model) {
+    const body = document.querySelector('[data-benchmark-profile-body="' + cardKey + '"]');
+    if (!body) return;
+    body.classList.add('is-loading');
+    try {
+        const profile = await loadBenchmarkModelProfile(type, provider, model);
+        body.innerHTML = renderBenchmarkCardBody(profile);
+        if (benchmarkModalState) {
+            if (cardKey === 'primary') {
+                benchmarkModalState.primaryProvider = provider;
+                benchmarkModalState.provider = provider;
+                benchmarkModalState.model = model;
+            } else {
+                benchmarkModalState.compareProvider = provider;
+                benchmarkModalState.compareModel = model;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading benchmark profile:', error);
+        body.innerHTML = '<p class="llm-benchmark-modal__loading llm-benchmark-modal__loading--error">Failed to load model details.</p>';
+    } finally {
+        body.classList.remove('is-loading');
+    }
+}
+
+async function refreshBenchmarkCardProvider(cardKey, type, provider, preferredModel) {
+    const modelSelect = document.getElementById(cardKey === 'primary' ? 'llm_benchmark_primary_model' : 'llm_benchmark_compare_model');
+    if (!modelSelect) return;
+    modelSelect.disabled = true;
+    try {
+        const normalizedModel = (preferredModel || '').toString();
+        const modelOptions = await loadBenchmarkProviderModels(type, provider);
+        const fallbackModel = normalizedModel ? { id: normalizedModel, label: normalizedModel } : null;
+        modelSelect.innerHTML = benchmarkSelectOptions({ model_options: modelOptions }, normalizedModel, fallbackModel);
+        const nextModel = normalizedModel && setSelectValueIfAvailable(modelSelect, normalizedModel)
+            ? normalizedModel
+            : (modelOptions[0] ? modelOptions[0].id : '');
+        if (nextModel) modelSelect.value = nextModel;
+        await refreshBenchmarkCardProfile(cardKey, type, provider, nextModel);
+        if (cardKey === 'compare') setActiveLeaderboardCompareRow(nextModel);
+    } catch (error) {
+        console.error('Error loading benchmark models:', error);
+        const body = document.querySelector('[data-benchmark-profile-body="' + cardKey + '"]');
+        if (body) body.innerHTML = '<p class="llm-benchmark-modal__loading llm-benchmark-modal__loading--error">Failed to load provider models.</p>';
+    } finally {
+        modelSelect.disabled = false;
+    }
 }
 
 function renderBenchmarkModal(payload) {
@@ -908,8 +1065,8 @@ function renderBenchmarkModal(payload) {
     const optionsHtml = benchmarkSelectOptions(payload, selected.id, { id: primaryProfile.model_id || selected.id, label: primaryProfile.model_label || selected.label });
     const comparePayload = Object.assign({}, payload, { model_options: payload.compare_model_options || [] });
     const compareOptionsHtml = benchmarkSelectOptions(comparePayload, comparison.id, { id: compareProfile.model_id || comparison.id, label: compareProfile.model_label || comparison.label });
-    const primaryProviderOptions = benchmarkProviderOptions(payload.type, primaryProvider);
-    const compareProviderOptions = benchmarkProviderOptions(payload.type, compareProvider);
+    const primaryProviderOptions = benchmarkProviderOptions(payload.type, primaryProvider, payload);
+    const compareProviderOptions = benchmarkProviderOptions(payload.type, compareProvider, payload);
     if (payload.refreshing && !(payload.leaderboard || []).length) {
         content.innerHTML = '<div class="llm-benchmark-modal__loading">' +
             '<div class="llm-benchmark-modal__spinner" aria-hidden="true"></div>' +
@@ -928,7 +1085,7 @@ function renderBenchmarkModal(payload) {
     }).join('');
     const refreshBanner = payload.refreshing ? '<div class="llm-benchmark-modal__refreshing">Fetching fresh benchmark data from sources in the background. You can close this window and come back in a bit.</div>' : '';
     content.innerHTML = '<header class="llm-benchmark-modal__header">' +
-        '<h3 class="llm-benchmark-modal__title">Comparison models</h3>' +
+        '<h3 class="llm-benchmark-modal__title">Benchmark information</h3>' +
         '<button type="button" class="llm-benchmark-modal__close" data-benchmark-close="1">×</button>' +
         '</header>' +
         '<div class="llm-benchmark-modal__tabs">' +
@@ -953,10 +1110,10 @@ function renderBenchmarkModal(payload) {
         '<section class="llm-benchmark-modal__panel' + (activeTab === 'compare' ? ' is-active' : '') + '">' +
         '<div class="llm-benchmark-modal__grid">' +
         '<section class="llm-benchmark-modal__compare-column">' +
-        renderBenchmarkCard('Primary', primaryProfile, 'llm-benchmark-card--primary', 'primary', payload.type, optionsHtml, primaryProviderOptions) +
+        renderBenchmarkCard(primaryProfile, 'llm-benchmark-card--primary', 'primary', payload.type, optionsHtml, primaryProviderOptions) +
         '</section>' +
         '<section class="llm-benchmark-modal__compare-column">' +
-        renderBenchmarkCard('Compare', compareProfile, 'llm-benchmark-card--comparison', 'compare', payload.type, compareOptionsHtml, compareProviderOptions) +
+        renderBenchmarkCard(compareProfile, 'llm-benchmark-card--comparison', 'compare', payload.type, compareOptionsHtml, compareProviderOptions) +
         '</section>' +
         '</div>' +
         '</section>';
@@ -969,50 +1126,32 @@ function renderBenchmarkModal(payload) {
     const compareProviderSelect = document.getElementById('llm_benchmark_compare_provider');
     if (primaryModelSelect) {
         primaryModelSelect.addEventListener('change', function () {
-            openBenchmarkModal(payload.type, {
-                provider: primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
-                model: this.value,
-                compareProvider: compareProviderSelect ? compareProviderSelect.value : compareProvider,
-                compareModel: compareModelSelect ? compareModelSelect.value : '',
-                sort: sort,
-                tab: 'compare',
-            });
+            refreshBenchmarkCardProfile(
+                'primary',
+                payload.type,
+                primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
+                this.value
+            );
         });
     }
     if (compareModelSelect) {
         compareModelSelect.addEventListener('change', function () {
-            openBenchmarkModal(payload.type, {
-                provider: primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
-                model: primaryModelSelect ? primaryModelSelect.value : (selected.id || ''),
-                compareProvider: compareProviderSelect ? compareProviderSelect.value : compareProvider,
-                compareModel: this.value,
-                sort: sort,
-                tab: 'compare',
-            });
+            refreshBenchmarkCardProfile(
+                'compare',
+                payload.type,
+                compareProviderSelect ? compareProviderSelect.value : compareProvider,
+                this.value
+            );
         });
     }
     if (primaryProviderSelect) {
         primaryProviderSelect.addEventListener('change', function () {
-            openBenchmarkModal(payload.type, {
-                provider: this.value,
-                model: '',
-                compareProvider: compareProviderSelect ? compareProviderSelect.value : compareProvider,
-                compareModel: compareModelSelect ? compareModelSelect.value : '',
-                sort: sort,
-                tab: 'compare',
-            });
+            refreshBenchmarkCardProvider('primary', payload.type, this.value);
         });
     }
     if (compareProviderSelect) {
         compareProviderSelect.addEventListener('change', function () {
-            openBenchmarkModal(payload.type, {
-                provider: primaryProviderSelect ? primaryProviderSelect.value : primaryProvider,
-                model: primaryModelSelect ? primaryModelSelect.value : (selected.id || ''),
-                compareProvider: this.value,
-                compareModel: '',
-                sort: sort,
-                tab: 'compare',
-            });
+            refreshBenchmarkCardProvider('compare', payload.type, this.value);
         });
     }
 }
@@ -1048,7 +1187,7 @@ async function openBenchmarkModal(type, opts) {
         '<div>Loading benchmark data...</div>' +
         '</div>';
     try {
-        const [benchmarkResponse, primaryModelsResponse, compareModelsResponse, primaryProfileResponse, compareProfileResponse] = await Promise.all([
+        const [benchmarkResponse, primaryModelsResponse, compareModelsResponse, primaryProfileResponse, compareProfileResponse, providerOptions] = await Promise.all([
             fetch('/api/llms/benchmark?type=' + encodeURIComponent(type) +
                 '&provider=' + encodeURIComponent(provider || '') +
                 '&model=' + encodeURIComponent(model || '') +
@@ -1064,7 +1203,8 @@ async function openBenchmarkModal(type, opts) {
                 '&model=' + encodeURIComponent(model || '')),
             fetch('/api/llms/model-profile?type=' + encodeURIComponent(type) +
                 '&provider=' + encodeURIComponent(compareProvider || '') +
-                '&model=' + encodeURIComponent(compareModel || ''))
+                '&model=' + encodeURIComponent(compareModel || '')),
+            loadBenchmarkProviderOptions(type)
         ]);
         const payload = benchmarkResponse.ok ? await benchmarkResponse.json() : null;
         const primaryCatalogPayload = primaryModelsResponse.ok ? await primaryModelsResponse.json() : { models: [] };
@@ -1072,20 +1212,11 @@ async function openBenchmarkModal(type, opts) {
         const primaryProfilePayload = primaryProfileResponse.ok ? await primaryProfileResponse.json() : { profile: null };
         const compareProfilePayload = compareProfileResponse.ok ? await compareProfileResponse.json() : { profile: null };
         if (!payload) throw new Error('Failed to load benchmark data');
-        payload.model_options = (primaryCatalogPayload.models || []).map(function (row) {
-            return {
-                id: (typeof row === 'object' && row != null && row.id != null) ? row.id : row,
-                label: (typeof row === 'object' && row != null && row.name != null) ? row.name : (row || '')
-            };
-        });
-        payload.compare_model_options = (compareCatalogPayload.models || []).map(function (row) {
-            return {
-                id: (typeof row === 'object' && row != null && row.id != null) ? row.id : row,
-                label: (typeof row === 'object' && row != null && row.name != null) ? row.name : (row || '')
-            };
-        });
+        payload.model_options = benchmarkModelOptionsFromCatalog(primaryCatalogPayload);
+        payload.compare_model_options = benchmarkModelOptionsFromCatalog(compareCatalogPayload);
         payload.primary_profile = primaryProfilePayload.profile || payload.selected_model || {};
         payload.compare_profile = compareProfilePayload.profile || payload.comparison_model || {};
+        payload.provider_options = providerOptions || [];
         payload.primary_provider = provider;
         payload.compare_provider = compareProvider;
         benchmarkModalState.model = (payload.selected_model || {}).id || model;
@@ -1270,7 +1401,12 @@ window.addEventListener('pageshow', function (ev) {
 window.addEventListener('open-llm-benchmark', function (event) {
     const type = event && event.detail ? event.detail.type : '';
     if (!type) return;
-    openBenchmarkModal(type);
+    openBenchmarkModal(type, {
+        provider: event.detail.provider || '',
+        model: event.detail.model || '',
+        compareProvider: event.detail.compareProvider || '',
+        compareModel: event.detail.compareModel || ''
+    });
 });
 
 window.saveLLMsSettings = saveLLMsSettings;

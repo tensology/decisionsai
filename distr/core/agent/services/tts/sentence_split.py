@@ -28,11 +28,16 @@ def spoken_word_count(text: str) -> int:
 def tts_chunk_has_enough_weight(
     sentences: list[str],
     *,
-    min_words: int = 14,
-    min_chars: int = 72,
+    min_words: int = 80,
+    min_chars: int = 360,
     max_sentences: int = 3,
 ) -> bool:
-    """Return True when a sentence group is substantial enough to synthesize."""
+    """Return True when a sentence group is substantial enough to synthesize.
+
+    For live playback, short sentence-by-sentence synthesis sounds chopped up.
+    Prefer at least three complete sentences, while still allowing very long
+    text to flush before it becomes an oversized provider request.
+    """
     if not sentences:
         return False
     text = " ".join(s.strip() for s in sentences if s.strip())

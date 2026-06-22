@@ -4,6 +4,7 @@ import logging
 import json
 import re
 import threading
+from queue import Queue
 
 from PyQt6.QtCore import QTimer
 
@@ -439,25 +440,41 @@ class SignalBridgeMixin:
         self._web_stream_chat_id = None
         self._web_stream_token_buffer = []
         self._web_stream_flush_timer = None
+        self._web_chat_event_queue = Queue()
+        self._web_chat_event_worker_started = False
+
+        def _ensure_web_chat_event_worker():
+            if getattr(self, "_web_chat_event_worker_started", False):
+                return
+            self._web_chat_event_worker_started = True
+
+            def _worker():
+                import requests
+                from distr.gui.web.server import get_unified_server
+                from distr.gui.web.security import INTERNAL_AUTH_HEADER, get_internal_api_token
+
+                while True:
+                    payload = self._web_chat_event_queue.get()
+                    try:
+                        server = get_unified_server()
+                        if server and server.is_running:
+                            requests.post(
+                                f"{server.get_url()}/api/internal/notify-chat-event",
+                                json=payload,
+                                headers={INTERNAL_AUTH_HEADER: get_internal_api_token()},
+                                timeout=2,
+                            )
+                    except Exception as e:
+                        logger.debug("Notify web chat event failed: %s", e)
+                    finally:
+                        self._web_chat_event_queue.task_done()
+
+            threading.Thread(target=_worker, daemon=True, name="web-chat-event-bridge").start()
 
         def _post_chat_event(payload):
-            """Post chat event to web server; runs in thread to avoid blocking stream token delivery."""
-            def _do_post():
-                try:
-                    import requests
-                    from distr.gui.web.server import get_unified_server
-                    from distr.gui.web.security import INTERNAL_AUTH_HEADER, get_internal_api_token
-                    server = get_unified_server()
-                    if server and server.is_running:
-                        requests.post(
-                            f"{server.get_url()}/api/internal/notify-chat-event",
-                            json=payload,
-                            headers={INTERNAL_AUTH_HEADER: get_internal_api_token()},
-                            timeout=2,
-                        )
-                except Exception as e:
-                    logger.debug("Notify web chat event failed: %s", e)
-            threading.Thread(target=_do_post, daemon=True).start()
+            """Queue chat events for ordered delivery to the web UI."""
+            _ensure_web_chat_event_worker()
+            self._web_chat_event_queue.put(dict(payload or {}))
 
         def _flush_stream_tokens():
             """Flush buffered stream tokens as one batched POST."""

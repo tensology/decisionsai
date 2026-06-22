@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, File, UploadFile, Request, WebSock
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
+from sqlalchemy.orm import selectinload
 from typing import Optional, List, Tuple, Any
 from urllib.parse import quote, urlparse, unquote
 from datetime import datetime
@@ -1433,6 +1434,35 @@ def _project_context_payload(project: Optional[Project], prefix: str) -> dict:
     }
 
 
+def _workflow_board_ticket_payload(
+    ticket: KanbanTicket,
+    *,
+    linked_project: Optional[Project] = None,
+) -> dict:
+    return {
+        "id": ticket.id,
+        "title": ticket.title,
+        "description": ticket.description or "",
+        "priority": ticket.priority or "medium",
+        "position": ticket.position,
+        "complexity": normalize_ticket_complexity(ticket.complexity),
+        "time_estimate": ticket.time_estimate or "",
+        "time_spent": ticket.time_spent or "",
+        "external_source": ticket.external_source,
+        "external_id": ticket.external_id,
+        "external_url": ticket.external_url,
+        "linked_workflow_id": ticket.linked_workflow_id,
+        "workflow_queue_position": ticket.workflow_queue_position or 0,
+        "linked_project_id": ticket.linked_project_id,
+        **_project_context_payload(linked_project, "linked"),
+        "workflow_status": ticket.workflow_status,
+        "whatsapp_message_id": ticket.whatsapp_message_id,
+        "whatsapp_message_wa_id": ticket.whatsapp_message_wa_id,
+        "source_chat_id": ticket.source_chat_id,
+        **_ticket_source_payload(ticket),
+    }
+
+
 def _apply_ticket_source_fields(t: KanbanTicket, payload: BaseModel) -> None:
     fields_set = getattr(payload, "model_fields_set", set())
     if "source_provider" in fields_set:
@@ -1698,6 +1728,11 @@ _BOARD_DETAIL_CACHE: dict = {}
 _BOARD_DETAIL_REFRESHING: set = set()
 _BOARD_DETAIL_STALE_AFTER_SEC = 45.0
 
+_EXTERNAL_BOARD_LIST_LOCK = threading.Lock()
+_EXTERNAL_BOARD_LIST_CACHE: dict = {}
+_EXTERNAL_BOARD_LIST_REFRESHING = False
+_EXTERNAL_BOARD_LIST_STALE_AFTER_SEC = 120.0
+
 _PROXY_IMAGE_LOCK = threading.Lock()
 _PROXY_IMAGE_CACHE: dict = {}
 _PROXY_IMAGE_TTL_SEC = 300.0
@@ -1714,6 +1749,13 @@ def _invalidate_external_board_detail_cache(provider: str, board_id: str) -> Non
     with _BOARD_DETAIL_LOCK:
         _BOARD_DETAIL_CACHE.pop(key, None)
         _BOARD_DETAIL_REFRESHING.discard(key)
+
+
+def _invalidate_external_board_list_cache() -> None:
+    global _EXTERNAL_BOARD_LIST_REFRESHING
+    with _EXTERNAL_BOARD_LIST_LOCK:
+        _EXTERNAL_BOARD_LIST_CACHE.clear()
+        _EXTERNAL_BOARD_LIST_REFRESHING = False
 
 
 def _resolve_local_destination_lane(session, board_id: int, lane_id: Optional[int] = None):
@@ -2760,6 +2802,64 @@ def create_routes():
                 "whatsapp_links": [{"id": l.id, "phone_number": l.phone_number, "contact_name": l.contact_name, "auto_snapshot": l.auto_snapshot or False} for l in whatsapp_links],
             })
 
+    @router.get("/tickets/boards/{board_id}/workflow-view")
+    async def get_board_workflow_view(board_id: int):
+        """Lightweight board payload for the workflows ticket sidebar."""
+        def _load_payload():
+            with get_session() as s:
+                board = (
+                    s.query(KanbanBoard)
+                    .options(
+                        selectinload(KanbanBoard.lanes).selectinload(KanbanLane.tickets),
+                    )
+                    .filter(KanbanBoard.id == board_id)
+                    .first()
+                )
+                if not board:
+                    raise HTTPException(404, "Board not found")
+
+                project_ids = {int(board.default_project_id)} if board.default_project_id else set()
+                for lane in board.lanes:
+                    for ticket in lane.tickets:
+                        if ticket.linked_project_id:
+                            project_ids.add(int(ticket.linked_project_id))
+                projects = {
+                    p.id: p
+                    for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
+                } if project_ids else {}
+                default_project = projects.get(board.default_project_id)
+                lanes = []
+                for lane in board.lanes:
+                    tickets = [
+                        _workflow_board_ticket_payload(
+                            ticket,
+                            linked_project=projects.get(ticket.linked_project_id),
+                        )
+                        for ticket in lane.tickets
+                    ]
+                    lanes.append({
+                        "id": lane.id,
+                        "name": lane.name,
+                        "position": lane.position,
+                        "tickets": tickets,
+                    })
+                return {
+                    "id": board.id,
+                    "name": board.name,
+                    "description": board.description or "",
+                    "source": board.source,
+                    "external_board_id": board.external_board_id,
+                    "external_url": board.external_url,
+                    "lanes": lanes,
+                    "default_workflow_id": board.default_workflow_id,
+                    "default_project_id": board.default_project_id,
+                    **_project_context_payload(default_project, "default"),
+                    "color": board.color or "",
+                    "in_use": getattr(board, "in_use", False) or False,
+                }
+
+        return JSONResponse(await asyncio.to_thread(_load_payload))
+
     @router.get("/tickets/boards/{board_id}/activity")
     async def board_activity(board_id: int, event_limit: int = 50, rule_limit: int = 20):
         with get_session() as s:
@@ -2924,76 +3024,78 @@ def create_routes():
         """Return local tickets allocated to a workflow without starting it."""
         from distr.core.db.projects import Project
 
-        with get_session() as s:
-            rows = (
-                s.query(KanbanTicket, KanbanLane, KanbanBoard)
-                .join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
-                .join(KanbanBoard, KanbanLane.board_id == KanbanBoard.id)
-                .filter(KanbanTicket.linked_workflow_id == workflow_id)
-                .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.created_date.asc())
-                .all()
-            )
-            project_ids = {
-                int(pid)
-                for t, _lane, board in rows
-                for pid in [t.linked_project_id or board.default_project_id]
-                if pid
-            }
-            projects = {
-                p.id: p
-                for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
-            } if project_ids else {}
-            return JSONResponse([
-                {
-                    "id": t.id,
-                    "title": t.title,
-                    "description": t.description or "",
-                    "priority": t.priority or "medium",
-                    "complexity": normalize_ticket_complexity(t.complexity),
-                    "position": t.position,
-                    "workflow_queue_position": t.workflow_queue_position or 0,
-                    "workflow_status": t.workflow_status,
-                    "linked_workflow_id": t.linked_workflow_id,
-                    "linked_project_id": (
-                        effective_project_id := (t.linked_project_id or board.default_project_id)
-                    ),
-                    **_project_context_payload(
-                        projects.get(effective_project_id) if effective_project_id else None,
-                        "linked",
-                    ),
-                    **_project_context_payload(
-                        projects.get(board.default_project_id) if board.default_project_id else None,
-                        "board_default",
-                    ),
-                    "cli_route": (
-                        _resolve_ticket_execution_route(
-                            s,
-                            {
-                                "ticket_id": t.id,
-                                "project_id": int(effective_project_id),
-                                "complexity": normalize_ticket_complexity(t.complexity),
-                            },
-                            allow_orchestrator_override=False,
-                        )
-                        if effective_project_id and projects.get(effective_project_id)
-                        else {}
-                    ),
-                    "lane_id": lane.id,
-                    "lane_name": lane.name,
-                    "board_id": board.id,
-                    "board_name": board.name,
-                    "source_provider": t.source_provider,
-                    "source_external_id": t.source_external_id,
-                    "external_source": t.external_source,
-                    "external_id": t.external_id,
-                    "source_label": t.source_label,
-                    "source_url": t.source_url,
-                    "context_notes": t.context_notes or "",
-                    "time_spent": t.time_spent or "",
-                    "time_estimate": t.time_estimate or "",
+        def _load_payload():
+            with get_session() as s:
+                rows = (
+                    s.query(KanbanTicket, KanbanLane, KanbanBoard)
+                    .join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
+                    .join(KanbanBoard, KanbanLane.board_id == KanbanBoard.id)
+                    .filter(KanbanTicket.linked_workflow_id == workflow_id)
+                    .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.created_date.asc())
+                    .all()
+                )
+                project_ids = {
+                    int(pid)
+                    for t, _lane, board in rows
+                    for pid in [t.linked_project_id or board.default_project_id]
+                    if pid
                 }
-                for t, lane, board in rows
-            ])
+                projects = {
+                    p.id: p
+                    for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
+                } if project_ids else {}
+                payload = []
+                for t, lane, board in rows:
+                    effective_project_id = t.linked_project_id or board.default_project_id
+                    payload.append({
+                        "id": t.id,
+                        "title": t.title,
+                        "description": t.description or "",
+                        "priority": t.priority or "medium",
+                        "complexity": normalize_ticket_complexity(t.complexity),
+                        "position": t.position,
+                        "workflow_queue_position": t.workflow_queue_position or 0,
+                        "workflow_status": t.workflow_status,
+                        "linked_workflow_id": t.linked_workflow_id,
+                        "linked_project_id": effective_project_id,
+                        **_project_context_payload(
+                            projects.get(effective_project_id) if effective_project_id else None,
+                            "linked",
+                        ),
+                        **_project_context_payload(
+                            projects.get(board.default_project_id) if board.default_project_id else None,
+                            "board_default",
+                        ),
+                        "cli_route": (
+                            _resolve_ticket_execution_route(
+                                s,
+                                {
+                                    "ticket_id": t.id,
+                                    "project_id": int(effective_project_id),
+                                    "complexity": normalize_ticket_complexity(t.complexity),
+                                },
+                                allow_orchestrator_override=False,
+                            )
+                            if effective_project_id and projects.get(effective_project_id)
+                            else {}
+                        ),
+                        "lane_id": lane.id,
+                        "lane_name": lane.name,
+                        "board_id": board.id,
+                        "board_name": board.name,
+                        "source_provider": t.source_provider,
+                        "source_external_id": t.source_external_id,
+                        "external_source": t.external_source,
+                        "external_id": t.external_id,
+                        "source_label": t.source_label,
+                        "source_url": t.source_url,
+                        "context_notes": t.context_notes or "",
+                        "time_spent": t.time_spent or "",
+                        "time_estimate": t.time_estimate or "",
+                    })
+                return payload
+
+        return JSONResponse(await asyncio.to_thread(_load_payload))
 
     @router.put("/tickets/workflows/{workflow_id}/tickets/reorder")
     async def reorder_workflow_tickets(workflow_id: int, payload: WorkflowTicketReorder):
@@ -3102,21 +3204,24 @@ def create_routes():
 
     @router.get("/tickets/workflows/{workflow_id}/execution-sessions")
     async def get_workflow_execution_sessions(workflow_id: int, limit: int = 50, active_only: bool = False):
-        from distr.core.db.workflow import AutoWorkflow
-        with get_session() as s:
-            wf = orm_get_by_id(s, AutoWorkflow, workflow_id)
-            if not wf:
-                raise HTTPException(404, "Workflow not found")
-        from distr.core.kanban.project_execution import list_execution_sessions_for_workflow
+        def _load_payload():
+            from distr.core.db.workflow import AutoWorkflow
+            with get_session() as s:
+                wf = orm_get_by_id(s, AutoWorkflow, workflow_id)
+                if not wf:
+                    raise HTTPException(404, "Workflow not found")
+            from distr.core.kanban.project_execution import list_execution_sessions_for_workflow
 
-        return JSONResponse({
-            "workflow_id": workflow_id,
-            "sessions": list_execution_sessions_for_workflow(
-                workflow_id,
-                limit=limit,
-                active_only=active_only,
-            ),
-        })
+            return {
+                "workflow_id": workflow_id,
+                "sessions": list_execution_sessions_for_workflow(
+                    workflow_id,
+                    limit=limit,
+                    active_only=active_only,
+                ),
+            }
+
+        return JSONResponse(await asyncio.to_thread(_load_payload))
 
 
     @router.get("/tickets/tickets/{ticket_id}/audit-report")
@@ -4449,14 +4554,14 @@ def create_routes():
 
     # ── External boards (Trello / Jira) ──
 
-    @router.get("/tickets/external-boards")
-    async def get_external_boards():
-        """Fetch Trello and Jira boards from connected accounts, enriched with local config."""
-        trello_boards = []
-        jira_boards = []
+    def _load_external_board_remote_catalog() -> dict:
+        """Fetch remote Jira/Trello board catalogs without local DB config."""
+        trello_boards: list[dict] = []
+        jira_boards: list[dict] = []
         try:
             from distr.core.settings import load_settings_from_db
             import json as _json
+
             settings = load_settings_from_db()
             raw = settings.get("connected_accounts") or "[]"
             if isinstance(raw, str):
@@ -4468,35 +4573,14 @@ def create_routes():
                 accounts = raw if isinstance(raw, list) else []
             if not accounts:
                 logger.info("External boards: no connected accounts found")
-                return JSONResponse({"trello": [], "jira": []})
-            # Load local config for external boards
-            local_configs = {}
-            with get_session() as s:
-                external_config_boards = s.query(KanbanBoard).filter(KanbanBoard.source.in_(["trello", "jira"])).all()
-                project_ids = {int(b.default_project_id) for b in external_config_boards if b.default_project_id}
-                projects = {
-                    p.id: p
-                    for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
-                } if project_ids else {}
-                for b in external_config_boards:
-                    key = f"{b.source}:{b.external_board_id}"
-                    default_project = projects.get(b.default_project_id)
-                    local_configs[key] = {
-                        "local_id": b.id,
-                        "has_local_config": True,
-                        "modified_date": _external_board_activity_iso(b.modified_date),
-                        "default_project_id": b.default_project_id,
-                        **_project_context_payload(default_project, "default"),
-                        "default_workflow_id": b.default_workflow_id,
-                        "color": b.color,
-                        "can_create_ticket": True,
-                    }
+                return {"trello": [], "jira": []}
             logger.info("External boards: found %d connected accounts", len(accounts))
             for acct in accounts:
                 provider = acct.get("provider", "").lower()
                 if provider == "trello" and acct.get("api_key") and acct.get("api_token") and acct.get("is_valid", True):
                     try:
                         import requests
+
                         resp = requests.get(
                             "https://api.trello.com/1/members/me/boards",
                             params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url,closed"},
@@ -4505,10 +4589,12 @@ def create_routes():
                         if resp.status_code == 200:
                             for b in resp.json():
                                 if not b.get("closed", False):
-                                    config = local_configs.get(f"trello:{b['id']}", {})
-                                    board_data = {"id": b["id"], "name": b["name"], "url": b.get("url", ""), "can_create_ticket": True}
-                                    board_data.update(config)
-                                    trello_boards.append(board_data)
+                                    trello_boards.append({
+                                        "id": b["id"],
+                                        "name": b["name"],
+                                        "url": b.get("url", ""),
+                                        "can_create_ticket": True,
+                                    })
                     except Exception as e:
                         logger.warning("Trello board fetch failed: %s", e)
                 elif provider == "jira" and acct.get("email") and acct.get("api_token") and acct.get("is_valid", True):
@@ -4522,6 +4608,7 @@ def create_routes():
                     try:
                         import requests
                         from requests.auth import HTTPBasicAuth
+
                         base_url = f"https://{domain}"
                         resp = requests.get(
                             f"{base_url}/rest/agile/1.0/board",
@@ -4531,22 +4618,99 @@ def create_routes():
                         )
                         if resp.status_code == 200:
                             for b in resp.json().get("values", []):
-                                config = local_configs.get(f"jira:{b['id']}", {})
-                                board_data = {
-                                    "id": str(b["id"]), "name": b["name"],
+                                jira_boards.append({
+                                    "id": str(b["id"]),
+                                    "name": b["name"],
                                     "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
                                     "can_create_ticket": True,
-                                }
-                                board_data.update(config)
-                                jira_boards.append(board_data)
+                                })
                     except Exception as e:
                         logger.warning("Jira board fetch failed: %s", e)
         except Exception as e:
             logger.warning("External board fetch error: %s", e)
-        return JSONResponse({
-            "trello": _sort_external_board_list(trello_boards),
-            "jira": _sort_external_board_list(jira_boards),
-        })
+        return {"trello": trello_boards, "jira": jira_boards}
+
+    def _external_board_local_config_index() -> dict[str, dict]:
+        with get_session() as s:
+            external_config_boards = s.query(KanbanBoard).filter(KanbanBoard.source.in_(["trello", "jira"])).all()
+            project_ids = {int(b.default_project_id) for b in external_config_boards if b.default_project_id}
+            projects = {
+                p.id: p
+                for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
+            } if project_ids else {}
+            out: dict[str, dict] = {}
+            for b in external_config_boards:
+                key = f"{b.source}:{b.external_board_id}"
+                default_project = projects.get(b.default_project_id)
+                out[key] = {
+                    "local_id": b.id,
+                    "has_local_config": True,
+                    "modified_date": _external_board_activity_iso(b.modified_date),
+                    "default_project_id": b.default_project_id,
+                    **_project_context_payload(default_project, "default"),
+                    "default_workflow_id": b.default_workflow_id,
+                    "color": b.color,
+                    "can_create_ticket": True,
+                }
+            return out
+
+    def _merge_external_board_local_configs(remote_payload: dict | None) -> dict:
+        remote_payload = remote_payload or {"trello": [], "jira": []}
+        local_configs = _external_board_local_config_index()
+        merged: dict[str, list[dict]] = {"trello": [], "jira": []}
+        for provider in ("trello", "jira"):
+            rows: list[dict] = []
+            for board in remote_payload.get(provider) or []:
+                if not isinstance(board, dict):
+                    continue
+                row = dict(board)
+                row.update(local_configs.get(f"{provider}:{board.get('id')}", {}))
+                rows.append(row)
+            merged[provider] = _sort_external_board_list(rows)
+        return merged
+
+    def _external_board_list_fetch_worker() -> None:
+        global _EXTERNAL_BOARD_LIST_REFRESHING
+        body = _load_external_board_remote_catalog()
+        with _EXTERNAL_BOARD_LIST_LOCK:
+            _EXTERNAL_BOARD_LIST_CACHE.clear()
+            _EXTERNAL_BOARD_LIST_CACHE.update({"ready": True, "t": time.time(), "body": body})
+            _EXTERNAL_BOARD_LIST_REFRESHING = False
+
+    def _schedule_external_board_list_refresh() -> None:
+        global _EXTERNAL_BOARD_LIST_REFRESHING
+        with _EXTERNAL_BOARD_LIST_LOCK:
+            if _EXTERNAL_BOARD_LIST_REFRESHING:
+                return
+            _EXTERNAL_BOARD_LIST_REFRESHING = True
+        threading.Thread(
+            target=_external_board_list_fetch_worker,
+            name="kanban-external-board-list",
+            daemon=True,
+        ).start()
+
+    @router.get("/tickets/external-boards")
+    async def get_external_boards(force_refresh: bool = False):
+        """Return cached Jira/Trello board catalogs immediately and refresh in the background when stale."""
+        if force_refresh:
+            _invalidate_external_board_list_cache()
+        now = time.time()
+        with _EXTERNAL_BOARD_LIST_LOCK:
+            ent = dict(_EXTERNAL_BOARD_LIST_CACHE) if _EXTERNAL_BOARD_LIST_CACHE else None
+        if ent and ent.get("ready"):
+            age = now - float(ent.get("t") or 0.0)
+            stale = age > _EXTERNAL_BOARD_LIST_STALE_AFTER_SEC
+            if stale:
+                _schedule_external_board_list_refresh()
+            payload = _merge_external_board_local_configs(ent.get("body") or {})
+            payload["cache_ready"] = True
+            payload["cache_stale"] = stale
+            return JSONResponse(payload)
+        _schedule_external_board_list_refresh()
+        payload = _merge_external_board_local_configs({"trello": [], "jira": []})
+        payload["cache_ready"] = False
+        payload["cache_stale"] = False
+        return JSONResponse(payload)
 
     @router.post("/tickets/external-boards/{provider}/{ext_board_id}/touch")
     async def touch_external_board(provider: str, ext_board_id: str):

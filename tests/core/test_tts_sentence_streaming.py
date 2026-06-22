@@ -13,6 +13,7 @@ from distr.core.agent.services.tts.coqui import CoquiTTSService
 from distr.core.agent.services.tts.sentence_split import (
     extract_complete_sentences,
     is_redundant_sentence,
+    tts_chunk_has_enough_weight,
 )
 
 
@@ -86,6 +87,12 @@ def test_tts_duplicate_filter_does_not_drop_similar_legitimate_sentences():
     assert is_redundant_sentence("first action completed successfully.", spoken)
     assert not is_redundant_sentence("the third action completed successfully.", spoken)
     assert not is_redundant_sentence("the second action completed with warnings.", spoken)
+
+
+def test_tts_chunk_weight_prefers_three_short_sentences_before_synthesis():
+    assert not tts_chunk_has_enough_weight(["Yep."])
+    assert not tts_chunk_has_enough_weight(["Yep.", "I can do that."])
+    assert tts_chunk_has_enough_weight(["Yep.", "I can do that.", "Let me line it up."])
 
 
 def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():

@@ -202,6 +202,29 @@ Next failing test for next feature.
 | **Minimal** | One thing. "and" in name? Split it. | `test('validates email and domain and whitespace')` |
 | **Clear** | Name describes behavior | `test('test1')` |
 | **Shows intent** | Demonstrates desired API | Obscures what code should do |
+| **Public interface** | Exercises behavior through the same interface callers use | Reaches into private helpers or internal storage |
+
+## Public Interface Tests
+
+Prefer integration-style tests that verify observable behavior through the public interface. A test should describe what the system does, not how its internals happen to be arranged today.
+
+Good tests survive refactors. Bad tests fail because a private helper was renamed, an internal collaborator changed shape, or a mock was asserted instead of the real behavior.
+
+Use mocks only when the dependency is outside the module's control, slow, nondeterministic, or expensive. If the behavior can be exercised with real code in the current process, use real code.
+
+## Vertical Slice Loop
+
+Do not write all tests first and then all implementation. That horizontal slice produces tests for imagined behavior and locks in speculative shapes.
+
+Use vertical slices:
+
+1. Pick one behavior.
+2. Write one failing test through the public interface.
+3. Implement the smallest code that passes.
+4. Refactor while green.
+5. Repeat with the next behavior.
+
+Each vertical slice is a tracer bullet. It proves the path from interface to implementation works before adding the next behavior.
 
 ## Why Order Matters
 

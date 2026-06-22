@@ -386,6 +386,12 @@ class InitiativeService:
             maybe_suggest_daily_plan_automation(self, settings)
         except Exception:
             logger.debug("daily plan automation suggestion skipped", exc_info=True)
+        try:
+            from distr.core.initiative.automation_recommendations import maybe_suggest_automation_from_initiative
+
+            maybe_suggest_automation_from_initiative(self, settings)
+        except Exception:
+            logger.debug("automation recommendation suggestion skipped", exc_info=True)
         level = self._get_level(settings)
         if level not in ("operate", "own"):
             return
@@ -1429,6 +1435,12 @@ class InitiativeService:
                     "workflow_start",
                     "project_cli_task",
                 )
+                else {
+                    "kind": "automation_preset_install",
+                    "preset_id": str((action.payload or {}).get("preset_id") or "").strip(),
+                    "source": "initiative",
+                }
+                if action.action_type == "automation_recommendation"
                 else None
             ),
         )

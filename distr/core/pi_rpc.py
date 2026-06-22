@@ -52,8 +52,9 @@ class PiRpcSession:
     and provides methods to send prompts, steer, abort, and collect events.
     """
 
-    def __init__(self, project_id: int, cwd: str, append_system_prompt: str = ""):
+    def __init__(self, project_id: int, cwd: str, append_system_prompt: str = "", board_id: int | None = None):
         self.project_id = project_id
+        self.board_id = board_id
         self.cwd = cwd
         self.append_system_prompt = append_system_prompt
         self._process: Optional[subprocess.Popen] = None
@@ -629,32 +630,53 @@ class PiRpcSession:
 
 
 # ── Global session registry ──────────────────────────────────────────────
-_rpc_sessions: Dict[int, PiRpcSession] = {}
+_rpc_sessions: Dict[tuple[int, int | None], PiRpcSession] = {}
 
 
-def get_rpc_session(project_id: int) -> Optional[PiRpcSession]:
-    """Get existing RPC session for a project."""
-    return _rpc_sessions.get(project_id)
+def _rpc_key(project_id: int, board_id: int | None = None) -> tuple[int, int | None]:
+    try:
+        normalized_board_id = None if board_id in (None, "", False) else int(board_id)
+    except Exception:
+        normalized_board_id = None
+    return int(project_id), normalized_board_id
 
 
-async def get_or_create_rpc_session(project_id: int, cwd: str, append_system_prompt: str = "", lazy_start: bool = False) -> PiRpcSession:
-    """Get or create an RPC session for a project. If lazy_start=True, don't auto-start the pi subprocess."""
-    session = _rpc_sessions.get(project_id)
+def get_rpc_session(project_id: int, board_id: int | None = None) -> Optional[PiRpcSession]:
+    """Get existing RPC session for a project/board scope."""
+    key = _rpc_key(project_id, board_id)
+    session = _rpc_sessions.get(key)
+    if session:
+        return session
+    if board_id not in (None, "", False):
+        return _rpc_sessions.get(_rpc_key(project_id, None))
+    return None
+
+
+async def get_or_create_rpc_session(
+    project_id: int,
+    cwd: str,
+    append_system_prompt: str = "",
+    lazy_start: bool = False,
+    board_id: int | None = None,
+) -> PiRpcSession:
+    """Get or create an RPC session for a project/board scope. If lazy_start=True, don't auto-start the pi subprocess."""
+    key = _rpc_key(project_id, board_id)
+    session = _rpc_sessions.get(key)
     if session and session.is_alive:
         return session
     # Clean up dead session
     if session:
         await session.kill()
-    session = PiRpcSession(project_id, cwd, append_system_prompt=append_system_prompt)
+    session = PiRpcSession(project_id, cwd, append_system_prompt=append_system_prompt, board_id=_rpc_key(project_id, board_id)[1])
     if not lazy_start:
         session.start()
-    _rpc_sessions[project_id] = session
+    _rpc_sessions[key] = session
     return session
 
 
-async def kill_rpc_session(project_id: int):
+async def kill_rpc_session(project_id: int, board_id: int | None = None):
     """Kill and remove an RPC session."""
-    session = _rpc_sessions.pop(project_id, None)
+    session = _rpc_sessions.pop(_rpc_key(project_id, board_id), None)
     if session:
         await session.kill()
 

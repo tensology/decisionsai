@@ -225,6 +225,7 @@ const voiceModelSelect = document.getElementById('voiceModel');
 const startingQuestionInput = document.getElementById('startingQuestion');
 const configureChatButton = document.getElementById('configureChatButton');
 const compactChatButton = document.getElementById('compactChatButton');
+const benchmarkInfoButton = document.getElementById('benchmarkInfoButton');
 const forkChatButton = document.getElementById('forkChatButton');
 const chatConfigModal = document.getElementById('chatConfigModal');
 const chatConfigClose = document.getElementById('chatConfigClose');
@@ -237,11 +238,17 @@ const chatConfigVoiceModel = document.getElementById('chatConfigVoiceModel');
 const chatConfigStatus = document.getElementById('chatConfigStatus');
 const headerLlmSummary = document.getElementById('headerLlmSummary');
 const headerVoiceSummary = document.getElementById('headerVoiceSummary');
+const voiceUsageMeter = document.getElementById('voiceUsageMeter');
+const voiceUsageFill = document.getElementById('voiceUsageFill');
+const voiceUsageText = document.getElementById('voiceUsageText');
 const contextRing = document.getElementById('contextRing');
 
 let _autoCompactInFlight = false;
 let _lastAutoCompactKey = null;
 let _headerStatsTimer = null;
+let _headerUsageCacheKey = null;
+let _headerUsageFetchedAt = 0;
+let _llmUsageTooltip = '';
 
 // TTS Player (bottom of sidebar)
 const ttsPlayerCard = document.getElementById('ttsPlayerCard');
@@ -540,6 +547,7 @@ function setupEventListeners() {
     }
     if (configureChatButton) configureChatButton.addEventListener('click', () => openChatConfigModal());
     if (compactChatButton) compactChatButton.addEventListener('click', () => compactCurrentChat());
+    if (benchmarkInfoButton) benchmarkInfoButton.addEventListener('click', () => openChatBenchmarkInfoModal());
     if (forkChatButton) forkChatButton.addEventListener('click', () => forkCurrentChat());
     if (chatMessages) {
         chatMessages.addEventListener('contextmenu', (e) => {
@@ -1394,6 +1402,17 @@ function mergeChatUpdatedDuringStream(messages) {
     }
 }
 
+function repairMissingUserMessageForStream(chatId) {
+    if (!chatMessages || chatId !== currentChatId) return;
+    fetch(`${API_BASE}/chats/${chatId}`)
+        .then(r => r.json())
+        .then(data => {
+            if (chatId !== currentChatId) return;
+            mergeChatUpdatedDuringStream(data.messages || []);
+        })
+        .catch(() => {});
+}
+
 function handleChatEventStreamStarted(msg) {
     if (msg.chat_id !== currentChatId) return;
     const preview = document.getElementById('transcriptionStatus');
@@ -1415,6 +1434,7 @@ function handleChatEventStreamStarted(msg) {
     const div = ensureStreamingAssistantMessageElement();
     _setLiveAssistantStreaming(msg.chat_id, '');
     _ensureTranscriptionPreviewPlacement();
+    repairMissingUserMessageForStream(msg.chat_id);
     scrollToBottom();
 }
 
@@ -4867,6 +4887,155 @@ function formatHeaderSettingsPair(providerLabel, modelLabel) {
     return `${provider} / ${model}`;
 }
 
+function headerUsageProviderId(value) {
+    return String(value || '').trim().toLowerCase().replace(/\s*\(.*?\)\s*/g, '').replace(/\s+/g, '');
+}
+
+function formatHeaderNumber(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return Math.round(n).toLocaleString();
+}
+
+function formatHeaderUnixDate(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    return new Date(n * 1000).toLocaleString();
+}
+
+function setVoiceUsageHidden(hidden) {
+    if (voiceUsageMeter) voiceUsageMeter.hidden = Boolean(hidden);
+}
+
+function renderVoiceUsageStatus(status) {
+    if (!voiceUsageMeter || !voiceUsageFill || !voiceUsageText) return;
+    if (!status) {
+        setVoiceUsageHidden(true);
+        return;
+    }
+    setVoiceUsageHidden(false);
+    const available = Boolean(status.available);
+    const percent = available ? Math.max(0, Math.min(100, Number(status.percent_used || 0))) : 0;
+    voiceUsageMeter.style.setProperty('--voice-usage-percent', `${percent}%`);
+    voiceUsageMeter.classList.toggle('is-warn', available && percent >= 80);
+    voiceUsageMeter.classList.toggle('is-error', !available || percent >= 95);
+    voiceUsageText.textContent = available ? `${percent}%` : '—';
+
+    const lines = available ? [
+        'ElevenLabs usage',
+        `Status: ${status.status || '—'}`,
+        `Tier: ${status.tier || '—'}`,
+        `Used: ${formatHeaderNumber(status.used)} characters`,
+        `Limit: ${formatHeaderNumber(status.limit)} characters`,
+        `Remaining: ${formatHeaderNumber(status.remaining)} characters`,
+        `Billing period: ${status.billing_period || '—'}`,
+        `Refresh period: ${status.character_refresh_period || '—'}`,
+        `Next reset: ${formatHeaderUnixDate(status.next_reset_unix)}`,
+        `Credit extension: ${status.max_credit_limit_extension ?? '—'}`,
+        `Current overage: ${JSON.stringify(status.current_overage || {})}`
+    ] : [
+        'ElevenLabs usage',
+        status.error || 'Usage unavailable.'
+    ];
+    voiceUsageMeter.setAttribute('data-tooltip', lines.join('\n'));
+}
+
+function contextTooltipText(stats) {
+    const estimated = Number((stats || {}).estimated_tokens || 0);
+    const percent = Math.max(0, Math.min(100, Number((stats || {}).percent_used || 0)));
+    const base = `${percent}% context used (${estimated}/${(stats || {}).context_window || 'unknown'} token limit)`;
+    return _llmUsageTooltip ? `${base}\n\n${_llmUsageTooltip}` : base;
+}
+
+function renderLlmUsageStatus(status) {
+    if (!status) {
+        _llmUsageTooltip = '';
+        return;
+    }
+    if (!status.available) {
+        _llmUsageTooltip = `OpenAI billing\n${status.error || 'Usage unavailable.'}`;
+        return;
+    }
+    const cost = Number(status.period_cost || 0);
+    const currency = (status.currency || 'usd').toUpperCase();
+    _llmUsageTooltip = [
+        'OpenAI billing',
+        `Current period cost: ${currency} ${cost.toFixed(4)}`,
+        `Period start: ${formatHeaderUnixDate(status.period_start_unix)}`,
+        `Period end: ${formatHeaderUnixDate(status.period_end_unix)}`,
+        status.note || ''
+    ].filter(Boolean).join('\n');
+}
+
+async function refreshHeaderUsageStatus(settings) {
+    const voiceProvider = headerUsageProviderId(settings && settings.voice_provider);
+    const llmProvider = headerUsageProviderId(settings && settings.provider);
+    const wantsVoice = voiceProvider === 'elevenlabs';
+    const wantsLlm = llmProvider === 'openai';
+    if (!wantsVoice) renderVoiceUsageStatus(null);
+    if (!wantsLlm) {
+        _llmUsageTooltip = '';
+        if (currentChatSettings && currentChatSettings.context_stats) updateContextRing(currentChatSettings.context_stats);
+    }
+    if (!wantsVoice && !wantsLlm) return;
+
+    const cacheKey = `${voiceProvider}|${llmProvider}`;
+    const now = Date.now();
+    if (_headerUsageCacheKey === cacheKey && now - _headerUsageFetchedAt < 60000) return;
+    _headerUsageCacheKey = cacheKey;
+    _headerUsageFetchedAt = now;
+
+    try {
+        const qs = new URLSearchParams({
+            voice_provider: wantsVoice ? voiceProvider : '',
+            llm_provider: wantsLlm ? llmProvider : ''
+        });
+        const response = await fetch(`${API_BASE}/chats/usage-status?${qs.toString()}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (wantsVoice) renderVoiceUsageStatus(data.voice);
+        if (wantsLlm) renderLlmUsageStatus(data.llm);
+        if (currentChatSettings && currentChatSettings.context_stats) updateContextRing(currentChatSettings.context_stats);
+    } catch (error) {
+        console.warn('Header usage status failed:', error);
+        if (wantsVoice) renderVoiceUsageStatus({ available: false, error: 'Usage unavailable.' });
+        if (wantsLlm) renderLlmUsageStatus({ available: false, error: 'Billing usage unavailable.' });
+    }
+}
+
+function getCurrentConversationalBenchmarkContext() {
+    const provider = (currentChatSettings && currentChatSettings.provider) ? currentChatSettings.provider : '';
+    const model = (currentChatSettings && currentChatSettings.model_name) ? currentChatSettings.model_name : '';
+    return {
+        provider: provider || '',
+        model: model || ''
+    };
+}
+
+function openChatBenchmarkInfoModal() {
+    const context = getCurrentConversationalBenchmarkContext();
+    if (typeof window.openLLMBenchmarkModal === 'function') {
+        window.openLLMBenchmarkModal('conversational', {
+            provider: context.provider,
+            model: context.model,
+            compareProvider: context.provider,
+            compareModel: context.model
+        });
+        return;
+    }
+    if (typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('open-llm-benchmark', {
+            detail: {
+                type: 'conversational',
+                provider: context.provider,
+                model: context.model,
+                compareProvider: context.provider,
+                compareModel: context.model
+            }
+        }));
+    }
+}
+
 async function renderHeaderSettingsSummary(settings) {
     if (!settings) return;
     await _ensureTTSProviders();
@@ -4885,6 +5054,8 @@ async function renderHeaderSettingsSummary(settings) {
     if (!hasVoice) {
         headerVoiceSummary.textContent = '—';
         headerVoiceSummary.title = '';
+        renderVoiceUsageStatus(null);
+        _llmUsageTooltip = '';
         return;
     }
     const voiceText = formatHeaderSettingsPair(
@@ -4897,6 +5068,9 @@ async function renderHeaderSettingsSummary(settings) {
     );
     headerVoiceSummary.textContent = voiceText;
     headerVoiceSummary.title = voiceText;
+    refreshHeaderUsageStatus(settings).catch((e) => {
+        console.warn('Header usage status failed:', e);
+    });
     setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
 }
 
@@ -5068,7 +5242,8 @@ function updateContextRing(stats) {
     const ringValue = document.getElementById('contextRingValue');
     if (ring) {
         ring.style.setProperty('--context-percent', `${percent}%`);
-        ring.title = `${percent}% context used (${estimated}/${stats.context_window || 'unknown'} token limit)`;
+        ring.title = contextTooltipText(stats);
+        ring.setAttribute('data-tooltip', contextTooltipText(stats));
         ring.classList.toggle('context-ring-warn', percent >= (stats.auto_compact_threshold || 75));
     }
     if (ringValue) ringValue.textContent = `${percent}%`;

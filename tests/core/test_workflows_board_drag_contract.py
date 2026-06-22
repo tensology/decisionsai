@@ -124,6 +124,10 @@ def test_workflow_loop_ui_has_ring_and_list_views():
     assert 'id="wf-loop-step-modal"' in html
     assert 'id="wf-loop-step-guardrail"' in html
     assert 'id="wf-loop-step-validation"' in html
+    assert 'data-loop-step-tab="execution-route"' in html
+    assert 'id="wf-loop-step-route-enabled"' in html
+    assert 'id="wf-loop-step-route-select"' in html
+    assert 'id="wf-loop-step-route-preview"' in html
     assert 'data-loop-step-tab="validation"' in html
     assert 'id="wf-loop-step-determine-skills"' in html
     assert 'id="wf-loop-step-skills-list"' in html
@@ -134,6 +138,9 @@ def test_workflow_loop_ui_has_ring_and_list_views():
     assert "wf-loop-step-layout" in html
     assert "function openLoopStepModal(opts)" in js
     assert "function renderLoopStepSkillsPicker" in js
+    assert "function renderLoopStepExecutionRouteEditor" in js
+    assert "function loopStepExecutionRouteValue" in js
+    assert "function loopStepChosenModels" in js
     assert "function determineLoopStepSkills" in js
     assert "suggestion.refined_instruction" in js
     assert "suggestion.guardrail" in js

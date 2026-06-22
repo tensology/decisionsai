@@ -64,7 +64,7 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
         self._total_audio_duration = 0.0
         self._tts_started_emitted = False  # Track if we've emitted tts_started for this session
         self._processed_sentences = set()  # Track processed sentences (normalized text) to prevent duplicates
-        self._tts_sentence_batch_size = 1
+        self._tts_sentence_batch_size = 3
         self._sentence_batch_hold: list[str] = []
         self._last_processed_text_hash = None  # Track last processed text to prevent duplicate processing
         # Timestamp when LLMFullResponseStartFrame last received - used to ignore stale InterruptionFrames
@@ -619,7 +619,6 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
     def get_sample_rate(self) -> int:
         """Return the output sample rate for OpenAI TTS (24kHz)"""
         return 24000
-
 
 
 

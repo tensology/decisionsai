@@ -105,6 +105,64 @@ def test_get_workflow_tickets_includes_cli_route_without_500():
     assert isinstance(rows[0].get("cli_route"), dict)
 
 
+def test_workflow_board_view_uses_lightweight_ticket_payload():
+    from distr.core.db.kanban import (
+        KanbanBoard,
+        KanbanLane,
+        KanbanTicket,
+        KanbanTicketFile,
+        KanbanTicketLink,
+        KanbanTicketTodo,
+    )
+    from distr.gui.web.routes.kanban import create_routes
+
+    factory = _make_factory()
+    with factory() as session:
+        board = KanbanBoard(name="Workflow board", in_use=True)
+        session.add(board)
+        session.flush()
+        lane = KanbanLane(board_id=board.id, name="Backlog", position=0)
+        session.add(lane)
+        session.flush()
+        ticket = KanbanTicket(
+            lane_id=lane.id,
+            title="Compact payload ticket",
+            description="Only sidebar fields should come back.",
+            time_estimate="2h",
+            time_spent="30m",
+            workflow_status="waiting",
+            position=0,
+        )
+        session.add(ticket)
+        session.flush()
+        session.add(KanbanTicketFile(ticket_id=ticket.id, filename="spec.md", file_path="/tmp/spec.md"))
+        session.add(KanbanTicketLink(ticket_id=ticket.id, title="Attachment", url="https://example.com"))
+        session.add(KanbanTicketTodo(ticket_id=ticket.id, text="Investigate", done=False, position=0))
+        session.commit()
+        board_id = board.id
+        ticket_id = ticket.id
+
+    def get_session():
+        return _session_ctx(factory)
+
+    app = FastAPI()
+    with patch("distr.gui.web.routes.kanban.get_session", get_session):
+        app.include_router(create_routes(), prefix="/api")
+        client = TestClient(app)
+        response = client.get(f"/api/tickets/boards/{board_id}/workflow-view")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    row = payload["lanes"][0]["tickets"][0]
+    assert row["id"] == ticket_id
+    assert row["time_estimate"] == "2h"
+    assert row["time_spent"] == "30m"
+    assert row["workflow_status"] == "waiting"
+    assert "files" not in row
+    assert "links" not in row
+    assert "todos" not in row
+
+
 def test_create_ticket_auto_complexity_stores_assessed_level():
     from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
     from distr.gui.web.routes.kanban import create_routes

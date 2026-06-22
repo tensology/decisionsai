@@ -308,6 +308,29 @@ class StepExecutorMixin:
         from distr.core.project_cli_backends import normalize_backend_id
 
         merged = dict(route or {})
+        execution_route = config.get("execution_route") if isinstance(config.get("execution_route"), dict) else {}
+        snapshot = execution_route.get("route_snapshot") if isinstance(execution_route.get("route_snapshot"), dict) else {}
+        if execution_route.get("enabled") and execution_route.get("mode") == "scoped" and snapshot:
+            backend_id = str(snapshot.get("backend_id") or "").strip()
+            if backend_id:
+                merged["backend"] = normalize_backend_id(backend_id)
+            model = str(snapshot.get("model") or "").strip()
+            if model:
+                merged["model"] = model
+            provider = str(snapshot.get("provider") or "").strip()
+            if provider:
+                merged["model_provider"] = provider
+            if snapshot.get("intelligence_hint"):
+                merged["intelligence_hint"] = str(snapshot.get("intelligence_hint") or "").strip()
+            if snapshot.get("speed_hint"):
+                merged["speed_hint"] = str(snapshot.get("speed_hint") or "").strip()
+            if snapshot.get("tier"):
+                merged["tier"] = str(snapshot.get("tier") or "").strip()
+            merged["source"] = "step_execution_route"
+            merged["rationale"] = (
+                f"Workflow step selected scoped route "
+                f"{str(snapshot.get('name') or snapshot.get('model') or 'route').strip()}."
+            )
         backend_id = str(config.get("backend_id") or "").strip()
         if backend_id:
             merged["backend"] = normalize_backend_id(backend_id)
@@ -317,7 +340,30 @@ class StepExecutorMixin:
         complexity = str(config.get("complexity") or "").strip().lower()
         if complexity in {"low", "medium", "high"}:
             merged["complexity"] = complexity
+        if config.get("codex_reasoning_effort"):
+            merged["codex_reasoning_effort"] = str(config.get("codex_reasoning_effort") or "").strip()
+        if config.get("codex_service_tier"):
+            merged["codex_service_tier"] = str(config.get("codex_service_tier") or "").strip()
         return merged
+
+    @staticmethod
+    def _step_execution_route_enabled(config: dict) -> bool:
+        execution_route = config.get("execution_route") if isinstance(config.get("execution_route"), dict) else {}
+        return bool(
+            execution_route.get("enabled")
+            and execution_route.get("mode") == "scoped"
+            and isinstance(execution_route.get("route_snapshot"), dict)
+            and str(execution_route.get("scoped_model_key") or "").strip()
+        )
+
+    @staticmethod
+    def _active_run_execution_route(run_data: dict | None) -> dict[str, Any]:
+        route = run_data.get("execution_route") if isinstance(run_data, dict) and isinstance(run_data.get("execution_route"), dict) else {}
+        backend = str(route.get("backend") or "").strip()
+        model = str(route.get("model") or "").strip()
+        if not backend and not model:
+            return {}
+        return dict(route)
 
     def _run_command(self, config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute a shell command."""
@@ -521,9 +567,17 @@ class StepExecutorMixin:
                     if not project:
                         raise ValueError(f"Project #{project_id} not found")
                     route = {}
+                    decision = None
                     ticket = None
                     board = None
                     ticket_id = run_data.get("ticket_id")
+                    run_row = (
+                        db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                        if run_id
+                        else None
+                    )
+                    run_data_local = json.loads(run_row.run_data or "{}") or {} if run_row else {}
+                    wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
                     if ticket_id is not None:
                         try:
                             from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
@@ -535,14 +589,17 @@ class StepExecutorMixin:
                                 if lane and getattr(lane, "board_id", None):
                                     board = db.query(KanbanBoard).filter(KanbanBoard.id == int(lane.board_id)).first()
                             if ticket:
-                                run_row = (
-                                    db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-                                    if run_id
-                                    else None
-                                )
-                                run_data_local = json.loads(run_row.run_data or "{}") or {} if run_row else {}
                                 approved_override = run_data_local.get("approved_route_override")
-                                if approved_override and isinstance(approved_override, dict):
+                                if self._step_execution_route_enabled(config):
+                                    route = self._apply_step_harness_overrides({}, config)
+                                    route["complexity"] = str(
+                                        route.get("complexity")
+                                        or run_data_local.get("execution_route", {}).get("complexity")
+                                        or getattr(ticket, "complexity", None)
+                                        or "medium"
+                                    ).strip().lower() or "medium"
+                                    route.setdefault("source", "step_execution_route")
+                                elif approved_override and isinstance(approved_override, dict):
                                     from distr.core.project_cli_backends import normalize_backend_id
 
                                     route = {
@@ -559,7 +616,15 @@ class StepExecutorMixin:
                                         "rationale": str(approved_override.get("rationale") or "").strip(),
                                         "requires_approval": False,
                                     }
-                                    decision = None
+                                elif self._active_run_execution_route(run_data_local):
+                                    route = self._active_run_execution_route(run_data_local)
+                                    route.setdefault("source", "active_run_route")
+                                    route.setdefault("rationale", "Continuing with the workflow run's active execution route.")
+                                    route["complexity"] = str(
+                                        route.get("complexity")
+                                        or getattr(ticket, "complexity", None)
+                                        or "medium"
+                                    ).strip().lower() or "medium"
                                 else:
                                     decision = resolve_execution_route(
                                         project=project,
@@ -593,7 +658,6 @@ class StepExecutorMixin:
                                         }
                                     run_row.run_data = json.dumps(run_data_local)
                                     db.commit()
-                                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
                                 backend_for_skills = route.get("backend") or "pi"
                                 if wf and project.folder_location:
                                     from distr.core.workflow.skill_provision import provision_workflow_skills
@@ -626,17 +690,17 @@ class StepExecutorMixin:
                         except Exception:
                             route = {}
                     route = self._apply_step_harness_overrides(route, config)
-                    wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
                     try:
                         from distr.core.project_cli_backends.model_policy import apply_workflow_model_policy
                         from distr.core.settings import load_settings_from_db
 
-                        route = apply_workflow_model_policy(
-                            route,
-                            workflow=wf,
-                            config=config,
-                            settings=load_settings_from_db(),
-                        )
+                        if not self._step_execution_route_enabled(config):
+                            route = apply_workflow_model_policy(
+                                route,
+                                workflow=wf,
+                                config=config,
+                                settings=load_settings_from_db(),
+                            )
                     except Exception:
                         logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
                     backend_id = route.get("backend") or "pi"
@@ -675,10 +739,10 @@ class StepExecutorMixin:
                         )
                     )
                     if run_id and handle.execution_session_id:
-                        run_row = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
                         if run_row:
                             run_data_local = json.loads(run_row.run_data or "{}") or {}
                             run_data_local["execution_session_id"] = handle.execution_session_id
+                            run_data_local["execution_route"] = route
                             run_data_local.pop("approved_route_override", None)
                             run_data_local.pop("suppress_orchestrator_override", None)
                             run_row.run_data = json.dumps(run_data_local)

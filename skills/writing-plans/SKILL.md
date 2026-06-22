@@ -42,6 +42,20 @@ This structure informs the task decomposition. Each task should produce self-con
 - "Run the tests and make sure they pass" - step
 - "Commit" - step
 
+## Vertical Slice Issue Breakdown
+
+When a plan will become tickets or AFK workflow work, break it into independently-grabbable vertical slices. Each slice should be a tracer bullet through the behavior: schema or storage, application logic, interface, and verification where those layers are relevant.
+
+Avoid horizontal slices like "build all database changes" or "write all UI." A completed slice should be demoable or machine-verifiable by itself, with dependencies named explicitly.
+
+For each slice, capture:
+
+- Title
+- Blocked by
+- Behavior delivered
+- Acceptance criteria
+- Verification command
+
 ## Plan Document Header
 
 **Every plan MUST start with this header:**

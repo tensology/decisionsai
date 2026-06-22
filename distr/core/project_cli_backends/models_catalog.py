@@ -191,8 +191,6 @@ def models_from_pi_json() -> list[dict]:
         if not any(m["id"] == mid for m in models):
             models.append(model_entry(mid, "openai", free=False, scope="available"))
     return models
-
-
 def settings_backed_cloud_models(settings: dict) -> list[dict]:
     """Live catalog from DecisionsAI third-party keys (OpenRouter, NVIDIA, Kilo, …)."""
     from distr.core.services.settings_service import thirdparty_llm_provider_ready
