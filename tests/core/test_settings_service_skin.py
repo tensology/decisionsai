@@ -135,7 +135,7 @@ class TestSaveShortcutSettings:
         "recording_hotkey_enabled": True,
         "recording_hotkey_modifier": "option_command",
         "recording_hotkey_key": "s",
-        "web_hotkey_chat_modifier": "option_command",
+        "web_hotkey_chat_modifier": "control_shift",
         "web_hotkey_chat_key": "c",
     })
     def test_rejects_any_changed_shortcut_overlap(self, _load, mock_save):
@@ -146,7 +146,7 @@ class TestSaveShortcutSettings:
                 global_ptt_hotkey_enabled=False,
                 global_ptt_hotkey_combo="option_command",
                 recording_hotkey_enabled=True,
-                recording_hotkey_modifier="option_command",
+                recording_hotkey_modifier="control_shift",
                 recording_hotkey_key="c",
                 dictation_hotkey_enabled=False,
             ))

@@ -1,4 +1,5 @@
 from distr.core.hotkeys import (
+    DEFAULTS,
     chord_to_qt_sequence,
     format_ptt_combo_display,
     format_shortcut_display,
@@ -30,3 +31,20 @@ def test_format_ptt_combo_display() -> None:
 def test_parse_remote_hotkey() -> None:
     assert parse_remote_hotkey("ctrl+shift+k") == ("control_shift", "k")
     assert parse_remote_hotkey("") is None
+
+
+def test_web_launcher_default_hotkeys_use_control_shift() -> None:
+    expected = {
+        "chat": "c",
+        "projects": "j",
+        "actions": "a",
+        "snippets": "n",
+        "workflows": "w",
+        "automations": "o",
+        "ticket_board": "t",
+        "irc": "i",
+        "preferences": "p",
+    }
+    for launcher, key in expected.items():
+        assert DEFAULTS[f"web_hotkey_{launcher}_modifier"] == "control_shift"
+        assert DEFAULTS[f"web_hotkey_{launcher}_key"] == key

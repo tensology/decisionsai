@@ -691,23 +691,23 @@ function _applyShortcutSettings(s) {
 
     // Web hotkeys
     _setMK('shortcuts_web_hotkey_chat_modifier',        'shortcuts_web_hotkey_chat_key',
-           _valueOrDefault(s.web_hotkey_chat_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_chat_key, 'c'));
+           _valueOrDefault(s.web_hotkey_chat_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_chat_key, 'c'));
     _setMK('shortcuts_web_hotkey_projects_modifier',    'shortcuts_web_hotkey_projects_key',
-           _valueOrDefault(s.web_hotkey_projects_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_projects_key, 'j'));
+           _valueOrDefault(s.web_hotkey_projects_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_projects_key, 'j'));
     _setMK('shortcuts_web_hotkey_actions_modifier',     'shortcuts_web_hotkey_actions_key',
-           _valueOrDefault(s.web_hotkey_actions_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_actions_key, 'a'));
+           _valueOrDefault(s.web_hotkey_actions_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_actions_key, 'a'));
     _setMK('shortcuts_web_hotkey_snippets_modifier',    'shortcuts_web_hotkey_snippets_key',
-           _valueOrDefault(s.web_hotkey_snippets_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_snippets_key, 'n'));
+           _valueOrDefault(s.web_hotkey_snippets_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_snippets_key, 'n'));
     _setMK('shortcuts_web_hotkey_workflows_modifier',   'shortcuts_web_hotkey_workflows_key',
-           _valueOrDefault(s.web_hotkey_workflows_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_workflows_key, 'w'));
+           _valueOrDefault(s.web_hotkey_workflows_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_workflows_key, 'w'));
     _setMK('shortcuts_web_hotkey_automations_modifier', 'shortcuts_web_hotkey_automations_key',
-           _valueOrDefault(s.web_hotkey_automations_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_automations_key, 'o'));
+           _valueOrDefault(s.web_hotkey_automations_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_automations_key, 'o'));
     _setMK('shortcuts_web_hotkey_ticket_board_modifier', 'shortcuts_web_hotkey_ticket_board_key',
-           _valueOrDefault(s.web_hotkey_ticket_board_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_ticket_board_key, 't'));
+           _valueOrDefault(s.web_hotkey_ticket_board_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_ticket_board_key, 't'));
     _setMK('shortcuts_web_hotkey_irc_modifier',        'shortcuts_web_hotkey_irc_key',
-           _valueOrDefault(s.web_hotkey_irc_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_irc_key, 'i'));
+           _valueOrDefault(s.web_hotkey_irc_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_irc_key, 'i'));
     _setMK('shortcuts_web_hotkey_preferences_modifier', 'shortcuts_web_hotkey_preferences_key',
-           _valueOrDefault(s.web_hotkey_preferences_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_preferences_key, 'grave'));
+           _valueOrDefault(s.web_hotkey_preferences_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_preferences_key, 'p'));
 
     // Oracle size
     _setMK('shortcuts_oracle_size_hotkey_decrease_modifier', 'shortcuts_oracle_size_hotkey_decrease_key',
