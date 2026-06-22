@@ -1063,7 +1063,7 @@ async def run_project_task(
 
     backend_id = normalize_backend_id(backend_id_override) if backend_id_override else get_project_backend_id(project)
     backend = get_backend(backend_id)
-    if any_live_session_running(int(project.id), board_id=board_id):
+    if any_live_session_running(int(project.id), exclude_backend_id=backend_id, board_id=board_id):
         return BackendTaskResult(
             False,
             backend_id,

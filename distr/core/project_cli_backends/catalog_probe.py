@@ -205,7 +205,7 @@ def codex_models(settings: dict | None = None) -> tuple[list[dict], str, str]:
     return (
         [model_entry("auto", "codex", "Auto", scope="scoped")],
         "codex-unverified",
-        "Codex CLI did not return a verified model list in this session. Only Auto is available until Codex reports real models.",
+        "Codex CLI is connected, but it did not expose a verified model list in this session. Use Auto for Codex-managed model selection.",
     )
 
 

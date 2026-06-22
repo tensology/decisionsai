@@ -31,7 +31,7 @@ def test_codex_models_falls_back_to_auto_when_unverified():
         models, source, message = codex_models({})
     assert source == "codex-unverified"
     assert models[0]["id"] == "auto"
-    assert "Only Auto is available" in message
+    assert "Use Auto for Codex-managed model selection" in message
 
 
 def test_probe_cli_backend_surfaces_setup_message():

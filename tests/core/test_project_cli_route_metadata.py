@@ -281,7 +281,7 @@ def test_cli_models_endpoint_returns_auto_only_when_codex_catalog_is_unverified(
     payload = response.json()
     assert payload["source"] == "codex-unverified"
     assert [row["id"] for row in payload["models"]] == ["auto"]
-    assert "Only Auto is available" in payload["message"]
+    assert "Use Auto for Codex-managed model selection" in payload["message"]
 
 
 def test_cli_setup_marks_local_cli_keys_as_optional(monkeypatch):
