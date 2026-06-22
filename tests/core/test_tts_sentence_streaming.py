@@ -63,6 +63,22 @@ def test_streaming_sentence_splitter_handles_no_space_after_punctuation():
     ]
 
 
+def test_streaming_sentence_splitter_keeps_quoted_sentence_before_next_sentence():
+    text = (
+        'So, boom, the street event gets bigger. '
+        'Donald Trump arrives next, somehow convinced the whole park renovation was his idea, '
+        'waving at absolutely nobody and declaring Spot "a tremendous dog, maybe the best dog, '
+        'people are saying it." '
+        'Trevor Noah is there hosting the community event.'
+    )
+
+    assert _stream_sentences([text]) == [
+        "So, boom, the street event gets bigger.",
+        'Donald Trump arrives next, somehow convinced the whole park renovation was his idea, waving at absolutely nobody and declaring Spot "a tremendous dog, maybe the best dog, people are saying it."',
+        "Trevor Noah is there hosting the community event.",
+    ]
+
+
 def test_streaming_sentence_splitter_stress_no_drops_or_duplicates():
     expected = [
         "Sentence one is short.",

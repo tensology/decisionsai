@@ -275,13 +275,39 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
     )[0]
 
     assert "canPromoteVoiceTranscriptInChat()" in promote_block
+    assert "hasOpenUserTurnPlain(plain)" in promote_block
+    assert "hasRenderedMessagePlain('user', plain)" not in promote_block
     assert "createMessageElement({ role: 'user', content: plain" in promote_block
     assert "insertMessageElementInOrder(div, { role: 'user', content: plain" in promote_block
-    assert "_optimisticUserMessages.add(plain.substring(0, 100));" in promote_block
+    assert "_addOptimisticUserMessage(plain.substring(0, 100));" in promote_block
     assert "if (clearLivePreview)" in status_block
     assert "promoteTranscriptionPreviewToUserMessage();" in status_block
     assert "if (done && trimmed && canPromoteVoiceTranscriptInChat() && hasLiveUserTranscriptionPreview())" in status_block
     assert "promoteTranscriptionPreviewToUserMessage(trimmed);" in status_block
+
+
+def test_repeated_voice_transcript_text_is_not_deduped_against_older_turns():
+    src = _chat_js_source()
+    open_turn_block = src.split("function hasOpenUserTurnPlain", 1)[1].split(
+        "function _stopSttPreviewClock",
+        1,
+    )[0]
+    stream_start_block = src.split("function handleChatEventStreamStarted", 1)[1].split(
+        "streamingChatId = msg.chat_id;",
+        1,
+    )[0]
+    merge_block = src.split("function mergeChatUpdatedDuringStream", 1)[1].split(
+        "function repairMissingUserMessageForStream",
+        1,
+    )[0]
+
+    assert "const last = nodes[nodes.length - 1];" in open_turn_block
+    assert "last.classList.contains('user')" in open_turn_block
+    assert "hasOpenUserTurnPlain(previewPlain)" in stream_start_block
+    assert "hasRenderedMessagePlain('user', previewPlain)" not in stream_start_block
+    assert "message.chat_row_id != null && findLiveTurnAnchor(message.chat_row_id)" in merge_block
+    assert "hasOpenUserTurnPlain(plain)" in merge_block
+    assert "hasRenderedMessagePlain('user', plain)" not in merge_block
 
 
 def test_voice_stream_start_repairs_missing_user_transcript_from_chat_state():

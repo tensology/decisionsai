@@ -887,7 +887,24 @@ function startChatWebSocket(force) {
 
 /** Track user message content already rendered optimistically by sendMessage()
     so handleChatEventMessageAdded can skip duplicates but render voice/PTT messages. */
-let _optimisticUserMessages = new Set();  // first-100-chars of user messages we already rendered
+let _optimisticUserMessages = new Map();  // first-100-chars -> timestamp for recently rendered user messages
+const OPTIMISTIC_USER_MESSAGE_TTL_MS = 15000;
+
+function _addOptimisticUserMessage(key) {
+    if (!key) return;
+    _optimisticUserMessages.set(String(key), Date.now());
+}
+
+function _hasRecentOptimisticUserMessage(key) {
+    if (!key) return false;
+    const now = Date.now();
+    for (const [storedKey, storedAt] of _optimisticUserMessages.entries()) {
+        if (!storedAt || now - Number(storedAt) > OPTIMISTIC_USER_MESSAGE_TTL_MS) {
+            _optimisticUserMessages.delete(storedKey);
+        }
+    }
+    return _optimisticUserMessages.has(String(key));
+}
 
 function _normalizeMsgPlain(s) {
     return (s != null ? String(s) : '').replace(/\s+/g, ' ').trim();
@@ -916,6 +933,22 @@ function _lastRenderedUserBubblePlain() {
     if (!users.length) return '';
     const te = users[users.length - 1].querySelector('.message-text');
     return te ? _normalizeMsgPlain(te.textContent) : '';
+}
+
+function hasOpenUserTurnPlain(plain) {
+    if (!plain || !chatMessages) return false;
+    const nodes = [...chatMessages.querySelectorAll('.message')]
+        .filter(el => {
+            const id = el.id || '';
+            return id !== 'transcriptionStatus'
+                && id !== 'streamingAssistantMessage'
+                && id !== 'streamingAssistantActivity'
+                && id !== 'typingIndicator';
+        });
+    const last = nodes[nodes.length - 1];
+    if (!last || !last.classList.contains('user')) return false;
+    const textEl = last.querySelector('.message-text');
+    return !!(textEl && _normalizeMsgPlain(textEl.textContent) === plain);
 }
 
 function _stopSttPreviewClock() {
@@ -1027,7 +1060,7 @@ function promoteTranscriptionPreviewToUserMessage(committedText) {
     const liveStt = document.getElementById('transcriptionStatus');
     const previewTextEl = liveStt ? liveStt.querySelector('#transcriptionStatusText') : null;
     const plain = _normalizeMsgPlain(committedText != null ? committedText : (previewTextEl ? previewTextEl.textContent : ''));
-    if (!plain || hasRenderedMessagePlain('user', plain)) {
+    if (!plain || hasOpenUserTurnPlain(plain)) {
         _discardLiveTranscriptionUi();
         return false;
     }
@@ -1035,7 +1068,7 @@ function promoteTranscriptionPreviewToUserMessage(committedText) {
     if (liveStt) liveStt.remove();
     const div = createMessageElement({ role: 'user', content: plain, timestamp: Date.now() });
     insertMessageElementInOrder(div, { role: 'user', content: plain, timestamp: Date.now() });
-    _optimisticUserMessages.add(plain.substring(0, 100));
+    _addOptimisticUserMessage(plain.substring(0, 100));
     _setCommittedLiveUserState(plain);
     syncRenderedMessageCountFromDom();
     scheduleRefreshChatHeaderStats();
@@ -1085,7 +1118,7 @@ function restoreLiveChatState(chatId, messages = []) {
     }
 
     const pendingUserText = _normalizeMsgPlain(state.pendingUserText || '');
-    if (pendingUserText && hasRenderedMessagePlain('user', pendingUserText)) {
+    if (pendingUserText && hasOpenUserTurnPlain(pendingUserText)) {
         if (state.assistantStreaming) {
             _updateLiveChatState(chatId, {
                 pendingUserText: '',
@@ -1098,10 +1131,10 @@ function restoreLiveChatState(chatId, messages = []) {
     } else if (pendingUserText) {
         if (state.pendingUserPhase === 'preview' && !document.getElementById('transcriptionStatus')) {
             showTranscriptionStatus(pendingUserText, false, false, false);
-        } else if (state.pendingUserPhase === 'committed' && !hasRenderedMessagePlain('user', pendingUserText)) {
+        } else if (state.pendingUserPhase === 'committed' && !hasOpenUserTurnPlain(pendingUserText)) {
             const div = createMessageElement({ role: 'user', content: pendingUserText, timestamp: Date.now() });
             insertMessageElementInOrder(div, { role: 'user', content: pendingUserText, timestamp: Date.now() });
-            _optimisticUserMessages.add(pendingUserText.substring(0, 100));
+            _addOptimisticUserMessage(pendingUserText.substring(0, 100));
             syncRenderedMessageCountFromDom();
         }
     }
@@ -1288,13 +1321,13 @@ function handleChatEventMessageAdded(msg) {
         // Voice/PTT messages come via WS without sendMessage() — render them.
         // Skip only if sendMessage() already rendered this exact text optimistically.
         const key = content.substring(0, 100);
-        if (_optimisticUserMessages.has(key)) {
+        if (_hasRecentOptimisticUserMessage(key) && hasOpenUserTurnPlain(_normalizeMsgPlain(content))) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
             return;
         }
         const np = _normalizeMsgPlain(content);
-        if (np && np === _lastRenderedUserBubblePlain() && hasRenderedMessagePlain('user', np)) {
+        if (np && hasOpenUserTurnPlain(np)) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
             return;
@@ -1303,7 +1336,7 @@ function handleChatEventMessageAdded(msg) {
         _discardLiveTranscriptionUi();
         const div = createMessageElement({ role, content, timestamp: msg.timestamp });
         insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
-        _optimisticUserMessages.add(key);
+        _addOptimisticUserMessage(key);
         _acknowledgePersistedLiveUser(currentChatId, content);
         repairOrphanAssistantBeforeUser();
         scrollToBottom();
@@ -1389,7 +1422,9 @@ function mergeChatUpdatedDuringStream(messages) {
     messages.forEach(message => {
         if (!message || message.role !== 'user') return;
         const plain = _normalizeMsgPlain(message.content || '');
-        if (!plain || hasRenderedMessagePlain('user', plain)) return;
+        if (!plain) return;
+        if (message.chat_row_id != null && findLiveTurnAnchor(message.chat_row_id)) return;
+        if (hasOpenUserTurnPlain(plain)) return;
         _discardLiveTranscriptionUi();
         const div = createMessageElement(message);
         insertMessageElementInOrder(div, message);
@@ -1418,7 +1453,7 @@ function handleChatEventStreamStarted(msg) {
     const preview = document.getElementById('transcriptionStatus');
     const previewTextEl = preview ? preview.querySelector('#transcriptionStatusText') : null;
     const previewPlain = _normalizeMsgPlain(previewTextEl ? previewTextEl.textContent : '');
-    if (!previewPlain || !hasRenderedMessagePlain('user', previewPlain)) {
+    if (!previewPlain || !hasOpenUserTurnPlain(previewPlain)) {
         promoteTranscriptionPreviewToUserMessage();
     } else {
         _discardLiveTranscriptionUi();
@@ -3020,9 +3055,10 @@ function renderMessages(messages, preserveOnEmpty) {
             // Skip user messages already on screen (typed, dictated, or optimistic).
             if (msg.role === 'user' && msg.content) {
                 const userPlain = _normalizeMsgPlain(msg.content);
+                const sameRowRendered = msg.chat_row_id != null && findLiveTurnAnchor(msg.chat_row_id);
                 if (
-                    _optimisticUserMessages.has(msg.content.substring(0, 100))
-                    || (userPlain && hasRenderedMessagePlain('user', userPlain))
+                    sameRowRendered
+                    || (_hasRecentOptimisticUserMessage(msg.content.substring(0, 100)) && hasOpenUserTurnPlain(userPlain))
                 ) {
                     continue;
                 }
@@ -3815,7 +3851,7 @@ async function sendMessage() {
             // Add user message to UI while waiting for agent
             const userMsg = createMessageElement({ role: 'user', content: message });
             chatMessages.appendChild(userMsg);
-            _optimisticUserMessages.add(message.substring(0, 100));
+            _addOptimisticUserMessage(message.substring(0, 100));
             _lastStreamFinalizedPlain = null;
             const typing = createTypingIndicator();
             chatMessages.appendChild(typing);
@@ -3862,7 +3898,7 @@ async function sendMessage() {
     messageInput.style.height = 'auto';
     handleInputChange();
     chatMessages.appendChild(createMessageElement({ role: 'user', content: message }));
-    _optimisticUserMessages.add(message.substring(0, 100));
+    _addOptimisticUserMessage(message.substring(0, 100));
     _lastStreamFinalizedPlain = null;
     chatMessages.appendChild(createTypingIndicator());
     scrollToBottom();

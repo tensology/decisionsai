@@ -18,6 +18,9 @@ _ABBREV_RE = re.compile(
     re.IGNORECASE,
 )
 _WORD_RE = re.compile(r"\b[\w']+\b")
+_SENTENCE_BOUNDARY_RE = re.compile(
+    r"([^.!?]*\w[^.!?]*[.!?]+[\"'”’)\]]*)(\s+|$|(?=[A-Z0-9]))"
+)
 
 
 def spoken_word_count(text: str) -> int:
@@ -80,7 +83,7 @@ def extract_complete_sentences(text: str) -> tuple[list[str], str]:
     sentences_raw: list[str] = []
     pos = 0
     while pos < len(protected):
-        match = re.search(r"([^.!?]*\w[^.!?]*[.!?]+)(\s+|$|(?=[A-Z0-9]))", protected[pos:])
+        match = _SENTENCE_BOUNDARY_RE.search(protected[pos:])
         if not match:
             break
         sentence = match.group(1).strip()
