@@ -217,7 +217,7 @@ def _get_tool_definitions(
         # Index Folder
         ("IndexFolderTool", dict(chat_manager=chat_manager, event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
         # Convert Document (MD → PDF/DOCX/Google Doc)
-        ("ConvertDocumentTool", {}),
+        ("ConvertDocumentTool", dict(chat_manager=chat_manager)),
         # Google Workspace
         ("GoogleWorkspaceTool", {}),
         ("DelegatedWorkflowTool", {}),

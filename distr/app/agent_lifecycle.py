@@ -13,6 +13,7 @@ import time
 from PyQt6.QtCore import QTimer
 
 from distr.core.signals import signal_manager
+from distr.core.runtime_lifecycle import append_runtime_event
 from distr.core.utils import load_settings_from_db, save_settings_to_db
 
 # Late import to avoid circular dependency — run_agent_session is defined in app.py
@@ -32,6 +33,11 @@ class AgentLifecycleMixin:
         if not self.agent_process.is_alive():
             exitcode = getattr(self.agent_process, 'exitcode', None)
             logger.warning("Agent process found dead (exitcode=%s): reloading session", exitcode)
+            append_runtime_event(
+                "agent_process_dead",
+                source="agent_health_check",
+                exitcode=exitcode,
+            )
             try:
                 crash_dir = os.path.expanduser("~/.decisions/logs")
                 crash_file = os.path.join(crash_dir, "agent_death.log")
@@ -228,6 +234,12 @@ class AgentLifecycleMixin:
             self._reloading_agent = True
 
         logger.info("🔄 reload_agent_session() called - starting agent reload")
+        append_runtime_event(
+            "agent_reload_requested",
+            source="agent_lifecycle.reload_agent_session",
+            skip_welcome=bool(skip_welcome),
+            new_chat_id=new_chat_id,
+        )
 
         self._pending_skip_welcome_for_agent = bool(skip_welcome)
         if new_chat_id:

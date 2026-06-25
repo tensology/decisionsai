@@ -255,11 +255,13 @@ def _strip_md_inline(text: str) -> str:
 
 class ConvertDocumentInput(BaseModel):
     """Input schema for convert_document tool."""
-    input_path: str = Field(
-        description="Path to the source file (e.g. a .md markdown file)."
+    input_path: Optional[str] = Field(
+        default=None,
+        description="Path to the source file (e.g. a .md markdown file). This argument is required."
     )
-    output_format: str = Field(
-        description="Target format: 'pdf', 'docx', or 'google_doc'."
+    output_format: Optional[str] = Field(
+        default=None,
+        description="Target format: 'pdf', 'docx', or 'google_doc' (or 'word' as alias for docx)."
     )
     output_path: Optional[str] = Field(
         default=None,
@@ -279,24 +281,125 @@ class ConvertDocumentTool(BaseTool):
         "  • Markdown (.md) → Google Doc — uploads to Google Drive\n"
         "\n"
         "Use this when the user says things like:\n"
-        "  - 'Convert this to a PDF'\n"
-        "  - 'Make a PDF from this markdown'\n"
-        "  - 'Turn this .md into a Word doc'\n"
-        "  - 'Export this as a PDF'\n"
+        "  - 'convert README.md to pdf'\n"
+        "  - 'make notes.md a docx'\n"
+        "  - 'turn /tmp/report.md into docx'\n"
+        "  - 'convert notes.markdown to google_doc'\n"
+        "\n"
+        "Do not call this tool with pronouns only (for example, 'this', 'that', 'turn this to PDF').\n"
+        "When no explicit path is provided, the tool will return an explicit input error.\n"
         "\n"
         "Tables, fenced code blocks, and Mermaid diagrams (```mermaid) are all rendered properly.\n"
         "The PDF output is styled like a clean GitHub-flavored document."
     )
     args_schema: type[BaseModel] = ConvertDocumentInput
 
-    def _run(self, input_path: str, output_format: str, output_path: Optional[str] = None, **kwargs) -> str:
-        fmt = output_format.lower().strip().replace(".", "")
+    def _find_recent_documents(self, multiple: bool = False) -> list[str]:
+        """Find recently dropped document files for this user context."""
+        try:
+            import json
+            storage_file = os.path.join(
+                os.path.expanduser("~"),
+                ".decisions",
+                "dropped_files",
+                "current_files.json",
+            )
+            if not os.path.exists(storage_file):
+                return []
+
+            with open(storage_file, "r") as f:
+                data = json.load(f)
+
+            doc_extensions = {".md", ".markdown", ".txt", ".docx", ".rtf"}
+
+            def _is_doc_like(path: str) -> bool:
+                return os.path.splitext(path)[1].lower() in doc_extensions
+
+            all_files = data.get("document_files", [])
+            if not all_files:
+                all_files = data.get("files", [])
+
+            # Prefer current chat bucket where available to avoid cross-chat confusion.
+            current_chat_id = None
+            if hasattr(self, "chat_manager") and self.chat_manager is not None:
+                try:
+                    current_chat_id = self.chat_manager.get_current_chat()
+                except Exception:
+                    current_chat_id = None
+
+            chat_files_index = data.get("chat_files_index", {})
+            if current_chat_id is not None:
+                chat_bucket = chat_files_index.get(str(current_chat_id), {})
+                if isinstance(chat_bucket, dict):
+                    bucket_docs = chat_bucket.get("document_files", [])
+                    bucket_files = chat_bucket.get("files", [])
+                    bucket_candidates = [p for p in (bucket_docs or bucket_files) if _is_doc_like(p)]
+                    if bucket_candidates:
+                        all_files = bucket_candidates
+
+            # Filter to files that still exist and are document-like.
+            existing_files = [
+                f
+                for f in all_files
+                if os.path.isfile(f) and _is_doc_like(f)
+            ]
+            if not existing_files:
+                return []
+
+            # Sort with most recent first.
+            file_timestamps = data.get("file_timestamps", {})
+            existing_files.sort(key=lambda f: file_timestamps.get(f, 0), reverse=True)
+            return existing_files if multiple else existing_files[:1]
+        except Exception as e:
+            logger.warning("ConvertDocumentTool: Failed to find recent documents: %s", e)
+            return []
+
+    def _run(
+        self,
+        input_path: Optional[str] = None,
+        output_format: Optional[str] = None,
+        output_path: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        resolved_input_path: Optional[str] = input_path.strip() if input_path else None
+
+        if resolved_input_path and resolved_input_path.lower() in {"this", "that", "it", "these", "those"}:
+            resolved_input_path = None
+
+        if not resolved_input_path:
+            recent_documents = self._find_recent_documents()
+            if recent_documents:
+                resolved_input_path = recent_documents[0]
+                logger.info("ConvertDocumentTool: Using most recent dropped document file %s", resolved_input_path)
+
+        if not resolved_input_path:
+            return (
+                "Error: input_path is required for convert_document. "
+                "Please provide a file path (for example, 'README.md') or drop a document file first."
+            )
+
+        if resolved_input_path.strip().lower() in {"this", "that", "it", "these", "those"}:
+            return (
+                "Error: input_path cannot be a pronoun. "
+                "Provide the source file path explicitly before converting."
+            )
+
+        if not output_format:
+            return "Error: output_format is required. Use 'pdf', 'docx', or 'google_doc'."
+
+        fmt = output_format.lower().strip()
+        fmt = re.sub(r"[^a-z_]", "", fmt)
+        fmt = fmt.replace(".", "")
+        if fmt == "word":
+            fmt = "docx"
+        if not fmt:
+            return "Error: output_format is required. Use 'pdf', 'docx', or 'google_doc'."
         if fmt not in ("pdf", "docx", "google_doc", "googledoc"):
             return f"Error: Unsupported output format '{output_format}'. Use 'pdf', 'docx', or 'google_doc'."
 
-        src = Path(input_path).expanduser().resolve()
+        src = Path(resolved_input_path).expanduser().resolve()
         if not src.exists():
-            return f"Error: File not found: {input_path}"
+            return f"Error: File not found: {resolved_input_path}"
 
         # Read source markdown
         try:
@@ -362,5 +465,11 @@ class ConvertDocumentTool(BaseTool):
         except Exception as e:
             return f"Error converting to Google Doc: {e}"
 
-    async def _arun(self, input_path: str, output_format: str, output_path: Optional[str] = None, **kwargs) -> str:
+    async def _arun(
+        self,
+        input_path: Optional[str] = None,
+        output_format: Optional[str] = None,
+        output_path: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         return self._run(input_path=input_path, output_format=output_format, output_path=output_path, **kwargs)

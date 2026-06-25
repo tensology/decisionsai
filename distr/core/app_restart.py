@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from distr.core.dock_app import load_dock_launch_preference, resolve_app_bundle_path
+from distr.core.runtime_lifecycle import append_runtime_event
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,12 @@ def spawn_restart_process(*, project_root: Path | None = None, python_path: str 
     root = project_root or resolve_project_root()
     py = python_path or resolve_restart_python(root)
     mark_restart_pending()
+    append_runtime_event(
+        "restart_spawn_begin",
+        source="app_restart.spawn_restart_process",
+        project_root=root,
+        python_path=py,
+    )
 
     app_bundle = _frozen_macos_app_bundle()
     if app_bundle:
@@ -146,6 +153,11 @@ def spawn_restart_process(*, project_root: Path | None = None, python_path: str 
             stderr=subprocess.DEVNULL,
         )
         logger.info("[RESTART] Spawned new app bundle via open -n: %s", app_bundle)
+        append_runtime_event(
+            "restart_spawned_bundle",
+            source="app_restart.spawn_restart_process",
+            app_bundle=app_bundle,
+        )
         return
 
     if sys.platform == "win32":
@@ -173,6 +185,11 @@ def spawn_restart_process(*, project_root: Path | None = None, python_path: str 
             stderr=subprocess.DEVNULL,
         )
         logger.info("[RESTART] Spawned Windows restart batch: %s", script)
+        append_runtime_event(
+            "restart_spawned_windows_batch",
+            source="app_restart.spawn_restart_process",
+            script=script,
+        )
         return
 
     script_path = restart_script_path()
@@ -200,4 +217,10 @@ def spawn_restart_process(*, project_root: Path | None = None, python_path: str 
         script_path,
         py,
         restart_log_path(),
+    )
+    append_runtime_event(
+        "restart_spawned_script",
+        source="app_restart.spawn_restart_process",
+        script_path=script_path,
+        restart_log=restart_log_path(),
     )

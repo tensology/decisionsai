@@ -17,6 +17,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6 import QtWidgets
 
 from distr.core.signals import signal_manager
+from distr.core.runtime_lifecycle import append_runtime_event
 from distr.core.dock_app import check_dock_activation_request
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.integrations.telegram.response_format import (
@@ -146,9 +147,11 @@ class EventHandlerMixin:
         # --- Misc ---
         elif event == 'exit_app':
             logger.info("[EVENT QUEUE] Received exit_app event from agent process - quitting application")
+            append_runtime_event("event_queue_exit_app", source="agent_process")
             self.quit()
         elif event == 'restart_app':
             logger.info("[EVENT QUEUE] Received restart_app event from agent process - restarting application")
+            append_runtime_event("event_queue_restart_app", source="agent_process")
             if hasattr(self, 'oracle_window') and self.oracle_window:
                 self.oracle_window.restart_app()
             else:

@@ -71,3 +71,26 @@ def test_open_mermaid_viewer_fast_action() -> None:
         assert result.action_type == ActionType.OPEN_WINDOW, text
         assert result.tool_name == "open_page", text
         assert result.tool_args.get("page") == "diagram viewer", text
+
+
+def test_document_convert_with_explicit_path_stays_fast_action() -> None:
+    result = detect_fast_action("convert README.md to pdf")
+    assert result.action_type == ActionType.DOCUMENT_CONVERT
+    assert result.tool_name == "convert_document"
+    assert result.tool_args.get("input_path") == "README.md"
+    assert result.tool_args.get("output_format") == "pdf"
+
+
+def test_document_convert_without_explicit_path_defers_to_llm(monkeypatch, tmp_path) -> None:
+    vague_cases = [
+        "convert this to pdf",
+        "make a pdf of this",
+        "export as pdf",
+        "turn that into a word document",
+    ]
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)
+    for text in vague_cases:
+        result = detect_fast_action(text)
+        assert result.action_type == ActionType.UNKNOWN, text
+        assert result.tool_name == "", text

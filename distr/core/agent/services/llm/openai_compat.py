@@ -49,8 +49,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """Run a blocking tool in the executor with a hard timeout."""
         loop = asyncio.get_running_loop()
         try:
+            safe_func_args = self._normalize_tool_kwargs(tool, func_args)
             return await asyncio.wait_for(
-                loop.run_in_executor(None, lambda t=tool, a=func_args: t._run(**a)),
+                loop.run_in_executor(None, lambda t=tool, a=safe_func_args: t._run(**a)),
                 timeout=self._TOOL_EXECUTION_TIMEOUT_SEC,
             )
         except asyncio.TimeoutError as exc:

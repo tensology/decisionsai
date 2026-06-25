@@ -12,6 +12,7 @@ The detector distinguishes between:
 
 import re
 import logging
+import os
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum
@@ -261,6 +262,9 @@ class FastActionDetector:
             # Other file ops (copy, move, rename) go to LLM which routes to execute_code or file_operations
             
             # === DOCUMENT CONVERSION (MD → PDF/DOCX, must come BEFORE audio conversion) ===
+            # Explicit file/path requests can safely bypass the LLM.
+            (re.compile(r'\b(?:convert|turn|export|save)\s+[`"\']?[^`"\']+\.(?:md|markdown|txt|docx?|rtf)[`"\']?\s+(?:into|to|as)\s+(?:a\s+)?(?:pdf|docx|word)\b', re.IGNORECASE),
+             ActionType.DOCUMENT_CONVERT, "convert_document", {"input_path": "__EXTRACT_DOCUMENT_PATH__", "output_format": "__EXTRACT_DOC_FORMAT__"}, False, "llm_response"),
             # "convert to pdf", "convert this to pdf", "convert that to a pdf", "make a pdf"
             (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(convert|turn|export|make)\s+(this|that|it|the\s+file)?\s*(in)?to\s+(a\s+)?(pdf|docx|word)\s*(document|file|doc)?\b', re.IGNORECASE),
              ActionType.DOCUMENT_CONVERT, "convert_document", {"output_format": "__EXTRACT_DOC_FORMAT__"}, False, "llm_response"),
@@ -848,6 +852,64 @@ class FastActionDetector:
             # "next" only needs context if NOT followed by tab/track/window/screen/monitor
             re.compile(r'^next\b(?!\s*(tab|track|window|screen|monitor|page|item|song|chapter|step))', re.IGNORECASE),
         ]
+
+    def _extract_document_input_path(self, text: str) -> Optional[str]:
+        """Extract an explicit markdown-like source path from the request."""
+        path_patterns = [
+            r'(?P<path>(?:~/|/)?(?:[\w.\- ]+/)*[\w.\- ]+\.(?:md|markdown|txt|docx?|rtf))',
+            r'(?P<path>`[^`]+\.(?:md|markdown|txt|docx?|rtf)`)',
+            r'(?P<path>"[^"]+\.(?:md|markdown|txt|docx?|rtf)")',
+            r"(?P<path>'[^']+\.(?:md|markdown|txt|docx?|rtf)')",
+        ]
+        for pattern in path_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if not match:
+                continue
+            raw_path = match.group("path").strip().strip("`\"'")
+            raw_path = re.sub(
+                r'^(?:convert|turn|export|save|make|create)\s+',
+                '',
+                raw_path,
+                flags=re.IGNORECASE,
+            )
+            if raw_path:
+                return raw_path
+        return None
+
+    def _extract_recent_document_file(self) -> Optional[str]:
+        """Return the latest dropped document file if available."""
+        try:
+            import json
+            storage_file = os.path.join(
+                os.path.expanduser("~"),
+                ".decisions",
+                "dropped_files",
+                "current_files.json",
+            )
+            if not os.path.exists(storage_file):
+                return None
+
+            with open(storage_file, "r") as f:
+                data = json.load(f)
+
+            doc_extensions = {".md", ".markdown", ".txt", ".docx", ".rtf"}
+
+            def _is_doc_like(path: str) -> bool:
+                return os.path.splitext(path)[1].lower() in doc_extensions
+
+            candidates = data.get("document_files", [])
+            if not candidates:
+                candidates = data.get("files", [])
+            candidates = [p for p in candidates if os.path.isfile(p) and _is_doc_like(p)]
+            if not candidates:
+                return None
+
+            file_timestamps = data.get("file_timestamps", {})
+            candidates.sort(key=lambda p: file_timestamps.get(p, 0), reverse=True)
+            return candidates[0]
+        except Exception as e:
+            logger.debug("FastActionDetector: Could not read recent dropped document file: %s", e)
+            return None
     
     def detect(self, text: str, has_recent_clipboard_context: bool = False) -> DetectedAction:
         """
@@ -1121,6 +1183,8 @@ class FastActionDetector:
                         if fmt == "word":
                             fmt = "docx"
                         final_args[key] = fmt
+                    elif value == "__EXTRACT_DOCUMENT_PATH__":
+                        final_args[key] = self._extract_document_input_path(text)
                     elif value == "__FOCUS_APP_NAME__":
                         # Captured app/window name from focus/switch/bring patterns; strip trailing punctuation.
                         raw = (match.group(1) or "").strip()
@@ -1157,6 +1221,29 @@ class FastActionDetector:
                             confidence=0.0,
                             original_text=text,
                         )
+
+                if action_type == ActionType.DOCUMENT_CONVERT:
+                    explicit_input_path = self._extract_document_input_path(text)
+                    if explicit_input_path:
+                        final_args["input_path"] = explicit_input_path
+                    else:
+                        recent_input_path = self._extract_recent_document_file()
+                        if recent_input_path:
+                            final_args["input_path"] = recent_input_path
+                        else:
+                            logger.info(
+                                "FastActionDetector: document convert missing explicit input path — deferring to LLM planner: '%s'",
+                                text[:120],
+                            )
+                            return DetectedAction(
+                                action_type=ActionType.UNKNOWN,
+                                tool_name="",
+                                tool_args={},
+                                needs_copy_first=False,
+                                response_type="llm_response",
+                                confidence=0.0,
+                                original_text=text,
+                            )
 
                 return DetectedAction(
                     action_type=action_type,

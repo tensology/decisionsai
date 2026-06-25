@@ -94,6 +94,7 @@ from distr.core.chat_qt_adapter import ChatManagerQt
 from distr.core.integrations.telegram import TelegramWebSocketManager
 from distr.core.db import get_session, Chat, Action
 from distr.core.paths import DB_DIR, CORE_DIR
+from distr.core.runtime_lifecycle import append_runtime_event, clear_exit_intent, read_exit_intent, write_exit_intent
 
 from distr.gui.player import PlayerWindow
 from distr.gui.oracle import OracleWindow
@@ -452,6 +453,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     
     def __init__(self, argv):
         super().__init__(argv)
+        self._startup_exit_intent = clear_exit_intent()
+        append_runtime_event(
+            "app_start",
+            argv=list(argv),
+            dock_app=is_dock_app(),
+            restarting=os.environ.get("DECISIONS_RESTARTING") == "1",
+            prior_exit_intent=self._startup_exit_intent,
+        )
         
         # Force standard font on macOS to prevent potential crash with system fonts
         if sys.platform == 'darwin':
@@ -582,6 +591,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Set up application behavior
         signal_manager.exit_app.connect(self.quit)
         signal_manager.restart_app.connect(lambda: self.oracle_window.restart_app() if hasattr(self, 'oracle_window') and self.oracle_window else None)
+        self.aboutToQuit.connect(self._log_about_to_quit)
         signal_manager.show_about_window.connect(self._on_show_about_from_web)
         signal_manager.reload_agent.connect(self.reload_agent_session)
         signal_manager.audio_devices_changed.connect(self.update_agent_audio_devices)
@@ -1621,6 +1631,12 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             return
             
         self._quitting = True
+        if not read_exit_intent():
+            write_exit_intent(
+                "app_quit",
+                source="application.quit",
+                slow_path=os.environ.get("DECISIONS_SLOW_QUIT", "0"),
+            )
 
         if os.environ.get("DECISIONS_SLOW_QUIT", "").lower() not in ("1", "true", "yes"):
             self._quit_fast()
@@ -1747,6 +1763,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         """Exit quickly; heavy process cleanup runs in bin/decisions-cleanup.sh."""
         logger = logging.getLogger(__name__)
         logger.info("Fast shutdown — handing process cleanup to external script")
+        append_runtime_event("app_quit_fast", source="application._quit_fast")
 
         agent_pid = None
         try:
@@ -1811,6 +1828,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
 
         # Avoid ggml Metal crash during normal Python/Qt teardown on macOS.
         os._exit(0)
+
+    def _log_about_to_quit(self):
+        append_runtime_event(
+            "qt_about_to_quit",
+            source="application.aboutToQuit",
+            exit_intent=read_exit_intent(),
+        )
     
     def _cleanup_all_processes(self):
         """Cleanup all child processes"""

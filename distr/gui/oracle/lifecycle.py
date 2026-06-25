@@ -12,6 +12,7 @@ from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication
 
 from distr.core.paths import ASSETS_DIR, ICONS_DIR
+from distr.core.runtime_lifecycle import append_runtime_event, write_exit_intent
 from distr.core.signals import signal_manager
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,9 @@ class LifecycleMixin:
             from distr.core.app_restart import spawn_restart_process
 
             logger.info("[RESTART] Restart requested")
+            self._restart_in_progress = True
+            write_exit_intent("restart_app", source="oracle.restart_app", expected_restart=True)
+            append_runtime_event("restart_requested", source="oracle.restart_app")
 
             # Save state
             self.reload_settings()
@@ -211,6 +215,14 @@ class LifecycleMixin:
 
         # Set a flag to prevent any further actions
         self.is_exiting = True
+        if not getattr(self, "_restart_in_progress", False):
+            write_exit_intent("exit_app", source="oracle.exit_app", expected_restart=False)
+        append_runtime_event(
+            "exit_requested",
+            source="oracle.exit_app",
+            confirm=confirm,
+            restart_in_progress=bool(getattr(self, "_restart_in_progress", False)),
+        )
 
         # Emit exit signal first to notify other components
         signal_manager.exit_app.emit()

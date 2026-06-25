@@ -20,6 +20,7 @@ BaseLLMService inherits from LLMSharedMixin which provides:
 import asyncio
 import json
 import logging
+import inspect
 
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE, LLMService,
@@ -183,6 +184,69 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             return fast_action
         return None
 
+    @staticmethod
+    def _normalize_tool_kwargs(tool, tool_args: dict) -> dict:
+        """Normalize tool-call arguments against the tool._run signature."""
+        if not isinstance(tool_args, dict):
+            return {}
+
+        try:
+            sig = inspect.signature(tool._run)
+        except (TypeError, ValueError):
+            return tool_args
+
+        params = sig.parameters
+        allow_var_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+        )
+        normalized = {
+            name: value
+            for name, value in tool_args.items()
+            if allow_var_kwargs or name in params
+        }
+
+        if allow_var_kwargs:
+            return normalized
+
+        missing = [
+            param.name
+            for param in params.values()
+            if param.name != "self"
+            and param.kind not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+            and param.default is inspect.Parameter.empty
+            and param.name not in normalized
+        ]
+
+        # NOTE: Older tool versions hard-validated input_path/output_format on
+        # ConvertDocumentTool; allow the modern fallback behavior to run instead of
+        # failing before _run() can surface a user-friendly message.
+        if missing and getattr(tool, "name", "") == "convert_document":
+            for fallback in ("input_path", "output_format"):
+                if fallback not in normalized and any(
+                    p.name == fallback for p in params.values()
+                ):
+                    normalized[fallback] = None
+
+            missing = [
+                param.name
+                for param in params.values()
+                if param.name != "self"
+                and param.kind not in (
+                    inspect.Parameter.VAR_KEYWORD,
+                    inspect.Parameter.VAR_POSITIONAL,
+                )
+                and param.default is inspect.Parameter.empty
+                and param.name not in normalized
+            ]
+
+        if missing:
+            tool_name = getattr(tool, "name", tool.__class__.__name__)
+            raise TypeError(
+                f"{tool_name}._run() missing required argument(s): {', '.join(missing)}"
+            )
+
+        return normalized
+
     async def _execute_tool_calls(self, tool_calls: list) -> list:
         """Execute tool calls and return results. Works for OpenAI-compatible format."""
         results = []
@@ -254,8 +318,9 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                         })
 
                     loop = asyncio.get_running_loop()
+                    safe_tool_args = self._normalize_tool_kwargs(tool, tool_args)
                     result = await loop.run_in_executor(
-                        None, lambda t=tool, a=tool_args: t._run(**a)
+                        None, lambda t=tool, a=safe_tool_args: t._run(**a)
                     )
                     results.append({
                         "role": "tool",
@@ -268,7 +333,7 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                     record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
                     # Record successful execution for self-reflection
                     if hasattr(self, 'record_tool_attempt'):
-                        self.record_tool_attempt(tool_name, tool_args, "success", str(result))
+                        self.record_tool_attempt(tool_name, safe_tool_args, "success", str(result))
                 except Exception as e:
                     logger.error("Error executing tool %s: %s", tool_name, e, exc_info=True)
                     err_content = f"Error: {str(e)}"
