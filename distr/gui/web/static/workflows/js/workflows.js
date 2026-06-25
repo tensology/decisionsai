@@ -1161,26 +1161,6 @@
                     : (state.isLinkedToWorkflow ? "Already in workflow queue" : "Cannot add to workflow"));
             addBtn.setAttribute("aria-label", addBtn.title);
         }
-        var actions = row.querySelector(".kb-ticket-list-actions");
-        if (actions && !actions.querySelector(".wf-board-pane-toggle")) {
-            var toggleBtn = document.createElement("button");
-            toggleBtn.type = "button";
-            toggleBtn.className = "wf-board-pane-toggle kb-card-action-btn";
-            toggleBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>';
-            toggleBtn.addEventListener("click", function (evt) {
-                evt.preventDefault();
-                evt.stopPropagation();
-                toggleWorkflowBoardPaneCollapsed();
-            });
-            actions.appendChild(toggleBtn);
-        }
-        var paneToggle = actions ? actions.querySelector(".wf-board-pane-toggle") : null;
-        if (paneToggle) {
-            var collapsed = !!workflowBoardPaneCollapsed;
-            paneToggle.setAttribute("aria-label", collapsed ? "Expand board tickets" : "Collapse board tickets");
-            paneToggle.title = collapsed ? "Expand board tickets" : "Collapse board tickets";
-            paneToggle.classList.toggle("is-collapsed", collapsed);
-        }
     }
 
     function refreshWorkflowLaneAddAllButtons() {
