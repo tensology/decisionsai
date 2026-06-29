@@ -1567,6 +1567,29 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 logger.info("LLM: Received empty TranscriptionFrame — ignoring")
                 return
 
+            text_lower = text.lower().strip()
+
+            # Dictation is a text-entry mode. It must win before wake phrases,
+            # voice commands, fast actions, duplicate tracking, or the
+            # conversational agent can see the transcript.
+            if self._is_dictation_transcript():
+                logger.info("Dictation: Received transcription for text entry: '%s'", text[:100])
+                cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                if cid:
+                    self._notify_transcription_progress(
+                        int(cid), "", False, False, discard_live_preview=True
+                    )
+                if not getattr(self, '_dictation_one_shot', False) and self._check_dictation_commands(text_lower, text):
+                    return
+                self._last_dictation_transcription_mono = time.monotonic()
+                text_to_type = self._process_dictation_text(text)
+                if text_to_type:
+                    await self._type_dictation_text(text_to_type)
+                self._one_shot_dictation_armed = False
+                if getattr(self, '_dictation_one_shot', False):
+                    self._stop_dictation()
+                return
+
             logger.info("LLM: Received transcription: '%s'", text[:100])
             # Drop duplicate frames (e.g. PTT / pipeline emits the same utterance twice in a row)
             _now = time.monotonic()
@@ -1588,28 +1611,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 return
             self._last_ptt_transcription_text = text
             self._last_ptt_transcription_mono = _now
-
-            text_lower = text.lower().strip()
-
-            # Dictation is a text-entry mode. It must win before wake phrases,
-            # voice commands, fast actions, or the conversational agent can see
-            # the transcript.
-            if self._is_dictation_transcript():
-                cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
-                if cid:
-                    self._notify_transcription_progress(
-                        int(cid), "", False, False, discard_live_preview=True
-                    )
-                if not getattr(self, '_dictation_one_shot', False) and self._check_dictation_commands(text_lower, text):
-                    return
-                self._last_dictation_transcription_mono = time.monotonic()
-                text_to_type = self._process_dictation_text(text)
-                if text_to_type:
-                    await self._type_dictation_text(text_to_type)
-                self._one_shot_dictation_armed = False
-                if getattr(self, '_dictation_one_shot', False):
-                    self._stop_dictation()
-                return
 
             # Agent PTT / hands-free utterance — never keep stale interrupt flags.
             self._one_shot_dictation_armed = False

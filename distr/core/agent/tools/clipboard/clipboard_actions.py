@@ -423,7 +423,7 @@ class ClipboardActionTool(BaseTool):
             import re
             
             # Sanitize emojis for TTS (but preserve text content)
-            exact_text = clean_text_for_tts(text) if text else ""
+            exact_text = clean_text_for_tts(text, speakable_symbols=True) if text else ""
             
             # CRITICAL: Send start frame FIRST - TTS expects StartFrame → TextFrame(s) → EndFrame
             logger.info("TTS: Sending LLMFullResponseStartFrame")

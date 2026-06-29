@@ -814,7 +814,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
         else:
             logger.error("NO specialized tools loaded! All tool loading failed!")
     else:
-        logger.warning(f"use_navigation_tools is False - skipping specialized tools!")
+        logger.debug("use_navigation_tools is False - skipping specialized tools")
 
     # Accessibility tree tools (sidecar-powered, optional — only if sidecar is running)
     accessibility_tools = [

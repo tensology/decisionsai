@@ -666,10 +666,11 @@ class SignalBridgeMixin:
                     'chat_id': chat_id,
                     'initial_message': first_message,
                     'initial_speak': speak_bool,
+                    'skip_user_persist': True,
                 })
                 logger.info(
                     "Web create-chat: queued %scurrent_chat_changed(initial_message) for chat_id=%s "
-                    "(speak_raw=%r speak_bool=%s)",
+                    "(speak_raw=%r speak_bool=%s skip_user_persist=True)",
                     "interrupt_tts + " if player_active else "",
                     chat_id,
                     speak,

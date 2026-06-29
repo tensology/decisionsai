@@ -141,8 +141,44 @@ def _char_allowed_for_spoken_tts(char: str) -> bool:
 
 
 
+def _make_symbols_speakable_for_tts(text: str) -> str:
+    """Turn copied symbol-heavy text into prose without changing the source text."""
+    if not text:
+        return ""
+
+    def _email_to_words(match: re.Match) -> str:
+        local, domain = match.group(1), match.group(2)
+        local = re.sub(r"[._-]+", " ", local).strip()
+        domain = re.sub(r"[._-]+", " dot ", domain).strip()
+        return f"{local} at {domain}"
+
+    text = re.sub(
+        r"\b([A-Za-z0-9._%+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b",
+        _email_to_words,
+        text,
+    )
+    text = re.sub(r"\[([^\]]+)\]", r"\1", text)
+    text = re.sub(r"\(([^)]+)\)", r"\1", text)
+    text = re.sub(r"\{([^}]+)\}", r". \1.", text)
+    text = re.sub(r"\s*\|\s*", ". ", text)
+    text = re.sub(r"(?<!\w)@(?=\w)", "at ", text)
+    text = re.sub(r"\s*->\s*", " to ", text)
+    text = re.sub(r"\s*=>\s*", " becomes ", text)
+    text = re.sub(r"\s*&\s*", " and ", text)
+    text = re.sub(r"\s*=\s*", " equals ", text)
+    text = re.sub(r"\s*\+\s*", " plus ", text)
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    text = re.sub(r"([.!?])\s*([.!?])+", r"\1", text)
+    return text
+
+
 def clean_text_for_tts(
-    text: str, strip_whitespace: bool = True, *, spoken_prose: bool = False
+    text: str,
+    strip_whitespace: bool = True,
+    *,
+    spoken_prose: bool = False,
+    speakable_symbols: bool = False,
 ) -> str:
     """
     Clean text for Text-to-Speech processing.
@@ -198,6 +234,8 @@ def clean_text_for_tts(
     # Strip any remaining HTML/XML-like tags — angle brackets trigger ElevenLabs SSML parsing
     # and can produce the characteristic elongated "aaaaaaaahhhhh" artifact.
     text = re.sub(r'<[^>]{0,80}>', '', text)
+    if speakable_symbols:
+        text = _make_symbols_speakable_for_tts(text)
     # Any surviving bare < or > could still confuse ElevenLabs; replace with parens.
     text = text.replace('<', '(').replace('>', ')')
 

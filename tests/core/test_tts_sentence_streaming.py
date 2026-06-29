@@ -228,6 +228,54 @@ def test_play_queued_sentence_forwards_tts_lifecycle_frames():
     assert types[-1] == "TTSStoppedFrame"
 
 
+def test_play_queued_sentence_preserves_output_audio_frame_for_transport_write():
+    from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
+    from distr.core.agent.libs import TTSStartedFrame, TTSStoppedFrame
+
+    class FakeOutputAudioFrame:
+        def __init__(self, audio: bytes, sample_rate: int, num_channels: int):
+            self.audio = audio
+            self.sample_rate = sample_rate
+            self.num_channels = num_channels
+            self.id = "out-1"
+            self.transport_destination = "desktop"
+            self.pts = 123
+
+    class FakeTTS(TTSPipelineMixin):
+        def __init__(self):
+            self._init_tts_pipeline_state()
+            self._cancelled = False
+            self._speech_volume = 1.0
+            self._volume_in_run_tts = True
+            self.pushed = []
+
+        async def push_frame(self, frame, direction):
+            self.pushed.append(frame)
+
+        async def run_tts(self, text):
+            yield TTSStartedFrame()
+            yield FakeOutputAudioFrame(audio=b"\x01\x00" * 160, sample_rate=44100, num_channels=1)
+            yield TTSStoppedFrame()
+
+    import distr.core.agent.services.tts.tts_pipeline_mixin as mixin_mod
+
+    real_output = mixin_mod.OutputAudioRawFrame
+    mixin_mod.OutputAudioRawFrame = FakeOutputAudioFrame
+    try:
+        tts = FakeTTS()
+        asyncio.run(tts._play_queued_sentence("hello", tts._tts_generation, None))
+    finally:
+        mixin_mod.OutputAudioRawFrame = real_output
+
+    audio_frames = [frame for frame in tts.pushed if isinstance(frame, FakeOutputAudioFrame)]
+    assert len(audio_frames) == 1
+    assert audio_frames[0].audio == b"\x01\x00" * 160
+    assert audio_frames[0].sample_rate == 44100
+    assert audio_frames[0].id == "out-1"
+    assert audio_frames[0].transport_destination == "desktop"
+    assert audio_frames[0].pts == 123
+
+
 def test_llm_end_flushes_partial_batch_when_text_buffer_empty():
     from distr.core.agent.services.tts.openai import OpenAITTSService
 

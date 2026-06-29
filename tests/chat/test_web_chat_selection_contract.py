@@ -286,6 +286,18 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
     assert "promoteTranscriptionPreviewToUserMessage(trimmed);" in status_block
 
 
+def test_live_transcription_websocket_updates_are_coalesced_before_dom_work():
+    src = _chat_js_source()
+    ws_block = src.split("chatWs.onmessage = (event) => {", 1)[1].split(
+        "if (msg.type === 'chat_updated'",
+        1,
+    )[0]
+
+    assert "queueTranscriptionStatusUpdate(" in ws_block
+    assert "requestAnimationFrame(flushQueuedTranscriptionStatusUpdate)" in src
+    assert "setTimeout(flushQueuedTranscriptionStatusUpdate, 80)" in src
+
+
 def test_repeated_voice_transcript_text_is_not_deduped_against_older_turns():
     src = _chat_js_source()
     open_turn_block = src.split("function hasOpenUserTurnPlain", 1)[1].split(

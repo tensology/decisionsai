@@ -12,6 +12,8 @@ let chatWs = null;
 let chatWsSubscribedId = null;
 let chatWsReconnectTimer = null;
 let chatWsReconnectDelay = 1000; // ms, doubles on each failure up to 30s
+let queuedTranscriptionStatusUpdate = null;
+let transcriptionStatusFlushScheduled = false;
 /** When non-null, we are showing a streamed assistant message for this chat (PTT/voice). */
 let streamingChatId = null;
 /** Plain text of the last reply finalized in stream_finished — suppress duplicate assistant message_added / poll rows. */
@@ -765,7 +767,7 @@ function startChatWebSocket(force) {
                 }
                 if (msg.event === 'transcription_progress') {
                     if (msg.chat_id === currentChatId) {
-                        showTranscriptionStatus(
+                        queueTranscriptionStatusUpdate(
                             msg.status != null ? msg.status : '',
                             Boolean(msg.done),
                             Boolean(msg.clear_live_preview),
@@ -1974,6 +1976,38 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
     _ensureSttPreviewClockRunning();
     _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
+}
+
+function queueTranscriptionStatusUpdate(text, done, clearLivePreview, discardLivePreview) {
+    if (done || clearLivePreview || discardLivePreview) {
+        queuedTranscriptionStatusUpdate = null;
+        transcriptionStatusFlushScheduled = false;
+        showTranscriptionStatus(text, done, clearLivePreview, discardLivePreview);
+        return;
+    }
+    queuedTranscriptionStatusUpdate = { text, done, clearLivePreview, discardLivePreview };
+    if (transcriptionStatusFlushScheduled) return;
+    transcriptionStatusFlushScheduled = true;
+    if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(flushQueuedTranscriptionStatusUpdate);
+    } else {
+        setTimeout(flushQueuedTranscriptionStatusUpdate, 16);
+    }
+    setTimeout(flushQueuedTranscriptionStatusUpdate, 80);
+}
+
+function flushQueuedTranscriptionStatusUpdate() {
+    if (!transcriptionStatusFlushScheduled && !queuedTranscriptionStatusUpdate) return;
+    const update = queuedTranscriptionStatusUpdate;
+    queuedTranscriptionStatusUpdate = null;
+    transcriptionStatusFlushScheduled = false;
+    if (!update) return;
+    showTranscriptionStatus(
+        update.text,
+        update.done,
+        update.clearLivePreview,
+        update.discardLivePreview
+    );
 }
 
 // Load Chats (from database via settings API; returns { chats, last_chat_id, agent_current_chat_id } for restore on refresh)

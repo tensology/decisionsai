@@ -115,9 +115,13 @@ class FastActionMixin:
             await self.push_frame(TextFrame(text=cleaned))
         await self.push_frame(LLMFullResponseEndFrame())
 
-    async def _fa_deliver_spoken_response(self, text: str) -> None:
+    async def _fa_deliver_spoken_response(self, text: str, *, speakable_symbols: bool = False) -> None:
         """Speak on desktop speakers or deliver voice to Telegram / remote control."""
-        cleaned = clean_text_for_tts(str(text or "").strip(), spoken_prose=True)
+        cleaned = clean_text_for_tts(
+            str(text or "").strip(),
+            spoken_prose=True,
+            speakable_symbols=speakable_symbols,
+        )
         if not cleaned:
             return
         if getattr(self, "_is_telegram_request", False):
@@ -397,14 +401,14 @@ class FastActionMixin:
             if text_read:
                 self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
                 if getattr(self, "_is_telegram_request", False):
-                    await self._fa_deliver_spoken_response(text_read)
+                    await self._fa_deliver_spoken_response(text_read, speakable_symbols=True)
             else:
                 self._fa_record_read_aloud_activity(chat_id, "Read aloud", "(selection read aloud)", user_text)
 
         elif result and isinstance(result, str) and result.startswith("READ_ACTION:"):
             text_to_read = result[len("READ_ACTION:"):]
             text_read = text_to_read
-            await self._fa_deliver_spoken_response(text_to_read)
+            await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True)
             self._fa_record_read_aloud_activity(chat_id, "Read aloud", text_read, user_text)
         else:
             logger.warning("LLM: TTS path fallback, no _read_task and no READ_ACTION, result=%s", result)
@@ -422,7 +426,7 @@ class FastActionMixin:
                     text_to_read = text_to_read.split("\n\nThis is the current clipboard content.")[0].strip()
 
             if text_to_read and text_to_read.strip():
-                await self._fa_deliver_spoken_response(text_to_read)
+                await self._fa_deliver_spoken_response(text_to_read, speakable_symbols=True)
                 self._fa_record_read_aloud_activity(
                     chat_id, "Read from clipboard", text_to_read, user_text
                 )
@@ -519,7 +523,11 @@ class FastActionMixin:
             for i, chunk in enumerate(chunks):
                 if self._cancelled:
                     break
-                cleaned = clean_text_for_tts(chunk, strip_whitespace=False)
+                cleaned = clean_text_for_tts(
+                    chunk,
+                    strip_whitespace=False,
+                    speakable_symbols=True,
+                )
                 if cleaned:
                     await self.push_frame(TextFrame(text=cleaned), pipeline_dir)
                 await asyncio.sleep(0.05)

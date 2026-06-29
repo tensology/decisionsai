@@ -44,6 +44,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
     _TOOL_EXECUTION_TIMEOUT_SEC = 90.0
     _tool_execution_in_progress = False
+    _DIRECT_SPEECH_TOOLS = {"speak_on_desktop"}
+    _GENERIC_TOOL_COMPLETIONS = {"done", "done.", "finished", "finished."}
 
     async def _run_tool_with_timeout(self, tool, func_args: dict, func_name: str):
         """Run a blocking tool in the executor with a hard timeout."""
@@ -659,6 +661,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         messages = self._prepare_api_messages()
         stream = await self._call_stream(messages, tools_list=tools_list, max_retries=3)
+        suppress_direct_speech_completion = (
+            OpenAICompatibleLLMService._last_tool_result_is_direct_speech_ack(self)
+        )
 
         content = ""
         tool_calls = []
@@ -698,7 +703,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     # Do not stream follow-up content directly to TTS here.
                     # Final TTS is handled once in _handle_follow_up_content()
                     # to avoid duplicate speech for tool follow-ups.
-                    if self.event_queue and not tool_call_detected:
+                    if (
+                        self.event_queue
+                        and not tool_call_detected
+                        and not suppress_direct_speech_completion
+                    ):
                         from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
                         display_chunk = clean_model_text_for_chat(c, strip_whitespace=False)
                         if display_chunk:
@@ -718,6 +727,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 tool_calls = parsed
                 content = re.sub(r'<tool_call>\s*.*?\s*</tool_call>', '', content, flags=re.DOTALL).strip()
                 logger.info("%s: Parsed %d tool call(s) from follow-up <tool_call> text", self.SERVICE_NAME, len(tool_calls))
+
+        if suppress_direct_speech_completion and not tool_calls and content:
+            if OpenAICompatibleLLMService._is_generic_tool_completion(content):
+                content = ""
+            elif self.event_queue:
+                from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
+                display = clean_model_text_for_chat(content, strip_whitespace=False)
+                if display:
+                    self.event_queue.put(('chat_stream_token', {'token': display}), block=False)
 
         tool_calls = self._sanitize_tool_calls(tool_calls)
         return content, tool_calls
@@ -1004,6 +1022,26 @@ class OpenAICompatibleLLMService(BaseLLMService):
         if should_suppress:
             threading.current_thread().suppress_tts_for_tool_chain = False
 
+    @classmethod
+    def _is_generic_tool_completion(cls, text):
+        return (text or "").strip().lower() in cls._GENERIC_TOOL_COMPLETIONS
+
+    @classmethod
+    def _is_direct_speech_tool_ack(cls, tool_name, content):
+        return (
+            (tool_name or "").strip() in cls._DIRECT_SPEECH_TOOLS
+            and cls._is_generic_tool_completion(content)
+        )
+
+    def _last_tool_result_is_direct_speech_ack(self):
+        for msg in reversed(self._messages):
+            if msg.get("role") == "tool":
+                return OpenAICompatibleLLMService._is_direct_speech_tool_ack(
+                    msg.get("name"),
+                    msg.get("content"),
+                )
+        return False
+
     async def _send_done_after_tools(self):
         """Send TTS response after tool execution, using tool results when meaningful. Returns True (end_frame sent)."""
         import json as _json
@@ -1054,6 +1092,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 break  # Only check the most recent tool result
 
         generic_ack = brief_tool_completion_message(last_tool_name)
+
+        if OpenAICompatibleLLMService._is_direct_speech_tool_ack(last_tool_name, tool_result_text):
+            await self._push_pipeline_frame(LLMFullResponseStartFrame())
+            await self._push_pipeline_frame(LLMFullResponseEndFrame())
+            return True
 
         # Fast-action screenshot already saved/spoke a user-facing reply — do not
         # append a second assistant line or replay TTS from the raw tool payload.

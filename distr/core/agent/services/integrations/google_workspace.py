@@ -23,6 +23,8 @@ import re
 
 logger = logging.getLogger(__name__)
 
+_REFRESH_FAILURE_BACKOFF = timedelta(minutes=15)
+
 
 def _walk_gmail_parts(part: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Flatten Gmail MIME parts, including nested multipart children."""
@@ -54,6 +56,7 @@ class GoogleWorkspaceConnector:
         self.token_expires_at: Optional[datetime] = None
         self.client_id: Optional[str] = None
         self.client_secret: Optional[str] = None
+        self._google_refresh_retry_after: Optional[datetime] = None
         self._load_credentials()
     
     def _load_credentials(self) -> bool:
@@ -142,6 +145,13 @@ class GoogleWorkspaceConnector:
         
         # Check if token needs refresh (refresh 5 minutes before expiration)
         if self.token_expires_at and datetime.utcnow() >= (self.token_expires_at - timedelta(minutes=5)):
+            retry_after = getattr(self, "_google_refresh_retry_after", None)
+            if retry_after and datetime.utcnow() < retry_after:
+                logger.debug(
+                    "Skipping Google access-token refresh until %s after recent failure",
+                    retry_after.isoformat(),
+                )
+                return False
             return self._refresh_access_token()
         
         return True
@@ -168,6 +178,7 @@ class GoogleWorkspaceConnector:
             self.access_token = tokens.get('access_token')
             expires_in = tokens.get('expires_in', 3600)
             self.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+            self._google_refresh_retry_after = None
             
             # Update tokens in database
             self._save_tokens_to_db()
@@ -176,7 +187,12 @@ class GoogleWorkspaceConnector:
             return True
             
         except Exception as e:
-            logger.error(f"Failed to refresh access token: {e}", exc_info=True)
+            self._google_refresh_retry_after = datetime.utcnow() + _REFRESH_FAILURE_BACKOFF
+            logger.warning(
+                "Failed to refresh Google access token; suppressing retry until %s: %s",
+                self._google_refresh_retry_after.isoformat(),
+                e,
+            )
             return False
     
     def _save_tokens_to_db(self):

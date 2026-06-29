@@ -1,14 +1,40 @@
 """Regression: one-shot dictation must not end before the real transcript is typed."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 from distr.core.agent.services.stt.base import BaseSTTService
+from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
 
 
 class _DummySTT(BaseSTTService):
     async def run_stt(self, audio_bytes):
         if False:
             yield None
+
+
+class _FakeTranscriptionFrame:
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _DummyLLM(LLMSharedMixin):
+    def __init__(self):
+        self._is_dictating = True
+        self._dictation_one_shot = True
+        self._one_shot_dictation_armed = True
+        self._is_hands_free = False
+        self._is_listening = True
+        self._messages = []
+        self._tools = []
+        self._tools_dict = {}
+        self._cancelled = False
+        self._tts_service = None
+        self.event_queue = None
+        self.chat_manager = None
+
+    async def push_frame(self, frame, direction):
+        raise AssertionError("empty dictation transcript should not be pushed downstream")
 
 
 def test_empty_dictation_capture_queues_stop_dictation():
@@ -34,9 +60,14 @@ def test_dictation_hotkey_arms_typing_before_capture():
     assert block.index("_one_shot_dictation_armed") < block.index("_cmd_push_to_talk_start")
 
 
-def test_one_shot_dictation_does_not_stop_on_empty_frame_in_source():
-    from pathlib import Path
+def test_one_shot_dictation_does_not_stop_on_empty_frame(monkeypatch):
+    import distr.core.agent.libs as libs
 
-    source = Path("distr/core/agent/services/llm/core_mixin.py").read_text()
-    block = source.split("if not text:", 1)[1].split("logger.info(\"LLM: Received transcription:", 1)[0]
-    assert "_stop_dictation()" not in block
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    llm = _DummyLLM()
+    asyncio.run(llm.process_frame(_FakeTranscriptionFrame(""), None))
+
+    assert llm._is_dictating is True
+    assert llm._dictation_one_shot is True
+    assert llm._one_shot_dictation_armed is True

@@ -132,6 +132,44 @@ def test_send_text_input_forwards_chat_id_from_integration_metadata(monkeypatch)
     )
 
 
+def test_web_create_chat_initial_message_skips_second_persist(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+
+    host = _Host()
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_create_chat_emits_requested.emit(
+        707,
+        "Are you ready to help me?",
+        True,
+        "openai",
+        "gpt-5.2",
+        "pixazo",
+        "custom_14",
+    )
+
+    assert host.sent_commands[-1] == (
+        "current_chat_changed",
+        {
+            "chat_id": 707,
+            "initial_message": "Are you ready to help me?",
+            "initial_speak": True,
+            "skip_user_persist": True,
+        },
+    )
+
+
 def test_web_chat_events_are_queued_for_ordered_delivery():
     src = inspect.getsource(SignalBridgeMixin._bridge_signals_to_agent)
 
