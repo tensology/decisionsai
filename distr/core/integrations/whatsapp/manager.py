@@ -25,6 +25,7 @@ import os
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -85,6 +86,10 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
     connection_status_changed = pyqtSignal(bool, str)  # connected, status_text
     qr_code_received = pyqtSignal(str)  # QR code string for scanning
     _open_socket_requested = pyqtSignal(str)
+    _voice_transcription_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="whatsapp-voice-stt",
+    )
 
     @staticmethod
     def _extract_group_display_name(raw_data: dict, jid: str) -> str:
@@ -718,21 +723,6 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         # Update the existing message record with relative path under DB_DIR when possible (BUG-8)
         self._update_media_info(message_id, path_for_db, file_length, duration=data.get("duration"))
 
-        # -- Transcribe voice notes --------------------------------------------
-        voice_transcription = None
-        if media_type in ("voice", "audio", "ptt") and abs_saved:
-            try:
-                from distr.core.audio.voice_cloning import transcribe_audio_file
-                voice_transcription = transcribe_audio_file(abs_saved)
-                if voice_transcription:
-                    logger.info(f"WhatsApp: Transcribed voice note ({media_type}): {voice_transcription[:100]}")
-                    # Store transcription in the message caption field
-                    self._update_message_caption(message_id, f"[Transcription] {voice_transcription}")
-                else:
-                    logger.info(f"WhatsApp: No transcription returned for {media_type}")
-            except Exception as e:
-                logger.warning(f"WhatsApp: Voice transcription failed: {e}")
-
         # Mark as processed on the relay server after local cache succeeds.
         if message_id:
             self._mark_relay_processed_by_message_id(
@@ -741,12 +731,12 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
                 client_media_local_path=abs_saved or "",
             )
 
+        self._schedule_voice_transcription(message_id, media_type, abs_saved)
+
         # Build agent message
         sender_phone = sender_jid.split("@")[0].split(":")[0] if sender_jid else "Unknown"
         size_str = f"{file_length / 1024:.1f} KB" if file_length < 1024 * 1024 else f"{file_length / 1024 / 1024:.1f} MB"
         agent_text = f"[WhatsApp: {sender_phone}] Received {media_type}: {Path(abs_saved).name if abs_saved else filename} ({size_str})"
-        if voice_transcription:
-            agent_text += f"\n[Voice transcription: {voice_transcription}]"
         if caption:
             agent_text += f" — {caption}"
 
@@ -760,6 +750,31 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
     # ═════════════════════════════════════════════════════════════════════════
     # Database Persistence
     # ═════════════════════════════════════════════════════════════════════════
+
+    def _schedule_voice_transcription(self, message_id: str, media_type: str, abs_saved: str) -> None:
+        """Queue optional voice-note transcription without blocking media ingest."""
+        if media_type not in ("voice", "audio", "ptt") or not abs_saved:
+            return
+
+        self._voice_transcription_executor.submit(
+            self._transcribe_voice_media_background,
+            message_id,
+            media_type,
+            abs_saved,
+        )
+
+    def _transcribe_voice_media_background(self, message_id: str, media_type: str, abs_saved: str) -> None:
+        try:
+            from distr.core.audio.voice_cloning import transcribe_audio_file
+
+            voice_transcription = transcribe_audio_file(abs_saved)
+            if voice_transcription:
+                logger.info(f"WhatsApp: Transcribed voice note ({media_type}): {voice_transcription[:100]}")
+                self._update_message_caption(message_id, f"[Transcription] {voice_transcription}")
+            else:
+                logger.info(f"WhatsApp: No transcription returned for {media_type}")
+        except Exception as e:
+            logger.warning(f"WhatsApp: Voice transcription failed: {e}")
 
     def _update_message_caption(self, message_id: str, caption: str):
         """Update the caption field of a stored WhatsApp message (with transcription)."""

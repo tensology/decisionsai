@@ -14,6 +14,15 @@ assert _SPEC and _SPEC.loader
 wa_paths = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(wa_paths)
 
+_MANAGER_FILE = (
+    Path(__file__).resolve().parents[2]
+    / "distr"
+    / "core"
+    / "integrations"
+    / "whatsapp"
+    / "manager.py"
+)
+
 
 def test_media_path_for_database_returns_relative_under_db_dir(tmp_path) -> None:
     db_dir = tmp_path / "db"
@@ -77,3 +86,13 @@ def test_resolve_whatsapp_media_disk_path_falls_back_to_legacy_basename(tmp_path
         wa_paths.DB_DIR = old_db_dir
 
     assert Path(resolved) == media_file.resolve()
+
+
+def test_inbound_media_handler_does_not_transcribe_voice_inline() -> None:
+    source = _MANAGER_FILE.read_text()
+    start = source.index("    def _handle_inbound_media")
+    end = source.index("    # \u2550", start)
+    handler_source = source[start:end]
+
+    assert "_schedule_voice_transcription" in handler_source
+    assert "transcribe_audio_file(abs_saved)" not in handler_source
