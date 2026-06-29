@@ -213,11 +213,17 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
 
     def resume_input(self):
         """Ensure the mic/CoreAudio input stream is ready for capture."""
+        was_idle_paused = not bool(getattr(self._params, "audio_in_enabled", True))
         self._params.audio_in_enabled = True
         # Pipecat sets _paused on StopFrame; ensure capture is not stuck paused.
         self._paused = False
         try:
             self._ensure_audio_task_ready()
+            if was_idle_paused and self._input_stream_is_active():
+                # While idle-paused, callbacks may legitimately stop updating.
+                # Trust the warm active stream on resume and let fresh callbacks
+                # prove health before deciding to reopen on a later check.
+                self._input_last_callback_at = time.time()
             self._open_input_stream()
             logger.info("Audio input stream resumed: %s", self.get_input_health())
         except Exception as e:

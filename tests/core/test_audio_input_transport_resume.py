@@ -100,7 +100,7 @@ def test_pause_idle_input_keeps_existing_stream_warm():
     assert transport.get_input_health()["stream_active"] is True
 
 
-def test_resume_input_reopens_active_stream_when_callbacks_stale_after_idle(monkeypatch):
+def test_resume_input_reuses_warm_paused_stream_even_when_callback_age_is_stale(monkeypatch):
     transport = _transport()
     created = []
 
@@ -119,10 +119,10 @@ def test_resume_input_reopens_active_stream_when_callbacks_stale_after_idle(monk
     transport.resume_input()
 
     assert created == [True]
-    assert stale_stream.closed is True
-    assert transport._in_stream is not stale_stream
+    assert stale_stream.closed is False
+    assert transport._in_stream is stale_stream
     assert transport._in_stream.is_active()
-    assert len(transport._py_audio.open_calls) == 2
+    assert len(transport._py_audio.open_calls) == 1
 
 
 def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
