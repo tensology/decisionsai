@@ -120,7 +120,7 @@ class VoiceDictationMixin:
         return trim_short_dictation_period(text)
 
     def _should_rewrite_dictation_as_ticket(self) -> bool:
-        return (
+        return bool(getattr(self, "_dictation_ticket_rewrite", False)) or (
             getattr(self, "_dictation_one_shot", False)
             and getattr(self, "_dictation_output_mode", "plain") == "ticket"
         )
@@ -227,13 +227,15 @@ class VoiceDictationMixin:
         """Start dictation mode.
 
         Args:
-            one_shot: When True (hold-to-dictate hotkey), exit dictation after the next
-                transcript is typed — release runs push_to_talk_stop before LLM sees text.
+            one_shot: When True, exit dictation after the next transcript is typed.
+                Hold-to-dictate hotkeys use the physical release event instead.
         """
         if self._is_dictating:
             if one_shot:
                 self._dictation_one_shot = True
                 self._one_shot_dictation_armed = True
+            self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
+            self._dictation_ticket_rewrite = output_mode == "ticket"
             return
 
         self._hands_free_before_dictation = self._is_hands_free
@@ -252,6 +254,7 @@ class VoiceDictationMixin:
         if one_shot:
             self._one_shot_dictation_armed = True
         self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
+        self._dictation_ticket_rewrite = output_mode == "ticket"
         logger.info(
             "Dictation: Dictation mode started (one_shot=%s, output_mode=%s)",
             self._dictation_one_shot,
@@ -277,6 +280,7 @@ class VoiceDictationMixin:
         self._dictation_one_shot = False
         self._one_shot_dictation_armed = False
         self._dictation_output_mode = "plain"
+        self._dictation_ticket_rewrite = False
         logger.info("Dictation: Dictation mode stopped")
 
         if self.event_queue:

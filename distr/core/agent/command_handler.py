@@ -905,8 +905,6 @@ def _cmd_dictation_hotkey_pressed(session, params):
     session.logger.debug("Dictation hotkey: pressed")
     dictation_params = dict(params or {})
     dictation_params["for_dictation"] = True
-    if hasattr(session, 'llm_service') and session.llm_service:
-        session.llm_service._one_shot_dictation_armed = True
     # Coalesce rapid TTS teardown so dictation capture is not starved by interrupt storms
     if hasattr(session, 'tts_service') and session.tts_service:
         if hasattr(session.tts_service, '_cancelled'):
@@ -916,7 +914,7 @@ def _cmd_dictation_hotkey_pressed(session, params):
     # Enable STT dictation flag before capture so short utterances stay in typing mode.
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
-        session.llm_service._start_dictation(one_shot=True)
+        session.llm_service._start_dictation(one_shot=False)
     _cmd_push_to_talk_start(session, dictation_params)
 
 
@@ -925,49 +923,22 @@ def _cmd_ticket_dictation_hotkey_pressed(session, params):
     session.logger.debug("Ticket dictation hotkey: pressed")
     dictation_params = dict(params or {})
     dictation_params["for_dictation"] = True
-    if hasattr(session, 'llm_service') and session.llm_service:
-        session.llm_service._one_shot_dictation_armed = True
     _cmd_set_dictating(session, {"enabled": True})
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
-        session.llm_service._start_dictation(one_shot=True, output_mode="ticket")
+        session.llm_service._start_dictation(one_shot=False, output_mode="ticket")
     _cmd_push_to_talk_start(session, dictation_params)
 
 
 def _cmd_dictation_hotkey_released(session, params):
-    """End capture; LLM stops one-shot dictation after transcript is processed."""
+    """End hold-to-dictate capture using the actual hotkey release state."""
     session.logger.debug("Dictation hotkey: released")
-    release_mono = time.monotonic()
     _cmd_push_to_talk_stop(session, params)
-
-    def _clear_stuck_one_shot_dictation():
-        try:
-            llm = getattr(session, 'llm_service', None)
-            last_transcript_mono = getattr(llm, '_last_dictation_transcription_mono', 0.0) if llm else 0.0
-            if (
-                llm
-                and getattr(llm, '_dictation_one_shot', False)
-                and getattr(llm, '_is_dictating', False)
-                and last_transcript_mono < release_mono
-            ):
-                session.logger.warning(
-                    "Dictation hotkey: clearing stuck one-shot dictation after %.1fs (no transcript arrived)",
-                    time.monotonic() - release_mono,
-                )
-                llm._stop_dictation()
-        except Exception as exc:
-            session.logger.debug("Dictation hotkey fallback cleanup failed: %s", exc)
-
-    loop = getattr(session.runner, '_loop', None) if session.runner else None
-    if loop and getattr(loop, 'is_running', lambda: False)():
-
-        async def _delayed_cleanup():
-            await asyncio.sleep(20.0)
-            _clear_stuck_one_shot_dictation()
-
-        try:
-            asyncio.run_coroutine_threadsafe(_delayed_cleanup(), loop)
-        except Exception as exc:
-            session.logger.debug("Dictation hotkey: could not schedule fallback cleanup: %s", exc)
+    try:
+        llm = getattr(session, 'llm_service', None)
+        if llm and hasattr(llm, '_stop_dictation'):
+            llm._stop_dictation()
+    except Exception as exc:
+        session.logger.debug("Dictation hotkey release cleanup failed: %s", exc)
 
 
 

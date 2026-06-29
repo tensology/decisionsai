@@ -47,17 +47,46 @@ def test_empty_dictation_capture_queues_stop_dictation():
     queue.put.assert_called_once_with(("stop_dictation", {}), block=False)
 
 
-def test_dictation_hotkey_arms_typing_before_capture():
+def test_dictation_hotkey_starts_hold_mode_before_capture():
     from pathlib import Path
 
     source = Path("distr/core/agent/command_handler.py").read_text()
     block = source.split("def _cmd_dictation_hotkey_pressed", 1)[1].split(
         "def _cmd_ticket_dictation_hotkey_pressed", 1
     )[0]
-    assert "_one_shot_dictation_armed = True" in block
     assert '_cmd_set_dictating(session, {"enabled": True})' in block
+    assert "_start_dictation(one_shot=False)" in block
+    assert "_one_shot_dictation_armed = True" not in block
+    assert "_start_dictation(one_shot=True)" not in block
     assert "for_dictation" in block
-    assert block.index("_one_shot_dictation_armed") < block.index("_cmd_push_to_talk_start")
+    assert block.index("_cmd_set_dictating") < block.index("_cmd_push_to_talk_start")
+    assert block.index("_start_dictation") < block.index("_cmd_push_to_talk_start")
+
+
+def test_dictation_hotkey_release_stops_without_one_shot_watchdog():
+    from pathlib import Path
+
+    source = Path("distr/core/agent/command_handler.py").read_text()
+    block = source.split("def _cmd_dictation_hotkey_released", 1)[1].split(
+        "def _cmd_interrupt_tts", 1
+    )[0]
+    assert "_cmd_push_to_talk_stop(session, params)" in block
+    assert "llm._stop_dictation()" in block
+    assert "asyncio.sleep(20.0)" not in block
+    assert "_dictation_one_shot" not in block
+
+
+def test_ticket_dictation_hotkey_keeps_ticket_mode_without_one_shot():
+    from pathlib import Path
+
+    source = Path("distr/core/agent/command_handler.py").read_text()
+    block = source.split("def _cmd_ticket_dictation_hotkey_pressed", 1)[1].split(
+        "def _cmd_dictation_hotkey_released", 1
+    )[0]
+    assert '_cmd_set_dictating(session, {"enabled": True})' in block
+    assert '_start_dictation(one_shot=False, output_mode="ticket")' in block
+    assert "_one_shot_dictation_armed = True" not in block
+    assert "_start_dictation(one_shot=True" not in block
 
 
 def test_one_shot_dictation_does_not_stop_on_empty_frame(monkeypatch):
