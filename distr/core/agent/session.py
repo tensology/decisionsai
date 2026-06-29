@@ -878,7 +878,9 @@ class AgentSession:
 
     def _on_dictation_hotkey_released(self):
         try:
-            if self.llm_service and hasattr(self.llm_service, '_stop_dictation'):
+            if self.llm_service and hasattr(self.llm_service, '_finish_dictation_after_pending_transcript'):
+                self.llm_service._finish_dictation_after_pending_transcript()
+            elif self.llm_service and hasattr(self.llm_service, '_stop_dictation'):
                 self.llm_service._stop_dictation()
         except Exception as e:
             self.logger.debug("Dictation hotkey release failed: %s", e)

@@ -71,7 +71,7 @@ def test_dictation_hotkey_release_stops_without_one_shot_watchdog():
         "def _cmd_interrupt_tts", 1
     )[0]
     assert "_cmd_push_to_talk_stop(session, params)" in block
-    assert "llm._stop_dictation()" in block
+    assert "llm._finish_dictation_after_pending_transcript()" in block
     assert "asyncio.sleep(20.0)" not in block
     assert "_dictation_one_shot" not in block
 

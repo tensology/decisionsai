@@ -26,6 +26,7 @@ class _Harness(LLMSharedMixin):
         self._is_dictating = True
         self._dictation_one_shot = False
         self._one_shot_dictation_armed = False
+        self._dictation_release_pending = False
         self._is_hands_free = False
         self._is_listening = True
         self._messages = []
@@ -61,3 +62,19 @@ def test_dictation_transcript_does_not_touch_agent_ptt_state(monkeypatch):
         "clear_live_preview": False,
         "discard_live_preview": True,
     }) in harness.event_queue.items
+
+
+def test_released_hold_dictation_transcript_still_routes_to_typing(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    harness = _Harness()
+    harness._is_dictating = False
+    harness._dictation_release_pending = True
+
+    asyncio.run(harness.process_frame(_FakeTranscriptionFrame("late flushed dictation"), None))
+
+    assert harness.typed == ["late flushed dictation"]
+    assert harness._dictation_release_pending is False
+    assert not hasattr(harness, "_last_ptt_transcription_text")

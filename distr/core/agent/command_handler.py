@@ -935,7 +935,9 @@ def _cmd_dictation_hotkey_released(session, params):
     _cmd_push_to_talk_stop(session, params)
     try:
         llm = getattr(session, 'llm_service', None)
-        if llm and hasattr(llm, '_stop_dictation'):
+        if llm and hasattr(llm, '_finish_dictation_after_pending_transcript'):
+            llm._finish_dictation_after_pending_transcript()
+        elif llm and hasattr(llm, '_stop_dictation'):
             llm._stop_dictation()
     except Exception as exc:
         session.logger.debug("Dictation hotkey release cleanup failed: %s", exc)

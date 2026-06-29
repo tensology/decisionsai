@@ -251,6 +251,7 @@ class VoiceDictationMixin:
 
         self._is_dictating = True
         self._dictation_one_shot = bool(one_shot)
+        self._dictation_release_pending = False
         if one_shot:
             self._one_shot_dictation_armed = True
         self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
@@ -271,14 +272,39 @@ class VoiceDictationMixin:
             except Exception as e:
                 logger.debug("Error emitting dictation_started: %s", e)
 
+    def _finish_dictation_after_pending_transcript(self):
+        """Stop recording now, but reserve the flushed transcript for dictation."""
+        if not self._is_dictating:
+            return
+
+        self._dictation_release_pending = True
+        self._one_shot_dictation_armed = True
+        logger.info("Dictation: Hotkey released; waiting for flushed dictation transcript")
+
+        if self.event_queue:
+            try:
+                self.event_queue.put(('set_dictating', {'enabled': False}), block=False)
+            except Exception as e:
+                logger.debug("Error emitting set_dictating: %s", e)
+            try:
+                self.event_queue.put(('dictation_stopped', {}), block=False)
+            except Exception as e:
+                logger.debug("Error emitting dictation_stopped: %s", e)
+
     def _stop_dictation(self):
         """Stop dictation mode."""
         if not self._is_dictating:
+            self._dictation_release_pending = False
+            self._one_shot_dictation_armed = False
+            self._dictation_one_shot = False
+            self._dictation_output_mode = "plain"
+            self._dictation_ticket_rewrite = False
             return
 
         self._is_dictating = False
         self._dictation_one_shot = False
         self._one_shot_dictation_armed = False
+        self._dictation_release_pending = False
         self._dictation_output_mode = "plain"
         self._dictation_ticket_rewrite = False
         logger.info("Dictation: Dictation mode stopped")

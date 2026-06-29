@@ -962,6 +962,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         return bool(
             self._is_dictating
             or getattr(self, "_one_shot_dictation_armed", False)
+            or getattr(self, "_dictation_release_pending", False)
         )
 
     def _is_critical_tool_run_in_progress(self) -> bool:
@@ -1586,7 +1587,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 if text_to_type:
                     await self._type_dictation_text(text_to_type)
                 self._one_shot_dictation_armed = False
-                if getattr(self, '_dictation_one_shot', False):
+                release_pending = getattr(self, '_dictation_release_pending', False)
+                self._dictation_release_pending = False
+                if getattr(self, '_dictation_one_shot', False) or release_pending:
                     self._stop_dictation()
                 return
 
