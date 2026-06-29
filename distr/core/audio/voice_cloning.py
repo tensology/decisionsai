@@ -68,7 +68,7 @@ def process_custom_voice(voice_id: int) -> None:
         session.close()
 
 
-def _transcribe_via_loaded_agent_stt(file_path: str, timeout_seconds: float = 45.0) -> str | None:
+def _transcribe_via_loaded_agent_stt(file_path: str, timeout_seconds: float = 2.5) -> str | None:
     """Route transcription to the already-loaded agent STT service when available."""
     try:
         from PyQt6.QtWidgets import QApplication
@@ -101,7 +101,10 @@ def _transcribe_via_loaded_agent_stt(file_path: str, timeout_seconds: float = 45
             if err:
                 logger.warning("Agent STT transcription returned error: %s", err)
         else:
-            logger.warning("Timed out waiting for agent STT transcription result")
+            logger.warning(
+                "Timed out waiting %.1fs for agent STT transcription result",
+                timeout_seconds,
+            )
         app._pending_stt_callbacks.pop(req_id, None)
     except Exception as e:
         logger.debug("Agent STT route unavailable, falling back: %s", e)
