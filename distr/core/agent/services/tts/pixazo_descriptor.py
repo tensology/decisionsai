@@ -81,6 +81,20 @@ class PixazoDescriptor(TTSProviderDescriptor):
         from distr.core.pixazo_client import pixazo_dit_steps_from_settings
 
         dit_steps = pixazo_dit_steps_from_settings(settings)
+        fallback_tts_service = None
+        try:
+            from distr.core.agent.services.tts.registry import tts_registry
+
+            fallback_tts_service = tts_registry.get("kokoro").create_service(
+                {"engine": "kokoro", "voice_name": "af_heart", "voice_id": "af_heart"},
+                settings=settings,
+                stt_service=stt_service,
+                is_hands_free=is_hands_free,
+                models_dir=models_dir,
+            )
+        except Exception:
+            logger.warning("Pixazo fallback Kokoro service could not be initialized", exc_info=True)
+
         service = PixazoTTSService(
             api_key=api_key,
             voice_id=voice_id,
@@ -92,6 +106,7 @@ class PixazoDescriptor(TTSProviderDescriptor):
             reference_audio_url=ref_url,
             prompt_text=prompt_text,
             dit_steps=dit_steps,
+            fallback_tts_service=fallback_tts_service,
         )
         service.set_hands_free(is_hands_free)
         return service
