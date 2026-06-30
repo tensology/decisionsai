@@ -960,6 +960,10 @@ function _stopSttPreviewClock() {
     }
 }
 
+function hasRenderedUserMessagePlain(plain) {
+    return hasRenderedMessagePlain('user', plain);
+}
+
 /** Live STT strip uses the same slot as timestamps — show the current time, not the word “Listening”. */
 function _tickSttPreviewClock() {
     const lab = document.querySelector('#transcriptionStatus .stt-preview-label');
@@ -1323,12 +1327,12 @@ function handleChatEventMessageAdded(msg) {
         // Voice/PTT messages come via WS without sendMessage() — render them.
         // Skip only if sendMessage() already rendered this exact text optimistically.
         const key = content.substring(0, 100);
-        if (_hasRecentOptimisticUserMessage(key) && hasOpenUserTurnPlain(_normalizeMsgPlain(content))) {
+        const np = _normalizeMsgPlain(content);
+        if (_hasRecentOptimisticUserMessage(key) && (hasOpenUserTurnPlain(np) || hasRenderedUserMessagePlain(np))) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
             return;
         }
-        const np = _normalizeMsgPlain(content);
         if (np && hasOpenUserTurnPlain(np)) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
@@ -3092,7 +3096,8 @@ function renderMessages(messages, preserveOnEmpty) {
                 const sameRowRendered = msg.chat_row_id != null && findLiveTurnAnchor(msg.chat_row_id);
                 if (
                     sameRowRendered
-                    || (_hasRecentOptimisticUserMessage(msg.content.substring(0, 100)) && hasOpenUserTurnPlain(userPlain))
+                    || (_hasRecentOptimisticUserMessage(msg.content.substring(0, 100))
+                        && (hasOpenUserTurnPlain(userPlain) || hasRenderedUserMessagePlain(userPlain)))
                 ) {
                     continue;
                 }

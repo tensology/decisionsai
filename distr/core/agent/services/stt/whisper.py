@@ -57,6 +57,7 @@ class WhisperSTTService(BaseSTTService):
         super().__init__(event_queue=event_queue, is_hands_free=is_hands_free, **kwargs)
         self.model_path = model_path
         self.model = None
+        self._transcribe_lock = asyncio.Lock()
 
         # Suppress whisper C library verbose output during initialization
         try:
@@ -68,6 +69,13 @@ class WhisperSTTService(BaseSTTService):
             raise RuntimeError(f"Could not initialize Whisper model: {e}") from e
 
         logger.info(f"WhisperSTTService initialized with model: {model_path}, is_hands_free={is_hands_free}")
+
+    def _get_transcribe_lock(self) -> asyncio.Lock:
+        lock = getattr(self, "_transcribe_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._transcribe_lock = lock
+        return lock
 
     def __del__(self):
         """Cleanup Whisper model resources on deletion"""
@@ -207,8 +215,11 @@ class WhisperSTTService(BaseSTTService):
         try:
             # Run in executor to avoid blocking the event loop
             # Note: We can't easily cancel executor tasks, but we check cancellation flag after
-            segments = await loop.run_in_executor(None, lambda: self.model.transcribe(audio_np))
-            
+            async with self._get_transcribe_lock():
+                segments = await loop.run_in_executor(
+                    None, lambda: self.model.transcribe(audio_np)
+                )
+
             # Check if cancelled after transcription
             if self._stt_cancelled:
                 logger.debug("STT: Transcription cancelled after completion - discarding result")

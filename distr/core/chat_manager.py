@@ -439,6 +439,7 @@ class ChatManagerCore:
                 settings = session.query(Settings).first()
                 if settings:
                     settings.last_chat_id = chat_id
+                    settings.agent_current_chat_id = chat_id
                     session.commit()
 
             if changed:

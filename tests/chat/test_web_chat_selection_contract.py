@@ -322,6 +322,23 @@ def test_repeated_voice_transcript_text_is_not_deduped_against_older_turns():
     assert "hasRenderedMessagePlain('user', plain)" not in merge_block
 
 
+def test_recent_optimistic_user_message_is_not_rendered_again_after_assistant_reply():
+    src = _chat_js_source()
+    message_added_block = src.split("function handleChatEventMessageAdded", 1)[1].split(
+        "if (role === 'assistant'",
+        1,
+    )[0]
+    render_incremental_block = src.split("// Fast path: append only new messages", 1)[1].split(
+        "// Duplicate assistant rows",
+        1,
+    )[0]
+
+    assert "hasRenderedUserMessagePlain(np)" in message_added_block
+    assert "hasRenderedUserMessagePlain(userPlain)" in render_incremental_block
+    assert "_hasRecentOptimisticUserMessage(key)" in message_added_block
+    assert "_hasRecentOptimisticUserMessage(msg.content.substring(0, 100))" in render_incremental_block
+
+
 def test_voice_stream_start_repairs_missing_user_transcript_from_chat_state():
     src = _chat_js_source()
     repair_block = src.split("function repairMissingUserMessageForStream", 1)[1].split(
