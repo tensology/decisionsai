@@ -5,7 +5,8 @@
     "humanizer": "../reference/humanizer",
     "last30days": "../reference/last30days-skill/skills/last30days",
     "marketingskills": "../reference/marketingskills/skills",
-    "awesome_design": "../reference/awesome-design-skills/skills"
+    "awesome_design": "../reference/awesome-design-skills/skills",
+    "taste-skill": "../reference/taste-skill/skills"
   },
   "project_full": [
     {
@@ -78,6 +79,12 @@
       "id": "bento",
       "source": "awesome_design/bento",
       "overwrite": true
+    },
+    {
+      "id": "design-taste-frontend",
+      "source": "taste-skill/taste-skill",
+      "overwrite": true,
+      "note": "Anti-slop frontend taste skill for landing pages, portfolios, and redesigns."
     }
   ],
   "index_only": [

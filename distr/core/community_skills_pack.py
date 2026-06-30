@@ -88,6 +88,11 @@ def merge_community_pre_chain(skill_ids: list[str], *, project_folder: str = "")
         prepend.extend(["product-marketing", "decisions-marketing-skills"])
     if any(t in blob for t in ("design", "aesthetic", "dashboard", "minimal", "ui")):
         prepend.append("decisions-design-aesthetics")
+    if any(
+        t in blob
+        for t in ("design", "landing", "portfolio", "redesign", "frontend", "anti-slop")
+    ):
+        prepend.append("design-taste-frontend")
     merged: list[str] = []
     seen: set[str] = set()
     for skill_id in [*prepend, *skill_ids]:
@@ -103,7 +108,7 @@ def _projection_text(*, harness: str, registry_path: Path) -> str:
     ref = PROJECT_ROOT.parent / "reference"
     return f"""---
 name: decisions-community-skills-harness
-description: Curated community skills for {harness} — humanizer, last30days, marketing, design aesthetics.
+description: Curated community skills for {harness} — humanizer, last30days, marketing, design aesthetics, taste-skill.
 ---
 
 # DecisionsAI Community Skills Harness
@@ -115,6 +120,7 @@ Curated pack (not a bulk dump of 44 marketing or 50 design skills).
 - **product-marketing**, **cro**, **copywriting**, **seo-audit**, **ai-seo**, **competitors** — marketing stack (skipped if already in harness)
 - **minimal**, **dashboard**, **application**, **shadcn**, **bento** — design aesthetic tokens
 - **decisions-marketing-skills** / **decisions-design-aesthetics** — indexes for on-demand skills
+- **design-taste-frontend** — anti-slop frontend taste and anti-template UI guidance
 
 Registry: `{registry_path}`
 
