@@ -42,11 +42,51 @@ def test_initiative_approval_telegram_is_conversational_and_has_no_payload(tmp_p
     )
 
     sent = svc.telegram_manager.send_to_telegram.call_args.kwargs["text"]
-    assert "I spotted a board change" in sent
+    assert "board update" in sent
+    assert "Goal:" in sent
     assert "Payload:" not in sent
     assert "Draft:" not in sent
     assert "[Initiative]" not in sent
     assert "[APPROVE]" not in sent
+
+
+def test_approval_notifications_use_event_queue_and_include_context(tmp_path):
+    svc = _service(tmp_path)
+
+    class QueueSpy:
+        def __init__(self):
+            self.items = []
+
+        def put(self, item, block=False):
+            self.items.append((item, block))
+
+    queue = QueueSpy()
+    svc.event_queue = queue
+
+    action = ProposedAction(
+        action_type="ticket_lane_move",
+        description="My Board has 2 backlog item(s) that could be promoted into Current.",
+        payload={"board_id": 1, "ticket_ids": [7, 12], "target_lane": "Current"},
+        draft='My Board has 2 backlog item(s).',
+    )
+
+    svc._draft_and_ask(
+        action,
+        {"initiative_allow_telegram": True},
+        tier=PermissionTier.APPROVE,
+    )
+
+    assert queue.items, "draft approval should be queued for send_to_telegram"
+    event_name, data = queue.items[0][0]
+    assert event_name == "send_to_telegram"
+    assert data["engagement_source"] == "initiative"
+    assert data["board_id"] == 1
+    assert data["ticket_id"] == 7
+    assert "engagement_goal_hint" in data
+    assert "2 backlog item" in data["engagement_goal_hint"]
+    assert data["requires_response"] is True
+    assert "input_type" in data
+    svc.telegram_manager.send_to_telegram.assert_not_called()
 
 
 def test_duplicate_pending_initiative_draft_does_not_notify_again(tmp_path):

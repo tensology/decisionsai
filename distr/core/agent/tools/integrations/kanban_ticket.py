@@ -3004,10 +3004,23 @@ class KanbanTicketTool(BaseTool):
             logger.info("Agent whatsapp_sync: finished %s", result)
             synced = int(result.get("synced") or 0)
             total = int(result.get("total") or 0)
+            warning = str(result.get("warning") or "").strip()
+            relay_ok = result.get("relay_link_ok", True)
             if result.get("error"):
                 return voice_then_reference(
                     "WhatsApp sync did not complete cleanly.",
                     f"WhatsApp sync error: {result.get('error')}",
+                )
+            if warning and not relay_ok:
+                if synced > 0:
+                    return voice_then_reference(
+                        f"Synced {synced} older message{'s' if synced != 1 else ''}, "
+                        "but WhatsApp on the server is not linked. Re-link in Settings.",
+                        f"WhatsApp sync: synced={synced}, relay_total={total}. {warning}",
+                    )
+                return voice_then_reference(
+                    "WhatsApp on the server is not linked. Scan the QR code in Settings to reconnect.",
+                    warning,
                 )
             return voice_then_reference(
                 f"WhatsApp sync finished. I pulled in {synced} new message{'s' if synced != 1 else ''}.",

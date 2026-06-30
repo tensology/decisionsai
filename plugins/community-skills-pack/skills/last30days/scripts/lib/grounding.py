@@ -1,4 +1,4 @@
-"""Web search retrieval via Brave Search, Exa, and Serper."""
+"""Web search retrieval via Brave Search, Exa, Serper, Parallel, or a keyless floor."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import urllib.parse
 from datetime import datetime
 from urllib.parse import urlparse
 
-from . import dates, http
+from . import dates, env, http, web_search_keyless
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +207,11 @@ def web_search(
             backend = "serper"
         elif config.get("PARALLEL_API_KEY"):
             backend = "parallel"
+        elif env.keyless_web_allowed(config):
+            # No paid key and the host has no native search -> use the keyless
+            # floor. On a native-search host this branch is skipped (the model
+            # supplies web results itself), so the engine returns nothing here.
+            backend = "keyless"
         else:
             return [], {}
     items: list[dict] = []
@@ -231,6 +236,8 @@ def web_search(
         if not key:
             raise RuntimeError("PARALLEL_API_KEY is required when web_backend='parallel'")
         items, artifact = parallel_search(query, date_range, key)
+    elif backend == "keyless":
+        items, artifact = web_search_keyless.keyless_search(query, date_range, config)
     elif backend != "none":
         raise ValueError(f"Unsupported web backend: {backend!r}")
     else:

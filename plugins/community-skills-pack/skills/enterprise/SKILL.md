@@ -1,44 +1,49 @@
 ---
-name: application
-description: App dashboard with purple-themed aesthetic, top-bar navigation, card-based layouts, and developer-first workflows.
+name: enterprise
+description: Dark-themed cloud-platform aesthetic with modular grids, glass-like panels, and strong data hierarchy for productivity dashboards.
 license: MIT
 metadata:
   author: typeui.sh
 ---
 
 <!-- TYPEUI_SH_MANAGED_START -->
-# Application Design System Skill (Universal)
+# Enterprise Design System Skill (Universal)
 
 ## Mission
-You are an expert design-system guideline author for Application.
+You are an expert design-system guideline author for Enterprise.
 Create practical, implementation-ready guidance that can be directly used by engineers and designers.
 
 ## Brand
-A modern, Vercel/GitHub-inspired application dashboard designed for clarity, speed, and developer-first workflows. The interface focuses on simplicity and visual hierarchy, allowing teams to monitor, deploy, and manage applications effortlessly from a single control center. Features a top-bar only navigation (no sidebar) and a clean purple-themed aesthetic.
+Enterprise design emphasizes grids, modular components, and strong visual hierarchy to present complex data in a clear and accessible way. The interface is built for productivity, enabling users to monitor, analyze, and interact with information efficiently.
 
 ## Style Foundations
-- Visual style: modern, clean, high-contrast, glass-like panels, soft shadows, rounded components
-- Typography scale: 12/14/16/20/24/32 | Fonts: primary=Inter, display=Inter, mono=JetBrains Mono | weights=100, 200, 300, 400, 500, 600, 700, 800, 900
-- Color palette: primary (purple), neutral, success, warning, danger | Tokens: primary=#9333ea, secondary=#a855f7, success=#10b981, warning=#f59e0b, danger=#ef4444, surface=#FFFFFF, text=#09090b
-- Layout: Top-bar only navigation, structured grid layout, card-based content
-- Spacing scale: 4/8/12/16/24/32
+- Visual style: modern, clean, cloud-platform aesthetic (Heroku/Vercel/GitHub inspired), dark theme, subtle gradients, soft shadows, glass-like panels, rounded components
+- Typography scale: 12/14/16/20/24/32 | Fonts: primary=IBM Plex Sans, display=IBM Plex Sans, mono=IBM Plex Sans | weights=100, 200, 300, 400, 500, 600, 700, 800, 900
+- Color palette: primary, neutral, success, warning, danger | Tokens: primary=#0C5CAB, secondary=#0a4a8a, success=#10b981, warning=#f59e0b, danger=#ef4444, surface=#09090b, text=#fafafa
+- Spacing scale: 8pt baseline grid
 
 
 ## Accessibility
-WCAG 2.2 AA, keyboard-first interactions, visible focus states
+WCAG 2.2 AA, keyboard-first interactions, visible focus states, semantic HTML before ARIA, screen-reader tested labels, reduced-motion support, 44px+ touch targets, high-contrast support
 
 ## Writing Tone
-concise, confident, helpful
+concise, confident, helpful, clear, friendly, professional, action-oriented, low-jargon
 
 ## Rules: Do
 - prefer semantic tokens over raw values
 - preserve visual hierarchy
 - keep interaction states explicit
+- design for empty/loading/error states
+- ensure responsive behavior by default
+- document accessibility rationale
 
 ## Rules: Don't
 - avoid low contrast text
 - avoid inconsistent spacing rhythm
+- avoid decorative motion without purpose
 - avoid ambiguous labels
+- avoid mixing multiple visual metaphors
+- avoid inaccessible hit areas
 
 ## Expected Behavior
 - Follow the foundations first, then component consistency.

@@ -175,6 +175,7 @@ def _ensure_remote_reply_context_table() -> None:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     platform VARCHAR,
                     channel VARCHAR,
+                    thread_id VARCHAR,
                     workflow_id INTEGER,
                     run_id INTEGER,
                     step_id INTEGER,
@@ -191,6 +192,12 @@ def _ensure_remote_reply_context_table() -> None:
                     metadata TEXT
                 )
             """))
+            try:
+                columns = {row[1] for row in conn.execute(text("PRAGMA table_info(remote_reply_context)")).fetchall()}
+                if "thread_id" not in columns:
+                    conn.execute(text("ALTER TABLE remote_reply_context ADD COLUMN thread_id VARCHAR"))
+            except Exception:
+                pass
             conn.commit()
     except Exception:
         return
@@ -213,6 +220,7 @@ def record_remote_reply_context(
     *,
     platform: str,
     channel: str = "",
+    thread_id: str | None = None,
     workflow_id: int | None = None,
     run_id: int | None = None,
     step_id: int | None = None,
@@ -241,19 +249,21 @@ def record_remote_reply_context(
                     INSERT INTO remote_reply_context(
                         platform, channel, workflow_id, run_id, step_id, ticket_id,
                         board_id, project_id, execution_session_id, ticket_title,
-                        workflow_title, step_title, state_fingerprint, outbound_text,
+                        thread_id, workflow_title, step_title, state_fingerprint, outbound_text,
                         sent_at, metadata
                     )
                     VALUES (
                         :platform, :channel, :workflow_id, :run_id, :step_id,
                         :ticket_id, :board_id, :project_id, :execution_session_id,
-                        :ticket_title, :workflow_title, :step_title,
+                        :ticket_title, :thread_id,
+                        :workflow_title, :step_title,
                         :state_fingerprint, :outbound_text, :sent_at, :metadata
                     )
                 """),
                 {
                     "platform": platform,
                     "channel": channel,
+                    "thread_id": str(thread_id).strip() if thread_id is not None else None,
                     "workflow_id": workflow_id,
                     "run_id": run_id,
                     "step_id": step_id,
@@ -275,7 +285,12 @@ def record_remote_reply_context(
         return
 
 
-def latest_remote_reply_context(*, platform: str = "", max_age_s: int = 3600) -> dict[str, Any] | None:
+def latest_remote_reply_context(
+    *,
+    platform: str = "",
+    thread_id: str | None = None,
+    max_age_s: int = 3600,
+) -> dict[str, Any] | None:
     try:
         from sqlalchemy import text
         from distr.core.db import engine
@@ -287,17 +302,100 @@ def latest_remote_reply_context(*, platform: str = "", max_age_s: int = 3600) ->
             where += " AND platform = :platform"
             params["platform"] = platform
         with engine.connect() as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 text(f"""
                     SELECT *
                     FROM remote_reply_context
                     WHERE {where}
                     ORDER BY sent_at DESC, id DESC
-                    LIMIT 1
+                    LIMIT 12
                 """),
                 params,
-            ).mappings().first()
-        return dict(row) if row else None
+            ).mappings().all()
+        if not rows:
+            return None
+        ctx_rows = [dict(row) for row in rows]
+
+        normalized_thread_id = str(thread_id).strip() if thread_id else None
+
+        def _extract_metadata(raw_metadata: Any) -> dict[str, Any]:
+            if isinstance(raw_metadata, dict):
+                return raw_metadata
+            if not raw_metadata:
+                return {}
+            try:
+                parsed = json.loads(str(raw_metadata))
+            except Exception:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+
+        def _row_thread_id(ctx: dict[str, Any]) -> str | None:
+            raw_thread = ctx.get("thread_id")
+            if raw_thread is None:
+                metadata = _extract_metadata(ctx.get("metadata"))
+                raw_thread = metadata.get("thread_id")
+            if raw_thread is None:
+                return None
+            normalized = str(raw_thread).strip()
+            return normalized or None
+
+        def _metadata_requires_response(raw_metadata: Any) -> bool:
+            metadata = _extract_metadata(raw_metadata)
+            return bool(metadata.get("requires_response"))
+
+        def _metadata_score(raw_metadata: Any) -> int:
+            metadata = _extract_metadata(raw_metadata)
+            score = 0
+            if bool(metadata.get("requires_response")):
+                score += 100
+
+            kind = str(metadata.get("engagement_kind") or "").strip().lower()
+            source = str(metadata.get("engagement_source") or "").strip().lower()
+            if kind in {
+                "initiative_action",
+                "initiative_update",
+                "execution_waiting",
+                "workflow_status",
+                "tool_result_status",
+            }:
+                score += 25
+            if source == "initiative":
+                score += 12
+            if str(metadata.get("engagement_goal_hint") or "").strip():
+                score += 10
+            if metadata.get("input_type") in {"voice", "text"}:
+                score += 3
+            return score
+
+        if normalized_thread_id:
+            matching = [ctx for ctx in ctx_rows if _row_thread_id(ctx) == normalized_thread_id]
+
+            if not matching:
+                return None
+
+            for ctx in matching:
+                if _metadata_requires_response(ctx.get("metadata")):
+                    return ctx
+
+            ranked = sorted(
+                ((_metadata_score(ctx), -idx, ctx) for idx, ctx in enumerate(matching)),
+                key=lambda item: (item[0], item[1]),
+                reverse=True,
+            )
+            return ranked[0][2] if ranked else None
+
+        # No thread specified, preserve old behavior with response-required preference.
+        for ctx in ctx_rows:
+            if _metadata_requires_response(ctx.get("metadata")):
+                return ctx
+
+        # No explicit response-required context. Fall back to highest scored row.
+        ranked = sorted(
+            ((_metadata_score(ctx), -idx, ctx) for idx, ctx in enumerate(ctx_rows)),
+            key=lambda item: (item[0], item[1]),
+            reverse=True,
+        )
+        return ranked[0][2] if ranked else None
     except Exception:
         return None
 
@@ -306,22 +404,39 @@ def build_remote_reply_context_preamble(
     text: str,
     *,
     platform: str = "telegram",
+    thread_id: str | None = None,
     max_age_s: int = 3600,
 ) -> str:
     """Prefix inbound remote text with hidden operational context for the agent."""
     clean = str(text or "").strip()
+    normalized_thread_id = str(thread_id).strip() if thread_id else None
+    if not normalized_thread_id:
+        return clean
     if not clean or "[Remote reply context]" in clean:
         return clean
-    ctx = latest_remote_reply_context(platform=platform, max_age_s=max_age_s)
+    ctx = latest_remote_reply_context(platform=platform, thread_id=normalized_thread_id, max_age_s=max_age_s)
     if not ctx and platform:
-        ctx = latest_remote_reply_context(max_age_s=max_age_s)
+        ctx = latest_remote_reply_context(thread_id=normalized_thread_id, max_age_s=max_age_s)
     if not ctx:
         return clean
+
+    metadata = ctx.get("metadata") or {}
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            metadata = {}
 
     lines = [
         "[Remote reply context]",
         f"The user is replying from {platform or 'a remote integration'} to the most recent DecisionsAI update.",
     ]
+    goal_hint = (
+        (ctx.get("engagement_goal_hint") or "")
+        or str((metadata or {}).get("engagement_goal_hint", "") or "").strip()
+    )
+    if goal_hint:
+        lines.append(f"Goal: {goal_hint}")
     if ctx.get("ticket_title"):
         lines.append(f"Ticket: {ctx.get('ticket_title')}")
     if ctx.get("ticket_id"):

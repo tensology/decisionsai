@@ -165,6 +165,23 @@ def mark_relay_processed(relay_id: int, *, headers: dict[str, str] | None = None
         return False
 
 
+def fetch_relay_whatsapp_status() -> dict[str, Any]:
+    """GET /status from the Baileys relay (connected, qr_ready, etc.)."""
+    try:
+        resp = requests.get(
+            f"{relay_api_base()}/status",
+            headers=relay_request_headers(),
+            timeout=5,
+        )
+        if resp.ok:
+            data = resp.json()
+            return data if isinstance(data, dict) else {"status": "unknown"}
+        return {"status": "error", "error": f"HTTP {resp.status_code}"}
+    except Exception as exc:
+        logger.debug("fetch_relay_whatsapp_status failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
 def sync_messages_from_relay(*, mark_processed: bool = True) -> dict[str, Any]:
     """Pull relay messages into the local WhatsAppMessage table."""
     try:

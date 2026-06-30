@@ -995,9 +995,36 @@ class EventHandlerMixin:
 
     def _record_remote_reply_context(self, data: dict, outbound_text: str, *, channel: str) -> None:
         try:
+            thread_id = None
+            if data.get("thread_id"):
+                thread_id = str(data.get("thread_id"))
+            elif data.get("chat_id"):
+                thread_id = str(data.get("chat_id"))
+            else:
+                if hasattr(self, "telegram_manager") and self.telegram_manager:
+                    try:
+                        from distr.core.integrations.bus import get_integration_message_bus
+
+                        current_chat_id = self._integration_reply_chat_id()
+                        if current_chat_id:
+                            thread_id = get_integration_message_bus().resolve_thread_id_for_chat(
+                                "telegram",
+                                int(current_chat_id),
+                            )
+                    except Exception:
+                        thread_id = None
+                if not thread_id and hasattr(self, "telegram_manager") and self.telegram_manager:
+                    telegram_user_id = getattr(self.telegram_manager, "telegram_user_id", None)
+                    if telegram_user_id:
+                        try:
+                            thread_id = str(int(telegram_user_id))
+                        except (TypeError, ValueError):
+                            thread_id = str(telegram_user_id)
+
             record_remote_reply_context(
                 platform="telegram",
                 channel=channel,
+                thread_id=thread_id,
                 workflow_id=data.get("workflow_id"),
                 run_id=data.get("run_id"),
                 step_id=data.get("step_id"),
@@ -1014,8 +1041,11 @@ class EventHandlerMixin:
                     "engagement_kind": data.get("engagement_kind"),
                     "engagement_source": data.get("engagement_source"),
                     "engagement_priority": data.get("engagement_priority"),
+                    "requires_response": bool(data.get("requires_response")),
+                    "engagement_goal_hint": data.get("engagement_goal_hint"),
                     "input_type": data.get("input_type"),
                     "provider": data.get("provider"),
+                    "thread_id": thread_id,
                 },
             )
         except Exception:

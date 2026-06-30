@@ -211,11 +211,19 @@ class IntegrationMessageBus:
             logger.exception("IntegrationMessageBus: text sink raised (%s)", platform)
 
     @staticmethod
-    def _with_recent_reply_context(text: str, platform: str) -> str:
+    def _with_recent_reply_context(
+        text: str,
+        platform: str,
+        thread_id: str | None = None,
+    ) -> str:
         try:
             from distr.core.human_engagement import build_remote_reply_context_preamble
 
-            return build_remote_reply_context_preamble(text, platform=platform)
+            return build_remote_reply_context_preamble(
+                text,
+                platform=platform,
+                thread_id=thread_id,
+            )
         except Exception:
             logger.debug("IntegrationMessageBus: failed to attach remote reply context", exc_info=True)
             return text
@@ -231,7 +239,12 @@ class IntegrationMessageBus:
     ) -> None:
         """Locked mapping update + delegate to Qt/agent sink (outside lock)."""
         sink: AgentTextSink | None
-        routed_text = self._with_recent_reply_context(text, "telegram")
+        thread_id = str(telegram_chat_id).strip() if telegram_chat_id is not None else None
+        routed_text = self._with_recent_reply_context(
+            text,
+            "telegram",
+            thread_id=thread_id,
+        )
         metadata = self._telegram_metadata(speak, input_type)
         queued = False
         with self._route_lock:
@@ -274,7 +287,11 @@ class IntegrationMessageBus:
         """
         sink: AgentTextSink | None
         img = msg.attachments[0] if msg.attachments else None
-        routed_text = self._with_recent_reply_context(msg.text, msg.platform)
+        routed_text = self._with_recent_reply_context(
+            msg.text,
+            msg.platform,
+            thread_id=msg.thread_id,
+        )
         metadata = self._connector_metadata(msg.platform, msg.speak)
         queued = False
         with self._route_lock:

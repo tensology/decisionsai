@@ -3193,7 +3193,18 @@
         el.textContent = "Syncing from server...";
         apiFetch("/api/tickets/whatsapp/sync", { method: "POST" }).then(function(result) {
             var newCount = Number(result && result.synced) || 0;
-            if (newCount > 0) {
+            var warning = result && result.warning ? String(result.warning) : "";
+            var relayDown = result && result.relay_link_ok === false;
+            if (relayDown && warning) {
+                if (newCount > 0) {
+                    showSnackbar(
+                        "Synced " + newCount + " older message" + (newCount !== 1 ? "s" : "") + ". " + warning,
+                        "warning"
+                    );
+                } else {
+                    showSnackbar(warning, "error");
+                }
+            } else if (newCount > 0) {
                 showSnackbar("Synced " + newCount + " new message" + (newCount !== 1 ? "s" : "") + " from server", "success");
             } else {
                 showSnackbar("No new messages on server");

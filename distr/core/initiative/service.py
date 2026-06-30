@@ -50,6 +50,142 @@ def _hash_initiative_payload(action_type: str, payload: dict | None) -> str:
     return hashlib.sha256(f"{action_type}:{raw}".encode("utf-8")).hexdigest()
 
 
+def _coerce_int(value) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_int_list(value) -> list[int]:
+    items: list[int] = []
+    if not isinstance(value, (list, tuple, set)):
+        return items
+    for item in value:
+        parsed = _coerce_int(item)
+        if parsed is not None:
+            items.append(parsed)
+    return items
+
+
+def _derive_initiative_action_context(action: ProposedAction) -> dict[str, Any]:
+    payload = action.payload if isinstance(action.payload, dict) else {}
+    def _pick_first_nonempty(*values: Any) -> str:
+        for value in values:
+            candidate = str(value or "").strip()
+            if candidate:
+                return candidate
+        return ""
+    raw_goal = _pick_first_nonempty(
+        payload.get("goal_hint"),
+        payload.get("goal"),
+        payload.get("goal_text"),
+        payload.get("objective"),
+        action.description,
+    )
+    if raw_goal and len(raw_goal) > 160:
+        raw_goal = raw_goal[:157].rstrip() + "..."
+    context: dict[str, Any] = {
+        "action_type": action.action_type,
+        "board_id": _coerce_int(payload.get("board_id")),
+        "workflow_id": _coerce_int(payload.get("workflow_id")),
+        "project_id": _coerce_int(payload.get("project_id")),
+        "ticket_ids": _coerce_int_list(payload.get("ticket_ids")),
+        "goal_hint": raw_goal,
+        "board_title": str(payload.get("board_title", "") or "").strip(),
+        "workflow_title": str(payload.get("workflow_title", "") or "").strip(),
+        "project_title": str(payload.get("project_title", "") or "").strip(),
+        "ticket_title": str(payload.get("ticket_title", "") or "").strip(),
+        "target_lane": str(
+            payload.get("target_lane", "") or payload.get("lane", "") or ""
+        ).strip(),
+    }
+    ticket_ids = context.get("ticket_ids") or []
+    context["ticket_id"] = ticket_ids[0] if ticket_ids else None
+
+    board_id = context.get("board_id")
+    workflow_id = context.get("workflow_id")
+    project_id = context.get("project_id")
+
+    if not (context["board_title"] and board_id) and not (context["ticket_title"] and context["ticket_id"]):
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.kanban import KanbanBoard, KanbanTicket
+
+            with get_session() as session:
+                if board_id and not context["board_title"]:
+                    board = session.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
+                    if board:
+                        context["board_title"] = str(board.name or "").strip()
+                if context["ticket_id"] and not context["ticket_title"]:
+                    ticket = session.query(KanbanTicket).filter(
+                        KanbanTicket.id == context["ticket_id"]
+                    ).first()
+                    if ticket:
+                        context["ticket_title"] = str(ticket.title or "").strip()
+        except Exception:
+            pass
+
+    if not context["workflow_title"] and workflow_id:
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.workflow import AutoWorkflow
+
+            with get_session() as session:
+                workflow = session.query(AutoWorkflow).filter(
+                    AutoWorkflow.id == workflow_id
+                ).first()
+                if workflow:
+                    context["workflow_title"] = str(workflow.name or "").strip()
+        except Exception:
+            pass
+
+    if not context["project_title"] and project_id:
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if project:
+                    context["project_title"] = str(project.name or "").strip()
+        except Exception:
+            pass
+
+    return context
+
+
+def _initiative_context_line(context: dict[str, Any]) -> str:
+    action_type = str(context.get("action_type") or "").strip()
+    board = context.get("board_title") or (
+        f"Board {context['board_id']}" if context.get("board_id") else "a board"
+    )
+    ticket_id = context.get("ticket_id")
+    ticket_title = context.get("ticket_title") or ""
+    ticket_count = len(context.get("ticket_ids") or [])
+
+    if action_type == "ticket_lane_move":
+        lane = context.get("target_lane") or "Current"
+        if ticket_count:
+            noun = "ticket" if ticket_count == 1 else "tickets"
+            return f"{ticket_count} {noun} on {board}: move to {lane}"
+        return f"Board change on {board}: move to {lane}"
+
+    if action_type == "workflow_start":
+        workflow = context.get("workflow_title") or f"Workflow {context.get('workflow_id')}"
+        subject = f"{ticket_title}" if ticket_title else f"Ticket {ticket_id}"
+        return f"Run {workflow} for {subject} on {board}"
+
+    if action_type == "project_cli_task":
+        project = context.get("project_title") or f"Project {context.get('project_id')}"
+        subject = f"{ticket_title}" if ticket_title else f"Ticket {ticket_id}"
+        return f"Run project task on {subject} for {project}"
+
+    return f"Initiative action on {board}"
+
+
 def _clean_telegram_line(text: str, max_len: int = 260) -> str:
     clean = re.sub(r"\s+", " ", str(text or "")).strip()
     clean = re.sub(r"\bPayload:\s*\{.*$", "", clean).strip()
@@ -59,25 +195,40 @@ def _clean_telegram_line(text: str, max_len: int = 260) -> str:
     return clean
 
 
-def _initiative_approval_text(entry: DraftEntry, tier_name: str) -> str:
+def _initiative_approval_text(
+    action: ProposedAction,
+    entry: DraftEntry,
+    tier_name: str,
+    context: dict[str, Any] | None = None,
+) -> str:
     description = _clean_telegram_line(entry.description, 220)
+    context = context or _derive_initiative_action_context(action)
+    scope = _initiative_context_line(context)
     if entry.action_type == "ticket_lane_move":
         return (
-            f"I spotted a board change that needs your approval: {description}\n\n"
-            "I’ve put it in Initiative approvals. Reply approve or reject, or handle it in the app."
+            "I found a board update that needs your approval:\n"
+            f"- {scope}\n\n"
+            f"Goal: {description}\n\n"
+            "Reply approve or reject, or handle it in the app."
         )
     if entry.action_type == "workflow_start":
         return (
-            f"A workflow is ready to run, but I need your approval first: {description}\n\n"
+            "A workflow is ready to run, but I need your approval first:\n"
+            f"- {scope}\n"
+            f"- {description}\n\n"
             "Reply approve or reject, or handle it in the app."
         )
     if entry.action_type == "project_cli_task":
         return (
-            f"A project execution is ready, but I need your approval first: {description}\n\n"
+            "A project execution is ready, but I need your approval first:\n"
+            f"- {scope}\n"
+            f"- {description}\n\n"
             "Reply approve or reject, or handle it in the app."
         )
     return (
-        f"I need your approval before I do this: {description}\n\n"
+        f"I need your approval before I do this ({tier_name}):\n"
+        f"- {scope}\n"
+        f"- {description}\n\n"
         "Reply approve or reject, or handle it in the app."
     )
 
@@ -1448,19 +1599,26 @@ class InitiativeService:
         logger.info("InitiativeService: draft queued %s: %s", entry.id, entry.description)
 
         # Notify via Telegram if possible
+        action_context = _derive_initiative_action_context(action)
         allow_telegram = settings.get("initiative_allow_telegram", False)
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if allow_telegram and uid and uid > 0:
-            msg = _initiative_approval_text(entry, resolved_tier.name)
+            msg = _initiative_approval_text(
+                action,
+                entry,
+                resolved_tier.name,
+                context=action_context,
+            )
             self._send_telegram_if_allowed(
                 msg,
                 settings,
                 kind="approval_request",
                 subject_type="initiative_action",
                 subject_id=entry.id,
-                state_fingerprint=entry.id,
+                state_fingerprint=f"{entry.id}:{action_context.get('action_type', '')}",
                 requires_response=True,
                 priority="high",
+                initiative_context=action_context,
             )
 
         # Also log to chat
@@ -1498,6 +1656,7 @@ class InitiativeService:
         priority: str = "normal",
         allow_voice: bool | None = None,
         voice_body: str | None = None,
+        initiative_context: dict[str, Any] | None = None,
     ) -> None:
         text = _initiative_update_text(text)
         if not text:
@@ -1540,11 +1699,60 @@ class InitiativeService:
             voice_body=(voice_body or text) if allow_voice else None,
             allow_voice=bool(allow_voice),
             requires_response=requires_response,
+            workflow_id=(initiative_context or {}).get("workflow_id"),
+            run_id=(initiative_context or {}).get("run_id"),
+            step_id=(initiative_context or {}).get("step_id"),
+            project_id=(initiative_context or {}).get("project_id"),
+            execution_session_id=(initiative_context or {}).get("execution_session_id"),
         ))
         if not decision.should_send:
             return
         outbound_text = decision.final_text or decision.final_voice_text or text
         self._record_notification_route(decision.channel, decision.route_reason, outbound_text)
+        event_queue = getattr(self, "event_queue", None)
+        event_context = initiative_context or {}
+        thread_hint = None
+        if self.telegram_manager is not None:
+            telegram_user_id = getattr(self.telegram_manager, "telegram_user_id", None)
+            if telegram_user_id:
+                try:
+                    thread_hint = str(int(telegram_user_id))
+                except (TypeError, ValueError):
+                    thread_hint = str(telegram_user_id)
+        base_event_data = {
+            "provider": "tool",
+            "thread_id": thread_hint,
+            "skip_screenshot": True,
+            "explicit_artifact_intent": False,
+            "requires_response": bool(requires_response),
+            "input_type": "voice" if decision.format == "voice" else "text",
+            "engagement_source": "initiative",
+            "engagement_kind": kind,
+            "engagement_subject_type": subject_type,
+            "engagement_subject_id": str(subject_id),
+            "engagement_priority": priority,
+            "engagement_ticket_title": str(event_context.get("ticket_title") or ""),
+            "engagement_workflow_title": str(event_context.get("workflow_title") or ""),
+            "engagement_step_title": str(event_context.get("step_title") or ""),
+            "engagement_goal_hint": str(event_context.get("goal_hint") or ""),
+            "workflow_id": event_context.get("workflow_id"),
+            "run_id": event_context.get("run_id"),
+            "step_id": event_context.get("step_id"),
+            "ticket_id": event_context.get("ticket_id"),
+            "board_id": event_context.get("board_id"),
+            "project_id": event_context.get("project_id"),
+            "state_fingerprint": str(
+                state_fingerprint
+                or event_context.get("state_fingerprint")
+                or event_context.get("ticket_id")
+                or str(subject_id)
+                or "initiative"
+            ),
+            "ticket_title": str(event_context.get("ticket_title") or ""),
+            "workflow_title": str(event_context.get("workflow_title") or ""),
+            "step_title": str(event_context.get("step_title") or ""),
+            "execution_session_id": event_context.get("execution_session_id"),
+        }
         try:
             if decision.channel == "desktop":
                 from distr.core.signals import signal_manager
@@ -1558,22 +1766,61 @@ class InitiativeService:
                     return
                 if not allow_telegram:
                     return
-            if decision.channel == "telegram" and decision.format == "voice" and getattr(self, "event_queue", None):
-                try:
-                    self.event_queue.put(('send_to_telegram', {
-                        'text': outbound_text,
-                        'is_done': False,
-                        'provider': 'tool',
-                        'skip_screenshot': True,
-                        'explicit_artifact_intent': False,
-                        'input_type': 'voice',
-                    }), block=False)
-                    logger.info("InitiativeService: queued Telegram voice notification (%s): %s", decision.route_reason, outbound_text[:100])
-                    return
-                except Exception:
-                    logger.debug("InitiativeService: could not queue Telegram voice notification", exc_info=True)
-            self.telegram_manager.send_to_telegram(text=outbound_text)
-            logger.info("InitiativeService: sent Telegram notification (%s): %s", decision.route_reason, outbound_text[:100])
+            if decision.channel == "telegram":
+                if event_queue is not None:
+                    try:
+                        payload = {
+                            "text": outbound_text,
+                            "is_done": False,
+                            **base_event_data,
+                        }
+                        event_queue.put(("send_to_telegram", payload), block=False)
+                        logger.info(
+                            "InitiativeService: queued Telegram notification (%s): %s",
+                            decision.route_reason,
+                            outbound_text[:100],
+                        )
+                        return
+                    except Exception:
+                        logger.debug("InitiativeService: could not queue Telegram notification", exc_info=True)
+
+                if self.telegram_manager is not None:
+                    try:
+                        from distr.core.human_engagement import record_remote_reply_context
+
+                        record_remote_reply_context(
+                            platform="telegram",
+                            channel="telegram",
+                            workflow_id=base_event_data.get("workflow_id"),
+                            run_id=base_event_data.get("run_id"),
+                            step_id=base_event_data.get("step_id"),
+                            ticket_id=base_event_data.get("ticket_id"),
+                            board_id=base_event_data.get("board_id"),
+                            project_id=base_event_data.get("project_id"),
+                            execution_session_id=base_event_data.get("execution_session_id"),
+                            ticket_title=base_event_data.get("engagement_ticket_title", ""),
+                            workflow_title=base_event_data.get("engagement_workflow_title", ""),
+                            step_title=base_event_data.get("engagement_step_title", ""),
+                            state_fingerprint=state_fingerprint
+                            or base_event_data.get("state_fingerprint")
+                            or "",
+                            outbound_text=outbound_text,
+                            metadata={
+                                "thread_id": thread_hint,
+                                "engagement_source": base_event_data.get("engagement_source"),
+                                "engagement_kind": base_event_data.get("engagement_kind"),
+                                "requires_response": bool(base_event_data.get("requires_response")),
+                                "engagement_goal_hint": base_event_data.get("engagement_goal_hint"),
+                                "input_type": base_event_data.get("input_type"),
+                                "provider": base_event_data.get("provider"),
+                            },
+                        )
+                    except Exception:
+                        logger.debug("InitiativeService: fallback remote context record failed", exc_info=True)
+
+                if self.telegram_manager is not None:
+                    self.telegram_manager.send_to_telegram(text=outbound_text)
+                    logger.info("InitiativeService: sent Telegram notification (%s): %s", decision.route_reason, outbound_text[:100])
         except Exception as e:
             logger.warning("InitiativeService: notification send failed: %s", e)
 

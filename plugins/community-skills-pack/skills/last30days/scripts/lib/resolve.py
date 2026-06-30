@@ -8,18 +8,17 @@ before the planner runs. This is the engine-side equivalent of SKILL.md Steps
 from __future__ import annotations
 
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Optional
 
-from . import categories, dates, grounding
+from . import categories, dates, grounding, log
 
 MAX_SUBS = 10
 
 
 def _log(msg: str) -> None:
-    print(f"[Resolve] {msg}", file=sys.stderr)
+    log.source_log("Resolve", msg, tty_only=False)
 
 
 def _merge_category_peers(topic: str, subreddits: list[str]) -> tuple[list[str], Optional[str]]:
@@ -77,6 +76,7 @@ def _has_backend(config: dict) -> bool:
         or config.get("SERPER_API_KEY")
         or config.get("PARALLEL_API_KEY")
         or config.get("OPENROUTER_API_KEY")
+        or config.get("PERPLEXITY_API_KEY")
     )
 
 

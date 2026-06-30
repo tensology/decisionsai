@@ -61,13 +61,13 @@
       "overwrite": true
     },
     {
-      "id": "dashboard",
-      "source": "awesome_design/dashboard",
+      "id": "enterprise",
+      "source": "awesome_design/enterprise",
       "overwrite": true
     },
     {
-      "id": "application",
-      "source": "awesome_design/application",
+      "id": "professional",
+      "source": "awesome_design/professional",
       "overwrite": true
     },
     {

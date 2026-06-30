@@ -118,7 +118,7 @@ Curated pack (not a bulk dump of 44 marketing or 50 design skills).
 - **humanizer** — remove AI writing tells before publish
 - **last30days** — 30-day social/web research synthesis
 - **product-marketing**, **cro**, **copywriting**, **seo-audit**, **ai-seo**, **competitors** — marketing stack (skipped if already in harness)
-- **minimal**, **dashboard**, **application**, **shadcn**, **bento** — design aesthetic tokens
+- **minimal**, **enterprise**, **professional**, **shadcn**, **bento** — design aesthetic tokens
 - **decisions-marketing-skills** / **decisions-design-aesthetics** — indexes for on-demand skills
 - **design-taste-frontend** — anti-slop frontend taste and anti-template UI guidance
 

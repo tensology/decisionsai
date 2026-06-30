@@ -33,7 +33,7 @@ RESULT_CAP = {
 
 
 def _log(msg: str):
-    log.source_log("PM", msg)
+    log.source_log("PM", msg, tty_only=False)
 
 
 def _extract_core_subject(topic: str) -> str:
@@ -300,7 +300,14 @@ def _extract_domain_queries(topic: str, events: List[Dict]) -> List[str]:
 
 
 def _infer_query_intent(topic: str) -> str:
-    """Tiny local fallback for Polymarket search tuning only."""
+    """Narrower local classifier for Polymarket search tuning only.
+
+    Deliberately does NOT delegate to ``query.infer_query_intent``:
+    Polymarket only needs the prediction/non-prediction split, and the
+    broader classifier would route queries to ``how_to``, ``opinion``,
+    ``product``, etc. without any matching expansion branch downstream.
+    Keep this narrow until polymarket grows additional intents.
+    """
     text = topic.lower().strip()
     if re.search(r"\b(predict|prediction|odds|forecast|chance|probability|will .* win)\b", text):
         return "prediction"
@@ -486,8 +493,9 @@ def _shorten_question(question: str) -> str:
     m = re.match(r"^Will\s+(.+?)\s+", q, re.IGNORECASE)
     if m and len(m.group(1).split()) <= 4:
         return m.group(1).strip()
-    # Fallback: truncate
-    return question[:40] if len(question) > 40 else question
+    # Fallback: truncate, dropping a leading article so the name doesn't read "an"/"the"
+    text = q[:40] if len(q) > 40 else q
+    return re.sub(r"^(?:a|an|the)\s+", "", text, flags=re.I)
 
 
 def _compute_text_similarity(topic: str, title: str, outcomes: List[str] = None) -> float:

@@ -58,8 +58,18 @@ def local_relevance(
     return score
 
 
-def freshness(item: schema.SourceItem, freshness_mode: str = "balanced_recent") -> int:
-    score = dates.recency_score(item.published_at)
+def freshness(
+    item: schema.SourceItem,
+    freshness_mode: str = "balanced_recent",
+    *,
+    reference_date: str | None = None,
+    max_days: int = 30,
+) -> int:
+    score = dates.recency_score(
+        item.published_at,
+        max_days=max_days,
+        reference_date=reference_date,
+    )
     if freshness_mode == "strict_recent":
         return int(score)
     if freshness_mode == "evergreen_ok":
@@ -84,6 +94,60 @@ def _top_comment_score(item: schema.SourceItem) -> float:
     if not comments or not isinstance(comments[0], dict):
         return 0.0
     return log1p_safe(comments[0].get("score"))
+
+
+# Per-platform log-reference for normalizing a top comment's vote count into a
+# [0,1] signal. Reddit upvotes run in the hundreds-to-thousands; YouTube/TikTok
+# likes run 10-600x higher (and the top end is display-abbreviated: "39K" is
+# stored as 39000). A raw or single-scale log compare would let YouTube/TikTok
+# dominate purely by platform scale, not by being funnier. Each value is the
+# log1p of a "very high" top-comment count for that platform, so dividing a
+# comment's log1p(score) by it yields a comparable cross-platform strength.
+_VOTE_LOG_REFERENCE: dict[str, float] = {
+    "reddit":     7.6,   # ~log1p(2000)
+    "hackernews": 6.2,   # ~log1p(500)
+    "youtube":    10.3,  # ~log1p(30000)
+    "tiktok":     10.3,  # ~log1p(30000)
+    "instagram":  9.2,   # ~log1p(10000)
+    "x":          9.2,   # ~log1p(10000)
+    "bluesky":    9.2,   # ~log1p(10000); like X/IG, not the Reddit default
+}
+_VOTE_LOG_REFERENCE_DEFAULT = 7.6
+
+
+def normalized_comment_vote(source: str, score: "float | int | None") -> float:
+    """Normalize a single comment's vote count to [0,1] within its platform.
+
+    Same per-platform reference as ``top_comment_vote_signal`` so a 22k-like
+    TikTok comment and a 600-upvote Reddit comment rank on a comparable scale.
+    Used to rank the cross-candidate Top Community Comments block.
+    """
+    base = log1p_safe(score)
+    if base <= 0.0:
+        return 0.0
+    ref = _VOTE_LOG_REFERENCE.get(source, _VOTE_LOG_REFERENCE_DEFAULT)
+    return max(0.0, min(1.0, base / ref))
+
+
+def top_comment_vote_signal(candidate: schema.Candidate) -> float:
+    """Strength of a candidate's most-upvoted top comment, as [0,1].
+
+    Normalized *within the candidate's platform* (see ``_VOTE_LOG_REFERENCE``)
+    so a 22k-like TikTok comment and a 600-upvote Reddit comment land on a
+    comparable scale rather than letting raw counts dominate. Returns 0.0 when
+    no top comment carries votes. Used by the fun judge to amplify (never
+    drive) crowd-certified comments.
+    """
+    best_log = 0.0
+    for item in candidate.source_items:
+        comments = item.metadata.get("top_comments") or []
+        for comment in comments[:3]:
+            if isinstance(comment, dict):
+                best_log = max(best_log, log1p_safe(comment.get("score")))
+    if best_log <= 0.0:
+        return 0.0
+    ref = _VOTE_LOG_REFERENCE.get(candidate.source, _VOTE_LOG_REFERENCE_DEFAULT)
+    return max(0.0, min(1.0, best_log / ref))
 
 
 # Per-source engagement weights: list of (field_name, weight) tuples.
@@ -183,13 +247,20 @@ def annotate_stream(
     items: list[schema.SourceItem],
     ranking_query: "str | relevance.PreparedQuery",
     freshness_mode: str,
+    reference_date: str | None = None,
+    max_days: int = 30,
 ) -> list[schema.SourceItem]:
     """Attach local scoring metadata and return items sorted by local_rank_score."""
     prepared_query = ranking_query if isinstance(ranking_query, relevance.PreparedQuery) else relevance.PreparedQuery(ranking_query)
     engagement_scores = normalize([engagement_raw(item) for item in items])
     for item, eng_score in zip(items, engagement_scores, strict=True):
         item.local_relevance = local_relevance(item, prepared_query)
-        item.freshness = freshness(item, freshness_mode)
+        item.freshness = freshness(
+            item,
+            freshness_mode,
+            reference_date=reference_date,
+            max_days=max_days,
+        )
         item.engagement_score = eng_score
         item.source_quality = source_quality(item.source)
         item.local_rank_score = (
@@ -239,6 +310,11 @@ def prune_low_relevance(
     sources_present = {item.source for item in items}
 
     def passes(item: schema.SourceItem) -> bool:
+        # YouTube items with successfully extracted transcripts should not
+        # be pruned by title-only relevance scoring — the transcript content
+        # already proves substantive topical coverage.
+        if item.source == "youtube" and item.snippet:
+            return True
         rel = item.local_relevance if item.local_relevance is not None else 0.0
         if rel < minimum:
             return False

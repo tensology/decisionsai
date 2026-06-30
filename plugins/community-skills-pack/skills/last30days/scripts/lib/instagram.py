@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from . import dates, http, log
+from .query import infer_query_intent
 from .relevance import token_overlap_relevance as _compute_relevance
 
 SCRAPECREATORS_BASE = "https://api.scrapecreators.com"
@@ -68,17 +69,8 @@ def _resolve_transcript_timeout(
 
 def _extract_core_subject(topic: str) -> str:
     """Extract core subject from verbose query for Instagram search."""
-    from .query import extract_core_subject
-    _INSTAGRAM_NOISE = frozenset({
-        'best', 'top', 'good', 'great', 'awesome', 'killer',
-        'latest', 'new', 'news', 'update', 'updates',
-        'trending', 'hottest', 'popular', 'viral',
-        'practices', 'features',
-        'recommendations', 'advice',
-        'prompt', 'prompts', 'prompting',
-        'methods', 'strategies', 'approaches',
-    })
-    return extract_core_subject(topic, noise=_INSTAGRAM_NOISE)
+    from .query import VIRAL_NOISE, extract_core_subject
+    return extract_core_subject(topic, noise=VIRAL_NOISE)
 
 
 def _to_hashtag_form(query: str) -> str:
@@ -90,20 +82,6 @@ def _to_hashtag_form(query: str) -> str:
     fallback before the request bubbles up as a silent failure.
     """
     return ''.join(query.split()).lower()
-
-
-def _infer_query_intent(topic: str) -> str:
-    """Tiny local intent classifier for Instagram query expansion."""
-    text = topic.lower().strip()
-    if re.search(r"\b(vs|versus|compare|difference between)\b", text):
-        return "comparison"
-    if re.search(r"\b(how to|tutorial|guide|setup|step by step|deploy|install)\b", text):
-        return "how_to"
-    if re.search(r"\b(thoughts on|worth it|should i|opinion|review)\b", text):
-        return "opinion"
-    if re.search(r"\b(pricing|feature|features|best .* for)\b", text):
-        return "product"
-    return "breaking_news"
 
 
 def expand_instagram_queries(topic: str, depth: str) -> List[str]:
@@ -125,7 +103,7 @@ def expand_instagram_queries(topic: str, depth: str) -> List[str]:
     if core.lower() != original_clean.lower() and len(original_clean.split()) <= 8:
         queries.append(original_clean)
 
-    qtype = _infer_query_intent(topic)
+    qtype = infer_query_intent(topic)
 
     # Intent-specific Instagram content-type variants
     if qtype == "breaking_news":
@@ -152,7 +130,7 @@ def expand_instagram_queries(topic: str, depth: str) -> List[str]:
 
 
 def _log(msg: str):
-    log.source_log("Instagram", msg)
+    log.source_log("Instagram", msg, tty_only=False)
 
 
 def _parse_date(item: Dict[str, Any]) -> Optional[str]:

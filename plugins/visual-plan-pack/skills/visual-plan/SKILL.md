@@ -88,13 +88,14 @@ surface.
   approach and options in the plan. Ask a clarifying question only when an
   ambiguity would change the design and you cannot resolve it from the code; use
   the host agent's normal ask-user-question flow and batch 2-4 high-leverage
-  questions before finalizing. Do not call `create-visual-questions` from
-  `/visual-plan`. Otherwise state the assumption explicitly and proceed, and
-  keep anything unresolved in the plan's single bottom `question-form` Open
-  Questions block. For complex plans, do a final open-question pass before
-  handoff: if a decision would affect architecture, scope, UX, data shape, or
-  rollout, either decide it in the plan with rationale or put it in that bottom
-  form with a recommended default.
+  questions before finalizing. Do not call `create-visual-questions` for
+  ordinary clarification or preflight; reserve it for the visual-intake mode when
+  the user explicitly asks for a visual intake questionnaire. Otherwise state the
+  assumption explicitly and proceed, and keep anything unresolved in the plan's
+  single bottom `question-form` Open Questions block. For complex plans, do a
+  final open-question pass before handoff: if a decision would affect
+  architecture, scope, UX, data shape, or rollout, either decide it in the plan
+  with rationale or put it in that bottom form with a recommended default.
 - **The plan is the approval gate.** After surfacing it, ask the user to review
   and approve before you write code, and name which files/areas the work touches.
   Presenting the plan and requesting sign-off is the approval step — do not ask a
@@ -118,21 +119,22 @@ skill's review discipline. Do not advise the user to skip `/visual-plan` because
 the default surface is hosted; choose the right Plan mode for the user's
 ownership, privacy, sharing, and branding needs.
 
-By default, create the plan via the Plan MCP connector. NEVER hand the plan over
-as inline chat content — no Markdown prose, ASCII sketch, table, or fenced
-wireframe. If the connector's tools are missing, do NOT fall back to inline
-output: the usual cause is a connector that did not finish connecting this
-session (it registers zero tools), not auth. Stop and give the user the exact
-restore step for their current client: in Codex/Codex Desktop run
-`npx -y @agent-native/core@latest reconnect https://plan.agent-native.com --client codex`
-and start a new Codex session; in Claude Code run `/mcp` and choose
-Authenticate/Reconnect (or run the same reconnect command with
-`--client claude-code` and restart Claude). Auth is stored per client
-config/session, so one client's reconnect does not make another running client
-load tools. Never reinstall from scratch just to fix auth. Publish once the tool
-is reachable. Local-files privacy mode (after Tool Guidance) is the exception.
+By default, create the plan via the Plan MCP connector and NEVER hand it over as
+inline chat content — no Markdown prose, ASCII sketch, table, or fenced
+wireframe. If the `plan` (or legacy `agent-native-plans`) tools are not visible,
+discover them through the host's `tool_search` first; if they are still missing,
+STOP and give the user the client-specific reconnect step rather than improvising
+an inline plan. Before publishing, or whenever a connector or auth error appears,
+READ `references/connection.md` in this skill directory — it is the single source
+of truth for the never-inline rule, connector discovery, and the per-client
+reconnect steps. Local-files privacy mode (after Tool Guidance) is the exception.
 
 ## Core Workflow
+
+This section describes the default hosted Plan MCP workflow. If
+`AGENT_NATIVE_PLANS_MODE=local-files` is set, or the user asks for fully local
+files/no hosted Plan writes, use **Local-Files Privacy Mode** instead; carry
+forward only the code-research and plan-composition guidance here.
 
 1. Follow the host agent's normal planning flow: inspect the codebase, delegate
    wide exploration when useful, gather the info needed, and ask native
@@ -161,6 +163,12 @@ is reachable. Local-files privacy mode (after Tool Guidance) is the exception.
    and put `diagram`, `data-model`,
    `api-endpoint`, `diff`, `file-tree`, `code`, and `annotated-code` blocks
    directly next to the relevant prose.
+   Wide document layout is renderer-owned and intentionally allowlisted: only
+   literal code-review surfaces (`diff`, `annotated-code`) and `tabs` blocks
+   with vertical orientation or diff-like children break out wider than prose.
+   Keep `api-endpoint`, `openapi-spec`, `data-model`, `json-explorer`,
+   `wireframe`, question, and `custom-html` blocks in normal document flow unless
+   their own renderer says otherwise.
 4. Surface the returned Plans link or inline MCP App and ask the user to review.
    Always include the actual URL in chat so the next step is a click in CLI or
    other text-only hosts. When the host exposes an embedded browser/preview panel
@@ -174,11 +182,13 @@ is reachable. Local-files privacy mode (after Tool Guidance) is the exception.
    backend, data, multi-file, or risky), also kick off the self-review pass in
    **Self-Review Before Handoff** while the user reads, instead of blocking the
    handoff on it.
-5. Call `get-plan-feedback` before editing, after review, after any long pause,
+5. For hosted plans, call `get-plan-feedback` before editing, after review,
+   after any long pause,
    and before the final response. Treat `anchorDetails`, resolver intent, recent
    review events, and any focused screenshots from browser handoff as the source
    of truth for exactly what changed and exactly what each comment points at.
-6. Apply changes with `update-visual-plan`, preferring targeted `contentPatches`.
+6. For hosted plans, apply changes with `update-visual-plan`, preferring
+   targeted `contentPatches`.
    Treat the top-level `content` payload as a full replacement, not a merge; do
    not send a partial `content` object to add a canvas or one block. If a full
    replacement is unavoidable, first read the complete plan source/content, carry
@@ -186,8 +196,8 @@ is reachable. Local-files privacy mode (after Tool Guidance) is the exception.
    afterward so the document body was not truncated. When the user wants
    source-control friendly edits, use `patch-visual-plan-source` against the MDX
    files instead of regenerating the plan.
-7. Export with `export-visual-plan` only when the user wants a shareable receipt
-   or repo-check-in artifacts.
+7. For hosted plans, export with `export-visual-plan` only when the user wants a
+   shareable receipt or repo-check-in artifacts.
 
 ## Self-Review Before Handoff
 
@@ -229,6 +239,14 @@ overflow menu or popover, a side panel, loading, or error. Put short annotations
 beside frames with `targetId` plus `placement`; keep implementation details,
 tradeoffs, file maps, data contracts, risks, and verification in the document
 body below the canvas.
+
+When the user asks for a flow, storyboard, journey, wireframe, canvas, or "what
+this looks like", treat that as a canvas-first request. Make one artboard per
+user-visible state, connect only adjacent transitions, and use short canvas
+annotations for the product notes. Do not substitute a document-body `diagram`
+block for the requested storyboard just because HTML diagrams are faster to
+write; diagrams belong below the canvas for backend mechanics, architecture, or
+data-flow explanation.
 
 Keep product wireframes and explanatory/meta diagrams separate. Start with pure
 screens that look like the app state under discussion, without callout prose or
@@ -288,6 +306,12 @@ in lanes, annotations are plain-text designer notes anchored by
 authoring or editing ANY canvas, artboard, or annotation, READ
 `references/canvas.md` in this skill directory — it is the single source of truth
 for canvas/artboard mechanics. Do not author canvas layouts from memory.
+Canvas artboards use the same HTML wireframe path as document-body
+`WireframeBlock` screens: author `<Screen surface="..." html={...} />` with a
+semantic HTML fragment. Do not author fresh kit-tree children such as
+`<FrameScreen>`, `<Card>`, `<Row>`, or `<Btn>` inside canvas `<Screen>` tags;
+those are legacy compatibility markup for old plans and produce brittle canvas
+layouts.
 
 ## Document quality — read `references/document-quality.md`
 
@@ -339,51 +363,26 @@ directory before authoring a plan.
 When the user critiques a plan's look or structure, fix the renderer or this
 skill — never hand-edit one stored plan. Turn feedback into better guidance.
 
-## Local-Files Privacy Mode
+## Local-Files Privacy Mode — read `references/local-files.md`
 
-Use local-files privacy mode when the user explicitly asks for no DB writes,
-no hosted Plan app, no Plan MCP publish, fully local files, offline/private
-planning, repo-owned/source-controlled planning artifacts, or when
-`AGENT_NATIVE_PLANS_MODE=local-files` is set. Also use it when a user or repo
-policy says a plan must stay under their own brand, domain, source control, or
-infrastructure. In this mode the plan data must never be sent to the Plan MCP
-server or Plan app action surface. Schema-only block catalog lookup is allowed
-because it sends no plan content: use the MCP `get-plan-blocks` tool if it is
-already available, or run
-`npx @agent-native/core@latest plan blocks --out plan-blocks.md` and read that
-file before authoring MDX.
-
-The local-files contract is:
-
-- Read source context from local files and shell commands only.
-- Fetch/read the block catalog before writing structured MDX. The
-  `plan blocks` command calls the public no-auth `get-plan-blocks` route and
-  writes only registry metadata to disk; use `--format schema` if exact nested
-  fields are needed. If network access is unavailable, use the bundled
-  references and rely on `plan local preview` to catch invalid tags.
-- Write the plan as a local MDX folder under `plans/<slug>/`: `plan.mdx`,
-  optional `canvas.mdx`, optional `prototype.mdx`, and optional
-  `.plan-state.json`.
-- Run `npx @agent-native/core@latest plan local preview --dir plans/<slug> --kind plan --open`
-  after writing or updating the folder. Report the returned local URL or the
-  `/local-plans/<slug>` route if the local Plan app is running with the same
-  `PLAN_LOCAL_DIR`.
-- Do **not** call `create-visual-plan`, `create-ui-plan`,
-  `create-prototype-plan`, `create-plan-design`, `import-visual-plan-source`,
-  `update-visual-plan`, `patch-visual-plan-source`, `get-plan-feedback`,
-  `export-visual-plan`, or any hosted Plan tool for that plan except the
-  schema-only block catalog lookup above.
-- Treat feedback as file or chat feedback: update the MDX files directly, rerun
-  the local preview command, and summarize the new local URL/path. Hosted
-  comments, sharing, history, and publish/export receipts are unavailable until
-  the user explicitly opts into publishing.
-
-Local-files mode prevents plan content from going to the Agent-Native Plan
-database. It does not by itself make the coding agent's language model local;
-for that stronger privacy boundary, the host agent/model must also be local or
-otherwise approved by the user.
+When the user wants no hosted Plan database writes — no DB writes, no Plan MCP
+publish, fully local/offline/private planning, repo-owned source-controlled
+artifacts, or `AGENT_NATIVE_PLANS_MODE=local-files` — do not call any hosted Plan
+tool except the schema-only `get-plan-blocks` catalog lookup. Author a local MDX
+folder and
+preview it with `plan local check` / `plan local serve` / `plan local verify`.
+Before using local-files mode, READ `references/local-files.md` in this skill
+directory — it is the single source of truth for the full contract (catalog
+lookup, MDX folder layout, the local bridge commands, and the hosted tools you
+must not call). Carry forward only the code-research and plan-composition
+guidance from Core Workflow; everything hosted is replaced by the local bridge.
 
 ## Interpreting comment anchors
+
+This section applies to hosted plans with `get-plan-feedback` /
+`update-visual-plan`. In local-files mode, do not call hosted feedback or update
+tools; interpret file/chat feedback directly, edit the MDX files, rerun the
+local bridge check/serve/verify command, and report the new local URL.
 
 `get-plan-feedback` returns rich anchors — read them before acting on any comment.
 
@@ -431,14 +430,16 @@ sign-in at setup — this is intended), so the first tool call in that client do
 not hit an OAuth wall:
 
 ```bash
-npx @agent-native/core@latest skills add visual-plan
+npx @agent-native/core@latest skills add visual-plans
 ```
 
 After that, `/visual-plan` and `/visual-recap` are the two installed slash
-commands. The other planning modes (`create-ui-plan`, `create-prototype-plan`,
-`create-plan-design`, `create-visual-questions`) are MCP tools reachable from
-`/visual-plan`, not separate slash commands. Pass `--no-connect` to register
-the connector without authenticating, then run
+commands. If you only need one command, use `skills add visual-plan` or
+`skills add visual-recap` instead. The other planning modes
+(`create-ui-plan`, `create-prototype-plan`, `create-plan-design`,
+`create-visual-questions`) are MCP tools reachable from `/visual-plan`, not
+separate slash commands. Pass `--no-connect` to register the connector without
+authenticating, then run
 `npx @agent-native/core@latest connect https://plan.agent-native.com --client all`
 whenever you are ready, or choose a narrower `--client`. Auth and MCP tool
 loading are per client config/session.
@@ -454,17 +455,9 @@ For fully offline, no-account use, run the Plans app locally and sync plans to
 your repo as MDX. This local mode is a separate advanced path, not the default
 hosted flow.
 
-If a Plans tool returns `needs auth`, `Unauthorized`, or `Session terminated`,
-do not keep retrying the tool. Stop and give the user the reconnect step for the
-client they are using: Codex/Codex Desktop should run
-`npx -y @agent-native/core@latest reconnect https://plan.agent-native.com --client codex`
-and start a new Codex session; Claude Code should run `/mcp` and choose
-Authenticate/Reconnect for the plan connector, or run the reconnect command with
-`--client claude-code` and restart Claude. To refresh every local client config
-that already has the Plan entry, use `--client all`, then restart/reload each
-client. Reconnect re-authenticates WITHOUT reinstalling and finds the entry by
-URL regardless of connector name. Never reinstall from scratch just to fix auth.
-Continue once the connector is available.
+If a Plans tool returns `needs auth`, `Unauthorized`, or `Session terminated`, do
+not keep retrying it — stop and give the user the per-client reconnect step from
+`references/connection.md`, then continue once the connector is available.
 
 Hosted default: connect `https://plan.agent-native.com/_agent-native/mcp`. Do
 not put shared secrets in skill files.

@@ -1,5 +1,5 @@
 ---
-name: Dashboard
+name: Enterprise
 colors:
   primary: "#0C5CAB"
   secondary: "#0a4a8a"

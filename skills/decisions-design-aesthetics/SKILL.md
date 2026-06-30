@@ -1,6 +1,6 @@
 ---
 name: decisions-design-aesthetics
-description: Pick a design aesthetic from awesome-design-skills — bundled minimal/dashboard/application/shadcn/bento; full catalog in reference for on-demand load.
+description: Pick a design aesthetic from awesome-design-skills — bundled minimal/professional/enterprise/shadcn/bento; full catalog in reference for on-demand load.
 ---
 
 # Design Aesthetics (awesome-design-skills)
@@ -10,8 +10,8 @@ description: Pick a design aesthetic from awesome-design-skills — bundled mini
 | Skill | When |
 |-------|------|
 | **minimal** | Calm SaaS, docs, focused tools |
-| **dashboard** | Dense data surfaces |
-| **application** | General product UI |
+| **enterprise** | Dense data surfaces |
+| **professional** | General product UI |
 | **shadcn** | shadcn/ui-aligned components |
 | **bento** | Marketing bento grids |
 

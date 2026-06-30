@@ -35,6 +35,10 @@ ENRICH_LIMITS = {
     "deep": 8,
 }
 
+# Unauthenticated GitHub search allows ~10 requests/min, so cap result volume
+# conservatively when running without a token to stay within the anon tier.
+UNAUTH_COUNT_CAP = 10
+
 USER_AGENT = "last30days/3.0 (research tool)"
 
 
@@ -175,18 +179,12 @@ def search_github(
     count = DEPTH_LIMITS.get(depth, DEPTH_LIMITS["default"])
     core = extract_core_subject(topic)
     resolved_token = _resolve_token(token)
-    if not resolved_token:
-        _log("No GitHub token available (set GITHUB_TOKEN or install gh CLI)")
-        return {
-            "items": [],
-            "error": "no token",
-            "context": {
-                "core": core,
-                "from_date": from_date,
-                "to_date": to_date,
-                "count": count,
-            },
-        }
+    authed = bool(resolved_token)
+    if not authed:
+        # Fall back to the unauthenticated REST tier instead of returning nothing.
+        # It is rate-limited, so cap the request volume.
+        count = min(count, UNAUTH_COUNT_CAP)
+        _log("No GitHub token; using the unauthenticated REST tier (low rate limit)")
     _log(f"Searching for '{core}' (raw: '{topic}', since {from_date}, count={count})")
 
     # Build search query with date filter
@@ -201,8 +199,17 @@ def search_github(
 
     data = _fetch_json(url, token=resolved_token, timeout=30)
     if not data:
-        return {"items": [], "context": {"core": core, "from_date": from_date,
-                                          "to_date": to_date, "count": count}}
+        envelope = {"items": [], "context": {"core": core, "from_date": from_date,
+                                             "to_date": to_date, "count": count}}
+        if not authed:
+            # Could be the anon rate limit (403) or an unprocessable query (422)
+            # -- _fetch_json maps both to None. Don't over-claim which; suggest a
+            # token since that fixes the common (rate-limit) case.
+            envelope["error"] = (
+                "GitHub unauthenticated request returned no data (anon rate limit "
+                "or unprocessable query; set GITHUB_TOKEN or run gh auth login)"
+            )
+        return envelope
 
     raw_items = data.get("items", [])
     _log(f"Found {len(raw_items)} issues/PRs")
@@ -621,7 +628,7 @@ def search_github_person(
         "snippet": velocity_text,
         "relevance": 0.95,
         "why_relevant": f"GitHub profile: @{username} - {merged_count} PRs merged across {num_repos} repos",
-        "engagement": {"reactions": merged_count, "comments": total_prs},
+        "engagement": {"merged_prs": merged_count, "comments": total_prs},
         "metadata": {
             "labels": ["person-profile", "velocity"],
             "state": "open",
@@ -682,7 +689,7 @@ def search_github_person(
                 "snippet": "\n".join(snippet_parts),
                 "relevance": min(0.9, 0.6 + math.log1p(stars) / 30 + min(0.15, pr_count / 20)),
                 "why_relevant": f"GitHub contribution: {pr_count} PRs merged to {repo} ({stars_str} stars)",
-                "engagement": {"reactions": stars, "comments": pr_count},
+                "engagement": {"stars": stars, "comments": pr_count},
                 "metadata": {
                     "labels": ["person-profile", "external-repo"],
                     "state": "open",
@@ -740,7 +747,7 @@ def search_github_person(
                 "snippet": "\n".join(snippet_parts),
                 "relevance": min(0.95, 0.7 + math.log1p(stars) / 25),
                 "why_relevant": f"GitHub own project: {repo_name} ({stars_str} stars)",
-                "engagement": {"reactions": stars, "comments": open_issues},
+                "engagement": {"stars": stars, "comments": open_issues},
                 "metadata": {
                     "labels": ["person-profile", "own-repo"],
                     "state": "open",
@@ -860,7 +867,7 @@ def search_github_project(
                 "snippet": "\n".join(snippet_parts),
                 "relevance": min(0.95, 0.7 + math.log1p(stars) / 25),
                 "why_relevant": f"GitHub project: {repo} ({stars_str} stars, live)",
-                "engagement": {"reactions": stars, "comments": open_issues},
+                "engagement": {"stars": stars, "comments": open_issues},
                 "metadata": {
                     "labels": ["project-mode"],
                     "state": "open",
