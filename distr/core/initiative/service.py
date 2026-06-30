@@ -104,13 +104,18 @@ def _derive_initiative_action_context(action: ProposedAction) -> dict[str, Any]:
         ).strip(),
     }
     ticket_ids = context.get("ticket_ids") or []
+    if not ticket_ids:
+        single_ticket_id = _coerce_int(payload.get("ticket_id"))
+        if single_ticket_id:
+            ticket_ids = [single_ticket_id]
+            context["ticket_ids"] = ticket_ids
     context["ticket_id"] = ticket_ids[0] if ticket_ids else None
 
     board_id = context.get("board_id")
     workflow_id = context.get("workflow_id")
     project_id = context.get("project_id")
 
-    if not (context["board_title"] and board_id) and not (context["ticket_title"] and context["ticket_id"]):
+    if board_id or ticket_ids:
         try:
             from distr.core.db import get_session
             from distr.core.db.kanban import KanbanBoard, KanbanTicket

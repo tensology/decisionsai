@@ -122,7 +122,7 @@ def match_draft_decision(text_lower: str) -> Literal["approve", "reject"] | None
     words = text_lower.split()
     n = len(words)
 
-    if n <= 5:
+    if n <= 8:
         if any(
             p in text_lower
             for p in (
@@ -148,6 +148,7 @@ def match_draft_decision(text_lower: str) -> Literal["approve", "reject"] | None
                 "execute now",
                 "execute this now",
                 "go and execute",
+                "please go and execute",
                 "go ahead and execute",
             )
         ):
