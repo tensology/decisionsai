@@ -93,6 +93,7 @@ def _derive_initiative_action_context(action: ProposedAction) -> dict[str, Any]:
         "workflow_id": _coerce_int(payload.get("workflow_id")),
         "project_id": _coerce_int(payload.get("project_id")),
         "ticket_ids": _coerce_int_list(payload.get("ticket_ids")),
+        "ticket_summaries": [],
         "goal_hint": raw_goal,
         "board_title": str(payload.get("board_title", "") or "").strip(),
         "workflow_title": str(payload.get("workflow_title", "") or "").strip(),
@@ -119,7 +120,26 @@ def _derive_initiative_action_context(action: ProposedAction) -> dict[str, Any]:
                     board = session.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
                     if board:
                         context["board_title"] = str(board.name or "").strip()
-                if context["ticket_id"] and not context["ticket_title"]:
+                ticket_ids = context.get("ticket_ids") or []
+                if ticket_ids:
+                    tickets = (
+                        session.query(KanbanTicket)
+                        .filter(KanbanTicket.id.in_(ticket_ids))
+                        .all()
+                    )
+                    ticket_map = {
+                        int(row.id): (str(row.title or "").strip() or f"Ticket #{row.id}")
+                        for row in tickets
+                    }
+                    summaries: list[str] = []
+                    for tid in ticket_ids:
+                        title = ticket_map.get(int(tid))
+                        if title:
+                            summaries.append(f"{tid}: {title}")
+                    context["ticket_summaries"] = summaries
+                    if context["ticket_id"] and not context["ticket_title"]:
+                        context["ticket_title"] = ticket_map.get(int(context["ticket_id"]), "")
+                elif context["ticket_id"] and not context["ticket_title"]:
                     ticket = session.query(KanbanTicket).filter(
                         KanbanTicket.id == context["ticket_id"]
                     ).first()
@@ -165,11 +185,22 @@ def _initiative_context_line(context: dict[str, Any]) -> str:
     ticket_id = context.get("ticket_id")
     ticket_title = context.get("ticket_title") or ""
     ticket_count = len(context.get("ticket_ids") or [])
+    ticket_summaries = [
+        str(item).strip()
+        for item in (context.get("ticket_summaries") or [])
+        if str(item).strip()
+    ]
 
     if action_type == "ticket_lane_move":
         lane = context.get("target_lane") or "Current"
         if ticket_count:
             noun = "ticket" if ticket_count == 1 else "tickets"
+            if ticket_summaries:
+                if ticket_count <= 3:
+                    detail = ", ".join(ticket_summaries)
+                else:
+                    detail = ", ".join(ticket_summaries[:3]) + f" and {ticket_count - 3} more"
+                return f"{ticket_count} {noun} on {board}: move to {lane} ({detail})"
             return f"{ticket_count} {noun} on {board}: move to {lane}"
         return f"Board change on {board}: move to {lane}"
 
@@ -223,6 +254,7 @@ def _initiative_approval_text(
             "A project execution is ready, but I need your approval first:\n"
             f"- {scope}\n"
             f"- {description}\n\n"
+            'You can say: "approve", "execute", or "run now".\n'
             "Reply approve or reject, or handle it in the app."
         )
     return (

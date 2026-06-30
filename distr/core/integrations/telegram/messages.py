@@ -752,12 +752,28 @@ class TelegramMessagesMixin:
         if decision == "approve":
             from distr.core.initiative.draft_execute import approve_draft_in_queue
 
-            ok = approve_draft_in_queue(queue_obj, draft_id)
-            self.send_to_telegram(
-                "Approved. I’m executing that Initiative action now."
-                if ok else
-                "I could not execute that Initiative action. It is still pending if execution failed."
-            )
+            def _runner() -> None:
+                try:
+                    ok = approve_draft_in_queue(queue_obj, draft_id)
+                    self.send_to_telegram(
+                        "Approved. I’m executing that Initiative action now."
+                        if ok else
+                        "I could not execute that Initiative action. It is still pending if execution failed."
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "[Telegram] Failed to execute initiative draft %s: %s",
+                        draft_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    self.send_to_telegram(
+                        f"I could not execute that Initiative action yet: {exc}"
+                    )
+
+            thread = threading.Thread(target=_runner, daemon=True)
+            thread.start()
+            self.send_to_telegram("Queued that Initiative action and started execution in the background.")
             return True
         removed = queue_obj.remove(draft_id)
         self.send_to_telegram("Rejected and removed from the Initiative queue." if removed else "That pending action was not found.")
@@ -779,7 +795,10 @@ class TelegramMessagesMixin:
             return f"{int(count or 0)} {noun}"
 
         def _decision_word(text: str) -> str | None:
-            if re.search(r"\b(approve|approved|yes|yep|correct|go ahead|do it|create it|make it|turn it into|ticket it)\b", text):
+            if re.search(
+                r"\b(approve|approved|yes|yep|correct|go ahead|execute|executed|do it|create it|make it|turn it into|ticket it)\b",
+                text,
+            ):
                 return "approve"
             if re.search(r"\b(reject|rejected|no|nope|ignore|dismiss|skip|not now)\b", text):
                 return "reject"

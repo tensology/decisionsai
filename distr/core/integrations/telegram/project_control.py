@@ -185,7 +185,14 @@ def _start_dispatch(
     def _runner() -> None:
         ide_session_id: int | None = None
         ide_chat_id: int | None = None
+        board_id_override: int | None = None
         try:
+            try:
+                raw_board_id = getattr(project, "kanban_board_id", None)
+                board_id_override = int(raw_board_id) if raw_board_id else None
+            except Exception:
+                board_id_override = None
+
             try:
                 from distr.core.ide_bridge import record_ide_event
 
@@ -205,7 +212,13 @@ def _start_dispatch(
             except Exception as exc:
                 logger.warning("[Telegram] Could not create IDE bridge session for %s: %s", label, exc, exc_info=True)
 
-            result = asyncio.run(_dispatch_project_task(project.id, command))
+            result = asyncio.run(
+                _dispatch_project_task(
+                    project.id,
+                    command,
+                    board_id_override=board_id_override,
+                )
+            )
             try:
                 from distr.core.ide_bridge import record_ide_event
 
@@ -246,7 +259,11 @@ def _start_dispatch(
     thread.start()
 
 
-async def _dispatch_project_task(project_id: int, command: TelegramProjectCommand):
+async def _dispatch_project_task(
+    project_id: int,
+    command: TelegramProjectCommand,
+    board_id_override: int | None = None,
+):
     from distr.core.db import get_session
     from distr.core.db.projects import Project
     from distr.core.project_cli_backends import run_project_task
@@ -260,6 +277,7 @@ async def _dispatch_project_task(project_id: int, command: TelegramProjectComman
             command.instruction,
             origin="telegram",
             backend_id_override=command.backend_id,
+            board_id_override=board_id_override,
         )
 
 
