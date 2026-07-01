@@ -744,10 +744,11 @@ def get_installed_ollama_models():
                         entry = {
                             'id': model_id,
                             'name': display_name,
+                            # ponytail: custom/community pulls (e.g. ornith:35b) are not in the
+                            # Ollama library cache — still selectable for chat/coding slots.
+                            'supports_tools': True,
                         }
                         # Store capability flags for filtering
-                        if 'tools' in caps:
-                            entry['supports_tools'] = True
                         if 'vision' in caps:
                             entry['input_modalities'] = ['text', 'image']
                         if 'code' in caps:

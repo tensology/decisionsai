@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+from collections.abc import Callable
 
 import numpy as np
 
@@ -64,6 +65,7 @@ class PixazoTTSService(OpenAITTSService):
         prompt_text: str = "",
         dit_steps: int = 6,
         fallback_tts_service=None,
+        refresh_reference_audio_url: Callable[[], str] | None = None,
         **kwargs,
     ):
         if not PIPECAT_AVAILABLE:
@@ -77,6 +79,7 @@ class PixazoTTSService(OpenAITTSService):
         self._prompt_text = prompt_text or ""
         self._dit_steps = max(4, min(30, int(dit_steps)))
         self._fallback_tts_service = fallback_tts_service
+        self._refresh_reference_audio_url = refresh_reference_audio_url
         self.voice_id = voice_id
         self.voice_name = voice_name or voice_id
         self.playback_speed = playback_speed
@@ -105,10 +108,10 @@ class PixazoTTSService(OpenAITTSService):
             self._tts_sentence_batch_size,
         )
 
-    def _generate_audio(self, text: str):
+    def _synthesize_wav_bytes(self, text: str) -> bytes:
         from distr.core.pixazo_client import voxcpm_synthesize_wav_bytes
 
-        wav_bytes = voxcpm_synthesize_wav_bytes(
+        return voxcpm_synthesize_wav_bytes(
             self._pixazo_api_key,
             text,
             voice_id=self.voice_id,
@@ -116,6 +119,37 @@ class PixazoTTSService(OpenAITTSService):
             prompt_text=self._prompt_text,
             dit_steps=self._dit_steps,
         )
+
+    def _should_retry_with_refreshed_reference(self, error: BaseException) -> bool:
+        raw = str(error or "")
+        return (
+            str(getattr(self, "voice_id", "") or "").startswith("custom_")
+            and bool(getattr(self, "_reference_audio_url", None))
+            and "Pixazo request failed (500)" in raw
+            and callable(getattr(self, "_refresh_reference_audio_url", None))
+        )
+
+    def _generate_audio(self, text: str):
+        try:
+            wav_bytes = self._synthesize_wav_bytes(text)
+        except RuntimeError as exc:
+            if not self._should_retry_with_refreshed_reference(exc):
+                raise
+            try:
+                refreshed_url = self._refresh_reference_audio_url()
+            except Exception:
+                logger.warning(
+                    "Pixazo clone failed with HTTP 500 and relay reference refresh also failed",
+                    exc_info=True,
+                )
+                raise exc
+            if not refreshed_url:
+                raise
+            self._reference_audio_url = refreshed_url
+            logger.warning(
+                "Pixazo clone failed with HTTP 500; refreshed relay reference and retrying once"
+            )
+            wav_bytes = self._synthesize_wav_bytes(text)
         if not SOUNDFILE_AVAILABLE:
             raise ImportError("soundfile is required for Pixazo VoxCPM WAV decode")
         audio_data, sample_rate = sf.read(io.BytesIO(wav_bytes), dtype="float32")

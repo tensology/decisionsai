@@ -397,6 +397,17 @@ class OllamaResponseMixin:
                 except (json.JSONDecodeError, ValueError):
                     pass
                 tool_calls[i] = {'function': {'name': 'clipboard_action', 'arguments': {'action': action}}}
+                continue
+
+            # 5b. text-encoded local-model alias: "(invoke. name=\"startproject\")"
+            if name in ('startproject', 'startprojecttool'):
+                tool_calls[i] = {
+                    'function': {
+                        'name': 'start_project',
+                        'arguments': {'text': last_user_message},
+                    }
+                }
+                continue
 
             # 6. Gmail request_tool guard: if Gmail/email intent is detected and
             # google_workspace is active, bypass request_tool and call

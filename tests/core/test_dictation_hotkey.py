@@ -45,6 +45,28 @@ def test_oracle_emits_ticket_dictation_signal_before_player_dismissal():
     )
 
 
+def test_oracle_debounces_dictation_repress_after_release():
+    source = Path("distr/gui/oracle/window.py").read_text()
+    pressed_method = source[
+        source.index("    def _on_dictation_hotkey_pressed"):
+        source.index("    def _on_ticket_dictation_hotkey_pressed")
+    ]
+    release_method = source[
+        source.index("    def _on_dictation_hotkey_released"):
+        source.index("    def _on_ticket_dictation_hotkey_released")
+    ]
+
+    assert "_DICTATION_HOTKEY_REPRESS_DEBOUNCE_S" in source
+    assert "_last_dictation_hotkey_release_mono" in pressed_method
+    assert "Ignoring dictation press bounce" in pressed_method
+    assert "signal_manager.dictation_hotkey_pressed.emit()" in pressed_method
+    assert pressed_method.index("Ignoring dictation press bounce") < pressed_method.index(
+        "signal_manager.dictation_hotkey_pressed.emit()"
+    )
+    assert "if not getattr(self, \"_dictation_hotkey_active\", False):" in release_method
+    assert "Ignoring dictation release without active press" in release_method
+
+
 # ---------------------------------------------------------------------------
 # 2. Test DEFAULT_SETTINGS in settings.py
 # ---------------------------------------------------------------------------

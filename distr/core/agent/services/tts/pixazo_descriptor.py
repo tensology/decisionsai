@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+from collections.abc import Callable
 from typing import Any, Optional
 
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
@@ -75,7 +76,7 @@ class PixazoDescriptor(TTSProviderDescriptor):
         if not api_key:
             raise ValueError("Pixazo API key is required for TTS")
         voice_id = (tts_config.get("voice_id") or DEFAULT_PIXAZO_VOICE).strip()
-        ref_url, prompt_text = self._resolve_clone_context(voice_id)
+        ref_url, prompt_text, refresh_reference_audio_url = self._resolve_clone_context(voice_id)
         lo, hi = self.speed_bounds
         playback_speed = max(lo, min(hi, (settings or {}).get("playback_speed", 1.0)))
         from distr.core.pixazo_client import pixazo_dit_steps_from_settings
@@ -107,6 +108,7 @@ class PixazoDescriptor(TTSProviderDescriptor):
             prompt_text=prompt_text,
             dit_steps=dit_steps,
             fallback_tts_service=fallback_tts_service,
+            refresh_reference_audio_url=refresh_reference_audio_url,
         )
         service.set_hands_free(is_hands_free)
         return service
@@ -125,7 +127,7 @@ class PixazoDescriptor(TTSProviderDescriptor):
         settings = load_settings_from_db()
         dit_steps = pixazo_dit_steps_from_settings(settings)
         vid = (voice or DEFAULT_PIXAZO_VOICE).strip()
-        ref_url, prompt_text = self._resolve_clone_context(vid)
+        ref_url, prompt_text, _refresh_reference_audio_url = self._resolve_clone_context(vid)
         wav_bytes = voxcpm_synthesize_wav_bytes(
             api_key,
             text,
@@ -272,11 +274,13 @@ class PixazoDescriptor(TTSProviderDescriptor):
         return None
 
     @staticmethod
-    def _resolve_clone_context(voice_id: str) -> tuple[Optional[str], str]:
-        """Return (reference_audio_url, prompt_text) for custom_* voices."""
+    def _resolve_clone_context(
+        voice_id: str,
+    ) -> tuple[Optional[str], str, Optional[Callable[[], str]]]:
+        """Return reference URL, prompt text, and a force-refresh callback for custom_* voices."""
         vid = (voice_id or "").strip()
         if not vid.startswith("custom_"):
-            return None, ""
+            return None, "", None
         try:
             from distr.core.db import CustomVoice, get_session
 
@@ -289,27 +293,40 @@ class PixazoDescriptor(TTSProviderDescriptor):
                     CustomVoice.status == "ready",
                 ).first()
                 if not cv:
-                    return None, ""
+                    return None, "", None
                 ref_path = PixazoDescriptor.reference_audio_path(vid)
                 prompt = (cv.system_prompt or "").strip()
                 if ref_path and cv.audio_dir:
+                    audio_dir = cv.audio_dir
+                    label = f"custom_{db_id}"
+
+                    def refresh_reference_audio_url() -> str:
+                        from distr.core.integrations.relay_media import ensure_pixazo_reference_url
+
+                        return ensure_pixazo_reference_url(
+                            ref_path,
+                            audio_dir,
+                            label=label,
+                            force_refresh=True,
+                        )
+
                     try:
                         from distr.core.integrations.relay_media import ensure_pixazo_reference_url
 
                         ref_url = ensure_pixazo_reference_url(
                             ref_path,
-                            cv.audio_dir,
-                            label=f"custom_{db_id}",
+                            audio_dir,
+                            label=label,
                         )
-                        return ref_url, prompt
+                        return ref_url, prompt, refresh_reference_audio_url
                     except Exception as exc:
                         logger.warning("Pixazo relay reference refresh failed for %s: %s", vid, exc)
                 ref_url = public_custom_voice_reference_url(db_id)
-                return ref_url, prompt
+                return ref_url, prompt, None
             finally:
                 session.close()
         except Exception:
-            return None, ""
+            return None, "", None
 
     @staticmethod
     def reference_audio_path(voice_id: str) -> Optional[str]:

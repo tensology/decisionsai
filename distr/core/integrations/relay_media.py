@@ -127,11 +127,12 @@ def ensure_pixazo_reference_url(
     audio_dir: str,
     *,
     label: str,
+    force_refresh: bool = False,
 ) -> str:
     """Return a public relay URL, re-uploading when the staged file is missing or near expiry."""
     meta = read_relay_reference_meta(audio_dir)
     now = datetime.now(timezone.utc)
-    if meta:
+    if meta and not force_refresh:
         expires = _parse_expires_at(str(meta.get("expires_at") or ""))
         download_url = str(meta.get("download_url") or "").strip()
         if download_url and expires and expires > now:

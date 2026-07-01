@@ -30,6 +30,8 @@ import time
 
 logger = logging.getLogger(__name__)
 
+_DICTATION_HOTKEY_REPRESS_DEBOUNCE_S = 0.25
+
 
 class _GlobalPttBridge(QtCore.QObject):
     pressed = QtCore.pyqtSignal()
@@ -129,6 +131,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.chat_manager = chat_manager
         self.about_window = about_window
         self.eula_window = eula_window  # Will be set after EULA window is created
+        self._last_dictation_hotkey_release_mono = 0.0
         # Connect the OracleWindow's move event to trigger PlayerWindow position update
         self.moveEvent = self.on_move_event
 
@@ -1650,6 +1653,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         Fires the 'dictation' visual hook so the oracle shows the right
         animation while the user is speaking.
         """
+        now = time.monotonic()
+        last_release = float(getattr(self, "_last_dictation_hotkey_release_mono", 0.0) or 0.0)
+        if now - last_release < _DICTATION_HOTKEY_REPRESS_DEBOUNCE_S:
+            logging.info(
+                "[ORACLE] Ignoring dictation press bounce %.0fms after release",
+                (now - last_release) * 1000,
+            )
+            return
         if not self.is_listening:
             self._mark_voice_capture_blocked_not_listening()
             return
@@ -1671,6 +1682,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             logging.debug("[ORACLE] dictation hook fire failed: %s", exc)
 
     def _on_ticket_dictation_hotkey_pressed(self):
+        now = time.monotonic()
+        last_release = float(getattr(self, "_last_dictation_hotkey_release_mono", 0.0) or 0.0)
+        if now - last_release < _DICTATION_HOTKEY_REPRESS_DEBOUNCE_S:
+            logging.info(
+                "[ORACLE] Ignoring ticket dictation press bounce %.0fms after release",
+                (now - last_release) * 1000,
+            )
+            return
         if not self.is_listening:
             self._mark_voice_capture_blocked_not_listening()
             return
@@ -1698,6 +1717,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         suspended/glowing state regardless of what the animation system did.
         """
         # Revert the dictation hook first
+        if not getattr(self, "_dictation_hotkey_active", False):
+            logging.info("[ORACLE] Ignoring dictation release without active press")
+            return
+        self._last_dictation_hotkey_release_mono = time.monotonic()
         self._dictation_hotkey_active = False
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
         if getattr(self, "is_dictating", False):
@@ -1731,6 +1754,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._maybe_prompt_enable_listening_on_release()
 
     def _on_ticket_dictation_hotkey_released(self):
+        if not getattr(self, "_dictation_hotkey_active", False):
+            logging.info("[ORACLE] Ignoring ticket dictation release without active press")
+            return
+        self._last_dictation_hotkey_release_mono = time.monotonic()
         self._dictation_hotkey_active = False
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
         if getattr(self, "is_dictating", False):

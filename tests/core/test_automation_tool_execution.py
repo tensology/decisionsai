@@ -260,6 +260,26 @@ def test_automation_subagent_skips_duplicate_workflow_run(monkeypatch):
     release_workflow_run(42)
 
 
+def test_scheduled_automation_telegram_delivery_does_not_speak_random_ack(monkeypatch):
+    from distr.core.automation_subagent import _orchestrator_delivery_ack
+
+    spoken = []
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._speak_orchestrator",
+        lambda text: spoken.append(text) or True,
+    )
+
+    _orchestrator_delivery_ack(
+        automation_name="Afternoon work scan",
+        success=True,
+        channel="telegram",
+        channel_detail="queued for Telegram",
+        manual=False,
+    )
+
+    assert spoken == []
+
+
 def test_legacy_planner_proactive_tasks_disabled_on_seed(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'proactive.sqlite3'}")
     from distr.core.db import init_db

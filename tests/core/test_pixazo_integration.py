@@ -121,6 +121,43 @@ def test_relay_media_multipart_and_refresh(tmp_path, monkeypatch):
     assert captured["url"].endswith("/api/media/voice-reference/upload/")
 
 
+def test_ensure_pixazo_reference_url_force_refreshes_cached_reference(tmp_path, monkeypatch):
+    from distr.core.integrations import relay_media
+
+    audio_dir = tmp_path / "voice"
+    audio_dir.mkdir()
+    wav = audio_dir / "reference.wav"
+    wav.write_bytes(b"RIFFxxxx")
+    relay_media.write_relay_reference_meta(
+        str(audio_dir),
+        {
+            "download_url": "https://www.decisionsai.net/api/telegram/media/download/old/",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        },
+    )
+
+    uploads = []
+
+    def _fake_upload(local_path, *, label):
+        uploads.append((local_path, label))
+        return {
+            "download_url": "https://www.decisionsai.net/api/telegram/media/download/new/",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(relay_media, "upload_pixazo_voice_reference", _fake_upload)
+
+    url = relay_media.ensure_pixazo_reference_url(
+        str(wav),
+        str(audio_dir),
+        label="custom_1",
+        force_refresh=True,
+    )
+
+    assert url == "https://www.decisionsai.net/api/telegram/media/download/new/"
+    assert uploads == [(str(wav), "custom_1")]
+
+
 def test_pixazo_clone_voice_defers_relay_staging_failure(tmp_path, monkeypatch):
     from distr.core.agent.services.tts.pixazo_descriptor import PixazoDescriptor
     from distr.core.integrations import relay_media

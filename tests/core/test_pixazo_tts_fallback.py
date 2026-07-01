@@ -1,7 +1,11 @@
 import asyncio
+from types import SimpleNamespace
+
+import numpy as np
 
 from distr.core.agent.libs import ErrorFrame, TTSStoppedFrame
 from distr.core.agent.services.tts.openai import OpenAITTSService
+from distr.core.agent.services.tts import pixazo as pixazo_tts
 from distr.core.agent.services.tts.pixazo import (
     PixazoTTSService,
     build_pixazo_fallback_text,
@@ -78,3 +82,43 @@ def test_pixazo_run_tts_falls_back_for_failed_primary_generation(monkeypatch):
     )
     assert fallback._tts_session_active is True
     assert fallback._tts_started_emitted is False
+
+
+def test_pixazo_custom_voice_refreshes_reference_once_after_clone_500(monkeypatch):
+    from distr.core import pixazo_client
+
+    service = object.__new__(PixazoTTSService)
+    service._pixazo_api_key = "pixazo-test-key"
+    service.voice_id = "custom_14"
+    service._reference_audio_url = "https://relay.example/old.wav"
+    service._prompt_text = "reference prompt"
+    service._dit_steps = 6
+    service._refresh_reference_audio_url = lambda: "https://relay.example/new.wav"
+
+    seen_urls = []
+
+    def fake_synthesize(_api_key, _text, *, voice_id, reference_audio_url, prompt_text, dit_steps):
+        seen_urls.append(reference_audio_url)
+        assert voice_id == "custom_14"
+        assert prompt_text == "reference prompt"
+        assert dit_steps == 6
+        if len(seen_urls) == 1:
+            raise RuntimeError("Pixazo request failed (500): Internal Server Error")
+        return b"RIFF fake wav"
+
+    monkeypatch.setattr(pixazo_client, "voxcpm_synthesize_wav_bytes", fake_synthesize)
+    monkeypatch.setattr(pixazo_tts, "SOUNDFILE_AVAILABLE", True)
+    monkeypatch.setattr(
+        pixazo_tts,
+        "sf",
+        SimpleNamespace(
+            read=lambda _buf, dtype="float32": (np.array([0.1, -0.1], dtype=np.float32), 24000)
+        ),
+    )
+
+    audio, sample_rate = service._generate_audio("Done.")
+
+    assert seen_urls == ["https://relay.example/old.wav", "https://relay.example/new.wav"]
+    assert service._reference_audio_url == "https://relay.example/new.wav"
+    assert sample_rate == 24000
+    assert audio.dtype == np.float32

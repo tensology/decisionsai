@@ -31,6 +31,12 @@ _PROMPT_LEAK_RE = re.compile(
     \bdo\s+not\s+(?:reveal|mention|disclose)\s+(?:the\s+)?(?:system\s+prompt|instructions)\b
     """
 )
+_TEXT_INVOKE_BLOCK_RE = re.compile(
+    r"""(?is)\(\s*invoke\.\s*name\s*=\s*["'](?P<name>[^"']+)["']\s*\)(?P<body>.*?)\(\s*\.invoke\s*\)"""
+)
+_TEXT_INVOKE_PARAM_RE = re.compile(
+    r"""(?is)\(\s*parameter\.\s*name\s*=\s*["'](?P<name>[^"']+)["']\s*\)(?P<value>.*?)\(\s*parameter\s*\)"""
+)
 
 
 def looks_like_prompt_leak(text: str) -> bool:
@@ -225,6 +231,7 @@ def clean_text_for_tts(
     text = re.sub(r'to=functions\.\w+\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'functions\.\w+\s*\([^)]*\)\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\{"name"\s*:\s*"\w+".*?"arguments"\s*:.*?\}\s*', '', text, flags=re.IGNORECASE | re.DOTALL)
+    text = _TEXT_INVOKE_BLOCK_RE.sub(' ', text)
 
     # Strip XML blocks
     text = re.sub(r'<tool_call>\s*.*?\s*</tool_call>', '', text, flags=re.DOTALL)
@@ -524,6 +531,21 @@ def parse_tool_calls_from_content(content: str) -> List[Dict]:
     
     if not content:
         return tool_calls
+
+    for match in _TEXT_INVOKE_BLOCK_RE.finditer(content):
+        tool_name = (match.group("name") or "").strip()
+        if not tool_name:
+            continue
+        params = {}
+        for param_match in _TEXT_INVOKE_PARAM_RE.finditer(match.group("body") or ""):
+            param_name = (param_match.group("name") or "").strip()
+            if not param_name:
+                continue
+            params[param_name] = re.sub(r"\s+", " ", param_match.group("value") or "").strip()
+        tool_calls.append({
+            "name": tool_name,
+            "arguments": json.dumps(params),
+        })
     
     # Patterns to find JSON in text
     json_patterns = [

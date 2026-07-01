@@ -169,12 +169,15 @@ def _orchestrator_delivery_ack(
     success: bool,
     channel: str,
     channel_detail: str,
+    manual: bool = True,
 ) -> None:
     """Brief spoken status — never recap where the summary was routed."""
     if success:
         if channel == "desktop_tts":
             return
         if channel == "telegram":
+            if not manual:
+                return
             _speak_orchestrator("Done. I put it on Telegram.")
             return
         _speak_orchestrator("Done.")
@@ -268,6 +271,7 @@ def finalize_automation_subagent_from_agent(
         success=success,
         channel=channel,
         channel_detail=channel_detail,
+        manual=True,
     )
 
 
@@ -377,6 +381,7 @@ def _automation_worker(
                     success=False,
                     channel="none",
                     channel_detail=summary,
+                    manual=manual,
                 )
                 return
 
@@ -421,6 +426,7 @@ def _automation_worker(
                 success=success,
                 channel=channel,
                 channel_detail=channel_detail,
+                manual=manual,
             )
             return
 
@@ -443,6 +449,7 @@ def _automation_worker(
                 success=False,
                 channel="none",
                 channel_detail=summary,
+                manual=manual,
             )
             return
 
@@ -466,6 +473,7 @@ def _automation_worker(
             success=False,
             channel="none",
             channel_detail=str(exc),
+            manual=manual,
         )
     finally:
         release_workflow_run(workflow_id)
@@ -502,6 +510,7 @@ def start_automation_subagent(
             success=False,
             channel="none",
             channel_detail="Automation is already running.",
+            manual=manual,
         )
         return
 
