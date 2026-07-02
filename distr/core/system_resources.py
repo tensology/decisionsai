@@ -1,7 +1,6 @@
 """System resource detection for adaptive model selection.
 
-Detects available RAM and recommends appropriate Ollama model sizes
-so low-memory machines (8 GB) don't choke on the default 8B model.
+Detects available RAM and recommends the current default Ollama models.
 """
 
 import logging
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 # Each entry: (min_ram_gb, model_name, approx_vram_gb, label)
 # NOTE: min_ram_gb accounts for ~5 GB app overhead (PyQt, pipecat, whisper, torch).
 OLLAMA_MODEL_TIERS = [
-    (0,   "deepseek-v4-pro:cloud", 0, "cloud — no local RAM needed"),
+    (0,   "ornith:9b", 6, "local default"),
 ]
 
 # Vision model tiers
@@ -24,7 +23,7 @@ OLLAMA_VISION_TIERS = [
 
 # Coding model tiers
 OLLAMA_CODING_TIERS = [
-    (0,   "glm-5.1:cloud",       0, "cloud — no local RAM needed"),
+    (0,   "ornith:9b", 6, "local default"),
 ]
 
 
@@ -88,7 +87,7 @@ def recommend_ollama_defaults(ram_gb: float = None) -> dict:
     """Return a dict of recommended Ollama models keyed by role.
 
     >>> recommend_ollama_defaults(8)
-    {'conversational': 'qwen3:4b', 'coding': 'qwen2.5-coder:3b', 'vision': 'qwen3-vl:235b-cloud'}
+    {'conversational': 'ornith:9b', 'coding': 'ornith:9b', 'vision': 'qwen3-vl:235b-cloud'}
     """
     if ram_gb is None:
         ram_gb = get_total_ram_gb()

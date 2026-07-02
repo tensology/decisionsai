@@ -146,12 +146,12 @@ class ReworkClipboardTool(BaseTool):
     
     CALL THE TOOL - never describe it."""
     
-    llm_model: Optional[str] = Field(default="qwen3:8b", description="LLM model to use for reworking")
+    llm_model: Optional[str] = Field(default="ornith:9b", description="LLM model to use for reworking")
     
     # Default local model for fast reworking — always prefer local for speed
-    LOCAL_REWORK_MODEL: str = "qwen3:8b"
+    LOCAL_REWORK_MODEL: str = "ornith:9b"
     
-    def __init__(self, llm_model="qwen3:8b", **kwargs):
+    def __init__(self, llm_model="ornith:9b", **kwargs):
         super().__init__(**kwargs)
         # Use a local model for reworking regardless of the main conversation model.
         # Cloud models are too slow for a synchronous clipboard operation.
@@ -214,7 +214,7 @@ class ReworkClipboardTool(BaseTool):
                 non_ollama_indicators = ['gpt-', 'claude-', 'gemini', 'openrouter', 'anthropic', 'google']
                 if any(indicator in model_to_use.lower() for indicator in non_ollama_indicators):
                     logger.warning(f"Rework: Model '{model_to_use}' is not an Ollama model, falling back to default")
-                    model_to_use = "qwen3:8b"
+                    model_to_use = "ornith:9b"
                 else:
                     # Try to verify the model exists in Ollama
                     try:
@@ -222,7 +222,7 @@ class ReworkClipboardTool(BaseTool):
                         available_models = [m['name'] for m in client.list().get('models', [])]
                         if model_to_use not in available_models:
                             logger.warning(f"Rework: Model '{model_to_use}' not found in Ollama, falling back to default")
-                            model_to_use = "qwen3:8b"
+                            model_to_use = "ornith:9b"
                     except Exception as e:
                         logger.warning(f"Rework: Could not verify Ollama models, using '{model_to_use}': {e}")
                         # If we can't verify, try the model anyway but be ready to fall back
@@ -259,9 +259,9 @@ Rewritten text:"""
                     )
                 except Exception as model_error:
                     # If the model fails, try with the default
-                    if model_to_use != "qwen3:8b":
+                    if model_to_use != "ornith:9b":
                         logger.warning(f"Rework: Model '{model_to_use}' failed, trying default: {model_error}")
-                        model_to_use = "qwen3:8b"
+                        model_to_use = "ornith:9b"
                         response = client.chat(
                             model=model_to_use,
                             messages=[
@@ -398,4 +398,3 @@ Rewritten text:"""
     async def _arun(self, text: str = "", **kwargs) -> str:
         # Filter out any unexpected arguments
         return self._run(text=text)
-

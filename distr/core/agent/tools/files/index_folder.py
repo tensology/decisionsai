@@ -135,7 +135,7 @@ class IndexFolderTool(BaseTool):
             try:
                 from distr.core.settings import load_settings_from_db
                 settings = load_settings_from_db()
-                model_name = settings.get('agent_model', 'deepseek-v4-pro:cloud') or 'deepseek-v4-pro:cloud'
+                model_name = settings.get('agent_model', 'ornith:9b') or 'ornith:9b'
                 exclude_text = settings.get('excluded_files', '')
                 exclude_extensions = None
                 if exclude_text:
@@ -146,7 +146,7 @@ class IndexFolderTool(BaseTool):
                     ]
             except Exception as e:
                 logger.warning(f"Could not load settings, using defaults: {e}")
-                model_name = 'deepseek-v4-pro:cloud'
+                model_name = 'ornith:9b'
                 exclude_extensions = None
             
             # Index the folder
@@ -175,4 +175,3 @@ class IndexFolderTool(BaseTool):
         except Exception as e:
             logger.error(f"Error indexing folder: {e}", exc_info=True)
             return f"Error indexing folder: {str(e)}"
-

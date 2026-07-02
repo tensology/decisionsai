@@ -28,7 +28,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "description": "Returns all root-level chat conversations, ordered by most recently modified. Also returns last_chat_id and agent_current_chat_id from settings.",
                         "curl": f'curl -s {base}/api/chats',
                         "body": None,
-                        "response_example": '{"chats": [{"id": 1, "title": "New Chat", "provider": "Ollama", "model_name": "qwen3:8b"}], "last_chat_id": 1, "agent_current_chat_id": 1}',
+                        "response_example": '{"chats": [{"id": 1, "title": "New Chat", "provider": "Ollama", "model_name": "ornith:9b"}], "last_chat_id": 1, "agent_current_chat_id": 1}',
                     },
                     {
                         "method": "GET",
@@ -38,7 +38,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "curl": f'curl -s {base}/api/chats/1',
                         "body": None,
                         "params": [{"name": "chat_id", "type": "int", "required": True, "description": "Chat ID"}],
-                        "response_example": '{"id": 1, "title": "New Chat", "messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}], "provider": "Ollama", "model_name": "qwen3:8b"}',
+                        "response_example": '{"id": 1, "title": "New Chat", "messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}], "provider": "Ollama", "model_name": "ornith:9b"}',
                     },
                     {
                         "method": "POST",
@@ -47,17 +47,17 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "description": "Creates a new chat conversation. Optionally specify provider, model, voice, title, and a starting question. If starting_question is provided, it will be sent to the agent immediately.",
                         "curl": f"""curl -s -X POST {base}/api/chats \\
   -H 'Content-Type: application/json' \\
-  -d '{{"provider": "ollama", "model_name": "qwen3:8b", "title": "My Chat", "starting_question": "Hello!"}}'""",
+  -d '{{"provider": "ollama", "model_name": "ornith:9b", "title": "My Chat", "starting_question": "Hello!"}}'""",
                         "body": {
                             "title": {"type": "string", "required": False, "description": "Chat title (auto-generated from question if omitted)"},
                             "provider": {"type": "string", "required": False, "description": "LLM provider: ollama, openai, anthropic, groq, openrouter, kilocode, gemini, nvidia"},
-                            "model_name": {"type": "string", "required": False, "description": "Model name (e.g. qwen3:8b, gpt-4o)"},
+                            "model_name": {"type": "string", "required": False, "description": "Model name (e.g. ornith:9b, gpt-4o)"},
                             "voice_provider": {"type": "string", "required": False, "description": "TTS provider: kokoro, openai, elevenlabs, f5tts"},
                             "voice_model": {"type": "string", "required": False, "description": "Voice model (e.g. af_heart, alloy)"},
                             "starting_question": {"type": "string", "required": False, "description": "First message to send to the agent"},
                             "speak": {"type": "boolean", "required": False, "description": "Whether agent should speak the reply (default: true)"},
                         },
-                        "response_example": '{"id": 5, "title": "My Chat", "provider": "Ollama", "model_name": "qwen3:8b", "message": "Chat created successfully"}',
+                        "response_example": '{"id": 5, "title": "My Chat", "provider": "Ollama", "model_name": "ornith:9b", "message": "Chat created successfully"}',
                     },
                     {
                         "method": "PATCH",
@@ -759,14 +759,14 @@ def create_routes(base_path: str = "") -> APIRouter:
             {
                 "section": "Models & LLMs",
                 "endpoints": [
-                    {"method": "GET", "path": "/api/models", "summary": "Get default LLM model", "description": "Returns the default conversational LLM provider and model from settings.", "curl": f'curl -s {base}/api/models', "body": None, "response_example": '{"provider": "Ollama", "model": "qwen3:8b"}'},
-                    {"method": "GET", "path": "/api/chats/agent-setup", "summary": "Get current agent setup", "description": "Returns the current agent configuration (model + voice) from settings.", "curl": f'curl -s {base}/api/chats/agent-setup', "body": None, "response_example": '{"provider": "Ollama", "model_name": "qwen3:8b", "voice_provider": "Kokoro", "voice_model": "Heart"}'},
-                    {"method": "GET", "path": "/api/llms", "summary": "Get LLM settings", "description": "Returns the current LLM provider, model, and related configuration.", "curl": f'curl -s {base}/api/llms', "body": None, "response_example": '{"provider": "Ollama", "model_name": "qwen3:8b", "ollama_url": "http://localhost:11434/"}'},
-                    {"method": "POST", "path": "/api/llms", "summary": "Save LLM settings", "description": "Update the default LLM provider and model. Triggers agent reload.", "curl": f"curl -s -X POST {base}/api/llms -H 'Content-Type: application/json' -d '{{\"provider\": \"Ollama\", \"model_name\": \"qwen3:8b\"}}'", "body": {"provider": {"type": "string", "required": True, "description": "LLM provider: Ollama, OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Google Gemini"}, "model_name": {"type": "string", "required": True, "description": "Model name (e.g. qwen3:8b, gpt-4o)"}}, "response_example": '{"success": true, "message": "LLM settings saved"}'},
-                    {"method": "GET", "path": "/api/llms/models", "summary": "List available models for a provider", "description": "Returns models available for the given provider. For Ollama, queries the local server.", "curl": f'curl -s "{base}/api/llms/models?provider=Ollama"', "params": [{"name": "provider", "type": "string", "required": True, "description": "Provider name"}], "body": None, "response_example": '{"models": [{"name": "qwen3:8b", "size": "4.9 GB"}]}'},
+                    {"method": "GET", "path": "/api/models", "summary": "Get default LLM model", "description": "Returns the default conversational LLM provider and model from settings.", "curl": f'curl -s {base}/api/models', "body": None, "response_example": '{"provider": "Ollama", "model": "ornith:9b"}'},
+                    {"method": "GET", "path": "/api/chats/agent-setup", "summary": "Get current agent setup", "description": "Returns the current agent configuration (model + voice) from settings.", "curl": f'curl -s {base}/api/chats/agent-setup', "body": None, "response_example": '{"provider": "Ollama", "model_name": "ornith:9b", "voice_provider": "Kokoro", "voice_model": "Heart"}'},
+                    {"method": "GET", "path": "/api/llms", "summary": "Get LLM settings", "description": "Returns the current LLM provider, model, and related configuration.", "curl": f'curl -s {base}/api/llms', "body": None, "response_example": '{"provider": "Ollama", "model_name": "ornith:9b", "ollama_url": "http://localhost:11434/"}'},
+                    {"method": "POST", "path": "/api/llms", "summary": "Save LLM settings", "description": "Update the default LLM provider and model. Triggers agent reload.", "curl": f"curl -s -X POST {base}/api/llms -H 'Content-Type: application/json' -d '{{\"provider\": \"Ollama\", \"model_name\": \"ornith:9b\"}}'", "body": {"provider": {"type": "string", "required": True, "description": "LLM provider: Ollama, OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Google Gemini"}, "model_name": {"type": "string", "required": True, "description": "Model name (e.g. ornith:9b, gpt-4o)"}}, "response_example": '{"success": true, "message": "LLM settings saved"}'},
+                    {"method": "GET", "path": "/api/llms/models", "summary": "List available models for a provider", "description": "Returns models available for the given provider. For Ollama, queries the local server.", "curl": f'curl -s "{base}/api/llms/models?provider=Ollama"', "params": [{"name": "provider", "type": "string", "required": True, "description": "Provider name"}], "body": None, "response_example": '{"models": [{"name": "ornith:9b", "size": "6 GB"}]}'},
                     {"method": "GET", "path": "/api/llms/available-providers", "summary": "List enabled LLM providers", "description": "Returns providers that have valid API keys configured or are locally available (Ollama).", "curl": f'curl -s {base}/api/llms/available-providers', "body": None, "response_example": '{"providers": ["Ollama", "OpenAI", "Groq"]}'},
-                    {"method": "GET", "path": "/api/llms/recommendations", "summary": "Get model recommendations", "description": "Returns AI-curated model recommendations based on system RAM and available providers.", "curl": f'curl -s {base}/api/llms/recommendations', "body": None, "response_example": '{"recommendations": [{"provider": "Ollama", "model": "qwen3:8b", "tier": "free"}]}'},
-                    {"method": "POST", "path": "/api/ollama/pull", "summary": "Pull an Ollama model", "description": "Downloads a model from the Ollama library. Returns immediately; poll Ollama API for progress.", "curl": f"curl -s -X POST {base}/api/ollama/pull -H 'Content-Type: application/json' -d '{{\"model\": \"qwen3:8b\"}}'", "body": {"model": {"type": "string", "required": True, "description": "Model name to pull"}}, "response_example": '{"success": true, "message": "Pull started for qwen3:8b"}'},
+                    {"method": "GET", "path": "/api/llms/recommendations", "summary": "Get model recommendations", "description": "Returns AI-curated model recommendations based on system RAM and available providers.", "curl": f'curl -s {base}/api/llms/recommendations', "body": None, "response_example": '{"recommendations": [{"provider": "Ollama", "model": "ornith:9b", "tier": "free"}]}'},
+                    {"method": "POST", "path": "/api/ollama/pull", "summary": "Pull an Ollama model", "description": "Downloads a model from the Ollama library. Returns immediately; poll Ollama API for progress.", "curl": f"curl -s -X POST {base}/api/ollama/pull -H 'Content-Type: application/json' -d '{{\"model\": \"ornith:9b\"}}'", "body": {"model": {"type": "string", "required": True, "description": "Model name to pull"}}, "response_example": '{"success": true, "message": "Pull started for ornith:9b"}'},
                     {"method": "GET", "path": "/api/ollama/library", "summary": "Browse Ollama model library", "description": "Returns the cached Ollama model library with sizes and descriptions.", "curl": f'curl -s {base}/api/ollama/library', "body": None, "response_example": '{"models": [{"name": "qwen3", "tags": ["8b", "1.7b"]}]}'},
                 ],
             },

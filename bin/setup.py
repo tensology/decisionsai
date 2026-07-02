@@ -235,6 +235,7 @@ def _model_display_name(model_id: str) -> str:
     display_names = {
         "minimax-m2.5": "MiniMax M2.5",
         "glm-5.1": "GLM 5.1",
+        "ornith": "Ornith 9B",
         "qwen3.5": "Qwen 3.5 397B",
         "qwen3-coder-next": "Qwen3 Coder Next",
         "qwen3-vl": "Qwen3 VL",
@@ -264,7 +265,7 @@ def setup_pi_cli(ram_gb=None, rec=None):
             from distr.core.system_resources import recommend_ollama_defaults
             rec = recommend_ollama_defaults(ram_gb)
         except Exception:
-            rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
+            rec = {"conversational": "ornith:9b", "coding": "ornith:9b", "vision": "qwen3-vl:235b-cloud"}
 
     conv_model = rec["conversational"]
     code_model = rec["coding"]
@@ -298,6 +299,7 @@ def setup_pi_cli(ram_gb=None, rec=None):
                     {"id": code_model, "name": _model_display_name(code_model)},
                     {"id": "qwen3-coder-next:cloud", "name": "Qwen3 Coder Next"},
                     {"id": "qwen3.5:397b-cloud", "name": "Qwen 3.5 397B"},
+                    {"id": "ornith:9b", "name": "Ornith 9B"},
                     {"id": "minimax-m2.5:cloud", "name": "MiniMax M2.5"},
                     {"id": "glm-5.1:cloud", "name": "GLM 5.1"},
                     {"id": "qwen3-vl:235b-cloud", "name": "Qwen3 VL"},
@@ -454,7 +456,7 @@ def setup(skip_model_pull=False, install_optional=False):
     except Exception as _e:
         print(f"Could not detect RAM ({_e}), using defaults for 16 GB")
         ram_gb = 16.0
-        rec = {"conversational": "deepseek-v4-pro:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
+        rec = {"conversational": "ornith:9b", "coding": "ornith:9b", "vision": "qwen3-vl:235b-cloud"}
 
     # Write recommended models to a file so the DB can pick them up on first creation
     try:

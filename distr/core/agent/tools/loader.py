@@ -91,9 +91,9 @@ def _get_tool_definitions(
         ("ExitAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
         ("RestartAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
         # Rework Clipboard
-        ("ReworkClipboardTool", dict(llm_model=llm_model or "qwen3:8b")),
+        ("ReworkClipboardTool", dict(llm_model=llm_model or "ornith:9b")),
         # Summarize Clipboard
-        ("SummarizeClipboardTool", dict(llm_model=llm_model or "qwen3:8b", llm_service=llm_service)),
+        ("SummarizeClipboardTool", dict(llm_model=llm_model or "ornith:9b", llm_service=llm_service)),
         # Skills tools
         ("FindSkillTool", {}),
         ("PushSkillTool", {}),
@@ -152,7 +152,7 @@ def _get_tool_definitions(
         # Execute Code
         ("ExecuteCodeTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
         # Create Cursor handoff (explicit Cursor requests, plus DEBUG DecisionsAI self tickets)
-        ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "qwen3:8b", chat_manager=chat_manager)),
+        ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "ornith:9b", chat_manager=chat_manager)),
         # Ticket Board Ticket (primary ticket tool)
         ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
         # Playwright Browser Automation

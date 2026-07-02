@@ -67,7 +67,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 from distr.core.system_resources import recommend_model
                 model_name = recommend_model()
             except Exception:
-                model_name = "deepseek-v4-pro:cloud"  # absolute fallback — cloud default
+                model_name = "ornith:9b"
 
         # --- Common state ---
         self._model_name = model_name

@@ -120,7 +120,7 @@ def _normalize_ollama_error(raw: str) -> str:
     if "requires a subscription" in text.lower() or "upgrade for access" in text.lower():
         return (
             f"{text} "
-            "Pick a local model in the CLI dropdown (for example qwen3:8b) or upgrade Ollama cloud at https://ollama.com/upgrade."
+            "Pick a local model in the CLI dropdown (for example ornith:9b) or upgrade Ollama cloud at https://ollama.com/upgrade."
         )
     if "not found" in text.lower() and "model" in text.lower():
         return f"{text} Run `ollama pull <model>` or choose another model in the CLI dropdown."
@@ -251,7 +251,7 @@ def _pick_local_fallback_models(installed: set[str], limit: int = 5) -> list[str
                 return [fallback]
         except Exception:
             pass
-        return ["qwen3:8b", "qwen2.5-coder:7b"]
+        return ["ornith:9b"]
 
     locals_only = [m for m in installed if m and not _is_ollama_cloud_model(m)]
     priority = (

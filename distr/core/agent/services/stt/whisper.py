@@ -4,6 +4,7 @@ import time
 import numpy as np
 import sys
 import os
+import threading
 from contextlib import contextmanager
 from typing import Optional
 
@@ -58,6 +59,9 @@ class WhisperSTTService(BaseSTTService):
         self.model_path = model_path
         self.model = None
         self._transcribe_lock = asyncio.Lock()
+        self._model_transcribe_lock = threading.RLock()
+        self._warmup_started = False
+        self._warmup_complete = False
 
         # Suppress whisper C library verbose output during initialization
         try:
@@ -76,6 +80,37 @@ class WhisperSTTService(BaseSTTService):
             lock = asyncio.Lock()
             self._transcribe_lock = lock
         return lock
+
+    def _get_model_transcribe_lock(self) -> threading.RLock:
+        lock = getattr(self, "_model_transcribe_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._model_transcribe_lock = lock
+        return lock
+
+    def _transcribe_audio_np(self, audio_np: np.ndarray):
+        with self._get_model_transcribe_lock():
+            return self.model.transcribe(audio_np)
+
+    def _warm_up_model(self):
+        if getattr(self, "model", None) is None:
+            return
+        started_at = time.time()
+        try:
+            silence = np.zeros(16000, dtype=np.float32)
+            with suppress_stderr():
+                self._transcribe_audio_np(silence)
+            self._warmup_complete = True
+            logger.info("STT: Whisper warm-up complete in %.0fms", (time.time() - started_at) * 1000)
+        except Exception as e:
+            logger.warning("STT: Whisper warm-up failed: %s", e)
+
+    def warm_up_async(self):
+        if getattr(self, "_warmup_started", False) or getattr(self, "_warmup_complete", False):
+            return
+        self._warmup_started = True
+        thread = threading.Thread(target=self._warm_up_model, name="whisper-stt-warmup", daemon=True)
+        thread.start()
 
     def __del__(self):
         """Cleanup Whisper model resources on deletion"""
@@ -217,7 +252,7 @@ class WhisperSTTService(BaseSTTService):
             # Note: We can't easily cancel executor tasks, but we check cancellation flag after
             async with self._get_transcribe_lock():
                 segments = await loop.run_in_executor(
-                    None, lambda: self.model.transcribe(audio_np)
+                    None, lambda: self._transcribe_audio_np(audio_np)
                 )
 
             # Check if cancelled after transcription

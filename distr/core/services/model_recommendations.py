@@ -92,7 +92,7 @@ def _write_recommendations(data: dict) -> None:
         raise
 
 
-def refresh_recommendations(model: str = "qwen3:8b") -> None:
+def refresh_recommendations(model: str = "ornith:9b") -> None:
     """Run the recommendation agent. Safe to call from a background thread."""
     global _refresh_running
     if _refresh_running:

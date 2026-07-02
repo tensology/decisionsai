@@ -1,6 +1,6 @@
 {
   "last_updated": "2026-06-11T10:15:53.084843+00:00",
-  "generated_by": "qwen3:8b",
+  "generated_by": "ornith:9b",
   "providers": {
     "ollama": {
       "display_name": "Ollama",

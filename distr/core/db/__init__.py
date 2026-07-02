@@ -72,20 +72,20 @@ class Settings(Base):
     tts_provider = Column(String, default='Kokoro (Offline)')
     tts_voice = Column(String, default='')
     agent_provider = Column(String, default='Ollama')
-    agent_model = Column(String, default='deepseek-v4-pro:cloud')
+    agent_model = Column(String, default='ornith:9b')
     code_provider = Column(String, default='Ollama')
-    code_model = Column(String, default='glm-5.1:cloud')
+    code_model = Column(String, default='ornith:9b')
     input_speech = Column(String, default='Vosk')
     transcription_model = Column(String, default='Whisper.cpp (Local & Offline)')
     
     # Multiple LLM Settings (Conversational, Coding, Vision, Image)
     # llm_provider/model: Standardized names used by ChatManager for hot-reload
     llm_provider = Column(String, default='Ollama')
-    llm_model = Column(String, default='deepseek-v4-pro:cloud')
+    llm_model = Column(String, default='ornith:9b')
     conversational_llm_provider = Column(String, default='Ollama')
-    conversational_llm_model = Column(String, default='deepseek-v4-pro:cloud')
+    conversational_llm_model = Column(String, default='ornith:9b')
     coding_llm_provider = Column(String, default='Ollama')
-    coding_llm_model = Column(String, default='glm-5.1:cloud')
+    coding_llm_model = Column(String, default='ornith:9b')
     workflow_llm_provider = Column(String, default='')
     workflow_llm_model = Column(String, default='')
     step_runner_llm_provider = Column(String, default='')
@@ -824,7 +824,7 @@ def init_db():
                 from distr.core.system_resources import recommend_ollama_defaults, get_total_ram_gb
                 _rec = recommend_ollama_defaults(get_total_ram_gb())
             except Exception:
-                _rec = {"conversational": "qwen3:0.6b", "coding": "qwen2.5-coder:0.5b", "vision": "qwen3-vl:235b-cloud"}
+                _rec = {"conversational": "ornith:9b", "coding": "ornith:9b", "vision": "qwen3-vl:235b-cloud"}
 
             # Also consume the setup.py JSON if it exists (may have more accurate values)
             _model_defaults_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'installer', '.model_defaults.json')
@@ -856,19 +856,19 @@ def init_db():
                 voice_provider='kokoro',
                 kokoro_voice='af_heart',
                 agent_provider='Ollama',
-                agent_model=_rec.get('conversational', 'deepseek-v4-pro:cloud'),
+                agent_model=_rec.get('conversational', 'ornith:9b'),
                 llm_provider='Ollama',
-                llm_model=_rec.get('conversational', 'deepseek-v4-pro:cloud'),
+                llm_model=_rec.get('conversational', 'ornith:9b'),
                 conversational_llm_provider='Ollama',
-                conversational_llm_model=_rec.get('conversational', 'deepseek-v4-pro:cloud'),
+                conversational_llm_model=_rec.get('conversational', 'ornith:9b'),
                 coding_llm_provider='Ollama',
-                coding_llm_model=_rec.get('coding', 'glm-5.1:cloud'),
+                coding_llm_model=_rec.get('coding', 'ornith:9b'),
                 vision_llm_provider='Ollama',
                 vision_llm_model=_rec.get('vision', 'qwen3-vl:235b-cloud'),
                 image_llm_provider='Ollama',
                 image_llm_model='x/flux2-klein:latest',
                 code_provider='Ollama',
-                code_model=_rec.get('coding', 'glm-5.1:cloud'),
+                code_model=_rec.get('coding', 'ornith:9b'),
                 input_speech='Vosk',
                 transcription_model='Whisper.cpp (Local & Offline)',
                 indexed_folders='[]',

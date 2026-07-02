@@ -169,7 +169,7 @@ def scan_project_folder(folder_path: str, gitignore_spec: Optional[pathspec.Path
         return []
 
 
-def get_project_rag_service(project_id: int, project_name: str, model_name: str = "qwen3:8b", embedding_model: str = "nomic-embed-text") -> Optional[Any]:
+def get_project_rag_service(project_id: int, project_name: str, model_name: str = "ornith:9b", embedding_model: str = "nomic-embed-text") -> Optional[Any]:
     """
     Get or create a project-specific RAG service.
 
@@ -226,7 +226,7 @@ def get_project_rag_service(project_id: int, project_name: str, model_name: str 
         return None
 
 
-def index_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str, Any]:
+def index_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str, Any]:
     """
     Index all project files and context items.
 
@@ -318,7 +318,7 @@ def index_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str, An
         session.close()
 
 
-def activate_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str, Any]:
+def activate_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str, Any]:
     """
     Activate a project:
     1. Set project.in_use = True (set all others to False)
@@ -646,7 +646,7 @@ def query_project_rag(query: str, project_id: Optional[int] = None) -> Optional[
     return rag_service.query(query)
 
 
-def reindex_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str, Any]:
+def reindex_project(project_id: int, model_name: str = "ornith:9b") -> Dict[str, Any]:
     """
     Force re-index of a project (clears and rebuilds index).
 

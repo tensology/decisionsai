@@ -1581,28 +1581,37 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"AutoWorkflow code/validation/wait migration: {e}")
 
-    # Migrate Ollama default models to cloud versions (no local RAM needed)
+    # Migrate retired or non-chat Ollama defaults to the current local default.
     try:
         with Session() as session:
             settings = session.query(Settings).first()
             if settings:
                 changed = False
-                # Conversational: old local models -> deepseek-v4-pro:cloud
-                old_conv = ('qwen3:8b', 'qwen3:4b', 'qwen3:1.7b', 'qwen3:0.6b', 'gemma4:e2b')
+                old_conv = (
+                    'qwen3:8b', 'qwen3:4b', 'qwen3:1.7b', 'qwen3:0.6b',
+                    'gemma4:e2b', 'deepseek-v4-pro:cloud', 'minimax-m2.5:cloud',
+                )
                 if settings.conversational_llm_model in old_conv or settings.llm_model in old_conv or settings.agent_model in old_conv:
-                    settings.conversational_llm_model = 'deepseek-v4-pro:cloud'
-                    settings.llm_model = 'deepseek-v4-pro:cloud'
-                    settings.agent_model = 'deepseek-v4-pro:cloud'
+                    settings.conversational_llm_model = 'ornith:9b'
+                    settings.llm_model = 'ornith:9b'
+                    settings.agent_model = 'ornith:9b'
                     changed = True
-                # Coding: old local models -> glm-5.1:cloud
+                old_code_models = ('glm-5.1:cloud',)
                 old_code_prefixes = ('qwen2.5-coder:', 'codegemma')
-                if any(settings.coding_llm_model.startswith(p) for p in old_code_prefixes) or any(settings.code_model.startswith(p) for p in old_code_prefixes):
-                    settings.coding_llm_model = 'glm-5.1:cloud'
-                    settings.code_model = 'glm-5.1:cloud'
+                coding_model = settings.coding_llm_model or ''
+                code_model = settings.code_model or ''
+                if (
+                    coding_model in old_code_models
+                    or code_model in old_code_models
+                    or any(coding_model.startswith(p) for p in old_code_prefixes)
+                    or any(code_model.startswith(p) for p in old_code_prefixes)
+                ):
+                    settings.coding_llm_model = 'ornith:9b'
+                    settings.code_model = 'ornith:9b'
                     changed = True
                 if changed:
                     session.commit()
-                    logger.info("Migrated default models to cloud versions (deepseek-v4-pro:cloud for chat, glm-5.1:cloud for coding)")
+                    logger.info("Migrated default Ollama models to ornith:9b")
     except Exception as e:
         logger.debug(f"Cloud model migration: {e}")
 

@@ -192,6 +192,7 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
 
     async def _play_queued_sentence(self, sentence: str, generation: int, direction) -> None:
         has_telegram_request, force_desktop_tts = self._route_telegram_flags()
+        push_direction = self._resolve_tts_push_direction(direction)
         logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
         audio_frame_count = 0
         async for audio_frame in self.run_tts(sentence):
@@ -199,7 +200,7 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                 break
             if isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
                 try:
-                    await self.push_frame(audio_frame, direction)
+                    await self.push_frame(audio_frame, push_direction)
                 except Exception as e:
                     logger.error("TTS: Error pushing lifecycle frame: %s", e, exc_info=True)
                     break
@@ -213,7 +214,7 @@ class KokoroTTSService(TTSPipelineMixin, TTSService):
                 audio_frame_count += 1
                 continue
             try:
-                await self.push_frame(audio_frame, direction)
+                await self.push_frame(audio_frame, push_direction)
                 audio_frame_count += 1
             except Exception as e:
                 logger.error("TTS: Error pushing frame: %s", e, exc_info=True)

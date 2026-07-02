@@ -119,13 +119,13 @@ class CreateCursorTicketTool(BaseTool):
     """
     
     llm_service: Optional[Any] = Field(default=None, exclude=True)
-    llm_model: str = Field(default="qwen3:8b", exclude=True)
+    llm_model: str = Field(default="ornith:9b", exclude=True)
     chat_manager: Optional[Any] = Field(default=None, exclude=True)
     
     # Default local model for fast ticket generation
-    LOCAL_TICKET_MODEL: str = "qwen3:8b"
+    LOCAL_TICKET_MODEL: str = "ornith:9b"
     
-    def __init__(self, llm_service=None, llm_model: str = "qwen3:8b", chat_manager=None, **kwargs):
+    def __init__(self, llm_service=None, llm_model: str = "ornith:9b", chat_manager=None, **kwargs):
         super().__init__(**kwargs)
         self.llm_service = llm_service
         # Use a local model for ticket generation regardless of the main conversation model.
@@ -342,7 +342,7 @@ Cleaned ticket:"""
                 # If model name looks like OpenAI, use a default Ollama model
                 ollama_model = self.llm_model
                 if _is_openai(ollama_model):
-                    ollama_model = "qwen3:8b"  # Default fallback
+                    ollama_model = "ornith:9b"
                     logger.info(f"CreateCursorTicket: Using default Ollama model {ollama_model} instead of {self.llm_model}")
                 
                 response = client.chat(

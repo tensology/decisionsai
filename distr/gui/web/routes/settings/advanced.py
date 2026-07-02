@@ -344,7 +344,7 @@ def register_routes(router, templates):
         import asyncio
         from distr.core.settings import load_settings_from_db as _load
         settings = _load()
-        model_name = settings.get('agent_model', 'deepseek-v4-pro:cloud') or 'deepseek-v4-pro:cloud'
+        model_name = settings.get('agent_model', 'ornith:9b') or 'ornith:9b'
         exclude_text = settings.get('excluded_files', '')
         exclude_extensions = None
         if exclude_text:

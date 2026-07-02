@@ -19,7 +19,7 @@ _rag_service = None
 _chat_rag_services = {}
 
 
-def get_rag_service(model_name: str = "qwen3:8b", embedding_model: str = "nomic-embed-text") -> Optional[Any]:
+def get_rag_service(model_name: str = "ornith:9b", embedding_model: str = "nomic-embed-text") -> Optional[Any]:
     """Get or create the global LlamaIndex RAG service instance."""
     global _rag_service
     
@@ -92,7 +92,7 @@ def get_indexed_folders() -> List[str]:
 
 
 def index_settings_folders(
-    model_name: str = "qwen3:8b",
+    model_name: str = "ornith:9b",
     embedding_model: str = "nomic-embed-text",
     exclude_extensions: Optional[List[str]] = None
 ) -> Dict[str, Any]:
@@ -217,7 +217,7 @@ def index_settings_folders(
         return result
 
 
-def query_rag(query_text: str, model_name: str = "qwen3:8b") -> Dict[str, Any]:
+def query_rag(query_text: str, model_name: str = "ornith:9b") -> Dict[str, Any]:
     """
     Query the RAG system with indexed folders.
     
@@ -238,7 +238,7 @@ def query_rag(query_text: str, model_name: str = "qwen3:8b") -> Dict[str, Any]:
     return rag_service.query(query_text)
 
 
-def add_files_to_index(file_paths: List[str], model_name: str = "qwen3:8b") -> Dict[str, Any]:
+def add_files_to_index(file_paths: List[str], model_name: str = "ornith:9b") -> Dict[str, Any]:
     """
     Add specific files to the RAG index.
     
@@ -259,7 +259,7 @@ def add_files_to_index(file_paths: List[str], model_name: str = "qwen3:8b") -> D
     return rag_service.index_files(file_paths)
 
 
-def add_directories_to_index(directory_paths: List[str], model_name: str = "qwen3:8b", exclude_extensions: Optional[List[str]] = None) -> Dict[str, Any]:
+def add_directories_to_index(directory_paths: List[str], model_name: str = "ornith:9b", exclude_extensions: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Add directories to the RAG index.
     
@@ -281,7 +281,7 @@ def add_directories_to_index(directory_paths: List[str], model_name: str = "qwen
     return rag_service.index_directories(directory_paths, exclude_extensions)
 
 
-def clear_rag_index(model_name: str = "qwen3:8b") -> Dict[str, Any]:
+def clear_rag_index(model_name: str = "ornith:9b") -> Dict[str, Any]:
     """
     Clear/reset the RAG index (removes all indexed documents).
     
@@ -301,7 +301,7 @@ def clear_rag_index(model_name: str = "qwen3:8b") -> Dict[str, Any]:
     return rag_service.clear_index()
 
 
-def get_chat_rag_service(chat_id: int, model_name: str = "qwen3:8b", embedding_model: str = "nomic-embed-text") -> Optional[Any]:
+def get_chat_rag_service(chat_id: int, model_name: str = "ornith:9b", embedding_model: str = "nomic-embed-text") -> Optional[Any]:
     """
     Get or create a per-chat RAG service instance (Chat Index Bucket).
     
@@ -378,7 +378,7 @@ def get_chat_rag_service(chat_id: int, model_name: str = "qwen3:8b", embedding_m
     return _chat_rag_services[chat_id]
 
 
-def index_chat_directory(chat_id: int, directory_path: str, model_name: str = "qwen3:8b", exclude_extensions: Optional[List[str]] = None) -> Dict[str, Any]:
+def index_chat_directory(chat_id: int, directory_path: str, model_name: str = "ornith:9b", exclude_extensions: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Index a directory in a chat's per-chat index bucket.
     
@@ -471,7 +471,7 @@ def cleanup_chat_index(chat_id: int) -> bool:
         return False
 
 
-def initialize_global_index(model_name: str = "qwen3:8b", embedding_model: str = "nomic-embed-text") -> Dict[str, Any]:
+def initialize_global_index(model_name: str = "ornith:9b", embedding_model: str = "nomic-embed-text") -> Dict[str, Any]:
     """
     Initialize the global index with folders from settings.
     
@@ -520,4 +520,3 @@ def initialize_global_index(model_name: str = "qwen3:8b", embedding_model: str =
         logger.warning(f"Global index initialization had issues: {result.get('error')}")
     
     return result
-

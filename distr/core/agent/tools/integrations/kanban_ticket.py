@@ -747,7 +747,7 @@ class KanbanTicketTool(BaseTool):
         """Synchronous LLM call for ticket summarisation."""
         try:
             import ollama
-            model = getattr(self.llm_service, '_model_name', 'qwen3:8b')
+            model = getattr(self.llm_service, '_model_name', 'ornith:9b')
             resp = ollama.chat(model=model, messages=[
                 {"role": "system", "content": "You are a concise project manager assistant."},
                 {"role": "user", "content": prompt},

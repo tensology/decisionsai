@@ -155,7 +155,7 @@ logs, model-provider requests, workflow audit trails, and the internal
 | | |
 |---|---|
 | **OS** | macOS (Apple Silicon & Intel), Windows, Linux |
-| **RAM** | 8 GB minimum; 12 GB recommended for qwen3:8b |
+| **RAM** | 8 GB minimum; 12 GB recommended for ornith:9b |
 | **Python** | 3.12 |
 | **System deps** | PortAudio, FFmpeg |
 | **Disk** | ~200 MB for cloud models; ~6 GB for full local models |
@@ -166,8 +166,8 @@ logs, model-provider requests, workflow audit trails, and the internal
 >
 > | Role | Model | RAM needed |
 > |---|---|---|
-> | Chat | `minimax-m2.5:cloud` | 0 (cloud) |
-> | Coding | `glm-5.1:cloud` | 0 (cloud) |
+> | Chat | `ornith:9b` | ~6 GB |
+> | Coding | `ornith:9b` | ~6 GB |
 > | Vision | `qwen3-vl:2b` | ~1.9 GB |
 > | Image | `x/flux2-klein:latest` | local only |
 >
@@ -176,7 +176,7 @@ logs, model-provider requests, workflow audit trails, and the internal
 > | RAM | Chat model | Coding model | Approx. VRAM |
 > |---|---|---|---|
 > | 10–11 GB | `qwen3:4b` | `qwen2.5-coder:3b` | ~3.5 GB |
-> | 12+ GB | `qwen3:8b` | `qwen2.5-coder:7b` | ~6 GB |
+> | 12+ GB | `ornith:9b` | `ornith:9b` | ~6 GB |
 
 ### Online / cloud mode
 

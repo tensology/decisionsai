@@ -210,7 +210,13 @@ class EventHandlerMixin:
         elif event == 'dictation_stopped':
             signal_manager.dictation_stopped.emit()
         elif event == 'set_dictating':
-            self._send_command_to_agent('set_dictating', {'enabled': data.get('enabled', False)})
+            enabled = bool(data.get('enabled', False))
+            last_enabled = getattr(self, '_last_set_dictating_enabled', None)
+            if last_enabled is enabled:
+                logger.debug("[EVENT QUEUE] Dedup: skipping set_dictating enabled=%s", enabled)
+                return
+            self._last_set_dictating_enabled = enabled
+            self._send_command_to_agent('set_dictating', {'enabled': enabled})
         elif event == 'hands_free_mode_changed':
             signal_manager.hands_free_mode_changed.emit(data.get('enabled', False))
 
@@ -487,7 +493,6 @@ class EventHandlerMixin:
         if player_on_screen:
             self._hide_player_window_immediate(reason)
         else:
-            signal_manager.player_stop.emit()
             logger.info("[EVENT QUEUE] Player not on screen (%s)", reason)
 
         # Defensive: if oracle is still in 'thinking' after playback is done,

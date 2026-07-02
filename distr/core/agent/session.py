@@ -537,6 +537,7 @@ class AgentSession:
                     event_queue=self.event_queue,
                     is_hands_free=self.is_hands_free
                 )
+                self.stt_service.warm_up_async()
                 self.logger.info(f"✅ Whisper.cpp STT service created successfully (type: {type(self.stt_service).__name__})")
         if stt_config['engine'] == 'vosk':
             if not VOSK_AVAILABLE or VoskSTTService is None:

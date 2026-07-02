@@ -156,6 +156,38 @@ def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
     assert any(isinstance(frame, TTSStoppedFrame) for frame in pushed)
 
 
+def test_coqui_falls_back_to_pipeline_direction_for_queued_audio():
+    service = object.__new__(CoquiTTSService)
+    service._init_tts_pipeline_state()
+    service._cancelled = False
+    service._pipeline_direction = object()
+    service._speech_volume = 1.0
+    service._volume_in_run_tts = True
+    service._current_telegram_request = False
+    service._force_desktop_tts = False
+    pushed = []
+
+    async def push_frame(frame, direction):
+        pushed.append((frame, direction))
+
+    async def run_tts(text):
+        audio = AudioRawFrame()
+        audio.audio = b"\x01\x00" * 160
+        audio.sample_rate = 16000
+        audio.num_channels = 1
+        yield TTSStartedFrame()
+        yield audio
+        yield TTSStoppedFrame()
+
+    service.push_frame = push_frame
+    service.run_tts = run_tts
+
+    asyncio.run(service._play_queued_sentence("hello", service._tts_generation, None))
+
+    assert len(pushed) == 3
+    assert all(direction is service._pipeline_direction for _frame, direction in pushed)
+
+
 def test_pixazo_batches_three_sentences_per_synthesis_call():
     from distr.core.agent.services.tts.pixazo import PixazoTTSService
 

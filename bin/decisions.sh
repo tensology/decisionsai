@@ -709,7 +709,7 @@ fi
 check_ollama() {
     if command -v ollama &> /dev/null; then
         echo -e "${GREEN}✓${NC} Ollama found"
-        echo -e "Default conversational model: deepseek-v4-pro:cloud"
+        echo -e "Default conversational model: ornith:9b"
         echo -e "${GREEN}✓${NC} Skipping automatic local Ollama model download"
         echo -e "${YELLOW}Optional local models can be installed manually if needed${NC}"
     else

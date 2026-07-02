@@ -142,7 +142,7 @@ try:
     from distr.core.system_resources import recommend_ollama_defaults as _rec
     _ollama_rec = _rec()
 except Exception:
-    _ollama_rec = {"conversational": "deepseek-v4-pro:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
+    _ollama_rec = {"conversational": "ornith:9b", "coding": "ornith:9b", "vision": "qwen3-vl:235b-cloud"}
 
 DEFAULT_MODELS = {
     "ollama": _ollama_rec["conversational"],

@@ -57,3 +57,32 @@ def test_whisper_transcribe_calls_are_serialized_per_model_instance():
     asyncio.run(run_two_transcriptions())
 
     assert model.max_active == 1
+
+
+class _ImmediateThread:
+    def __init__(self, target, *args, **kwargs):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+def test_whisper_warm_up_async_runs_once(monkeypatch):
+    service = _whisper_service_with_model(_ConcurrentProbeModel())
+    service._warmup_started = False
+    service._warmup_complete = False
+    calls = []
+
+    def fake_warm_up_model():
+        calls.append("warmed")
+        service._warmup_complete = True
+
+    service._warm_up_model = fake_warm_up_model
+    monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+
+    service.warm_up_async()
+    service.warm_up_async()
+
+    assert calls == ["warmed"]
+    assert service._warmup_started is True
+    assert service._warmup_complete is True

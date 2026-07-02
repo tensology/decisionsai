@@ -152,11 +152,11 @@ class SummarizeClipboardTool(BaseTool):
     )
     
     # Default local model for fast summarization — always prefer local for speed
-    LOCAL_SUMMARIZE_MODEL: str = "qwen3:8b"
-    llm_model: str = Field(default="qwen3:8b", exclude=True)
+    LOCAL_SUMMARIZE_MODEL: str = "ornith:9b"
+    llm_model: str = Field(default="ornith:9b", exclude=True)
     llm_service: Optional[Any] = Field(default=None, exclude=True)
     
-    def __init__(self, llm_model: str = "qwen3:8b", llm_service=None, **kwargs):
+    def __init__(self, llm_model: str = "ornith:9b", llm_service=None, **kwargs):
         super().__init__(**kwargs)
         # Use a local model for summarization regardless of the main conversation model.
         # Cloud models are too slow for a synchronous clipboard operation that the user
@@ -574,4 +574,3 @@ Summary:"""
     async def _arun(self, text: str = "", **kwargs) -> str:
         # Filter out any unexpected arguments
         return self._run(text=text)
-

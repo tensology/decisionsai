@@ -136,6 +136,7 @@ class TTSPipelineMixin:
         if not hasattr(self, "run_tts"):
             logger.warning("TTS: _play_queued_sentence called but run_tts is missing")
             return
+        push_direction = self._resolve_tts_push_direction(direction)
         logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
         audio_frame_count = 0
         truncated = False
@@ -147,7 +148,7 @@ class TTSPipelineMixin:
                 # Transport needs TTSStartedFrame to disable VAD barge-in and
                 # prepare the output stream before the first audio chunk.
                 try:
-                    await self.push_frame(audio_frame, direction)  # type: ignore[attr-defined]
+                    await self.push_frame(audio_frame, push_direction)  # type: ignore[attr-defined]
                 except Exception as e:
                     logger.error("TTS: Error pushing lifecycle frame: %s", e, exc_info=True)
                     truncated = True
@@ -160,7 +161,7 @@ class TTSPipelineMixin:
                 continue
             try:
                 self._apply_volume_to_audio_frame(audio_frame)
-                await self.push_frame(audio_frame, direction)  # type: ignore[attr-defined]
+                await self.push_frame(audio_frame, push_direction)  # type: ignore[attr-defined]
                 audio_frame_count += 1
             except Exception as e:
                 logger.error("TTS: Error pushing frame: %s", e, exc_info=True)
@@ -173,6 +174,19 @@ class TTSPipelineMixin:
             )
         elif audio_frame_count > 0:
             logger.debug("TTS: Pushed %s audio frames for sentence", audio_frame_count)
+
+    def _resolve_tts_push_direction(self, direction: Any) -> Any:
+        if direction is not None:
+            return direction
+        stored = getattr(self, "_pipeline_direction", None)
+        if stored is not None:
+            return stored
+        try:
+            from pipecat.processors.frame_processor import FrameDirection
+
+            return FrameDirection.DOWNSTREAM
+        except Exception:
+            return direction
 
     def _apply_volume_to_audio_frame(self, audio_frame: Any) -> None:
         if getattr(self, "_volume_in_run_tts", False):

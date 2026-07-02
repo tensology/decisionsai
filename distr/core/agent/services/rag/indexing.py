@@ -48,7 +48,7 @@ class LlamaIndexRAGService:
     
     def __init__(
         self,
-        model_name: str = "qwen3:8b",
+        model_name: str = "ornith:9b",
         embedding_model: str = "nomic-embed-text",
         index_path: Optional[str] = None,
         persist_dir: Optional[str] = None,
@@ -160,10 +160,10 @@ class LlamaIndexRAGService:
                 except Exception as e:
                     logger.error(f"Failed to initialize Ollama LLM: {e}")
                     # Try default model as last resort
-                    logger.info("Trying default Ollama model: qwen3:8b")
-                    self.llm = Ollama(model="qwen3:8b", request_timeout=120.0)
-                    self.model_name = "qwen3:8b"
-                    logger.info("Initialized Ollama LLM with default model: qwen3:8b")
+                    logger.info("Trying default Ollama model: ornith:9b")
+                    self.llm = Ollama(model="ornith:9b", request_timeout=120.0)
+                    self.model_name = "ornith:9b"
+                    logger.info("Initialized Ollama LLM with default model: ornith:9b")
             
             # Initialize embeddings - support both OpenAI and Ollama
             if use_openai:
@@ -186,9 +186,9 @@ class LlamaIndexRAGService:
             # Try to recover with default Ollama model
             try:
                 logger.info("Attempting recovery with default Ollama model...")
-                self.model_name = "qwen3:8b"
+                self.model_name = "ornith:9b"
                 self.is_openai_model = False
-                self.llm = Ollama(model="qwen3:8b", request_timeout=120.0)
+                self.llm = Ollama(model="ornith:9b", request_timeout=120.0)
                 self.embed_model = OllamaEmbedding(model_name=self.embedding_model)
                 self._load_or_create_index()
                 logger.info("Recovered successfully with default Ollama model")
@@ -317,7 +317,7 @@ class LlamaIndexRAGService:
                     logger.info(f"Model '{self.model_name}' not available, falling back to default Ollama model")
                     try:
                         # Use default Ollama model as fallback
-                        fallback_llm = Ollama(model="qwen3:8b", request_timeout=120.0)
+                        fallback_llm = Ollama(model="ornith:9b", request_timeout=120.0)
                         self.query_engine = self.index.as_query_engine(
                             llm=fallback_llm,
                             similarity_top_k=5,
@@ -325,9 +325,9 @@ class LlamaIndexRAGService:
                         )
                         # Update self.llm to the fallback
                         self.llm = fallback_llm
-                        self.model_name = "qwen3:8b"
+                        self.model_name = "ornith:9b"
                         self.is_openai_model = False
-                        logger.info("Query engine initialized with fallback Ollama model: qwen3:8b")
+                        logger.info("Query engine initialized with fallback Ollama model: ornith:9b")
                     except Exception as fallback_error:
                         logger.error(f"Failed to create query engine even with fallback model: {fallback_error}")
                         raise query_error  # Raise original error
@@ -760,7 +760,6 @@ class LlamaIndexRAGService:
                 "success": False,
                 "error": str(e)
             }
-
 
 
 
