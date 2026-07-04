@@ -1199,6 +1199,19 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add coding_backend_model column: {e}")
 
+    # Handle database migration for manual Projects sidebar ordering
+    try:
+        with Session() as session:
+            session.execute(text("SELECT position FROM projects LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN position INTEGER DEFAULT 0"))
+                conn.commit()
+                logger.info("Added position column to projects table")
+            except Exception as e:
+                logger.warning(f"Could not add position column: {e}")
+
     # Project columns required before any Project ORM queries below (board column seeding).
     try:
         with engine.connect() as conn:

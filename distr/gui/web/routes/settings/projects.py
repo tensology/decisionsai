@@ -441,10 +441,15 @@ def register_routes(router, templates):
         """Get list of projects for the Projects page"""
         logger.info("GET /api/projects called")
         try:
+            from sqlalchemy import desc
             from distr.core.db import get_session
             from distr.core.db.projects import Project
             with get_session() as session:
-                projects = session.query(Project).order_by(Project.modified_date.desc()).all()
+                projects = (
+                    session.query(Project)
+                    .order_by(Project.position.asc(), desc(Project.modified_date), Project.id.asc())
+                    .all()
+                )
                 return JSONResponse([
                     {
                         "id": p.id,
@@ -460,6 +465,53 @@ def register_routes(router, templates):
                 ])
         except Exception as e:
             logger.error(f"Failed to load projects: {e}", exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/projects/reorder")
+    async def reorder_projects(request: Request):
+        """Persist manual Projects sidebar order. Expects {"order": [id1, id2, ...]}."""
+        try:
+            from sqlalchemy import desc
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+
+            body = await request.json()
+            raw_order = body.get("order") if isinstance(body, dict) else None
+            if not isinstance(raw_order, list):
+                raise HTTPException(status_code=400, detail="order must be a list of project ids")
+
+            ordered_ids: list[int] = []
+            seen: set[int] = set()
+            for raw_id in raw_order:
+                try:
+                    project_id = int(raw_id)
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="order must contain project ids")
+                if project_id > 0 and project_id not in seen:
+                    ordered_ids.append(project_id)
+                    seen.add(project_id)
+
+            with get_session() as session:
+                projects = (
+                    session.query(Project)
+                    .order_by(Project.position.asc(), desc(Project.modified_date), Project.id.asc())
+                    .all()
+                )
+                by_id = {project.id: project for project in projects}
+                unknown = [project_id for project_id in ordered_ids if project_id not in by_id]
+                if unknown:
+                    raise HTTPException(status_code=400, detail="order contains unknown project ids")
+
+                reordered = [by_id[project_id] for project_id in ordered_ids]
+                remaining = [project for project in projects if project.id not in seen]
+                for position, project in enumerate(reordered + remaining):
+                    project.position = position
+                session.commit()
+                return JSONResponse({"success": True})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to reorder projects: {e}", exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.get("/projects/board-providers")
@@ -1665,6 +1717,7 @@ def register_routes(router, templates):
             from distr.core.project_cli_backends import normalize_backend_id
             coding_backend = normalize_backend_id(body.get("coding_backend"))
             with get_session() as session:
+                max_position = max((p.position or 0) for p in session.query(Project).all()) if session.query(Project).count() else -1
                 project = Project(
                     name=name,
                     description="",
@@ -1673,6 +1726,7 @@ def register_routes(router, templates):
                     additional_trigger_words="[]",
                     coding_backend=coding_backend,
                     coding_backend_model=(body.get("coding_backend_model") or "").strip(),
+                    position=max_position + 1,
                 )
                 session.add(project)
                 session.commit()

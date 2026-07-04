@@ -5,6 +5,7 @@
 (function() {
     var currentProjectId = null;
     var searchText = "";
+    var draggedProjectId = null;
 
     function escapeAttr(s) {
         if (!s) return "";
@@ -52,7 +53,8 @@
                 ? "<span class=\"project-in-use-dot w-2 h-2 rounded-full bg-[#f97316] flex-shrink-0\" title=\"In use\" aria-label=\"In use\"></span>"
                 : "";
             var active = currentProjectId === p.id ? " bg-white/10 border-[#f97316]" : " border-transparent hover:bg-white/5";
-            return "<div class=\"project-item-wrapper flex items-center gap-1 rounded border" + active + " group focus:outline-none focus:ring-2 focus:ring-[#f97316]/60\" data-id=\"" + p.id + "\" tabindex=\"0\" role=\"option\" aria-selected=\"" + (currentProjectId === p.id ? "true" : "false") + "\">" +
+            var draggable = searchText.trim() ? "false" : "true";
+            return "<div class=\"project-item-wrapper flex items-center gap-1 rounded border" + active + " group focus:outline-none focus:ring-2 focus:ring-[#f97316]/60\" data-id=\"" + p.id + "\" draggable=\"" + draggable + "\" tabindex=\"0\" role=\"option\" aria-selected=\"" + (currentProjectId === p.id ? "true" : "false") + "\">" +
                 "<button type=\"button\" class=\"project-item flex-1 min-w-0 text-left px-3 py-2 text-white text-sm\" data-id=\"" + p.id + "\">" + escapeAttr(p.name || "Untitled") + "</button>" +
                 inUseDot +
                 "<button type=\"button\" class=\"project-item-delete p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/20 flex-shrink-0\" data-id=\"" + p.id + "\" aria-label=\"Delete\">" + deleteSvg + "</button>" +
@@ -80,6 +82,54 @@
                 var id = parseInt(wrap.getAttribute("data-id"), 10);
                 if (id && currentProjectId !== id) selectProject(id);
             });
+            wrap.addEventListener("dragstart", function(e) {
+                if (searchText.trim() || (e.target && e.target.closest && e.target.closest(".project-item-delete"))) {
+                    e.preventDefault();
+                    return;
+                }
+                draggedProjectId = parseInt(wrap.getAttribute("data-id"), 10);
+                if (e.dataTransfer) {
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", String(draggedProjectId));
+                }
+            });
+            wrap.addEventListener("dragover", function(e) {
+                if (!draggedProjectId || searchText.trim()) return;
+                e.preventDefault();
+                if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+            });
+            wrap.addEventListener("drop", function(e) {
+                if (!draggedProjectId || searchText.trim()) return;
+                e.preventDefault();
+                var targetId = parseInt(wrap.getAttribute("data-id"), 10);
+                persistProjectOrder(draggedProjectId, targetId);
+                draggedProjectId = null;
+            });
+            wrap.addEventListener("dragend", function() {
+                draggedProjectId = null;
+            });
+        });
+    }
+
+    function persistProjectOrder(draggedId, targetId) {
+        if (!draggedId || !targetId || draggedId === targetId) return;
+        var order = projectsData.map(function(p) { return p.id; });
+        order = order.filter(function(id) { return id !== draggedId; });
+        var targetIndex = order.indexOf(targetId);
+        if (targetIndex === -1) return;
+        order.splice(targetIndex, 0, draggedId);
+
+        var byId = {};
+        projectsData.forEach(function(p) { byId[p.id] = p; });
+        projectsData = order.map(function(id) { return byId[id]; }).filter(Boolean);
+        renderList(projectsData);
+
+        apiFetch("/api/projects/reorder", {
+            method: "POST",
+            body: JSON.stringify({ order: order }),
+        }).catch(function(err) {
+            showSnackbar((err && err.message) || "Could not reorder projects", "error");
+            loadProjects();
         });
     }
 

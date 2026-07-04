@@ -21,6 +21,7 @@ class Project(Base):
     start_time_tracker = Column(Boolean, default=True)  # Start schedule timer when startup terminals launch
     coding_backend = Column(String, nullable=False, default="pi")  # Project coding CLI backend
     coding_backend_model = Column(String, nullable=True)  # Optional per-project model/alias for the selected CLI backend
+    position = Column(Integer, default=0)  # Manual order in the Projects sidebar
 
     created_date = Column(DateTime, default=utc_now_naive)
     modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive)
