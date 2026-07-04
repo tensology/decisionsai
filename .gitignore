@@ -76,6 +76,12 @@ scripts/*
 !scripts/deploy_changelog.sh
 !scripts/deploy_changelog_to_site.sh
 !scripts/humanize_changelog.py
+!scripts/cleanup_workflow_loop_smoke.py
+!scripts/harness_doctor.py
+!scripts/prefetch_local_models.py
+!scripts/setup_project_clis.sh
+!scripts/setup_workflow_loop_smoke.py
+!scripts/verify_agent_harness_setup.py
 
 # --- Databases ---
 db/*

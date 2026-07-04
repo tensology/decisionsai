@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
 from distr.core.project_cli_backends.base import BackendTaskResult
+from distr.core.project_cli_backends.harness import HarnessHandle, HarnessStatus
 
 
 def _make_factory():
@@ -114,6 +115,18 @@ def _seed_codex_game_ticket(factory, project_dir: Path) -> dict[str, int]:
                 "Create index.html for a polished Memory Sprint card game with score and restart controls. "
                 "Return changed files and validation notes."
             ),
+            config=json.dumps({
+                "execution_route": {
+                    "enabled": True,
+                    "mode": "scoped",
+                    "scoped_model_key": "codex:gpt-5.3-codex-spark",
+                    "route_snapshot": {
+                        "backend_id": "codex",
+                        "model": "gpt-5.3-codex-spark",
+                        "name": "Codex Spark",
+                    },
+                },
+            }),
             linked_project_id=project.id,
             validation_type="none",
             timeout_seconds=30,
@@ -160,6 +173,7 @@ def _seed_codex_game_ticket(factory, project_dir: Path) -> dict[str, int]:
                     "artifacts": {"files_changed": []},
                     "audit": {"final_verdict": "cannot_determine"},
                 },
+                "skip_human_checkpoints": True,
             }),
         )
         session.add(run)
@@ -188,35 +202,19 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
 
     captured = {}
 
-    async def fake_run_project_task(
-        project,
-        instruction,
-        *,
-        chat_id=None,
-        audit_id=None,
-        run_id=None,
-        workflow_id=None,
-        step_id=None,
-        on_event=None,
-        origin="cli",
-        ticket_id=None,
-        ticket_complexity="medium",
-        backend_id_override=None,
-        model_override=None,
-    ):
+    async def fake_dispatch_harness(context):
+        project = context.project
         captured["project_id"] = project.id
-        captured["backend"] = project.coding_backend
-        captured["model"] = project.coding_backend_model
-        captured["origin"] = origin
-        captured["ticket_id"] = ticket_id
-        captured["ticket_complexity"] = ticket_complexity
-        captured["backend_id_override"] = backend_id_override
-        captured["model_override"] = model_override
-        captured["audit_id"] = audit_id
-        captured["run_id"] = run_id
-        captured["workflow_id"] = workflow_id
-        captured["step_id"] = step_id
-        captured["instruction"] = instruction
+        captured["backend"] = context.backend_id
+        captured["model"] = context.model
+        captured["origin"] = context.origin
+        captured["ticket_id"] = context.ticket_id
+        captured["ticket_complexity"] = context.ticket_complexity
+        captured["audit_id"] = context.step_id
+        captured["run_id"] = context.run_id
+        captured["workflow_id"] = context.workflow_id
+        captured["step_id"] = context.step_id
+        captured["instruction"] = context.instruction
         Path(project.folder_location, "index.html").write_text(
             """<!doctype html>
 <html>
@@ -234,12 +232,18 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
 """,
             encoding="utf-8",
         )
-        return BackendTaskResult(
+        backend_result = BackendTaskResult(
             success=True,
             backend_id="codex",
             engine="codex",
             output="Changed files: index.html\nValidation: Memory Sprint UI created.",
-            session_id=audit_id,
+            session_id=context.step_id,
+        )
+        return HarnessHandle(
+            backend_id=context.backend_id,
+            result=backend_result,
+            status=HarnessStatus.DONE,
+            evidence={"output": backend_result.output, "engine": backend_result.engine},
         )
 
     no_op = MagicMock()
@@ -257,7 +261,7 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
         patch("distr.core.workflow.router.record_workflow_chat_event", no_op),
         patch("distr.core.workflow.dispatcher.append_ticket_audit_entry", no_op),
         patch("distr.core.workflow.router.append_ticket_audit_entry", no_op),
-        patch("distr.core.project_cli_backends.run_project_task", fake_run_project_task),
+        patch("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch_harness),
     ]
 
     with contextlib.ExitStack() as stack:

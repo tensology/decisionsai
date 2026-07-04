@@ -6,12 +6,13 @@ def test_gpt35_does_not_match_gpt5_window():
 
 
 def test_gpt5_uses_recommendations_before_static_fallback():
-    # Cached recommendations list gpt-5 @ 128k for OpenAI tool_calling.
-    assert context_window_for_model("openai", "gpt-5") == 128_000
+    # Cached recommendations include gpt-5-turbo @ 128k; base gpt-5 keeps the
+    # current static family window instead of matching that longer variant.
+    assert context_window_for_model("openai", "gpt-5") == 400_000
 
 
 def test_gpt5_coder_does_not_shrink_base_gpt5_lookup():
-    assert context_window_for_model("openai", "gpt-5-coder") == 65_536
+    assert context_window_for_model("openai", "gpt-5-coder") == 400_000
 
 
 def test_implausibly_small_recommendation_does_not_override_known_static(monkeypatch):

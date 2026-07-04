@@ -73,10 +73,15 @@ def test_route_helpers_invoke_sink(
 
     bus.set_chat_id_provider(lambda: 5)
     bus.set_text_sink(
-        lambda text, is_telegram, img, speak: seen.append((text, is_telegram, img, speak))
+        lambda text, is_telegram, img, metadata: seen.append(
+            (text, is_telegram, img, metadata)
+        )
     )
     route_fn(**kw)
-    assert seen == [("hi", True, None, None)]
+    expected_surface = "discord" if "author_id" in kw else "slack"
+    assert seen == [
+        ("hi", True, None, {"speak": None, "surface": expected_surface, "chat_id": 5})
+    ]
 
 
 def test_slack_event_to_incoming_platform() -> None:

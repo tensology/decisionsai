@@ -262,14 +262,19 @@ class BaseSTTService(STTService):
                 # Fallback for STT restore paths that do not go through command_handler.
                 if (self._pipeline_direction is not None
                         and self._event_loop is not None
-                        and self._event_loop.is_running()):
+                        and isinstance(self._event_loop, asyncio.AbstractEventLoop)
+                        and self._event_loop.is_running() is True):
+                    coro = None
                     try:
+                        coro = self._send_interruption(self._pipeline_direction)
                         asyncio.run_coroutine_threadsafe(
-                            self._send_interruption(self._pipeline_direction),
+                            coro,
                             self._event_loop,
                         )
                         logger.debug("STT: Scheduled immediate InterruptionFrame on PTT activation")
                     except Exception as e:
+                        if coro is not None:
+                            coro.close()
                         logger.warning(f"STT: Could not send immediate interruption: {e}")
                 else:
                     if self._pipeline_direction is None:

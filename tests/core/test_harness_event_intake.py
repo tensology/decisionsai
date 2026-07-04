@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -45,6 +46,10 @@ def test_reporter_fails_silently_when_decisions_is_off():
         / "report_decisions_event.py"
     )
 
+    env = dict(os.environ)
+    env.pop("DEBUG", None)
+    env.pop("DECISIONSAI_HARNESS_DEBUG", None)
+
     result = subprocess.run(
         [
             sys.executable,
@@ -60,6 +65,7 @@ def test_reporter_fails_silently_when_decisions_is_off():
         text=True,
         timeout=15,
         check=False,
+        env=env,
     )
 
     assert result.returncode == 0

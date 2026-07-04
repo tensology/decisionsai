@@ -123,7 +123,7 @@ class WorkflowAgentBridge:
             result = (s.get("result") or "").strip()
             status = s.get("status", "")
             st_lower = (status or "").strip().lower()
-            ok = st_lower in ("completed", "passed")
+            ok = st_lower in ("completed", "passed") or (success and not st_lower)
             if result:
                 lim = _PASS_SNIPPET if ok else _FAIL_SNIPPET
                 short = WorkflowAgentBridge._human_step_result(result)
@@ -138,12 +138,10 @@ class WorkflowAgentBridge:
                 else:
                     step_lines.append(f"{title} didn't clear.")
 
-        steps_block = "\n".join(step_lines) if step_lines else "No steps were recorded."
-
         if not step_lines:
-            return status_line
+            return f"{status_line}\nNo steps were recorded."
 
-        return f"{status_line}\n{steps_block}"
+        return f"{status_line}\n" + "\n".join(step_lines)
 
     @staticmethod
     def _human_step_result(result: str) -> str:

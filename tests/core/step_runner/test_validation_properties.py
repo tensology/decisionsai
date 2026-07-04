@@ -79,6 +79,9 @@ def valid_config_for(draw, step_type: str):
                 "recording_name": draw(non_empty_text),
             }
 
+    if step_type == StepType.DECISIONS_ACTION.value:
+        return {"action_id": draw(st.integers(min_value=1))}
+
     if step_type == StepType.HTTP_REQUEST.value:
         cfg = {"url": draw(valid_urls)}
         if draw(st.booleans()):

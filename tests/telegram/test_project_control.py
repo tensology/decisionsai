@@ -79,7 +79,7 @@ def test_handle_cursor_command_dispatches_to_backend(monkeypatch):
     bridge_events = []
     project = SimpleNamespace(id=7, name="DecisionsAI", folder_location="/repo")
 
-    async def fake_dispatch(project_id, command):
+    async def fake_dispatch(project_id, command, **kwargs):
         calls.append((project_id, command.backend_id, command.instruction))
         return SimpleNamespace(success=True, engine="cursor", output="Status: completed", error="")
 
@@ -117,7 +117,7 @@ def test_handle_codex_natural_project_hint_dispatches_named_project(monkeypatch)
     calls = []
     project = SimpleNamespace(id=11, name="player1sport.com", folder_location="/repo/player1sport.com")
 
-    async def fake_dispatch(project_id, command):
+    async def fake_dispatch(project_id, command, **kwargs):
         calls.append((project_id, command.backend_id, command.project_hint, command.instruction))
         return SimpleNamespace(success=True, engine="codex", output="Status: completed", error="")
 

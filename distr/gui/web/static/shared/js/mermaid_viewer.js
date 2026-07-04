@@ -225,17 +225,7 @@
                     if (!id) return;
                             var row = items.find(function (row) { return row.id === id; }) || {};
                             var title = row.title || "diagram";
-                            if (!window.DecisionsAPI || typeof window.DecisionsAPI.confirm !== "function") {
-                                if (!window.confirm("Delete " + (title || "diagram") + "?")) {
-                                    return;
-                                }
-                                apiFetch("/api/diagrams/" + encodeURIComponent(id), { method: "DELETE" })
-                                    .then(function () { loadHistoryList(historyEl, onSelect, statusEl); })
-                                    .catch(function () {
-                                        setStatus(statusEl, "Failed to delete diagram.", "error");
-                                    });
-                                return;
-                            }
+                            if (!window.DecisionsAPI || typeof window.DecisionsAPI.confirm !== "function") return;
                             window.DecisionsAPI.confirm({
                                 title: "Delete Mermaid diagram",
                                 message: 'Delete "' + title + '"? This cannot be undone.',

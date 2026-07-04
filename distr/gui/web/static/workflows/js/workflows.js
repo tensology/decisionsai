@@ -595,10 +595,11 @@
             },
             showKanbanConfirm: function (opts) {
                 opts = opts || {};
-                if (window.confirm(opts.message || "Continue?")) {
-                    if (typeof opts.onConfirm === "function") opts.onConfirm();
-                } else if (typeof opts.onCancel === "function") {
-                    opts.onCancel();
+                if (window.DecisionsAPI && typeof window.DecisionsAPI.confirm === "function") {
+                    window.DecisionsAPI.confirm(opts).then(function (confirmed) {
+                        if (confirmed && typeof opts.onConfirm === "function") opts.onConfirm();
+                        if (!confirmed && typeof opts.onCancel === "function") opts.onCancel();
+                    });
                 }
             },
             hideKanbanConfirm: function () {},
@@ -12492,6 +12493,7 @@
                 getRowId: function(row) { return parseInt(row.dataset.id, 10); },
                 getSelectedId: function() { return currentWorkflowId; },
                 onSelect: function(id) { selectWorkflow(id); },
+                onDelete: function(id) { deleteWorkflowById(id); },
                 pageGuard: function() { return !!document.getElementById("wf-list"); },
                 shouldSkip: function() { return isWorkflowQueueKeyboardContext(); },
             });

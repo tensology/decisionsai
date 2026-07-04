@@ -76,3 +76,15 @@ class TestInitiativeServiceLifecycle:
             MockQTimer.singleShot = MagicMock()
             service._on_idle_timer_expired()
             MockQTimer.singleShot.assert_not_called()
+
+    def test_dispatch_cycle_skips_during_quiet_window(self):
+        service = self._make_service()
+        service._last_cycle_at = 1_000.0
+        ran = []
+        service._run_initiative_cycle = lambda trigger: ran.append(trigger)
+
+        with patch("distr.core.initiative.service.time.time", return_value=1_020.0):
+            service._dispatch_cycle("schedule_tick")
+
+        assert ran == []
+        assert service._cycle_running is False

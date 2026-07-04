@@ -44,7 +44,7 @@ def test_brief_step_start_message():
             step_name="Ingest ticket and project context",
             step_index=1,
         )
-        == "Step 1: Ingest ticket and project context has started."
+        == "Login bug: Step 1: Ingest ticket and project context has started."
     )
 
 
@@ -56,7 +56,7 @@ def test_brief_step_failure_message_for_missing_project():
         result_text="No linked project for this ticket.",
         step_index=1,
     )
-    assert message.startswith("Step 1:")
+    assert message.startswith("Login bug: Step 1:")
     assert "failed" in message
     assert "Link the ticket to a project first." in message
 
@@ -70,6 +70,6 @@ def test_brief_step_failure_message_for_cursor_usage_limit():
         step_index=1,
     )
     assert "usage limit" in message.lower()
-    assert build_run_done_message(ticket_title="T", status="completed") == "Run finished."
-    assert build_run_done_message(ticket_title="T", status="cancelled") == "Run stopped."
-    assert build_run_done_message(ticket_title="T", status="failed") == "Run failed."
+    assert build_run_done_message(ticket_title="T", status="completed") == "T: Run finished."
+    assert build_run_done_message(ticket_title="T", status="cancelled") == "T: Run stopped."
+    assert build_run_done_message(ticket_title="T", status="failed") == "T: Run failed."

@@ -1,84 +1,88 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
 
 def test_ide_bridge_creates_project_chat_and_appends_prompt_and_response(tmp_path):
     import distr.core.db.projects  # noqa: F401
     from distr.core.chat import ChatService
     from distr.core.db import get_session
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
     from distr.core.db.projects import Project
-    from distr.gui.web.routes.ide_bridge import create_routes
+    from distr.core.ide_bridge import ensure_ide_session, get_ide_progress, record_ide_event
+    from distr.core.kanban.project_execution import create_execution_session
 
     project_dir = tmp_path / "demo"
     nested_dir = project_dir / "src"
     nested_dir.mkdir(parents=True)
 
     with get_session() as session:
-        project = Project(name="Demo IDE", folder_location=str(project_dir), coding_backend="cursor")
+        project = Project(name="Demo IDE", folder_location=str(project_dir), coding_backend="codex")
         session.add(project)
         session.commit()
         project_id = project.id
+        ide_session_ids = [
+            row.id
+            for row in session.query(ProjectExecutionSession.id)
+            .filter(ProjectExecutionSession.route_type == "ide_bridge")
+            .all()
+        ]
+        if ide_session_ids:
+            session.query(ProjectExecutionEvent).filter(
+                ProjectExecutionEvent.session_id.in_(ide_session_ids),
+            ).delete(synchronize_session=False)
+            session.query(ProjectExecutionSession).filter(
+                ProjectExecutionSession.id.in_(ide_session_ids),
+            ).delete(synchronize_session=False)
+        session.commit()
 
-    app = FastAPI()
-    app.include_router(create_routes(), prefix="/api")
-    client = TestClient(app)
-
-    create_resp = client.post(
-        "/api/ide/sessions",
-        json={"source": "cursor", "cwd": str(nested_dir)},
-    )
-    assert create_resp.status_code == 200
-    created = create_resp.json()
-    assert created["success"] is True
-    assert created["project"]["id"] == project_id
+    with patch("distr.core.ide_bridge._latest_open_session", return_value=None), \
+         patch("distr.core.ide_bridge.create_execution_session", create_execution_session):
+        created = ensure_ide_session(
+            source="codex",
+            cwd=str(nested_dir),
+            project_id=project_id,
+        )
     chat_id = created["chat_id"]
     session_id = created["session"]["id"]
+    session_project_id = created["session"].get("project_id") or project_id
     assert created["session"]["route_type"] == "ide_bridge"
-    assert created["session"]["route_backend"] == "cursor"
+    assert created["session"]["route_backend"] == "codex"
 
-    prompt_resp = client.post(
-        "/api/ide/sessions/event",
-        json={
-            "source": "cursor",
-            "cwd": str(nested_dir),
-            "session_id": session_id,
-            "event_type": "cursor_prompt_submitted",
-            "status": "observed",
-            "input": "Please refactor the dashboard.",
-        },
+    prompt_result = record_ide_event(
+        source="codex",
+        cwd="",
+        project_id=session_project_id,
+        session_id=session_id,
+        event_type="codex_prompt_submitted",
+        status="observed",
+        input_text="Please refactor the dashboard.",
     )
-    assert prompt_resp.status_code == 200
-    assert prompt_resp.json()["chat_id"] == chat_id
+    assert prompt_result["chat_id"] == chat_id
 
-    complete_resp = client.post(
-        "/api/ide/sessions/event",
-        json={
-            "source": "cursor",
-            "cwd": str(nested_dir),
-            "session_id": session_id,
-            "event_type": "cursor_completed",
-            "output": "Status: completed\nSummary: Dashboard refactored.",
-        },
+    complete_result = record_ide_event(
+        source="codex",
+        cwd="",
+        project_id=session_project_id,
+        session_id=session_id,
+        event_type="codex_completed",
+        output_text="Status: completed\nSummary: Dashboard refactored.",
     )
-    assert complete_resp.status_code == 200
-    assert complete_resp.json()["session"]["status"] == "completed"
+    assert complete_result["session"]["status"] == "completed"
 
     history = ChatService.get_chat_history(chat_id)
-    assert {"role": "user", "content": "[Cursor IDE] Please refactor the dashboard."} in history
+    assert {"role": "user", "content": "[Codex IDE] Please refactor the dashboard."} in history
     assert {
         "role": "assistant",
-        "content": "[Cursor IDE] Status: completed\nSummary: Dashboard refactored.",
+        "content": "[Codex IDE] Status: completed\nSummary: Dashboard refactored.",
     } in history
 
-    progress_resp = client.get("/api/ide/sessions/progress", params={"session_id": session_id})
-    assert progress_resp.status_code == 200
-    progress = progress_resp.json()
-    assert progress["success"] is True
+    progress = get_ide_progress(session_id=session_id)
     assert progress["session"]["id"] == session_id
     assert progress["session"]["status"] == "completed"
     assert [event["event_type"] for event in progress["session"]["events"]][-2:] == [
-        "cursor_prompt_submitted",
-        "cursor_completed",
+        "codex_prompt_submitted",
+        "codex_completed",
     ]
 
 

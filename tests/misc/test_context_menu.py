@@ -15,6 +15,7 @@ import hashlib
 
 class TestChatListWidget(QListWidget):
     """Minimal test version of ChatListWidget"""
+    __test__ = False
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -95,6 +96,8 @@ class TestChatListWidget(QListWidget):
 
 
 class TestWindow(QMainWindow):
+    __test__ = False
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Context Menu Test")
@@ -139,7 +142,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 

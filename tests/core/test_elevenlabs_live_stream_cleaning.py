@@ -1,6 +1,7 @@
 import asyncio
 
 from distr.core.agent.libs import (
+    LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     TextFrame,
     TTSStartedFrame,
@@ -35,6 +36,7 @@ def test_elevenlabs_live_textframes_are_cleaned_before_sentence_synthesis():
     service._tts_started_emitted = False
     service.event_queue = None
     service._frame_id_counter = 0
+    service._init_tts_pipeline_state()
 
     synthesized = []
     pushed = []
@@ -54,8 +56,12 @@ def test_elevenlabs_live_textframes_are_cleaned_before_sentence_synthesis():
     text = TextFrame()
     text.text = "The answer is <tool_call>{bad}</tool_call> ahhhhh stable."
 
-    asyncio.run(service.process_frame(start, None))
-    asyncio.run(service.process_frame(text, None))
+    async def run_stream():
+        await service.process_frame(start, None)
+        await service.process_frame(text, None)
+        await service.process_frame(LLMFullResponseEndFrame(), None)
+
+    asyncio.run(run_stream())
 
     assert synthesized == ["The answer is stable."]
     assert any(isinstance(frame, TTSStartedFrame) for frame in pushed)

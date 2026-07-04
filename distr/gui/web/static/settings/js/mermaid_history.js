@@ -73,15 +73,7 @@ function removeMermaidHistoryItem(diagramId, diagramTitle) {
     var title = String(diagramTitle || 'this diagram');
     if (!diagramId) return Promise.resolve(false);
     if (!window.DecisionsAPI || typeof window.DecisionsAPI.confirm !== 'function') {
-        if (!window.confirm('Delete ' + title + '?')) return Promise.resolve(false);
-        return _mermaidHistoryApi('/api/diagrams/' + encodeURIComponent(diagramId), { method: 'DELETE' })
-            .then(function () { return true; })
-            .catch(function () {
-                if (window.DecisionsAPI && window.DecisionsAPI.snackbar) {
-                    window.DecisionsAPI.snackbar('Failed to delete diagram.', 'error');
-                }
-                return false;
-            });
+        return Promise.resolve(false);
     }
     return window.DecisionsAPI.confirm({
         title: 'Delete Mermaid diagram',

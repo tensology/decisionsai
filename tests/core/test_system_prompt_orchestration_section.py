@@ -11,7 +11,7 @@ def test_system_prompt_contains_orchestration_routing():
     assert "pi_agent" in text
     assert "terminal_overview" in text
     assert "codex_thread_context" in text
-    assert "Do not ask them to paste the conversation first" in text
+    assert "automatically gathers the recent conversation thread" in text
     assert "find_skill" in text
     assert "push_skill" in text
     assert "list_workflows" in text or "run_workflow" in text

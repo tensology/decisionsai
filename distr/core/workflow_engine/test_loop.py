@@ -34,6 +34,8 @@ class ExecutionResult:
 @dataclass
 class TestResult:
     """Aggregated result of the test-fix loop."""
+    __test__ = False
+
     success: bool
     code: str
     attempts: List[Dict[str, Any]]
@@ -46,6 +48,7 @@ class TestResult:
 
 class TestLoopService:
     """Execute code and auto-fix on failure using the coding LLM."""
+    __test__ = False
 
     MAX_FIX_ATTEMPTS = 3
 

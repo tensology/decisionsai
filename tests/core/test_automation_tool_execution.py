@@ -160,7 +160,15 @@ def test_tool_bound_automation_dispatches_directly(tmp_path, monkeypatch):
 
     result = dispatch_automation_to_current_chat(automation, manual=True, speak=False)
     assert result["status"] == "running"
-    assert any("Daily plan finished" in str(item) for item in emitted)
+    assert emitted == ["Done."]
+
+    with get_session() as session:
+        run = (
+            session.query(AutoWorkflow)
+            .filter(AutoWorkflow.id == workflow_id)
+            .one()
+        )
+        assert run.last_run_at is not None
 
 
 def test_proactive_orchestrator_uses_configured_daily_plan_automation(monkeypatch):

@@ -51,7 +51,7 @@ def test_ideation_preset_has_no_cursor_steps(chain_factory, tmp_path):
         session.close()
 
 
-def test_development_preset_is_cursor_only_cli(chain_factory, tmp_path):
+def test_development_preset_uses_cli_harness_with_evidence_tools(chain_factory, tmp_path):
     applied = apply_preset_to_workflow(chain_factory, DEVELOPMENT_SLUG)
     session = chain_factory()
     try:
@@ -61,10 +61,11 @@ def test_development_preset_is_cursor_only_cli(chain_factory, tmp_path):
             .order_by(AutoWorkflowStep.position.asc())
             .all()
         )
-        assert len(steps) == 4
-        cli_steps = [s for s in steps if s.action_type == "send_to_project_cli"]
-        assert len(cli_steps) == 3
-        assert steps[-1].action_type == "agent_instruction"
+        assert len(steps) == 6
+        assert all(step.action_type == "send_to_project_cli" for step in steps)
+        assert steps[-1].name == "Report, update ticket, and compact memory"
+        assert any("playwright" in (step.config or "") for step in steps)
+        assert any("browser_use" in (step.config or "") for step in steps)
     finally:
         session.close()
 

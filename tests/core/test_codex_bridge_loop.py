@@ -164,9 +164,13 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
     timeline = client.get(f"/api/workflows/{workflow_id}/runs/{run_id}/timeline")
     assert timeline.status_code == 200
     events = timeline.json()["events"]
-    assert events[-1]["event_type"] == "needs_input"
-    assert events[-1]["legacy_event_type"] == "user_steer"
-    assert "Hermes" not in events[-1]["notification"]["text"]
+    steer_event = next(
+        event
+        for event in events
+        if event["event_type"] == "needs_input"
+        and event["legacy_event_type"] == "user_steer"
+    )
+    assert "Hermes" not in steer_event["notification"]["text"]
 
 
 def test_cursor_completed_auto_continues_waiting_ide_handoff(monkeypatch):

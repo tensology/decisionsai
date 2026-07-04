@@ -451,7 +451,7 @@ def test_initiative_execution_terminal_nudge_strips_markdown_from_task(monkeypat
     assert "Cursor finished" in spoken
 
 
-def test_initiative_idle_nudge_uses_text_even_when_event_queue_is_available():
+def test_initiative_idle_nudge_queues_text_when_event_queue_is_available():
     from distr.core.human_engagement import reset_engagement_ledger
     from distr.core.initiative.service import InitiativeService
     from distr.core.notification_routing import reset_notification_activity
@@ -475,5 +475,12 @@ def test_initiative_idle_nudge_uses_text_even_when_event_queue_is_available():
         requires_response=True,
     )
 
-    assert manager.sent == ["Cursor looks idle."]
-    assert event_queue.items == []
+    assert manager.sent == []
+    assert len(event_queue.items) == 1
+    (event_name, payload), block = event_queue.items[0]
+    assert event_name == "send_to_telegram"
+    assert block is False
+    assert payload["text"] == "Cursor looks idle."
+    assert payload["input_type"] == "text"
+    assert payload["engagement_kind"] == "idle_nudge"
+    assert payload["requires_response"] is True

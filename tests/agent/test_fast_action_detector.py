@@ -55,6 +55,8 @@ detector = FastActionDetector()
 @dataclass
 class TestCase:
     """A single test case for the fast action detector."""
+    __test__ = False
+
     input_text: str
     expected_route: str  # "llm" or "fast_action"
     expected_action_type: Optional[str] = None  # e.g. "CLIPBOARD_COPY", "MOUSE_MOVEMENT" — only for fast_action
@@ -69,6 +71,8 @@ class TestCase:
 @dataclass
 class TestResult:
     """Result of running a test case."""
+    __test__ = False
+
     test: TestCase
     actual_action_type: str
     actual_tool_name: str

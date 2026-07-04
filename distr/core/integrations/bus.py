@@ -73,7 +73,7 @@ class IntegrationMessageBus:
         self._load_mapping()
 
     def set_text_sink(self, sink: AgentTextSink | None) -> None:
-        """``(text, is_telegram, uploaded_image_path, speak)`` — matches ``send_text_input``."""
+        """Register the ``send_text_input``-style sink used by integrations."""
         pending: list[tuple[str, bool, str | None, Any, str]] = []
         with self._route_lock:
             self._text_sink = sink

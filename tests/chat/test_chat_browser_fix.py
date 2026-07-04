@@ -17,6 +17,8 @@ import pytest
 pytest.importorskip("PyQt6.QtCore")
 from PyQt6.QtCore import QUrl
 
+_QT_APP = None
+
 
 def handle_chat_browser_source(url: QUrl, chat_window) -> bool:
     """Return ``True`` if ``url`` was handled as a custom chat scheme."""
@@ -83,8 +85,8 @@ def test_qtextbrowser_set_source_delegates_when_possible():
     if getattr(qc, "_decisions_stub", False):
         pytest.skip("QTextBrowser is stubbed; logic covered by scheme tests above")
 
-    if QApplication.instance() is None:
-        QApplication([])
+    global _QT_APP
+    _QT_APP = QApplication.instance() or QApplication([])
 
     class ChatTextBrowser(QTextBrowser):
         def __init__(self, parent=None, chat_window=None):

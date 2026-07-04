@@ -3778,16 +3778,24 @@
             if (e.key === "Enter") addTodo();
         });
 
-        // Confirm modal (ticket delete)
-        document.getElementById("kb-confirm-cancel").addEventListener("click", hideKanbanConfirm);
-        document.getElementById("kb-confirm-ok").addEventListener("click", function() {
-            modalHelpers.invokeConfirmAction();
-        });
+        // Legacy confirm modal listeners are guarded because Kanban now uses
+        // the shared DecisionsAPI confirm modal from base.html.
+        var legacyConfirmCancel = document.getElementById("kb-confirm-cancel");
+        var legacyConfirmOk = document.getElementById("kb-confirm-ok");
+        var legacyConfirmModal = document.getElementById("kb-confirm-modal");
+        if (legacyConfirmCancel) legacyConfirmCancel.addEventListener("click", hideKanbanConfirm);
+        if (legacyConfirmOk) {
+            legacyConfirmOk.addEventListener("click", function() {
+                modalHelpers.invokeConfirmAction();
+            });
+        }
         document.getElementById("kb-send-workflow-cancel").addEventListener("click", closeSendWorkflowModal);
         document.getElementById("kb-send-workflow-confirm").addEventListener("click", confirmSendWorkflowModal);
-        document.getElementById("kb-confirm-modal").addEventListener("click", function(e) {
-            if (e.target === this) hideKanbanConfirm();
-        });
+        if (legacyConfirmModal) {
+            legacyConfirmModal.addEventListener("click", function(e) {
+                if (e.target === this) hideKanbanConfirm();
+            });
+        }
         document.addEventListener("keydown", function(e) {
             var cfm = document.getElementById("kb-confirm-modal");
             if (!cfm || cfm.classList.contains("hidden")) return;

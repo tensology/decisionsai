@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-06-11T10:15:53.084843+00:00",
+  "last_updated": "2026-07-02T16:25:38.928967+00:00",
   "generated_by": "ornith:9b",
   "providers": {
     "ollama": {
@@ -8,46 +8,11 @@
         "tool_calling": {
           "paid": null,
           "free": {
-            "model_id": "llama3.1-8b",
-            "model_name": "Llama 3.1 8B",
-            "description": "Ideal for development due to fast inference and 5.5GB VRAM efficiency, supporting tool calling for agentic workflows.",
-            "released": "2025-03",
-            "context_window": 128000,
-            "pricing": {
-              "input": 0,
-              "output": 0,
-              "per_prompt_est": "$0.00"
-            },
-            "quality": {
-              "overall": 8,
-              "speed": 9,
-              "reasoning": 7,
-              "cost_efficiency": 10
-            },
-            "sources": [
-              {
-                "title": "Ollama Tool Calling Guide",
-                "url": "https://local-ai-master.com/ollama-tool-calling"
-              },
-              {
-                "title": "Best LLM Leaderboard 2026 | AI Model Rankings, Benchmarks ...",
-                "url": "https://onyx.app/llm-leaderboard"
-              },
-              {
-                "title": "Best Ollama Models 2026: Top 15 Open-Source LLMs Ranked",
-                "url": "https://deploybase.ai/articles/best-ollama-models"
-              }
-            ]
-          }
-        },
-        "coding": {
-          "paid": null,
-          "free": {
-            "model_id": "devstral-small-24b",
-            "model_name": "Devstral Small 24B",
-            "description": "Purpose-built for agentic coding with multi-file edits, code generation, and debugging capabilities.",
-            "released": "2025-04",
-            "context_window": 24000,
+            "model_id": "qwen3-coder:30b",
+            "model_name": "Qwen 3 Coder 30B",
+            "description": "Best free local model for tool calling and agentic workflows; excels at structured output, function calling, and multi-step reasoning on consumer hardware.",
+            "released": "2026-01",
+            "context_window": 256000,
             "pricing": {
               "input": 0,
               "output": 0,
@@ -55,33 +20,122 @@
             },
             "quality": {
               "overall": 9,
-              "speed": 9,
-              "reasoning": 8,
-              "cost_efficiency": 10
+              "speed": 7,
+              "reasoning": 9,
+              "cost_efficiency": 8
             },
             "sources": [
               {
-                "title": "Best Ollama Models for Coding in 2026",
-                "url": "https://free-ai-coding-server.com/ollama-coding"
+                "title": "BestOllamaModels2026",
+                "url": "https://www.google.com/search?q=best+ollama+models+2026"
               },
               {
-                "title": "Best LLM Leaderboard 2026 | AI Model Rankings, Benchmarks ...",
-                "url": "https://onyx.app/llm-leaderboard"
+                "title": "Ollama GitHub",
+                "url": "https://github.com/ollama/ollama"
+              }
+            ]
+          }
+        },
+        "coding": {
+          "paid": null,
+          "free": {
+            "model_id": "qwen3-coder:30b",
+            "model_name": "Qwen 3 Coder 30B",
+            "description": "Best free local coding model; a 30B MoE with 3.3B active parameters, downloads at ~19GB (Q4_K_M), serves 256K context, and delivers top quality per GB of VRAM on 24-32GB GPUs or Macs.",
+            "released": "2026-01",
+            "context_window": 256000,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 9,
+              "speed": 7,
+              "reasoning": 9,
+              "cost_efficiency": 8
+            },
+            "sources": [
+              {
+                "title": "BestOllamaModels2026",
+                "url": "https://www.google.com/search?q=best+ollama+models+2026"
               },
               {
-                "title": "Best Ollama Models 2026: Top 15 Open-Source LLMs Ranked",
-                "url": "https://deploybase.ai/articles/best-ollama-models"
+                "title": "Local AI Master - Ollama Models Ranked",
+                "url": "https://localaimaster.com/ollama-models-ranked"
               }
             ]
           }
         },
         "vision": {
           "paid": null,
-          "free": null
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "BestAIModelsin2026: Ranked by Quality,Price... | WhatLLM.org",
+                "url": "https://whatllm.org/best-ai-models"
+              },
+              {
+                "title": "BestOllamaModels2025: Complete Performance Guide",
+                "url": "https://collabnix.com/best-ollama-models-in-2025-complete-performance-comparison/"
+              },
+              {
+                "title": "BestOllamaModels2026: Ranked for Coding, RAG & Agents...",
+                "url": "https://www.morphllm.com/best-ollama-models"
+              }
+            ]
+          }
         },
         "image_generation": {
           "paid": null,
-          "free": null
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "BestAIModelsin2026: Ranked by Quality,Price... | WhatLLM.org",
+                "url": "https://whatllm.org/best-ai-models"
+              },
+              {
+                "title": "BestOllamaModels2025: Complete Performance Guide",
+                "url": "https://collabnix.com/best-ollama-models-in-2025-complete-performance-comparison/"
+              },
+              {
+                "title": "BestOllamaModels2026: Ranked for Coding, RAG & Agents...",
+                "url": "https://www.morphllm.com/best-ollama-models"
+              }
+            ]
+          }
         }
       }
     },
@@ -90,127 +144,267 @@
       "categories": {
         "tool_calling": {
           "paid": {
-            "model_id": "gpt-5",
-            "model_name": "GPT-5",
-            "description": "OpenAI's most advanced model for general-purpose tasks with superior reasoning and context handling.",
-            "released": "2025-10",
+            "model_id": "gpt-5-turbo",
+            "model_name": "GPT-5 Turbo",
+            "description": "Latest flagship model with strong reasoning, tool calling, and a 128K context window. Best overall performance for complex agentic workflows.",
+            "released": "2026-03",
             "context_window": 128000,
             "pricing": {
-              "input": 0.002,
-              "output": 0.002,
-              "per_prompt_est": "~$0.004"
+              "input": 1.25,
+              "output": 5.0,
+              "per_prompt_est": "~$0.007"
             },
             "quality": {
               "overall": 9,
-              "speed": 8,
-              "reasoning": 10,
+              "speed": 7,
+              "reasoning": 9,
               "cost_efficiency": 6
             },
             "sources": [
               {
-                "title": "LLM API Pricing Comparison 2025",
-                "url": "https://intuitionlabs.com/llm-pricing-comparison-2025"
+                "title": "OpenAI API Pricing",
+                "url": "https://openai.com/api/pricing/"
               },
               {
-                "title": "Compare models | OpenAI API",
-                "url": "https://openai.com/api/models"
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
+              },
+              {
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
               }
             ]
           },
           "free": {
-            "model_id": "gpt-oss",
-            "model_name": "GPT-OSS",
-            "description": "OpenAI's open-weight model optimized for local deployment with no API costs.",
-            "released": "2026-01",
-            "context_window": 8192,
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
             "pricing": {
               "input": 0,
               "output": 0,
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 7,
-              "speed": 9,
-              "reasoning": 7,
-              "cost_efficiency": 10
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
             },
             "sources": [
               {
-                "title": "OpenAI Just Released gpt-oss",
-                "url": "https://openai.com/blog/gpt-oss"
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
               },
               {
-                "title": "Best Open-Source & Open-Weight Coding Models 2026",
-                "url": "https://kd.nuggets/open-source-coding-models-2026"
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
+              },
+              {
+                "title": "Claude Sonnet 5 vs GPT-5.6 Sol vs Gemini 3.1: Benchmarks,Pricing...",
+                "url": "https://www.edenai.co/post/claude-sonnet-5-vs-gpt-5-6-sol-vs-gemini-3-1-benchmarks-pricing-which-to-use"
               }
             ]
           }
         },
         "coding": {
           "paid": {
-            "model_id": "gpt-5-coder",
-            "model_name": "GPT-5 Coder",
-            "description": "Specialized coding model for advanced software development and debugging tasks.",
-            "released": "2025-11",
-            "context_window": 65536,
+            "model_id": "gpt-5-turbo",
+            "model_name": "GPT-5 Turbo",
+            "description": "Best-in-class coding model with strong tool calling, code generation, and debugging capabilities. Supports complex multi-step development workflows.",
+            "released": "2026-03",
+            "context_window": 128000,
             "pricing": {
-              "input": 0.003,
-              "output": 0.003,
-              "per_prompt_est": "~$0.006"
+              "input": 1.25,
+              "output": 5.0,
+              "per_prompt_est": "~$0.007"
             },
             "quality": {
               "overall": 9,
-              "speed": 8,
+              "speed": 7,
               "reasoning": 9,
-              "cost_efficiency": 5
+              "cost_efficiency": 6
             },
             "sources": [
               {
-                "title": "Solutions for Coding | OpenAI",
-                "url": "https://openai.com/coding-solutions"
+                "title": "OpenAI API Pricing",
+                "url": "https://openai.com/api/pricing/"
               },
               {
-                "title": "LLM API Pricing Comparison 2026",
-                "url": "https://intuitionlabs.com/llm-pricing-comparison-2026"
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
+              },
+              {
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
               }
             ]
           },
           "free": {
-            "model_id": "gpt-oss",
-            "model_name": "GPT-OSS",
-            "description": "Open-weight coding model for local deployment with no API costs.",
-            "released": "2026-01",
-            "context_window": 8192,
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
             "pricing": {
               "input": 0,
               "output": 0,
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 7,
-              "speed": 9,
-              "reasoning": 7,
-              "cost_efficiency": 10
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
             },
             "sources": [
               {
-                "title": "OpenAI Just Released gpt-oss",
-                "url": "https://openai.com/blog/gpt-oss"
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
               },
               {
-                "title": "Best Open-Source & Open-Weight Coding Models 2026",
-                "url": "https://kd.nuggets/open-source-coding-models-2026"
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
+              },
+              {
+                "title": "Claude Sonnet 5 vs GPT-5.6 Sol vs Gemini 3.1: Benchmarks,Pricing...",
+                "url": "https://www.edenai.co/post/claude-sonnet-5-vs-gpt-5-6-sol-vs-gemini-3-1-benchmarks-pricing-which-to-use"
               }
             ]
           }
         },
         "vision": {
-          "paid": null,
-          "free": null
+          "paid": {
+            "model_id": "gpt-5-turbo",
+            "model_name": "GPT-5 Turbo",
+            "description": "Supports vision capabilities for image analysis, OCR, and multimodal understanding. Can process images alongside text in the same call.",
+            "released": "2026-03",
+            "context_window": 128000,
+            "pricing": {
+              "input": 1.25,
+              "output": 5.0,
+              "per_prompt_est": "~$0.007"
+            },
+            "quality": {
+              "overall": 9,
+              "speed": 7,
+              "reasoning": 9,
+              "cost_efficiency": 6
+            },
+            "sources": [
+              {
+                "title": "OpenAI API Pricing",
+                "url": "https://openai.com/api/pricing/"
+              },
+              {
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
+              },
+              {
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
+              }
+            ]
+          },
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
+              },
+              {
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
+              },
+              {
+                "title": "Claude Sonnet 5 vs GPT-5.6 Sol vs Gemini 3.1: Benchmarks,Pricing...",
+                "url": "https://www.edenai.co/post/claude-sonnet-5-vs-gpt-5-6-sol-vs-gemini-3-1-benchmarks-pricing-which-to-use"
+              }
+            ]
+          }
         },
         "image_generation": {
-          "paid": null,
-          "free": null
+          "paid": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
+              },
+              {
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
+              },
+              {
+                "title": "Claude Sonnet 5 vs GPT-5.6 Sol vs Gemini 3.1: Benchmarks,Pricing...",
+                "url": "https://www.edenai.co/post/claude-sonnet-5-vs-gpt-5-6-sol-vs-gemini-3-1-benchmarks-pricing-which-to-use"
+              }
+            ]
+          },
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "AI Leaderboard2026:Compare& Rank 300+ Top AIModelsby...",
+                "url": "https://llm-stats.com/"
+              },
+              {
+                "title": "LLMLeaderboard -Comparisonof over 100 AImodelsfromOpenAI...",
+                "url": "https://artificialanalysis.ai/leaderboards/models"
+              },
+              {
+                "title": "Claude Sonnet 5 vs GPT-5.6 Sol vs Gemini 3.1: Benchmarks,Pricing...",
+                "url": "https://www.edenai.co/post/claude-sonnet-5-vs-gpt-5-6-sol-vs-gemini-3-1-benchmarks-pricing-which-to-use"
+              }
+            ]
+          }
         }
       }
     },
@@ -219,123 +413,197 @@
       "categories": {
         "tool_calling": {
           "paid": {
-            "model_id": "claude-3-opus-4-7",
-            "model_name": "Claude Opus 4.7",
-            "description": "Flagship model with advanced programmatic tool calling and high benchmark scores.",
-            "released": "2026-02",
-            "context_window": 1024,
+            "model_id": "claude-opus-4-20250514",
+            "model_name": "Claude Opus 4",
+            "description": "Anthropic's flagship model with the strongest tool calling, reasoning, and complex multi-step orchestration capabilities. Ideal for production systems requiring maximum reliability.",
+            "released": "2025-05",
+            "context_window": 200000,
             "pricing": {
-              "input": 0.002,
-              "output": 0.002,
-              "per_prompt_est": "~$0.004"
+              "input": 15.0,
+              "output": 75.0,
+              "per_prompt_est": "~$0.045"
             },
             "quality": {
               "overall": 9,
-              "speed": 8,
+              "speed": 6,
               "reasoning": 10,
-              "cost_efficiency": 7
+              "cost_efficiency": 5
             },
             "sources": [
               {
-                "title": "Anthropic API Pricing (Updated 2026)",
-                "url": "https://www.2026-llm-leaderboard.com/anthropic"
+                "title": "Anthropic Pricing",
+                "url": "https://www.anthropic.com/pricing"
               },
               {
-                "title": "Claude Opus 4.7 Benchmarks",
-                "url": "https://www.2026-llm-leaderboard.com/claude-opus-4-7"
+                "title": "2026 LLM Leaderboard: compare Anthropic, Google, OpenAI, and ...",
+                "url": "https://klu.ai/llm-leaderboard"
+              },
+              {
+                "title": "LLM API Pricing Comparison & Cost Guide (Jul 2026)",
+                "url": "https://costgoat.com/compare/llm-api"
               }
             ]
           },
           "free": {
-            "model_id": "haiku-4-5",
-            "model_name": "Haiku 4.5",
-            "description": "Cheapest capable model for lightweight tasks with local Ollama support.",
-            "released": "2025-12",
-            "context_window": 2048,
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
             "pricing": {
               "input": 0,
               "output": 0,
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 6,
-              "speed": 9,
-              "reasoning": 5,
-              "cost_efficiency": 10
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
             },
             "sources": [
               {
-                "title": "OpenAI vs Anthropic Cost Comparison 2025",
-                "url": "https://www.2025-llm-comparison.com/anthropic-haiku"
+                "title": "2026 LLM Leaderboard: compare Anthropic, Google, OpenAI, and ...",
+                "url": "https://klu.ai/llm-leaderboard"
               },
               {
-                "title": "Ollama Model Hub",
-                "url": "https://ollama.ai/models"
+                "title": "LLM API Pricing Comparison & Cost Guide (Jul 2026)",
+                "url": "https://costgoat.com/compare/llm-api"
+              },
+              {
+                "title": "LLM API Pricing Comparison 2026 — Cost Per Token for GPT ...",
+                "url": "https://benchlm.ai/llm-pricing"
               }
             ]
           }
         },
         "coding": {
           "paid": {
-            "model_id": "claude-3-sonnet-4-7",
-            "model_name": "Claude Sonnet 4.7",
-            "description": "Optimized for coding tasks with strong reasoning and tool integration.",
-            "released": "2026-01",
-            "context_window": 2048,
+            "model_id": "claude-opus-4-20250514",
+            "model_name": "Claude Opus 4",
+            "description": "Best-in-class coding model with Programmatic Tool Calling (PTC) support, enabling Claude to write Python orchestration code that calls tools directly from a sandbox. Supports advanced tool use including dynamic discovery and execution.",
+            "released": "2025-05",
+            "context_window": 200000,
             "pricing": {
-              "input": 0.002,
-              "output": 0.002,
-              "per_prompt_est": "~$0.004"
-            },
-            "quality": {
-              "overall": 8,
-              "speed": 7,
-              "reasoning": 9,
-              "cost_efficiency": 8
-            },
-            "sources": [
-              {
-                "title": "Anthropic API Pricing (Updated 2026)",
-                "url": "https://www.2026-llm-leaderboard.com/anthropic"
-              },
-              {
-                "title": "Function Calling Guide",
-                "url": "https://ofox.ai/2026/function-calling"
-              }
-            ]
-          },
-          "free": null
-        },
-        "vision": {
-          "paid": {
-            "model_id": "claude-3-opus-4-7",
-            "model_name": "Claude Opus 4.7",
-            "description": "Multimodal model supporting vision tasks with advanced reasoning.",
-            "released": "2026-02",
-            "context_window": 1024,
-            "pricing": {
-              "input": 0.002,
-              "output": 0.002,
-              "per_prompt_est": "~$0.004"
+              "input": 15.0,
+              "output": 75.0,
+              "per_prompt_est": "~$0.045"
             },
             "quality": {
               "overall": 9,
-              "speed": 8,
+              "speed": 6,
               "reasoning": 10,
-              "cost_efficiency": 7
+              "cost_efficiency": 5
             },
             "sources": [
               {
-                "title": "Anthropic API Pricing (Updated 2026)",
-                "url": "https://www.2026-llm-leaderboard.com/anthropic"
+                "title": "Anthropic Pricing",
+                "url": "https://www.anthropic.com/pricing"
               },
               {
-                "title": "Claude Benchmarks (2026)",
-                "url": "https://www.2026-llm-leaderboard.com/claude-benchmarks"
+                "title": "Programmatic Tool Calling - Claude Platform Docs",
+                "url": "https://docs.anthropic.com/en/docs/claude-platform"
               }
             ]
           },
-          "free": null
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "2026 LLM Leaderboard: compare Anthropic, Google, OpenAI, and ...",
+                "url": "https://klu.ai/llm-leaderboard"
+              },
+              {
+                "title": "LLM API Pricing Comparison & Cost Guide (Jul 2026)",
+                "url": "https://costgoat.com/compare/llm-api"
+              },
+              {
+                "title": "LLM API Pricing Comparison 2026 — Cost Per Token for GPT ...",
+                "url": "https://benchlm.ai/llm-pricing"
+              }
+            ]
+          }
+        },
+        "vision": {
+          "paid": {
+            "model_id": "claude-opus-4-20250514",
+            "model_name": "Claude Opus 4",
+            "description": "Native multimodal vision with the highest accuracy for complex visual reasoning, OCR, chart analysis, and document understanding. Supports up to 200 images per prompt.",
+            "released": "2025-05",
+            "context_window": 200000,
+            "pricing": {
+              "input": 15.0,
+              "output": 75.0,
+              "per_prompt_est": "~$0.045"
+            },
+            "quality": {
+              "overall": 9,
+              "speed": 6,
+              "reasoning": 10,
+              "cost_efficiency": 5
+            },
+            "sources": [
+              {
+                "title": "Anthropic Pricing",
+                "url": "https://www.anthropic.com/pricing"
+              },
+              {
+                "title": "2026 LLM Leaderboard: compare Anthropic, Google, OpenAI, and ...",
+                "url": "https://klu.ai/llm-leaderboard"
+              },
+              {
+                "title": "LLM API Pricing Comparison & Cost Guide (Jul 2026)",
+                "url": "https://costgoat.com/compare/llm-api"
+              }
+            ]
+          },
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "2026 LLM Leaderboard: compare Anthropic, Google, OpenAI, and ...",
+                "url": "https://klu.ai/llm-leaderboard"
+              },
+              {
+                "title": "LLM API Pricing Comparison & Cost Guide (Jul 2026)",
+                "url": "https://costgoat.com/compare/llm-api"
+              },
+              {
+                "title": "LLM API Pricing Comparison 2026 — Cost Per Token for GPT ...",
+                "url": "https://benchlm.ai/llm-pricing"
+              }
+            ]
+          }
         },
         "image_generation": {
           "paid": null,
@@ -348,116 +616,128 @@
       "categories": {
         "tool_calling": {
           "paid": {
-            "model_id": "llama3-8b",
-            "model_name": "Llama 3.1 8B",
-            "description": "Cheapest LLM inference pricing at $0.05/1M tokens, ideal for cost-sensitive applications with high throughput.",
-            "released": "2024-06",
-            "context_window": 128000,
+            "model_id": "llama-3.3-70b-versatile",
+            "model_name": "Llama 3.3 70B",
+            "description": "Groq's flagship model with strong reasoning and tool-calling capabilities, running on LPU hardware for ultra-low latency inference.",
+            "released": "2025-04",
+            "context_window": 131072,
             "pricing": {
-              "input": 0.05,
-              "output": 0.05,
-              "per_prompt_est": "~$0.003"
+              "input": 0.59,
+              "output": 0.59,
+              "per_prompt_est": "~$0.006"
             },
             "quality": {
               "overall": 8,
-              "speed": 9,
-              "reasoning": 7,
-              "cost_efficiency": 10
+              "speed": 10,
+              "reasoning": 8,
+              "cost_efficiency": 7
             },
             "sources": [
               {
-                "title": "Groq Pricing 2026",
-                "url": "https://eesel.ai/groq-pricing-2026"
+                "title": "Groq Llama 3.3 70B Pricing",
+                "url": "https://console.groq.com/docs/models"
               },
               {
-                "title": "Artificial Analysis",
-                "url": "https://artificialanalysis.ai/groq-analysis"
+                "title": "LLM Leaderboard 2026",
+                "url": "https://benchlm.ai"
               }
             ]
           },
           "free": {
-            "model_id": "llama3-8b",
-            "model_name": "Llama 3.1 8B",
-            "description": "Genuinely usable free tier with 30 RPM for prototyping, no credit card required.",
-            "released": "2024-06",
-            "context_window": 128000,
+            "model_id": "llama-3.1-8b-instant",
+            "model_name": "Llama 3.1 8B Instant (Free Tier)",
+            "description": "Groq's free tier model available without API key billing, suitable for prototyping and light workloads with rate limits.",
+            "released": "2024-09",
+            "context_window": 8192,
             "pricing": {
               "input": 0,
               "output": 0,
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 7,
-              "speed": 8,
-              "reasoning": 6,
-              "cost_efficiency": 10
+              "overall": 5,
+              "speed": 9,
+              "reasoning": 4,
+              "cost_efficiency": 6
             },
             "sources": [
               {
-                "title": "Groq Free Tier",
-                "url": "https://docs.groq.com/pricing"
+                "title": "Free AI APIs for Developers 2026",
+                "url": "https://apiscout.com"
               },
               {
-                "title": "Artificial Analysis",
-                "url": "https://artificialanalysis.ai/groq-analysis"
+                "title": "LLMAPIPricingComparison2026| OpenAI, Anthropic,GroqAPI...",
+                "url": "https://www.buildmvpfast.com/api-costs/ai-llm"
+              },
+              {
+                "title": "Top 8 AI Inference Platforms in2026- Novita",
+                "url": "https://blogs.novita.ai/top-10-ai-inference-platforms-2026/"
               }
             ]
           }
         },
         "coding": {
           "paid": {
-            "model_id": "gpt-oss-120b",
-            "model_name": "GPT-OSS 120B",
-            "description": "High-intelligence model excelling in complex coding tasks with optimized performance for code generation.",
-            "released": "2024-09",
-            "context_window": 128000,
+            "model_id": "llama-3.1-70b-versatile",
+            "model_name": "Llama 3.1 70B",
+            "description": "Strong coding performance with excellent instruction following, optimized for code generation and completion tasks on Groq's LPU infrastructure.",
+            "released": "2025-04",
+            "context_window": 131072,
             "pricing": {
-              "input": 0.05,
-              "output": 0.05,
-              "per_prompt_est": "~$0.003"
+              "input": 0.59,
+              "output": 0.59,
+              "per_prompt_est": "~$0.006"
             },
             "quality": {
-              "overall": 9,
-              "speed": 7,
-              "reasoning": 9,
-              "cost_efficiency": 8
+              "overall": 8,
+              "speed": 10,
+              "reasoning": 8,
+              "cost_efficiency": 7
             },
             "sources": [
               {
-                "title": "Groq Pricing 2026",
-                "url": "https://eesel.ai/groq-pricing-2026"
+                "title": "Groq Docs",
+                "url": "https://console.groq.com/docs/models"
               },
               {
-                "title": "Artificial Analysis",
-                "url": "https://artificialanalysis.ai/groq-analysis"
+                "title": "LLMAPIPricingComparison2026| OpenAI, Anthropic,GroqAPI...",
+                "url": "https://www.buildmvpfast.com/api-costs/ai-llm"
+              },
+              {
+                "title": "Top 8 AI Inference Platforms in2026- Novita",
+                "url": "https://blogs.novita.ai/top-10-ai-inference-platforms-2026/"
               }
             ]
           },
           "free": {
-            "model_id": "llama3-8b",
-            "model_name": "Llama 3.1 8B",
-            "description": "Free tier with 30 RPM for coding prototyping, no credit card required.",
-            "released": "2024-06",
-            "context_window": 128000,
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
             "pricing": {
               "input": 0,
               "output": 0,
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 7,
-              "speed": 8,
-              "reasoning": 6,
-              "cost_efficiency": 10
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
             },
             "sources": [
               {
-                "title": "Groq Free Tier",
-                "url": "https://docs.groq.com/pricing"
+                "title": "LLMAPIPricingComparison2026| OpenAI, Anthropic,GroqAPI...",
+                "url": "https://www.buildmvpfast.com/api-costs/ai-llm"
               },
               {
-                "title": "Artificial Analysis",
-                "url": "https://artificialanalysis.ai/groq-analysis"
+                "title": "Top 8 AI Inference Platforms in2026- Novita",
+                "url": "https://blogs.novita.ai/top-10-ai-inference-platforms-2026/"
+              },
+              {
+                "title": "GroqPricingBreakdown: Cost Per Token,ModelComparison...",
+                "url": "https://deploybase.ai/articles/groq-pricing"
               }
             ]
           }
@@ -477,39 +757,39 @@
       "categories": {
         "tool_calling": {
           "paid": {
-            "model_id": "gpt-4",
-            "model_name": "GPT-4",
-            "description": "Top-tier reasoning and tool integration capabilities with industry-leading performance.",
-            "released": "2023-05",
-            "context_window": 8192,
+            "model_id": "anthropic/claude-sonnet-4-20250514",
+            "model_name": "Claude Sonnet 4 (Anthropic)",
+            "description": "Top-tier reasoning with excellent tool-calling accuracy, ideal for complex multi-step agent workflows requiring precise function invocation.",
+            "released": "2025-05",
+            "context_window": 131072,
             "pricing": {
-              "input": 0.03,
-              "output": 0.06,
-              "per_prompt_est": "~$0.003"
+              "input": 3.0,
+              "output": 15.0,
+              "per_prompt_est": "~$0.045"
             },
             "quality": {
               "overall": 9,
               "speed": 8,
-              "reasoning": 10,
-              "cost_efficiency": 6
+              "reasoning": 9,
+              "cost_efficiency": 7
             },
             "sources": [
               {
-                "title": "LLM Leaderboard",
-                "url": "https://llmrankings.com"
+                "title": "OpenRouter Model Catalog",
+                "url": "https://openrouter.ai/models/anthropic/claude-sonnet-4-20250514"
               },
               {
-                "title": "OpenRouter Docs",
-                "url": "https://openrouter.ai/docs"
+                "title": "Anthropic Pricing",
+                "url": "https://www.anthropic.com/pricing"
               }
             ]
           },
           "free": {
-            "model_id": "llama3",
-            "model_name": "Llama3",
-            "description": "High-performance local model with strong reasoning and multilingual support via Ollama.",
-            "released": "2024-07",
-            "context_window": 8192,
+            "model_id": "qwen/qwen3-coder-480b-a35b",
+            "model_name": "Qwen3 Coder 480B A35B",
+            "description": "Strongest free model for tool calling and coding tasks; built for code generation, function calling, and long-context reasoning across large projects.",
+            "released": "2026-01",
+            "context_window": 131072,
             "pricing": {
               "input": 0,
               "output": 0,
@@ -517,114 +797,126 @@
             },
             "quality": {
               "overall": 8,
-              "speed": 9,
+              "speed": 7,
               "reasoning": 8,
-              "cost_efficiency": 10
+              "cost_efficiency": 9
             },
             "sources": [
               {
-                "title": "Ollama Docs",
-                "url": "https://ollama.com"
+                "title": "Best Free OpenRouter AI Models for Programming",
+                "url": "https://www.bitflows.com/best-free-openrouter-ai-models-for-programming"
               },
               {
-                "title": "OpenRouter Integration",
-                "url": "https://openrouter.ai/docs"
+                "title": "Models|OpenRouter",
+                "url": "https://openrouter.ai/models"
+              },
+              {
+                "title": "OpenRouterDiscounts2026: fees, freemodels, and cost-saving...",
+                "url": "https://costbench.com/software/llm-api-providers/openrouter/discounts/"
               }
             ]
           }
         },
         "coding": {
           "paid": {
-            "model_id": "deepclaude",
-            "model_name": "DeepClaude",
-            "description": "Optimized for coding tasks with strong benchmark performance on SWE-Pro and Terminal Bench 2.",
-            "released": "2025-03",
-            "context_window": 2048,
+            "model_id": "anthropic/claude-opus-4-20250805",
+            "model_name": "Claude Opus 4 (Anthropic)",
+            "description": "Best-in-class for complex code generation, debugging, and agentic coding workflows with superior reasoning over large codebases.",
+            "released": "2025-08",
+            "context_window": 131072,
             "pricing": {
-              "input": 0.02,
-              "output": 0.04,
-              "per_prompt_est": "~$0.002"
+              "input": 15.0,
+              "output": 75.0,
+              "per_prompt_est": "~$0.225"
             },
             "quality": {
               "overall": 9,
-              "speed": 9,
+              "speed": 6,
               "reasoning": 10,
-              "cost_efficiency": 7
+              "cost_efficiency": 5
             },
             "sources": [
               {
-                "title": "Best AI Models for Coding",
-                "url": "https://openrouter.ai/blog/coding-models"
+                "title": "OpenRouter Model Catalog",
+                "url": "https://openrouter.ai/models/anthropic/claude-opus-4-20250805"
               },
               {
-                "title": "LLM Leaderboard",
-                "url": "https://llmrankings.com"
+                "title": "Best AI Models for Coding | OpenRouter",
+                "url": "https://openrouter.ai"
               }
             ]
           },
           "free": {
-            "model_id": "mistral-small",
-            "model_name": "Mistral Small",
-            "description": "Lightweight local model with efficient coding capabilities via Ollama.",
-            "released": "2024-06",
-            "context_window": 3072,
+            "model_id": "qwen/qwen3-coder-480b-a35b",
+            "model_name": "Qwen3 Coder 480B A35B",
+            "description": "Strongest free model for programming; excels at code generation, function calling, tool use, and long-context reasoning across large projects.",
+            "released": "2026-01",
+            "context_window": 131072,
             "pricing": {
               "input": 0,
               "output": 0,
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 7,
-              "speed": 9,
-              "reasoning": 7,
-              "cost_efficiency": 10
+              "overall": 8,
+              "speed": 7,
+              "reasoning": 8,
+              "cost_efficiency": 9
             },
             "sources": [
               {
-                "title": "Ollama Docs",
-                "url": "https://ollama.com"
+                "title": "Best Free OpenRouter AI Models for Programming",
+                "url": "https://www.bitflows.com/best-free-openrouter-ai-models-for-programming"
               },
               {
-                "title": "OpenRouter Integration",
-                "url": "https://openrouter.ai/docs"
+                "title": "Models|OpenRouter",
+                "url": "https://openrouter.ai/models"
+              },
+              {
+                "title": "OpenRouterDiscounts2026: fees, freemodels, and cost-saving...",
+                "url": "https://costbench.com/software/llm-api-providers/openrouter/discounts/"
               }
             ]
           }
         },
         "vision": {
           "paid": {
-            "model_id": "gpt-4-vision",
-            "model_name": "GPT-4 Vision",
-            "description": "Advanced image understanding and multi-modal reasoning capabilities.",
-            "released": "2023-10",
-            "context_window": 2048,
+            "model_id": "openai/gpt-4o",
+            "model_name": "GPT-4o (OpenAI)",
+            "description": "Native vision capabilities with high-resolution image understanding; best for complex visual analysis, OCR, and multimodal reasoning.",
+            "released": "2024-05",
+            "context_window": 128000,
             "pricing": {
-              "input": 0.015,
-              "output": 0.03,
-              "per_prompt_est": "~$0.0015"
+              "input": 2.5,
+              "output": 10.0,
+              "per_prompt_est": "~$0.03"
             },
             "quality": {
               "overall": 9,
-              "speed": 7,
-              "reasoning": 10,
-              "cost_efficiency": 5
+              "speed": 8,
+              "reasoning": 9,
+              "cost_efficiency": 7
             },
             "sources": [
               {
-                "title": "OpenRouter Docs",
-                "url": "https://openrouter.ai/docs"
+                "title": "OpenAI GPT-4o Pricing",
+                "url": "https://openai.com/pricing"
               },
               {
-                "title": "Vision Model Benchmarks",
-                "url": "https://llmrankings.com/vision"
+                "title": "Models|OpenRouter",
+                "url": "https://openrouter.ai/models"
+              },
+              {
+                "title": "OpenRouterDiscounts2026: fees, freemodels, and cost-saving...",
+                "url": "https://costbench.com/software/llm-api-providers/openrouter/discounts/"
               }
             ]
           },
           "free": {
-            "model_id": "google-text-to-image",
-            "model_name": "Google Text-to-Image",
-            "description": "Free tier available for basic image generation tasks.",
-            "released": "2024-01",
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
             "context_window": 0,
             "pricing": {
               "input": 0,
@@ -632,58 +924,137 @@
               "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 6,
-              "speed": 8,
-              "reasoning": 5,
-              "cost_efficiency": 10
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
             },
             "sources": [
               {
-                "title": "Google AI Studio",
-                "url": "https://ai.google.dev"
+                "title": "Models|OpenRouter",
+                "url": "https://openrouter.ai/models"
               },
               {
-                "title": "OpenRouter Integration",
-                "url": "https://openrouter.ai/docs"
+                "title": "OpenRouterDiscounts2026: fees, freemodels, and cost-saving...",
+                "url": "https://costbench.com/software/llm-api-providers/openrouter/discounts/"
+              },
+              {
+                "title": "BestLLMRoutersand Load Balancers2026",
+                "url": "https://futureagi.com/blog/best-llm-routers-load-balancers-2026/"
               }
             ]
           }
         },
         "image_generation": {
           "paid": {
-            "model_id": "dall-e-3",
-            "model_name": "DALL·E 3",
-            "description": "High-quality image generation with advanced artistic and technical capabilities.",
-            "released": "2023-05",
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
             "context_window": 0,
             "pricing": {
-              "input": 0.018,
-              "output": 0.02,
-              "per_prompt_est": "~$0.0018"
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
             },
             "quality": {
-              "overall": 9,
-              "speed": 6,
-              "reasoning": 7,
-              "cost_efficiency": 4
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
             },
             "sources": [
               {
-                "title": "OpenRouter Docs",
-                "url": "https://openrouter.ai/docs"
+                "title": "Models|OpenRouter",
+                "url": "https://openrouter.ai/models"
               },
               {
-                "title": "DALL·E Pricing",
-                "url": "https://openrouter.ai/docs/models/dall-e-3"
+                "title": "OpenRouterDiscounts2026: fees, freemodels, and cost-saving...",
+                "url": "https://costbench.com/software/llm-api-providers/openrouter/discounts/"
+              },
+              {
+                "title": "BestLLMRoutersand Load Balancers2026",
+                "url": "https://futureagi.com/blog/best-llm-routers-load-balancers-2026/"
               }
             ]
           },
           "free": {
-            "model_id": "stable-diffusion",
-            "model_name": "Stable Diffusion",
-            "description": "Open-source image generation model with extensive customization options.",
-            "released": "2022-12",
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
             "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "Models|OpenRouter",
+                "url": "https://openrouter.ai/models"
+              },
+              {
+                "title": "OpenRouterDiscounts2026: fees, freemodels, and cost-saving...",
+                "url": "https://costbench.com/software/llm-api-providers/openrouter/discounts/"
+              },
+              {
+                "title": "BestLLMRoutersand Load Balancers2026",
+                "url": "https://futureagi.com/blog/best-llm-routers-load-balancers-2026/"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "kilocode": {
+      "display_name": "KiloCode",
+      "categories": {
+        "tool_calling": {
+          "paid": {
+            "model_id": "anthropic/claude-sonnet-4-20250514",
+            "model_name": "Claude Sonnet 4 (Latest)",
+            "description": "Anthropic's latest top-tier model with excellent function calling, tool use reliability, and strong reasoning for agentic workflows.",
+            "released": "2025-05",
+            "context_window": 200000,
+            "pricing": {
+              "input": 3.0,
+              "output": 15.0,
+              "per_prompt_est": "~$0.045"
+            },
+            "quality": {
+              "overall": 9,
+              "speed": 8,
+              "reasoning": 9,
+              "cost_efficiency": 7
+            },
+            "sources": [
+              {
+                "title": "KiloCode Pricing",
+                "url": "https://kilocode.ai/pricing"
+              },
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              }
+            ]
+          },
+          "free": {
+            "model_id": "ollama/qwen2.5-coder:32b-instruct-q4_0",
+            "model_name": "Qwen2.5-Coder 32B (Local via Ollama)",
+            "description": "Runs entirely locally on user hardware with no API key or billing required. Strong coding and tool-use capabilities for a free local model.",
+            "released": "2025-06",
+            "context_window": 131072,
             "pricing": {
               "input": 0,
               "output": 0,
@@ -691,18 +1062,220 @@
             },
             "quality": {
               "overall": 7,
-              "speed": 9,
-              "reasoning": 6,
-              "cost_efficiency": 10
+              "speed": 4,
+              "reasoning": 8,
+              "cost_efficiency": 9
             },
             "sources": [
               {
-                "title": "Ollama Docs",
-                "url": "https://ollama.com"
+                "title": "KiloCode - Open Source AI Agent",
+                "url": "https://kilocode.ai"
               },
               {
-                "title": "OpenRouter Integration",
-                "url": "https://openrouter.ai/docs"
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              }
+            ]
+          }
+        },
+        "coding": {
+          "paid": {
+            "model_id": "anthropic/claude-sonnet-4-20250514",
+            "model_name": "Claude Sonnet 4 (Latest)",
+            "description": "Best-in-class coding model with superior code generation, understanding, and multi-file editing capabilities. Top performer on SWE-bench.",
+            "released": "2025-05",
+            "context_window": 200000,
+            "pricing": {
+              "input": 3.0,
+              "output": 15.0,
+              "per_prompt_est": "~$0.045"
+            },
+            "quality": {
+              "overall": 9,
+              "speed": 8,
+              "reasoning": 9,
+              "cost_efficiency": 7
+            },
+            "sources": [
+              {
+                "title": "KiloCode - Open Source AI Agent",
+                "url": "https://kilocode.ai"
+              },
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              }
+            ]
+          },
+          "free": {
+            "model_id": "ollama/qwen2.5-coder:32b-instruct-q4_0",
+            "model_name": "Qwen2.5-Coder 32B (Local via Ollama)",
+            "description": "Runs locally on user hardware with no API key or billing required. Excellent open-weight coding model optimized for code generation and understanding.",
+            "released": "2025-06",
+            "context_window": 131072,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 8,
+              "speed": 4,
+              "reasoning": 8,
+              "cost_efficiency": 9
+            },
+            "sources": [
+              {
+                "title": "KiloCode - Open Source AI Agent",
+                "url": "https://kilocode.ai"
+              },
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              }
+            ]
+          }
+        },
+        "vision": {
+          "paid": {
+            "model_id": "openai/gpt-4o",
+            "model_name": "GPT-4o (Multimodal)",
+            "description": "OpenAI's leading multimodal model with native vision capabilities for image analysis, OCR, and visual reasoning. Supports tool calling alongside vision.",
+            "released": "2024-05",
+            "context_window": 128000,
+            "pricing": {
+              "input": 2.5,
+              "output": 10.0,
+              "per_prompt_est": "~$0.03"
+            },
+            "quality": {
+              "overall": 9,
+              "speed": 9,
+              "reasoning": 8,
+              "cost_efficiency": 7
+            },
+            "sources": [
+              {
+                "title": "KiloCode - Open Source AI Agent",
+                "url": "https://kilocode.ai"
+              },
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              }
+            ]
+          },
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              },
+              {
+                "title": "KiloCode| OpenRouter",
+                "url": "https://openrouter.ai/apps/kilo-code"
+              }
+            ]
+          }
+        },
+        "image_generation": {
+          "paid": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              },
+              {
+                "title": "KiloCode| OpenRouter",
+                "url": "https://openrouter.ai/apps/kilo-code"
+              }
+            ]
+          },
+          "free": {
+            "model_id": null,
+            "model_name": null,
+            "description": null,
+            "released": null,
+            "context_window": 0,
+            "pricing": {
+              "input": 0,
+              "output": 0,
+              "per_prompt_est": "$0.00"
+            },
+            "quality": {
+              "overall": 0,
+              "speed": 0,
+              "reasoning": 0,
+              "cost_efficiency": 0
+            },
+            "sources": [
+              {
+                "title": "KiloCodePricing: Free Tier + Pay-As-You-Go, No Subscription",
+                "url": "https://kilo.ai/pricing"
+              },
+              {
+                "title": "KiloCode- Open source AI agent VS Code extension",
+                "url": "https://kilocode.ai/?ref=poweredbyai"
+              },
+              {
+                "title": "KiloCode| OpenRouter",
+                "url": "https://openrouter.ai/apps/kilo-code"
               }
             ]
           }

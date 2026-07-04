@@ -49,6 +49,8 @@ def _safe_attachment_filename(filename: str) -> str:
 
 class GoogleWorkspaceConnector:
     """Comprehensive Google Workspace API connector"""
+
+    _google_refresh_retry_after_global: Optional[datetime] = None
     
     def __init__(self):
         self.access_token: Optional[str] = None
@@ -56,7 +58,7 @@ class GoogleWorkspaceConnector:
         self.token_expires_at: Optional[datetime] = None
         self.client_id: Optional[str] = None
         self.client_secret: Optional[str] = None
-        self._google_refresh_retry_after: Optional[datetime] = None
+        self._google_refresh_retry_after: Optional[datetime] = self.__class__._google_refresh_retry_after_global
         self._load_credentials()
     
     def _load_credentials(self) -> bool:
@@ -145,7 +147,10 @@ class GoogleWorkspaceConnector:
         
         # Check if token needs refresh (refresh 5 minutes before expiration)
         if self.token_expires_at and datetime.utcnow() >= (self.token_expires_at - timedelta(minutes=5)):
-            retry_after = getattr(self, "_google_refresh_retry_after", None)
+            retry_after = (
+                getattr(self, "_google_refresh_retry_after", None)
+                or self.__class__._google_refresh_retry_after_global
+            )
             if retry_after and datetime.utcnow() < retry_after:
                 logger.debug(
                     "Skipping Google access-token refresh until %s after recent failure",
@@ -179,6 +184,7 @@ class GoogleWorkspaceConnector:
             expires_in = tokens.get('expires_in', 3600)
             self.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
             self._google_refresh_retry_after = None
+            self.__class__._google_refresh_retry_after_global = None
             
             # Update tokens in database
             self._save_tokens_to_db()
@@ -188,6 +194,7 @@ class GoogleWorkspaceConnector:
             
         except Exception as e:
             self._google_refresh_retry_after = datetime.utcnow() + _REFRESH_FAILURE_BACKOFF
+            self.__class__._google_refresh_retry_after_global = self._google_refresh_retry_after
             logger.warning(
                 "Failed to refresh Google access token; suppressing retry until %s: %s",
                 self._google_refresh_retry_after.isoformat(),

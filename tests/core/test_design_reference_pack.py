@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-
 def test_merge_design_reference_adds_baseline(tmp_path):
     from distr.core.design_reference_pack import merge_design_reference_pre_chain
 
@@ -44,9 +41,5 @@ def test_design_reference_bootstrap_writes_mcp_script(tmp_path, monkeypatch):
     script = tmp_path / ".decisions" / "harness" / "mcp-setup-design.sh"
     assert script.is_file()
     assert "api.mobbin.com/mcp" in script.read_text(encoding="utf-8")
-    rec = tmp_path / ".decisions" / "harness" / "mcp-recommendations.json"
-    assert rec.is_file()
-    import json
-
-    data = json.loads(rec.read_text(encoding="utf-8"))
-    assert "refero" in data and "mobbin" in data and "aceternity_ui" in data
+    assert result["mcp_setup_script"] == str(script)
+    assert result["refero_skill_install"].startswith("npx skills add")

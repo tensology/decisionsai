@@ -37,10 +37,11 @@ def test_chat_page_cannot_override_shared_modal_styles():
     base = read("distr/gui/web/templates/base.html")
     chat_js = read("distr/gui/web/static/chat/js/chat.js")
 
-    assert "{% block head_styles %}" in chat_html
+    assert "{% block extra_head %}" in chat_html
     assert "static/css/chat.css" in chat_html
     assert '/static/shared/css/base.css' in base
     assert base.index('/static/shared/css/base.css') < base.index("{% block head_styles %}")
+    assert base.index("{% block head_styles %}") < base.index("{% block extra_head %}")
     assert 'title: "Delete chat"' in chat_js
     assert 'window.DecisionsAPI.confirm({' in chat_js
     assert "chat-item-delete-btn" in chat_js

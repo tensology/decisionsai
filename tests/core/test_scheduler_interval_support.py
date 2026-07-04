@@ -97,7 +97,7 @@ def test_once_run_at_local_input_is_converted_to_utc_storage():
 
 def test_automations_api_once_schedule_round_trips_local_run_at(monkeypatch):
     from distr.core.db import get_session
-    from distr.core.db.workflow import AutoWorkflow
+    from distr.core.db.automation import Automation
     from distr.gui.web.routes.automations import create_routes
 
     monkeypatch.setattr(
@@ -122,12 +122,13 @@ def test_automations_api_once_schedule_round_trips_local_run_at(monkeypatch):
     )
     assert create_resp.status_code == 200
     automation = create_resp.json()["automation"]
-    workflow_id = int(str(automation["id"]).replace("wf_", ""))
+    assert str(automation["id"]).startswith("auto_")
+    record_id = int(automation["record_id"])
     assert automation["schedule"]["run_at"] == "2026-06-02T13:05"
 
     with get_session() as session:
-        wf = session.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
-        assert wf is not None
-        assert wf.schedule_time == "2026-06-02T11:05:00Z"
-        session.delete(wf)
+        row = session.query(Automation).filter(Automation.id == record_id).first()
+        assert row is not None
+        assert row.schedule_time == "2026-06-02T11:05:00Z"
+        session.delete(row)
         session.commit()

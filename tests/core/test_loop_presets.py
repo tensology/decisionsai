@@ -45,7 +45,7 @@ def test_loop_presets_api_route_not_shadowed_by_workflow_id():
     assert resp.status_code == 200
     body = resp.json()
     assert isinstance(body.get("presets"), list)
-    assert len(body["presets"]) == 4
+    assert len(body["presets"]) == len(list_preset_summaries())
     assert body["presets"][0]["slug"] == "ideation-brief-to-board"
 
 
@@ -83,13 +83,12 @@ def db_factory(tmp_path, monkeypatch):
 
 def test_loop_preset_bundles_exist():
     summaries = list_preset_summaries()
-    assert len(summaries) == 4
+    assert len(summaries) == 3
     slugs = {row.get("slug") for row in summaries}
     assert slugs == {
         "ideation-brief-to-board",
         "development-ticket-to-implementation",
         "polish-verify-and-ship",
-        "ship-pr-until-green",
     }
 
 
@@ -108,13 +107,15 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     planned = plan_steps_from_bundle(bundle)
     assert planned["success"] is True
     steps = planned["steps"]
-    assert len(steps) == 4
-    assert steps[0]["title"] == "Ingest ticket and project context"
-    assert steps[1]["title"] == "Write plan.md and attach to ticket"
-    assert steps[2]["title"] == "Implement, test, and self-correct"
-    assert steps[-1]["title"] == "Close development slice with evidence"
+    assert len(steps) == 6
+    assert steps[0]["title"] == "Ingest ticket, memory, and acceptance context"
+    assert steps[1]["title"] == "Plan the smallest implementation slice"
+    assert steps[2]["title"] == "Implement the slice with project checks"
+    assert steps[3]["title"] == "Capture browser evidence and self-assess"
+    assert steps[4]["title"] == "Correct, re-run, or skip with reason"
+    assert steps[-1]["title"] == "Report, update ticket, and compact memory"
     assert any(step["action_type"] == "send_to_project_cli" for step in steps)
-    assert not any(step["action_type"] == "playwright" for step in steps)
+    assert any("playwright" in ((step.get("config") or {}).get("tools") or []) for step in steps)
     assert any(step.get("on_fail_goto_position") == 2 for step in steps)
     assert "plan.md" in (planned["loop_contract"].get("exit_when") or "")
 
@@ -156,7 +157,7 @@ def test_apply_loop_preset_from_bundle(db_factory):
     assert merged.get("loop_contract")
 
 
-def test_apply_deploy_preset_uses_ship_with_ci_contract(db_factory):
+def test_apply_parked_ship_with_ci_preset_is_not_active(db_factory):
     session = db_factory()
     wf = AutoWorkflow(name="Deploy Gate", description="", workflow_input="{}")
     session.add(wf)
@@ -165,15 +166,8 @@ def test_apply_deploy_preset_uses_ship_with_ci_contract(db_factory):
 
     result = apply_loop_preset(wf.id, "ship-pr-until-green")
 
-    assert result["success"] is True
-    assert result.get("preset_slug") == "ship-pr-until-green"
-    assert result["step_count"] >= 4
-
-    session = db_factory()
-    wf_row = session.query(AutoWorkflow).filter(AutoWorkflow.id == wf.id).first()
-    merged = json.loads(wf_row.workflow_input or "{}")
-    assert merged.get("loop_contract", {}).get("archetype") == "ship_with_ci"
-    assert "required release checks" in merged.get("loop_contract", {}).get("exit_when", "")
+    assert result["success"] is False
+    assert "Unknown loop preset" in (result.get("error") or "")
 
 
 def test_apply_loop_preset_append_mode(db_factory):

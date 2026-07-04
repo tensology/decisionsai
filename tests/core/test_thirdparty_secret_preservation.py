@@ -25,6 +25,12 @@ def _thirdparty_payload(**overrides):
         "kilo_key": "",
         "gemini_enabled": False,
         "gemini_key": "",
+        "nvidia_enabled": False,
+        "nvidia_key": "",
+        "pixazo_enabled": False,
+        "pixazo_key": "",
+        "composio_enabled": False,
+        "composio_key": "",
         "masko_enabled": False,
         "masko_key": "",
     }

@@ -9,7 +9,6 @@
       while a workflow orchestration is running on a WorkflowAgent.
 """
 
-import sys
 import asyncio
 import queue
 import threading
@@ -17,31 +16,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, call
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Mock heavy dependencies (same pattern as test_concurrent_orchestration.py)
-# ---------------------------------------------------------------------------
-_mock_qt = MagicMock()
-for mod in ("PyQt6", "PyQt6.QtCore", "PyQt6.QtWidgets", "PyQt6.QtGui"):
-    sys.modules.setdefault(mod, _mock_qt)
-
-_mock_sa = MagicMock()
-for mod in ("sqlalchemy", "sqlalchemy.orm", "sqlalchemy.ext", "sqlalchemy.ext.declarative"):
-    sys.modules.setdefault(mod, _mock_sa)
-
-_mock_db_pkg = MagicMock()
-sys.modules.setdefault("distr.core.db", _mock_db_pkg)
-sys.modules.setdefault("distr.core.db.step_runner", MagicMock())
-sys.modules.setdefault("distr.core.db.workflow", MagicMock())
-
-sys.modules.setdefault("distr.core.workflow_engine.context_assembly", MagicMock())
-sys.modules.setdefault("distr.core.workflow.service", MagicMock())
-sys.modules.setdefault("distr.core.workflow.scheduler", MagicMock())
-sys.modules.setdefault("distr.gui.web.workflow_events", MagicMock())
-sys.modules.setdefault("distr.gui", MagicMock())
-sys.modules.setdefault("distr.gui.web", MagicMock())
-
-sys.modules.pop("distr.core.workflow_engine.agent_bridge", None)
 
 from distr.app.workflow import WorkflowOrchestrationMixin  # noqa: E402
 from distr.core.workflow_engine.agent_bridge import (  # noqa: E402
@@ -78,6 +52,11 @@ def _make_steps(count=2, start_id=100):
     ]
 
 
+class _CloseableResponse(str):
+    def close(self):
+        return None
+
+
 def _make_mock_workflow_agent(responses=None):
     """Create a mock WorkflowAgent whose execute() returns canned responses.
 
@@ -88,8 +67,8 @@ def _make_mock_workflow_agent(responses=None):
     agent.shutdown = MagicMock()
     _responses = list(responses or ["agent response"])
 
-    async def _execute(instruction):
-        return _responses.pop(0) if _responses else "done"
+    def _execute(instruction):
+        return _CloseableResponse(_responses.pop(0) if _responses else "done")
 
     agent.execute = MagicMock(side_effect=_execute)
     return agent
@@ -99,6 +78,17 @@ def _make_mock_event_loop():
     loop = MagicMock()
     loop.call_soon_threadsafe = MagicMock()
     return loop
+
+
+def _run_threads_immediately(mock_thread_cls):
+    """Make patched Thread.start() execute its target synchronously."""
+    def _make_thread(*args, **kwargs):
+        target = kwargs.get("target")
+        thread = MagicMock()
+        thread.start.side_effect = lambda: target() if target else None
+        return thread
+
+    mock_thread_cls.side_effect = _make_thread
 
 
 def _setup_mixin():
@@ -179,6 +169,7 @@ class TestFullWorkflowLifecycle:
         mock_run_coro.assert_called_once()
         coro_arg, loop_arg = mock_run_coro.call_args[0]
         assert loop_arg is mock_loop
+        coro_arg.close()
 
         # Capture the done callback
         future_mock = mock_run_coro.return_value
@@ -191,7 +182,13 @@ class TestFullWorkflowLifecycle:
         done_future.result.return_value = "Step 1 completed successfully"
 
         # The callback uses QTimer.singleShot — patch it to call immediately
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {
+                "action": "next_step",
+                "step_id": 101,
+                "wait_before_next": 0,
+            }
             # Make singleShot call the lambda immediately
             def _call_immediately(ms, fn):
                 fn()
@@ -210,12 +207,11 @@ class TestFullWorkflowLifecycle:
         # Step 1 should be marked running
         mixin._set_workflow_step_status.assert_any_call(101, "running")
 
-        # --- Step 1: send instruction (triggered by advance) ---
-        # Reset mock to capture the second call
-        mock_run_coro.reset_mock()
-        mixin._send_workflow_instruction(orch, 1, prompt="Do step 2")
-
-        mock_run_coro.assert_called_once()
+        # --- Step 1: send instruction was triggered by advance ---
+        assert mock_run_coro.call_count == 2
+        coro_arg_2, loop_arg_2 = mock_run_coro.call_args[0]
+        assert loop_arg_2 is mock_loop
+        coro_arg_2.close()
         future_mock_2 = mock_run_coro.return_value
         on_done_cb_2 = future_mock_2.add_done_callback.call_args[0][0]
 
@@ -223,7 +219,9 @@ class TestFullWorkflowLifecycle:
         done_future_2 = MagicMock()
         done_future_2.result.return_value = "Step 2 done"
 
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {"action": "end_run", "status": "completed"}
             mock_qtimer.singleShot = _call_immediately
             on_done_cb_2(done_future_2)
 
@@ -240,7 +238,9 @@ class TestFullWorkflowLifecycle:
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
         assert reports[0]["session_id"] == 1
-        assert "Completed successfully" in reports[0]["report"]
+        assert "All done." in reports[0]["report"]
+        assert "Step 1 finished." in reports[0]["report"]
+        assert "Step 2 finished." in reports[0]["report"]
         assert "Step 1" in reports[0]["report"]
         assert "Step 2" in reports[0]["report"]
 
@@ -334,12 +334,14 @@ class TestConcurrentWorkflows:
 
         # --- Send instruction for workflow A step 0 ---
         mixin._send_workflow_instruction(orch_a, 0, prompt="A step 1")
+        mock_run_coro.call_args[0][0].close()
         future_a0 = mock_run_coro.return_value
         cb_a0 = future_a0.add_done_callback.call_args[0][0]
 
         # --- Send instruction for workflow B step 0 ---
         mock_run_coro.reset_mock()
         mixin._send_workflow_instruction(orch_b, 0, prompt="B step 1")
+        mock_run_coro.call_args[0][0].close()
         future_b0 = mock_run_coro.return_value
         cb_b0 = future_b0.add_done_callback.call_args[0][0]
 
@@ -349,9 +351,17 @@ class TestConcurrentWorkflows:
         # --- Complete workflow A step 0 ---
         done_a0 = MagicMock()
         done_a0.result.return_value = "A step 1 done"
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {
+                "action": "next_step",
+                "step_id": 101,
+                "wait_before_next": 0,
+            }
             mock_qtimer.singleShot = _call_immediately
             cb_a0(done_a0)
+        mock_run_coro.call_args[0][0].close()
+        cb_a1 = mock_run_coro.return_value.add_done_callback.call_args[0][0]
 
         # A advanced to step 1, B still at step 0
         assert orch_a["current_index"] == 1
@@ -362,22 +372,27 @@ class TestConcurrentWorkflows:
         # --- Complete workflow B step 0 ---
         done_b0 = MagicMock()
         done_b0.result.return_value = "B step 1 done"
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {
+                "action": "next_step",
+                "step_id": 201,
+                "wait_before_next": 0,
+            }
             mock_qtimer.singleShot = _call_immediately
             cb_b0(done_b0)
+        mock_run_coro.call_args[0][0].close()
+        cb_b1 = mock_run_coro.return_value.add_done_callback.call_args[0][0]
 
         assert orch_b["current_index"] == 1
         assert orch_b["any_step_succeeded"] is True
 
         # --- Complete workflow A step 1 → finishes A ---
-        mock_run_coro.reset_mock()
-        mixin._send_workflow_instruction(orch_a, 1, prompt="A step 2")
-        future_a1 = mock_run_coro.return_value
-        cb_a1 = future_a1.add_done_callback.call_args[0][0]
-
         done_a1 = MagicMock()
         done_a1.result.return_value = "A step 2 done"
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {"action": "end_run", "status": "completed"}
             mock_qtimer.singleShot = _call_immediately
             cb_a1(done_a1)
 
@@ -388,14 +403,11 @@ class TestConcurrentWorkflows:
         agent_b.shutdown.assert_not_called()
 
         # --- Complete workflow B step 1 → finishes B ---
-        mock_run_coro.reset_mock()
-        mixin._send_workflow_instruction(orch_b, 1, prompt="B step 2")
-        future_b1 = mock_run_coro.return_value
-        cb_b1 = future_b1.add_done_callback.call_args[0][0]
-
         done_b1 = MagicMock()
         done_b1.result.return_value = "B step 2 done"
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {"action": "end_run", "status": "completed"}
             mock_qtimer.singleShot = _call_immediately
             cb_b1(done_b1)
 
@@ -410,7 +422,7 @@ class TestConcurrentWorkflows:
         assert session_ids == {1, 2}
 
         for r in reports:
-            assert "Completed successfully" in r["report"]
+            assert "All done." in r["report"]
 
     @patch("distr.core.signals.signal_manager")
     @patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run")
@@ -461,20 +473,24 @@ class TestConcurrentWorkflows:
 # ===========================================================================
 
 class TestUserChatUnaffectedDuringWorkflow:
-    """Integration: _on_workflow_execute_step_requested (single-step execution
-    via the main agent) still works via signal_manager.send_text_input while
-    a workflow orchestration is running on a separate WorkflowAgent.
+    """Integration: _on_workflow_execute_step_requested (single-step execution)
+    still works through StepDispatcher while a workflow orchestration runs on a
+    separate WorkflowAgent.
 
-    The two paths — workflow agent execution and single-step main-agent
-    execution — must be completely independent.
+    The two paths — workflow agent execution and isolated single-step dispatch
+    — must be completely independent.
     """
 
-    @patch("distr.app.workflow.signal_manager")
+    @patch("distr.core.workflow.dispatcher.StepDispatcher.run_isolated")
+    @patch("distr.app.workflow.threading.Thread")
     @patch("asyncio.run_coroutine_threadsafe")
-    def test_single_step_uses_signal_while_workflow_runs(self, mock_run_coro, mock_sm):
-        """_on_workflow_execute_step_requested emits send_text_input even when
-        a workflow orchestration is active on a WorkflowAgent.
+    def test_single_step_uses_isolated_dispatch_while_workflow_runs(
+        self, mock_run_coro, mock_thread_cls, mock_run_isolated
+    ):
+        """_on_workflow_execute_step_requested dispatches isolated work even
+        when a workflow orchestration is active on a WorkflowAgent.
         """
+        _run_threads_immediately(mock_thread_cls)
         mixin = _setup_mixin()
         mixin._resolve_workflow_chat_id = MagicMock(return_value=(42, "workflow instr"))
 
@@ -486,8 +502,7 @@ class TestUserChatUnaffectedDuringWorkflow:
             step_id=999, workflow_id=50, instruction="User single step", chat_id=42
         )
 
-        # signal_manager.send_text_input.emit should be called (main agent path)
-        mock_sm.send_text_input.emit.assert_called_once_with("User single step", False, None, None)
+        mock_run_isolated.assert_called_once_with(999)
 
         # The workflow orchestration should be completely unaffected
         assert 1 in mixin._workflow_orchestrations
@@ -511,17 +526,22 @@ class TestUserChatUnaffectedDuringWorkflow:
         mock_run_coro.assert_called_once()
         coro_arg, loop_arg = mock_run_coro.call_args[0]
         assert loop_arg is mock_loop
+        coro_arg.close()
 
         # signal_manager.send_text_input should NOT be called
         mock_sm.send_text_input.emit.assert_not_called()
 
-    @patch("distr.app.workflow.signal_manager")
+    @patch("distr.core.workflow.dispatcher.StepDispatcher.run_isolated")
+    @patch("distr.app.workflow.threading.Thread")
     @patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run")
     @patch("asyncio.run_coroutine_threadsafe")
-    def test_both_paths_work_simultaneously(self, mock_run_coro, mock_finish_run, mock_sm):
+    def test_both_paths_work_simultaneously(
+        self, mock_run_coro, mock_finish_run, mock_thread_cls, mock_run_isolated
+    ):
         """A workflow step and a single-step execution can happen at the same
         time without interfering with each other.
         """
+        _run_threads_immediately(mock_thread_cls)
         mixin = _setup_mixin()
         mixin._resolve_workflow_chat_id = MagicMock(return_value=(42, "workflow instr"))
 
@@ -530,19 +550,15 @@ class TestUserChatUnaffectedDuringWorkflow:
 
         # --- Start workflow step 0 ---
         mixin._send_workflow_instruction(orch, 0, prompt="Workflow step 1")
+        mock_run_coro.call_args[0][0].close()
         future_mock = mock_run_coro.return_value
         cb = future_mock.add_done_callback.call_args[0][0]
 
-        # --- While workflow is in-flight, execute a single step via main agent ---
+        # --- While workflow is in-flight, execute an isolated single step ---
         mixin._on_workflow_execute_step_requested(
             step_id=888, workflow_id=77, instruction="User wants this done", chat_id=42
         )
-        mock_sm.send_text_input.emit.assert_called_once_with("User wants this done", False, None, None)
-
-        # Verify _pending_single_step was set for the single-step path
-        assert mixin._pending_single_step is not None
-        assert mixin._pending_single_step["step_id"] == 888
-        assert mixin._pending_single_step["workflow_id"] == 77
+        mock_run_isolated.assert_called_once_with(888)
 
         # --- Now complete the workflow step ---
         def _call_immediately(ms, fn):
@@ -550,21 +566,31 @@ class TestUserChatUnaffectedDuringWorkflow:
 
         done_future = MagicMock()
         done_future.result.return_value = "Workflow step 1 done"
-        with patch("distr.app.workflow.QTimer") as mock_qtimer:
+        with patch("distr.app.workflow.QTimer") as mock_qtimer, \
+             patch("distr.core.workflow.router.StepRouter.route") as mock_route:
+            mock_route.return_value = {
+                "action": "next_step",
+                "step_id": 101,
+                "wait_before_next": 0,
+            }
             mock_qtimer.singleShot = _call_immediately
             cb(done_future)
+        mock_run_coro.call_args[0][0].close()
 
         # Workflow advanced to step 1
         assert orch["current_index"] == 1
         assert orch["any_step_succeeded"] is True
 
-        # The single-step state is independent — still set from the execute_requested call
-        assert mixin._pending_single_step["step_id"] == 888
+        mock_run_isolated.assert_called_once_with(888)
 
-    @patch("distr.app.workflow.signal_manager")
+    @patch("distr.core.workflow.dispatcher.StepDispatcher.run_isolated")
+    @patch("distr.app.workflow.threading.Thread")
     @patch("asyncio.run_coroutine_threadsafe")
-    def test_multiple_single_steps_while_workflow_runs(self, mock_run_coro, mock_sm):
+    def test_multiple_single_steps_while_workflow_runs(
+        self, mock_run_coro, mock_thread_cls, mock_run_isolated
+    ):
         """Multiple single-step executions can be triggered while a workflow runs."""
+        _run_threads_immediately(mock_thread_cls)
         mixin = _setup_mixin()
         mixin._resolve_workflow_chat_id = MagicMock(return_value=(10, "instr"))
 
@@ -573,11 +599,11 @@ class TestUserChatUnaffectedDuringWorkflow:
 
         # Fire multiple single-step executions
         for i in range(3):
-            mock_sm.send_text_input.emit.reset_mock()
             mixin._on_workflow_execute_step_requested(
                 step_id=i, workflow_id=50 + i, instruction=f"Single step {i}", chat_id=10
             )
-            mock_sm.send_text_input.emit.assert_called_once_with(f"Single step {i}", False, None, None)
+
+        assert [call.args for call in mock_run_isolated.call_args_list] == [(0,), (1,), (2,)]
 
         # Workflow is still running, unaffected
         assert 1 in mixin._workflow_orchestrations

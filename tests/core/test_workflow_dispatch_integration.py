@@ -62,7 +62,7 @@ def _seed_db(factory):
     from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
 
     s = factory()
-    board = KanbanBoard(name="Test Board", agent_enabled=True)
+    board = KanbanBoard(name="Test Board")
     s.add(board)
     s.flush()
 
@@ -161,6 +161,9 @@ class TestWorkflowDispatchIntegration:
             # LLM boundary — return a canned response, no tool calls
             patch("distr.core.workflow_agent.WorkflowAgent._call_llm_sync",
                   return_value=fake_llm_response),
+            patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty", lambda: None),
+            patch("distr.core.workflow_agent.WorkflowAgent._load_tools", lambda self: None),
+            patch("distr.core.workflow.step_executor.StepExecutorMixin._get_run_context", lambda self, step_id, run_id: None),
             # Silence WebSocket/event emissions — not under test
             patch("distr.core.workflow.dispatcher.increment_workflow_updated", no_op_workflow),
             patch("distr.core.workflow.dispatcher.increment_kanban_updated", no_op_kanban),
@@ -197,6 +200,8 @@ class TestWorkflowDispatchIntegration:
                     "ticket_title": "Fix the login bug",
                     "board_name": "Test Board",
                     "phase": "planning",
+                    "skip_run_briefing": True,
+                    "skip_human_checkpoints": True,
                 },
             )
 
@@ -237,6 +242,8 @@ class TestWorkflowDispatchIntegration:
             patch("distr.core.workflow.step_executor.get_session", self._patched_get_session),
             patch("distr.core.workflow_agent.WorkflowAgent._call_llm_sync",
                   return_value=fake_llm_response),
+            patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty", lambda: None),
+            patch("distr.core.workflow_agent.WorkflowAgent._load_tools", lambda self: None),
             patch("distr.core.workflow.dispatcher.increment_workflow_updated", no_op),
             patch("distr.core.workflow.dispatcher.increment_kanban_updated", no_op),
             patch("distr.core.workflow.router.increment_workflow_updated", no_op),
@@ -303,6 +310,8 @@ class TestWorkflowDispatchIntegration:
             patch("distr.core.workflow.post_execution.get_session", self._patched_get_session),
             patch("distr.core.workflow.step_executor.get_session", self._patched_get_session),
             patch("distr.core.workflow_agent.WorkflowAgent._call_llm_sync", return_value=fake_llm),
+            patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty", lambda: None),
+            patch("distr.core.workflow_agent.WorkflowAgent._load_tools", lambda self: None),
             patch("distr.core.workflow.dispatcher.increment_workflow_updated", no_op),
             patch("distr.core.workflow.dispatcher.increment_kanban_updated", no_op),
             patch("distr.core.workflow.router.increment_workflow_updated", no_op),

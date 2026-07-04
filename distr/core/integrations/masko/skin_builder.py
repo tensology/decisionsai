@@ -2,7 +2,7 @@
 Skin builder — constructs valid SkinConfig objects from generated assets
 and writes them to disk.
 
-Generates avatar-type skins with all 12 event hooks mapped to their
+Generates avatar-type skins with all SkinConfig event hooks mapped to their
 respective animation files, and optional transitions for animated mode.
 """
 from __future__ import annotations
@@ -58,7 +58,7 @@ def build_skin_json(
     Raises:
         ValueError: If the generated config fails validation.
     """
-    # Build events dict — ensure all 12 hooks are present
+    # Build events dict — ensure every runtime hook is present.
     events: Dict[str, EventResponse] = {}
     for hook in SKIN_CONFIG_HOOKS:
         filename = hook_to_file.get(hook, f"{hook}.webp" if mode == "static" else f"{hook}.webm")

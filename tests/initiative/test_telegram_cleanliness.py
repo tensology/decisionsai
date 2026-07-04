@@ -19,8 +19,19 @@ def _service(tmp_path):
     return svc
 
 
-def test_initiative_approval_telegram_is_conversational_and_has_no_payload(tmp_path):
+def test_initiative_approval_telegram_is_conversational_and_has_no_payload(tmp_path, monkeypatch):
+    from distr.core.human_engagement import DeliveryDecision
+
     svc = _service(tmp_path)
+    monkeypatch.setattr(
+        "distr.core.human_engagement.HumanEngagementService.decide",
+        lambda self, intent: DeliveryDecision(
+            should_send=True,
+            channel="telegram",
+            format="text",
+            route_reason="test",
+        ),
+    )
     action = ProposedAction(
         action_type="ticket_lane_move",
         description="My Board has 2 backlog item(s) that could be promoted into Current.",
@@ -50,8 +61,19 @@ def test_initiative_approval_telegram_is_conversational_and_has_no_payload(tmp_p
     assert "[APPROVE]" not in sent
 
 
-def test_approval_notifications_use_event_queue_and_include_context(tmp_path):
+def test_approval_notifications_use_event_queue_and_include_context(tmp_path, monkeypatch):
+    from distr.core.human_engagement import DeliveryDecision
+
     svc = _service(tmp_path)
+    monkeypatch.setattr(
+        "distr.core.human_engagement.HumanEngagementService.decide",
+        lambda self, intent: DeliveryDecision(
+            should_send=True,
+            channel="telegram",
+            format="text",
+            route_reason="test",
+        ),
+    )
 
     class QueueSpy:
         def __init__(self):
@@ -89,8 +111,19 @@ def test_approval_notifications_use_event_queue_and_include_context(tmp_path):
     svc.telegram_manager.send_to_telegram.assert_not_called()
 
 
-def test_duplicate_pending_initiative_draft_does_not_notify_again(tmp_path):
+def test_duplicate_pending_initiative_draft_does_not_notify_again(tmp_path, monkeypatch):
+    from distr.core.human_engagement import DeliveryDecision
+
     svc = _service(tmp_path)
+    monkeypatch.setattr(
+        "distr.core.human_engagement.HumanEngagementService.decide",
+        lambda self, intent: DeliveryDecision(
+            should_send=True,
+            channel="telegram",
+            format="text",
+            route_reason="test",
+        ),
+    )
     action = ProposedAction(
         action_type="ticket_lane_move",
         description="Promote two backlog items.",

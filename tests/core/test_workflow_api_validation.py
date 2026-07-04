@@ -901,7 +901,9 @@ class TestWorkflowTypeValidation422:
 
         assert wf.schedule_preset == "once"
         assert wf.schedule_time == "2026-06-03T09:30:00"
-        assert wf.next_run_at.isoformat() == "2026-06-03T09:30:00"
+        from distr.core.workflow.scheduler import parse_once_run_at_as_utc
+
+        assert wf.next_run_at == parse_once_run_at_as_utc("2026-06-03T09:30:00")
 
     def test_visual_baseline_readiness_reports_missing_paths(self, client, tmp_path):
         tc, _ = client

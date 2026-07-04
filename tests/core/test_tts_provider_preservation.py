@@ -20,7 +20,17 @@ from hypothesis import strategies as st
 # ---------------------------------------------------------------------------
 
 # Canonical provider IDs (must match TTSProviderRegistry / TTS_PROVIDER_BY_ID)
-ALL_PROVIDER_IDS = {"kokoro", "elevenlabs", "openai", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox"}
+ALL_PROVIDER_IDS = {
+    "kokoro",
+    "elevenlabs",
+    "openai",
+    "coqui",
+    "f5tts",
+    "voxcpm",
+    "supertonic",
+    "chatterbox",
+    "pixazo",
+}
 
 # normalize_voice_provider: observed input -> expected output mappings
 NORMALIZE_PROVIDER_CASES = {
@@ -67,6 +77,10 @@ NORMALIZE_PROVIDER_CASES = {
     "Chatterbox": "chatterbox",
     "Chatterbox (Offline)": "chatterbox",
     "chatter box": "chatterbox",
+    # Pixazo variants
+    "pixazo": "pixazo",
+    "Pixazo": "pixazo",
+    "Pixazo (VoxCPM)": "pixazo",
     # Edge cases
     "": "kokoro",
     "  ": "kokoro",
@@ -98,6 +112,8 @@ PROVIDER_TO_INTERNAL_CASES = {
     "chatterbox": "chatterbox",
     "chatterbox (offline)": "chatterbox",
     "chatter box": "chatterbox",
+    "pixazo": "pixazo",
+    "pixazo (voxcpm)": "pixazo",
     "": "kokoro",
 }
 
@@ -111,6 +127,7 @@ VOICE_SETTINGS_BASELINE = {
     "voxcpm":     ("voxcpm",     "voxcpm_voice",     "default",  {}),
     "supertonic": ("supertonic", "supertonic_voice", "M1",       {}),
     "chatterbox": ("chatterbox", "chatterbox_voice", "default",  {}),
+    "pixazo":     ("pixazo",     "pixazo_voice",     "voxcpm",   {"api_key": "pixazo_key"}),
 }
 
 # voice_keys: observed baseline mapping
@@ -123,14 +140,15 @@ VOICE_KEYS_BASELINE = {
     "voxcpm": "voxcpm_voice",
     "supertonic": "supertonic_voice",
     "chatterbox": "chatterbox_voice",
+    "pixazo": "pixazo_voice",
 }
 
 # valid_voice_providers: observed baseline (both create and update lists)
 VALID_PROVIDERS_CREATE = {
-    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", ""
+    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "pixazo", ""
 }
 VALID_PROVIDERS_UPDATE = {
-    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "", None
+    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "pixazo", "", None
 }
 
 # _display_map in chat.py: observed baseline
@@ -143,6 +161,7 @@ DISPLAY_MAP_CHAT = {
     "voxcpm": "VoxCPM",
     "supertonic": "Supertonic",
     "chatterbox": "Chatterbox",
+    "pixazo": "Pixazo",
 }
 
 # _display in main.py: observed baseline
@@ -155,6 +174,7 @@ DISPLAY_MAP_MAIN = {
     "voxcpm": "VoxCPM",
     "supertonic": "Supertonic",
     "chatterbox": "Chatterbox",
+    "pixazo": "Pixazo",
 }
 
 # SPEED_BOUNDS: observed baseline
@@ -167,6 +187,7 @@ SPEED_BOUNDS_BASELINE = {
     "voxcpm": (0.5, 2.0),
     "supertonic": (0.5, 2.0),
     "chatterbox": (0.5, 2.0),
+    "pixazo": (0.5, 2.0),
 }
 
 # TTS_SAMPLE_RATES: observed baseline
@@ -179,6 +200,7 @@ SAMPLE_RATES_BASELINE = {
     "voxcpm": 48000,
     "supertonic": 44100,
     "chatterbox": 24000,
+    "pixazo": 48000,
 }
 
 
@@ -200,7 +222,7 @@ def _provider_to_internal_strategy():
 
 
 def _canonical_provider_strategy():
-    """Generate one of the six canonical provider IDs."""
+    """Generate one of the canonical provider IDs."""
     return st.sampled_from(sorted(ALL_PROVIDER_IDS))
 
 
@@ -287,6 +309,8 @@ class TestPreservationTtsProviderToInternal:
             result = "supertonic"
         elif p in ("chatterbox", "chatterbox (offline)", "chatter box"):
             result = "chatterbox"
+        elif "pixazo" in p:
+            result = "pixazo"
         else:
             result = p or "kokoro"
 
@@ -314,6 +338,8 @@ class TestPreservationTtsProviderToInternal:
             result = "supertonic"
         elif p in ("chatterbox", "chatterbox (offline)", "chatter box"):
             result = "chatterbox"
+        elif "pixazo" in p:
+            result = "pixazo"
         else:
             result = p or "kokoro"
 
@@ -476,20 +502,20 @@ class TestPreservationValidVoiceProviders:
     """
     **Validates: Requirements 3.8**
 
-    Property: valid_voice_providers contains all six provider IDs.
+    Property: valid_voice_providers contains all provider IDs.
     """
 
     def test_valid_voice_providers_create_contains_all_providers(self):
-        """The create-chat valid_voice_providers list contains all six providers."""
+        """The create-chat valid_voice_providers list contains all providers."""
         # Observed from chat.py line 584
-        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", ""]
+        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "pixazo", ""]
         for pid in ALL_PROVIDER_IDS:
             assert pid in valid, f"{pid} missing from valid_voice_providers (create)"
 
     def test_valid_voice_providers_update_contains_all_providers(self):
-        """The update-chat valid_voice_providers list contains all six providers."""
+        """The update-chat valid_voice_providers list contains all providers."""
         # Observed from chat.py line 842
-        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "", None]
+        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "pixazo", "", None]
         for pid in ALL_PROVIDER_IDS:
             assert pid in valid, f"{pid} missing from valid_voice_providers (update)"
 
@@ -519,6 +545,7 @@ class TestPreservationVoiceKeys:
             "voxcpm": "voxcpm_voice",
             "supertonic": "supertonic_voice",
             "chatterbox": "chatterbox_voice",
+            "pixazo": "pixazo_voice",
         }
         assert voice_keys == VOICE_KEYS_BASELINE
 
@@ -552,6 +579,7 @@ class TestPreservationVoiceSettings:
             "voxcpm":     ("voxcpm",     "voxcpm_voice",     "default",  {}),
             "supertonic": ("supertonic", "supertonic_voice", "M1",       {}),
             "chatterbox": ("chatterbox", "chatterbox_voice", "default",  {}),
+            "pixazo":     ("pixazo",     "pixazo_voice",     "voxcpm",   {"api_key": "pixazo_key"}),
         }
         for provider, expected in VOICE_SETTINGS_BASELINE.items():
             assert _VOICE_SETTINGS[provider] == expected, f"_VOICE_SETTINGS[{provider!r}] mismatch"
@@ -592,6 +620,7 @@ class TestPreservationDisplayMaps:
             "voxcpm": "VoxCPM",
             "supertonic": "Supertonic",
             "chatterbox": "Chatterbox",
+            "pixazo": "Pixazo",
         }
 
     def test_main_display_map_baseline(self):
@@ -605,6 +634,7 @@ class TestPreservationDisplayMaps:
             "voxcpm": "VoxCPM",
             "supertonic": "Supertonic",
             "chatterbox": "Chatterbox",
+            "pixazo": "Pixazo",
         }
 
     @given(provider=_canonical_provider_strategy())

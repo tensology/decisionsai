@@ -756,16 +756,23 @@ class StepExecutorMixin:
                 handle = await dispatch_harness(context)
                 return handle
 
-            # asyncio.run() raises RuntimeError if called from within a running
-            # event loop (e.g. inside FastAPI). Fall back to a thread-bound loop
-            # so workflow steps can use any project backend without stalling.
-            try:
-                result = asyncio.run(_run_task())
-            except RuntimeError:
+            def _threaded_run_task():
                 def _thread_runner():
                     return asyncio.run(_run_task())
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    result = pool.submit(_thread_runner).result(timeout=int(config.get("timeout_seconds", 900) or 900))
+                    return pool.submit(_thread_runner).result(
+                        timeout=int(config.get("timeout_seconds", 900) or 900)
+                    )
+
+            # asyncio.run() cannot be called from within a running event loop
+            # (e.g. FastAPI/tests). Detect that case before constructing the
+            # coroutine so Python does not warn about an un-awaited _run_task().
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                result = asyncio.run(_run_task())
+            else:
+                result = _threaded_run_task()
 
             if isinstance(result, dict) and result.get("route_approval_pending"):
                 if run_id:

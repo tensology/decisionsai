@@ -203,11 +203,13 @@ def test_assist_no_idle_cycles(action, boundaries, trigger):
     """
     Property 3: Assist level never runs idle cycles (Requirements 5.1, 5.3, 5.4)
 
-    evaluate() with level="assist" must always return SUGGEST_ONLY — the policy
-    gate never escalates to EXECUTE or DRAFT_AND_ASK at this level.
+    evaluate() with level="assist" must not execute idle-cycle work. Automation
+    recommendations are allowed to draft-and-ask, because they still require
+    human confirmation.
     """
     decision = evaluate(action, "assist", boundaries)
-    assert decision == PolicyDecision.SUGGEST_ONLY
+    assert decision in {PolicyDecision.SUGGEST_ONLY, PolicyDecision.DRAFT_AND_ASK}
+    assert decision != PolicyDecision.EXECUTE
 
 
 # ---------------------------------------------------------------------------

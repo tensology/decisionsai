@@ -34,7 +34,13 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+LIVE_GOOGLE_WORKSPACE = pytest.mark.skipif(
+    os.environ.get("DECISIONSAI_GOOGLE_WORKSPACE_TESTS", "").strip().lower()
+    not in {"1", "true", "yes"},
+    reason="Live Google Workspace smoke; set DECISIONSAI_GOOGLE_WORKSPACE_TESTS=1 to run.",
+)
 
+@LIVE_GOOGLE_WORKSPACE
 def test_connection():
     """Test if Google is connected"""
     print("\n" + "="*80)
@@ -54,6 +60,7 @@ def test_connection():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_gmail_check_inbox():
     """Test checking Gmail inbox"""
     print("\n" + "="*80)
@@ -80,6 +87,7 @@ def test_gmail_check_inbox():
     return len(messages) > 0
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_gmail_read_email(message_id=None):
     """Test reading a specific email"""
     print("\n" + "="*80)
@@ -114,6 +122,7 @@ def test_gmail_read_email(message_id=None):
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_gmail_send_email():
     """Test sending an email"""
     print("\n" + "="*80)
@@ -143,6 +152,7 @@ def test_gmail_send_email():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_gmail_draft_email():
     """Test creating a draft email"""
     print("\n" + "="*80)
@@ -167,6 +177,7 @@ def test_gmail_draft_email():
         return False
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_drive_list_folders():
     """Test listing Google Drive folders"""
     print("\n" + "="*80)
@@ -191,6 +202,7 @@ def test_drive_list_folders():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_drive_list_files():
     """Test listing Google Drive files"""
     print("\n" + "="*80)
@@ -216,6 +228,7 @@ def test_drive_list_files():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_drive_read_file(file_id=None):
     """Test reading a file from Google Drive"""
     print("\n" + "="*80)
@@ -247,6 +260,7 @@ def test_drive_read_file(file_id=None):
         return False
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_calendar_get_events():
     """Test getting calendar events"""
     print("\n" + "="*80)
@@ -285,6 +299,7 @@ def test_calendar_get_events():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_calendar_schedule_tomorrow():
     """Test getting tomorrow's schedule"""
     print("\n" + "="*80)
@@ -314,6 +329,7 @@ def test_calendar_schedule_tomorrow():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_calendar_schedule_this_week():
     """Test getting this week's schedule"""
     print("\n" + "="*80)
@@ -343,6 +359,7 @@ def test_calendar_schedule_this_week():
     return True
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_docs_create_from_markdown():
     """Test creating Google Doc from markdown"""
     print("\n" + "="*80)
@@ -409,8 +426,10 @@ def test_normalize_calendar_events_raw():
     assert _normalize_calendar_events_raw({"params": {"events": ev}}) == ev
 
 
+@LIVE_GOOGLE_WORKSPACE
 def test_google_workspace_tool():
     """Test the Google Workspace Tool wrapper"""
+    pytest.skip("Live Google Workspace wrapper smoke; keep out of default offline pytest.")
     print("\n" + "="*80)
     print("TEST 13: Google Workspace Tool Wrapper")
     print("="*80)
@@ -517,4 +536,3 @@ def run_all_tests():
 
 if __name__ == "__main__":
     run_all_tests()
-

@@ -16,7 +16,7 @@ def test_main_snippets_ui_uses_simple_editable_snippet_field():
     assert "<textarea" not in js
     assert "type=\\\"text\\\"" in js
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in template
-    assert "grid-template-columns: 42px minmax(120px, 1fr) 154px 66px 38px" in template
+    assert "grid-template-columns: 28px minmax(0, 1fr) minmax(88px, 108px) 66px 38px" in template
     assert "key-badge" in template
     assert "formatHotkeyBadges" in js
     assert "ctrl+shift+f\" + (idx + 1)" in js

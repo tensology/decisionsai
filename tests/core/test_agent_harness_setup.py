@@ -4,8 +4,8 @@ from pathlib import Path
 def test_verify_agent_harness_setup_installs_claude_ecc_surface(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     home = tmp_path / "home"
-    plugin = root / "vendor" / "ecc" / ".claude-plugin"
-    commands = root / "vendor" / "ecc" / ".claude" / "commands"
+    plugin = root / "plugins" / "ecc" / ".claude-plugin"
+    commands = root / "plugins" / "ecc" / ".claude" / "commands"
     plugin.mkdir(parents=True)
     commands.mkdir(parents=True)
     (plugin / "plugin.json").write_text('{"name":"ecc"}', encoding="utf-8")

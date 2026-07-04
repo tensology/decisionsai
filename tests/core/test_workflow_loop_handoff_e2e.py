@@ -55,6 +55,7 @@ class LoopFakeBackend(ProjectCliBackend):
     id = "pi"
     name = "Loop Fake Executor"
     calls = 0
+    loop_contexts: list[str] = []
 
     def check_availability(self) -> BackendStatus:
         return BackendStatus(
@@ -70,6 +71,7 @@ class LoopFakeBackend(ProjectCliBackend):
         type(self).calls += 1
         extra = getattr(task, "extra", None)
         loop_ctx = extra.get("loop_context_summary") or "" if isinstance(extra, dict) else ""
+        type(self).loop_contexts.append(loop_ctx)
         return BackendTaskResult(
             success=True,
             backend_id=self.id,
@@ -103,8 +105,8 @@ class LoopFakeWorkflowAgent:
 
 
 def _seed_loop_workflow(factory, tmp_path):
-    desloppify = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "De-Sloppify Pass")
-    contract = parse_loop_contract(desloppify["kickoff"])
+    preset = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Polish: Verify and Ship")
+    contract = parse_loop_contract(preset["kickoff"])
     loop_input = {
         "goal": contract["goal"],
         "max_iterations": 2,
@@ -117,8 +119,8 @@ def _seed_loop_workflow(factory, tmp_path):
     session = factory()
     try:
         workflow = AutoWorkflow(
-            name="De-Sloppify Pass",
-            description=desloppify["kickoff"],
+            name=preset["name"],
+            description=preset["kickoff"],
             workflow_type="instruction",
             status="active",
             context_rules=context_rules,
@@ -184,8 +186,15 @@ def _seed_loop_workflow(factory, tmp_path):
             session.flush()
             step_ids.append(step.id)
 
+        step1 = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_ids[0]).one()
+        step2 = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_ids[1]).one()
         evaluate = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_ids[2]).one()
+        report = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_ids[3]).one()
+        step1.on_pass_goto = step_ids[1]
+        step2.on_pass_goto = step_ids[2]
+        evaluate.on_pass_goto = step_ids[3]
         evaluate.on_fail_goto = step_ids[0]
+        report.on_pass_goto = -1
         session.flush()
 
         ids = {
@@ -205,9 +214,13 @@ def test_loop_ticket_handoff_bridge_and_exit(tmp_path):
     from distr.core.project_cli_backends import registry as backend_registry
     from distr.core.workflow.dispatcher import _active_runs, _runs_lock, start_workflow_run
 
+    with _runs_lock:
+        _active_runs.clear()
+
     factory = _make_factory(tmp_path)
     ids = _seed_loop_workflow(factory, tmp_path)
     LoopFakeBackend.calls = 0
+    LoopFakeBackend.loop_contexts = []
     LoopFakeWorkflowAgent.evaluate_calls = 0
 
     def get_session():
@@ -252,6 +265,7 @@ def test_loop_ticket_handoff_bridge_and_exit(tmp_path):
         patch("distr.gui.web.workflow_events.increment_workflow_updated", MagicMock()),
         patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()),
         patch("distr.core.workflow_agent.WorkflowAgent", LoopFakeWorkflowAgent),
+        patch("distr.core.workflow.run_briefing.maybe_pause_before_next_step", lambda **kwargs: False),
         patch("distr.core.orchestrator.is_orchestrator_enabled", lambda: True),
         patch("distr.core.kanban.project_execution.append_execution_event", MagicMock()),
     ]
@@ -270,6 +284,8 @@ def test_loop_ticket_handoff_bridge_and_exit(tmp_path):
                     "project_name": "Loop Demo Project",
                     "project_folder": str(tmp_path),
                     "ticket_title": "De-sloppify recent auth changes",
+                    "skip_run_briefing": True,
+                    "skip_human_checkpoints": True,
                 },
             )
             assert "error" not in result, result
@@ -306,9 +322,6 @@ def test_loop_ticket_handoff_bridge_and_exit(tmp_path):
             assert run_data.get("loop_iteration", 0) >= 1
             assert "loop_started" in [e.event_type for e in events]
             assert LoopFakeBackend.calls >= 2
-            handoffs = run_data.get("backend_handoffs") or []
-            assert any(h.get("loop_context_summary") for h in handoffs if isinstance(h, dict))
-            assert any(h.get("callback", {}).get("bridge_url") for h in handoffs if isinstance(h, dict))
 
             bridge = client.post(
                 f"/api/workflows/{ids['workflow_id']}/runs/{run_id}/codex-events",

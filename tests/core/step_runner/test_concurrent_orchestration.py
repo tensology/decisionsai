@@ -5,38 +5,12 @@
 6.5 — _send_workflow_instruction routes to WorkflowAgent, not signal_manager.send_text_input.
 """
 
-import sys
 import asyncio
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, call
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Mock heavy dependencies that aren't available in the test environment.
-# These must be set BEFORE importing distr.app.workflow.
-# ---------------------------------------------------------------------------
-_mock_qt = MagicMock()
-for mod in ("PyQt6", "PyQt6.QtCore", "PyQt6.QtWidgets", "PyQt6.QtGui"):
-    sys.modules.setdefault(mod, _mock_qt)
-
-_mock_sa = MagicMock()
-for mod in ("sqlalchemy", "sqlalchemy.orm", "sqlalchemy.ext", "sqlalchemy.ext.declarative"):
-    sys.modules.setdefault(mod, _mock_sa)
-
-_mock_db_pkg = MagicMock()
-sys.modules.setdefault("distr.core.db", _mock_db_pkg)
-sys.modules.setdefault("distr.core.db.step_runner", MagicMock())
-sys.modules.setdefault("distr.core.db.workflow", MagicMock())
-
-sys.modules.setdefault("distr.core.workflow_engine.context_assembly", MagicMock())
-sys.modules.setdefault("distr.core.workflow_engine.agent_bridge", MagicMock())
-sys.modules.setdefault("distr.core.workflow.service", MagicMock())
-sys.modules.setdefault("distr.core.workflow.scheduler", MagicMock())
-sys.modules.setdefault("distr.gui.web.workflow_events", MagicMock())
-sys.modules.setdefault("distr.gui", MagicMock())
-sys.modules.setdefault("distr.gui.web", MagicMock())
 
 from distr.app.workflow import WorkflowOrchestrationMixin  # noqa: E402
 

@@ -238,16 +238,7 @@ def _dedupe_repeated_tail(value: str) -> str:
     return value
 
 
-def _parse_table_rows(html: str) -> list[list[dict[str, Any]]]:
-    parser = _HTMLTableParser()
-    parser.feed(html)
-    if not parser.tables:
-        return []
-    return max(parser.tables, key=len)
-
-
-def _fetch_terminal_bench_rows() -> list[dict[str, Any]]:
-    entries = parse_terminal_bench_entries(_http_get(TERMINAL_BENCH_URL))
+def aggregate_terminal_bench_models(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for entry in entries:
         model_name = _entry_model_label(entry)
@@ -275,10 +266,34 @@ def _fetch_terminal_bench_rows() -> list[dict[str, Any]]:
         row["latest_date"] = max(row["latest_date"], str(entry.get("date") or ""))
         if bool(entry.get("verified")):
             row["verified_submission_count"] += 1
+
     rows = []
-    sorted_rows = sorted(grouped.values(), key=lambda item: (item["best_accuracy"], item["submission_count"]), reverse=True)
-    for index, row in enumerate(sorted_rows, start=1):
+    for row in sorted(grouped.values(), key=lambda item: (item["best_accuracy"], item["submission_count"]), reverse=True):
         submission_count = max(int(row["submission_count"]), 1)
+        rows.append(
+            {
+                **row,
+                "best_accuracy": round(float(row["best_accuracy"]), 1),
+                "average_accuracy": round(float(row["average_accuracy"]) / submission_count, 1),
+                "submission_count": submission_count,
+                "verified_submission_count": int(row["verified_submission_count"] or 0),
+            }
+        )
+    return rows
+
+
+def _parse_table_rows(html: str) -> list[list[dict[str, Any]]]:
+    parser = _HTMLTableParser()
+    parser.feed(html)
+    if not parser.tables:
+        return []
+    return max(parser.tables, key=len)
+
+
+def _fetch_terminal_bench_rows() -> list[dict[str, Any]]:
+    entries = parse_terminal_bench_entries(_http_get(TERMINAL_BENCH_URL))
+    rows = []
+    for index, row in enumerate(aggregate_terminal_bench_models(entries), start=1):
         performance = round(float(row["best_accuracy"]), 1)
         rows.append(
             _source_metric(
@@ -290,11 +305,11 @@ def _fetch_terminal_bench_rows() -> list[dict[str, Any]]:
                 provider=str(row.get("provider") or ""),
                 rank=index,
                 performance_raw=performance,
-                value_raw=(performance / max(submission_count, 1)) if performance else None,
+                value_raw=(performance / max(int(row["submission_count"]), 1)) if performance else None,
                 metrics={
                     "best_accuracy": performance,
-                    "average_accuracy": round(float(row["average_accuracy"]) / submission_count, 1),
-                    "submission_count": submission_count,
+                    "average_accuracy": row["average_accuracy"],
+                    "submission_count": int(row["submission_count"]),
                     "verified_submission_count": int(row["verified_submission_count"] or 0),
                     "latest_date": row.get("latest_date") or "",
                 },

@@ -97,25 +97,15 @@
     }
 
     function showConfirm(opts) {
-        opts = opts || {};
-        document.getElementById("kb-confirm-title").textContent = opts.title || "Confirm";
-        document.getElementById("kb-confirm-message").textContent = opts.message || "";
-        var okBtn = document.getElementById("kb-confirm-ok");
-        okBtn.textContent = opts.confirmLabel || "OK";
-        okBtn.className = opts.danger
-            ? "px-4 py-2 rounded text-white text-sm bg-red-600 hover:bg-red-700"
-            : "px-4 py-2 rounded text-white text-sm bg-[#f97316] hover:bg-[#ea580c]";
-        confirmCallback = typeof opts.onConfirm === "function" ? opts.onConfirm : null;
-        hideAllModals("kb-confirm-modal");
-        document.getElementById("kb-confirm-modal").classList.remove("hidden");
-        requestAnimationFrame(function() {
-            try { okBtn.focus(); } catch (err) {}
-        });
+        if (window.DecisionsAPI && typeof window.DecisionsAPI.confirm === "function") {
+            window.DecisionsAPI.confirm(opts || {});
+        }
     }
 
     function hideConfirm() {
         confirmCallback = null;
-        document.getElementById("kb-confirm-modal").classList.add("hidden");
+        var shared = document.getElementById("decisions-confirm-modal");
+        if (shared) shared.remove();
     }
 
     function invokeConfirmAction() {

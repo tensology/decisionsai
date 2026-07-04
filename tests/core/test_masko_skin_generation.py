@@ -101,8 +101,8 @@ def test_generated_skin_config_structural_validity(name, mode):
     assert config.rendering.chroma_key is None
     assert config.rendering.chroma_threshold == 30
 
-    # Must contain all 12 event hooks
-    assert len(config.events) == 12
+    # Must contain every SkinConfig event hook
+    assert len(config.events) == len(EVENT_HOOKS)
     for hook in EVENT_HOOKS:
         assert hook in config.events, f"Missing hook: {hook}"
         assert config.events[hook].playback == "loop"

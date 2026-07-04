@@ -142,7 +142,7 @@ class TestSelfRoutingGuard:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
 
         router = StepRouter()
         decision = router.route(5, "result", True, 10)
@@ -165,7 +165,7 @@ class TestWaitState:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run]
 
         router = StepRouter()
         decision = router.route(1, "done", True, 10)
@@ -185,7 +185,7 @@ class TestWaitState:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run]
 
         with patch("distr.core.workflow.router.StepRouter._emit_waiting_for_feedback") as mock_emit:
             router = StepRouter()
@@ -272,7 +272,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.add = MagicMock()
 
         router = StepRouter()
@@ -291,7 +291,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run, None]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, None]
         db.add = MagicMock()
 
         router = StepRouter()
@@ -311,7 +311,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.add = MagicMock()
 
         router = StepRouter()
@@ -413,7 +413,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, run, next_step]
         db.add = MagicMock()
         db.flush = MagicMock()
 

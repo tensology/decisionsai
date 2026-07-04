@@ -76,9 +76,29 @@ def _extract_section(html: str, heading_text: str) -> str | None:
 
 def _extract_stt_section(html: str) -> str:
     """Extract the full STT section HTML."""
-    result = _extract_section(html, "Speech to Text (STT)")
+    result = _extract_panel(html, "speech")
     assert result is not None, "Could not find STT section in template"
     return result
+
+
+def _extract_panel(html: str, panel_name: str) -> str | None:
+    """Extract a current LLM settings panel by its data-llm-panel attribute."""
+    pattern = rf'<div\s+class="[^"]*\bllm-config-panel\b[^"]*"\s+data-llm-panel="{re.escape(panel_name)}"'
+    match = re.search(pattern, html)
+    if not match:
+        return None
+    section_start = match.start()
+    depth = 0
+    i = section_start
+    while i < len(html):
+        if html[i:i + 4] == '<div':
+            depth += 1
+        elif html[i:i + 6] == '</div>':
+            depth -= 1
+            if depth == 0:
+                return html[section_start:i + 6]
+        i += 1
+    return None
 
 
 class ElementExtractor(HTMLParser):
@@ -145,11 +165,11 @@ llm_row_strategy = st.sampled_from(LLM_ROWS)
 label_type_strategy = st.sampled_from(["provider", "model"])
 
 section_heading_strategy = st.sampled_from([
-    "Speech to Text (STT)",
-    "Conversational LLM",
-    "Coding LLM",
-    "Vision LLM",
-    "Image LLM",
+    "Speech to Text",
+    "Conversational",
+    "Coding",
+    "Vision",
+    "Image Generation",
 ])
 
 
@@ -326,12 +346,10 @@ def test_flex_row_layout_preserved(row: str) -> None:
 def test_section_headings_preserved(heading: str) -> None:
     """**Validates: Requirements 3.1, 3.2**
 
-    All section headings must be present in the template.
+    All LLM subtab labels must be present in the template.
     """
     html = _read_template()
-    elements = _extract_elements(html)
-
-    assert heading in elements.section_headings, (
-        f"Section heading '{heading}' not found in template. "
-        f"Found: {elements.section_headings}"
-    )
+    assert re.search(
+        rf'<button[^>]*data-llm-subtab="[^"]+"[^>]*>\s*{re.escape(heading)}\s*</button>',
+        html,
+    ), f"LLM subtab '{heading}' not found in template."

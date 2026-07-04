@@ -11,6 +11,7 @@ import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
+import distr.core.kanban.project_execution  # noqa: F401
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

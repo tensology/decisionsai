@@ -47,7 +47,8 @@ def test_cursor_worker_requires_prompt_by_prompt_orchestrator_visibility():
     assert "For any normal Cursor IDE/chat prompt inside a DecisionsAI project folder" in skill
     assert "--turn-input" in skill
     assert "--turn-output" in skill
-    assert "exits quietly" in skill
+    assert "DecisionsAI is not reachable" in skill
+    assert "keep working without surfacing a" in skill
 
 
 def test_cursor_reporter_supports_turn_reporting_and_quiet_offline_mode():

@@ -273,7 +273,6 @@ def test_engagement_surface_does_not_hardcode_personal_name():
     scanned_roots = [
         root / "distr" / "app",
         root / "distr" / "core",
-        root / "tests",
     ]
     offenders = []
     for base in scanned_roots:

@@ -231,7 +231,7 @@ def test_proactive_orchestrator_tool_builds_daily_plan_from_context(monkeypatch)
         lambda markdown, max_len=650: "Handle the DecisionsAI board, then check WhatsApp and Gmail.",
     )
 
-    result = ProactiveOrchestratorTool()._run(action="daily_plan")
+    result = ProactiveOrchestratorTool()._run(action="daily_plan", from_automation_run=True)
 
     assert result.startswith("Handle the DecisionsAI board")
     assert "REFERENCE:" in result
@@ -289,7 +289,7 @@ def test_proactive_orchestrator_daily_plan_executes_implied_actions(monkeypatch)
     )
     monkeypatch.setattr("distr.core.initiative.action_handlers.execute_initiative_action", fake_execute)
 
-    result_text = ProactiveOrchestratorTool()._run(action="daily_plan", format="json")
+    result_text = ProactiveOrchestratorTool()._run(action="daily_plan", format="json", from_automation_run=True)
     result = json.loads(result_text)
 
     assert result["orchestration_results"][0]["message"] == "Moved 1 ticket to Current"
@@ -343,7 +343,7 @@ def test_proactive_orchestrator_daily_plan_respects_lane_move_permission(monkeyp
     )
     monkeypatch.setattr("distr.core.initiative.action_handlers.execute_initiative_action", fail_execute)
 
-    result_text = ProactiveOrchestratorTool()._run(action="daily_plan", format="json")
+    result_text = ProactiveOrchestratorTool()._run(action="daily_plan", format="json", from_automation_run=True)
     result = json.loads(result_text)
 
     assert result["orchestration_actions"][0]["action_type"] == "ticket_lane_move"

@@ -9,13 +9,13 @@ from distr.core.workflow.service import build_step_context_prompt
 
 
 class TestSingleStepPassthrough:
-    """Requirement 6.2: single-step with no context rules returns raw instruction."""
+    """Requirement 6.2: single-step with no workflow context returns raw instruction."""
 
-    def test_single_step_no_context_returns_raw(self):
+    def test_single_step_no_workflow_context_returns_raw(self):
         result = build_step_context_prompt(
             step_index=0,
             total_steps=1,
-            workflow_description="Do something",
+            workflow_description="",
             step_title="Step 1",
             step_instruction="Run the tests",
             prior_results=[],
@@ -23,7 +23,7 @@ class TestSingleStepPassthrough:
         )
         assert result == "Run the tests"
 
-    def test_single_step_none_context_rules_returns_raw(self):
+    def test_single_step_with_workflow_description_gets_execution_context(self):
         result = build_step_context_prompt(
             step_index=0,
             total_steps=1,
@@ -34,7 +34,10 @@ class TestSingleStepPassthrough:
             context_rules="",
             continuation_input="",
         )
-        assert result == "Run the tests"
+        assert result != "Run the tests"
+        assert "[WORKFLOW ENGINE]" in result
+        assert "Overall goal: Do something" in result
+        assert "Task: Run the tests" in result
 
     def test_single_step_with_context_rules_does_not_passthrough(self):
         result = build_step_context_prompt(

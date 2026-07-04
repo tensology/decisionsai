@@ -532,7 +532,7 @@ def test_agent_instruction_dispatch_isolation(data):
     try:
         with patch.object(dispatcher_mod, "get_session", return_value=mock_session_ctx), \
              patch("distr.core.signals.signal_manager", mock_signal_manager), \
-             patch.object(dispatcher_mod, "_run_verification", return_value=True), \
+             patch("distr.core.workflow.post_execution._run_verification", return_value=True), \
              patch.object(dispatcher_mod, "increment_workflow_updated"):
 
             from distr.core.workflow.dispatcher import StepDispatcher
@@ -2788,6 +2788,20 @@ def test_integration_smoke_two_step_workflow_completes():
         dispatcher_mod.StepDispatcher, "_record_result_and_route", _tracking_record_result_and_route
     )
     patcher_complete_run = patch.object(dispatcher_mod, "complete_run", side_effect=_tracking_complete_run)
+    patcher_validation_snapshot = patch.object(
+        router_mod,
+        "build_validation_snapshot",
+        return_value={
+            "type": "none",
+            "passed": True,
+            "result": "not_required",
+            "standards_context": [],
+        },
+    )
+    patcher_standards_context = patch(
+        "distr.core.workflow.standards_memory.build_standards_context",
+        return_value="",
+    )
 
     try:
         patcher_session.start()
@@ -2803,6 +2817,8 @@ def test_integration_smoke_two_step_workflow_completes():
         mock_os = patcher_os.start()
         patcher_rr.start()
         patcher_complete_run.start()
+        patcher_validation_snapshot.start()
+        patcher_standards_context.start()
 
         mock_os.environ = {}
         mock_bridge_cls.return_value = MagicMock()
@@ -2856,6 +2872,8 @@ def test_integration_smoke_two_step_workflow_completes():
 
     finally:
         # Stop all patchers
+        patcher_standards_context.stop()
+        patcher_validation_snapshot.stop()
         patcher_complete_run.stop()
         patcher_rr.stop()
         patcher_os.stop()

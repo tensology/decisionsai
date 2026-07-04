@@ -811,7 +811,7 @@ def _cmd_push_to_talk_start(session, params):
 
     # Retry resume shortly after start — mic task can lag the command thread.
     target_loop = getattr(getattr(session, 'runner', None), '_loop', None) or getattr(session, '_main_loop', None)
-    if target_loop and getattr(target_loop, 'is_running', lambda: False)():
+    if target_loop and getattr(target_loop, 'is_running', lambda: False)() is True:
         def _retry_resume():
             _set_audio_input_active(session, True, "push_to_talk_start_retry", force=True)
             try:
@@ -861,14 +861,24 @@ def _cmd_push_to_talk_start(session, params):
         and session.stt_service
         and getattr(session.stt_service, '_FrameProcessor__started', False)
     )
-    if stt_started and session.runner and session.runner._loop:
+    runner_loop = getattr(getattr(session, "runner", None), "_loop", None)
+    if (
+        stt_started
+        and isinstance(runner_loop, asyncio.AbstractEventLoop)
+        and runner_loop.is_running() is True
+    ):
         async def send_ptt_interruption():
             try:
                 await session.stt_service.push_interruption_task_frame_and_wait()
                 session.logger.debug("PTT: Pipeline interruption broadcast via PipelineTask (all processors notified)")
             except Exception as e:
                 session.logger.warning(f"PTT: Could not send pipeline interruption: {e}")
-        asyncio.run_coroutine_threadsafe(send_ptt_interruption(), session.runner._loop)
+        coro = send_ptt_interruption()
+        try:
+            asyncio.run_coroutine_threadsafe(coro, runner_loop)
+        except Exception:
+            coro.close()
+            raise
     elif hasattr(session, 'stt_service') and session.stt_service and not stt_started:
         session.logger.debug("PTT: STT not started yet — skipping pipeline interruption")
     elif hasattr(session, 'stt_service') and session.stt_service:

@@ -353,6 +353,7 @@ def _litellm_model(provider: str, model: str, settings: dict) -> str:
 class InitiativeService:
     IDLE_TIMEOUT_MS = 300_000   # 5 minutes
     SCHEDULE_TICK_MS = 60_000   # 1 minute
+    MIN_CYCLE_SPACING_S = 45.0
 
     def __init__(self, telegram_manager, chat_manager, event_queue=None):
         self.telegram_manager = telegram_manager
@@ -631,8 +632,19 @@ class InitiativeService:
     def _dispatch_cycle(self, trigger_source: str) -> None:
         if self._stopped:
             return
+        now = time.time()
         with self._cycle_lock:
             if self._cycle_running:
+                return
+            if (
+                self._last_cycle_at is not None
+                and now - self._last_cycle_at < self.MIN_CYCLE_SPACING_S
+            ):
+                logger.debug(
+                    "InitiativeService: skipping %s cycle %.1fs after previous cycle",
+                    trigger_source,
+                    now - self._last_cycle_at,
+                )
                 return
             self._cycle_running = True
         t = threading.Thread(

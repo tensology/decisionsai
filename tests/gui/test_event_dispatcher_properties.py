@@ -190,7 +190,7 @@ def test_transition_lookup(config: SkinConfig, from_hook: str, to_hook: str) -> 
     config=skin_config_strategy(),
     initial_hook=st.sampled_from([h for h in EVENT_HOOKS
                                   if h != "tts_response"
-                                  and h not in ("ptt_active", "hands_free_listening", "dictation")]),
+                                  and h not in ("ptt_active", "hands_free_listening", "dictation", "ticket_dictation")]),
 )
 def test_tts_response_reverts_to_previous_state(
     config: SkinConfig, initial_hook: str

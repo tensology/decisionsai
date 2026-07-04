@@ -10,12 +10,12 @@
   },
   "development-ticket-to-implementation": {
     "archetype": "incremental_ship",
-    "step_count": 4,
-    "final_step_name": "Close development slice with evidence",
+    "step_count": 6,
+    "final_step_name": "Report, update ticket, and compact memory",
     "max_iterations": 6,
     "has_fail_goto": true,
     "has_end_loop_action": true,
-    "tools": ["cli", "other"]
+    "tools": ["browser_use", "cli", "other", "playwright", "shell"]
   },
   "polish-verify-and-ship": {
     "archetype": "review_cleanup",

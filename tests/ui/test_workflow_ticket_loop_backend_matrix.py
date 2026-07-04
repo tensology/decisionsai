@@ -114,7 +114,7 @@ def test_disposable_project_path_is_exactly_guarded(tmp_path: Path) -> None:
         development_root=tmp_path,
     )
 
-    assert project_dir == tmp_path / "decisionsai-e2e-spotify-remake-codex-20260614-120000"
+    assert project_dir == tmp_path / "spotify-remake-e2e-codex-20260614-120000"
     assert harness.assert_safe_disposable_spotify_project_dir(
         project_dir,
         development_root=tmp_path,

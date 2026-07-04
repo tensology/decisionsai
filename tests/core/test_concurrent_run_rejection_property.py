@@ -25,6 +25,7 @@ from distr.core.db.workflow import (  # noqa: F401 — ensure models registered
     AutoWorkflowVariable,
 )
 from distr.core.workflow.service import start_workflow_run
+from distr.core.workflow import dispatcher as workflow_dispatcher
 
 
 # ---------------------------------------------------------------------------
@@ -119,14 +120,20 @@ class TestConcurrentRunRejection:
             return _session_ctx(factory)
 
         wf_id = _create_workflow_with_step(factory)
-        _create_active_run(factory, wf_id, active_status)
+        active_run_id = _create_active_run(factory, wf_id, active_status)
 
-        with patch(
-            "distr.core.workflow.service.get_session", patched_get_session
-        ), patch(
-            "distr.core.workflow.dispatcher.get_session", patched_get_session
-        ):
-            result = start_workflow_run(wf_id)
+        with workflow_dispatcher._runs_lock:
+            workflow_dispatcher._active_runs[active_run_id] = MagicMock()
+        try:
+            with patch(
+                "distr.core.workflow.service.get_session", patched_get_session
+            ), patch(
+                "distr.core.workflow.dispatcher.get_session", patched_get_session
+            ):
+                result = start_workflow_run(wf_id)
+        finally:
+            with workflow_dispatcher._runs_lock:
+                workflow_dispatcher._active_runs.pop(active_run_id, None)
 
         assert "error" in result, (
             f"Expected error for concurrent run with active status "

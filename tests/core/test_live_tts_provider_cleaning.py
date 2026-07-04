@@ -1,6 +1,6 @@
 import asyncio
 
-from distr.core.agent.libs import LLMFullResponseStartFrame, TextFrame
+from distr.core.agent.libs import LLMFullResponseEndFrame, LLMFullResponseStartFrame, TextFrame
 from distr.core.agent.services.tts.openai import OpenAITTSService
 from distr.core.agent.services.tts.coqui import CoquiTTSService
 
@@ -43,8 +43,12 @@ def test_openai_live_textframes_are_cleaned_before_sentence_synthesis():
     text = TextFrame()
     text.text = "OpenAI should ignore <tool_call>{bad}</tool_call> ahhhhh artifacts."
 
-    asyncio.run(service.process_frame(start, None))
-    asyncio.run(service.process_frame(text, None))
+    async def consume():
+        await service.process_frame(start, None)
+        await service.process_frame(text, None)
+        await service.process_frame(LLMFullResponseEndFrame(), None)
+
+    asyncio.run(consume())
 
     assert synthesized == ["OpenAI should ignore artifacts."]
 
