@@ -1086,6 +1086,15 @@ class StepExecutorMixin:
                     run_ctx.workflow_agent.execute(prompt), run_ctx.event_loop)
 
                 def _on_agent_done(fut):
+                    from distr.core.workflow.dispatcher import workflow_run_context_is_current
+
+                    if not workflow_run_context_is_current(run_id, run_ctx):
+                        logger.info(
+                            "Ignoring stale WorkflowAgent callback for run_id=%s step_id=%s",
+                            run_id,
+                            step_id,
+                        )
+                        return
                     try:
                         result_text = fut.result(timeout=0)
                         result_text = self._augment_agent_result_with_tool_evidence(
@@ -1109,7 +1118,16 @@ class StepExecutorMixin:
 
                 def _timeout_watchdog():
                     import time
+                    from distr.core.workflow.dispatcher import workflow_run_context_is_current
+
                     time.sleep(timeout_seconds)
+                    if not workflow_run_context_is_current(run_id, run_ctx):
+                        logger.info(
+                            "Ignoring stale WorkflowAgent timeout for run_id=%s step_id=%s",
+                            run_id,
+                            step_id,
+                        )
+                        return
                     if not future.done():
                         _timed_out[0] = True
                         logger.warning("WorkflowAgent timed out for step %s after %ds", step_id, timeout_seconds)

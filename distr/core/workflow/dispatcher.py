@@ -109,6 +109,55 @@ _active_runs: Dict[int, _RunContext] = {}
 _runs_lock = threading.Lock()
 
 
+def workflow_run_context_is_current(run_id: int, expected_ctx: _RunContext) -> bool:
+    """Return whether *expected_ctx* is still the live context for *run_id*."""
+    with _runs_lock:
+        return _active_runs.get(run_id) is expected_ctx
+
+
+def build_workflow_run_receipt(
+    *,
+    run_id: int,
+    workflow_id: int,
+    status: str,
+    steps_summary: List[dict],
+    board_id: Optional[int] = None,
+    ticket_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    validation_records: Optional[List[dict]] = None,
+    result_packet: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a compact, stable terminal summary for a workflow run."""
+    normalized_status = (status or "completed").strip().lower()
+    normalized_steps = [dict(item or {}) for item in (steps_summary or [])]
+    completed_count = sum(
+        1
+        for item in normalized_steps
+        if str(item.get("status") or "").strip().lower() in ("completed", "passed")
+    )
+    has_completion_evidence = (
+        completed_count > 0
+        or bool(validation_records)
+        or any((item.get("result") or item.get("status")) for item in normalized_steps)
+    )
+    return {
+        "run_id": run_id,
+        "workflow_id": workflow_id,
+        "status": normalized_status,
+        "success": normalized_status == "completed",
+        "cancelled": normalized_status == "cancelled",
+        "board_id": board_id,
+        "ticket_id": ticket_id,
+        "project_id": project_id,
+        "steps_summary": normalized_steps,
+        "step_count": len(normalized_steps),
+        "completed_step_count": completed_count,
+        "has_completion_evidence": has_completion_evidence,
+        "validation_records": list(validation_records or []),
+        "result_packet": dict(result_packet or {}),
+    }
+
+
 def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_summary: List[dict]) -> None:
     """Append a bounded workflow completion note to a ticket description.
 
@@ -475,8 +524,24 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     _cleanup_run(run_id)
 
     steps_summary: List[dict] = []
+    board_id: Optional[int] = None
+    ticket_id: Optional[int] = None
+    project_id: Optional[int] = None
+    result_packet: Dict[str, Any] = {}
+    validation_records: List[dict] = []
     try:
         with get_session() as db:
+            run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            if run_rec:
+                board_id = run_rec.board_id
+                ticket_id = run_rec.ticket_id
+                try:
+                    run_data = json.loads(run_rec.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                project_id_raw = run_data.get("project_id") if isinstance(run_data, dict) else None
+                project_id = int(project_id_raw) if str(project_id_raw or "").isdigit() else None
+                result_packet = dict(run_data.get("result_packet") or {}) if isinstance(run_data, dict) else {}
             step_results = (
                 db.query(AutoWorkflowStepResult)
                 .filter(AutoWorkflowStepResult.run_id == run_id)
@@ -493,13 +558,40 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     except Exception:
         logger.debug("Could not load step results for run %d", run_id)
 
-    run_result = {
-        "session_id": workflow_id,
-        "run_id": run_id,
-        "success": status == "completed",
-        "cancelled": status == "cancelled",
-        "steps_summary": steps_summary,
-    }
+    try:
+        from distr.core.orchestrator import list_validation_records
+
+        validation_records = list_validation_records(run_id=run_id, limit=10)
+    except Exception:
+        logger.debug("Could not load validation records for run %d", run_id)
+
+    run_result = build_workflow_run_receipt(
+        run_id=run_id,
+        workflow_id=workflow_id,
+        status=status,
+        steps_summary=steps_summary,
+        board_id=board_id,
+        ticket_id=ticket_id,
+        project_id=project_id,
+        validation_records=validation_records,
+        result_packet=result_packet,
+    )
+    run_result["session_id"] = workflow_id
+    try:
+        with get_session() as db:
+            run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            if run_rec:
+                try:
+                    run_data = json.loads(run_rec.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                if not isinstance(run_data, dict):
+                    run_data = {}
+                run_data["terminal_receipt"] = run_result
+                run_rec.run_data = json.dumps(run_data, default=str)
+                db.commit()
+    except Exception:
+        logger.debug("Could not persist terminal receipt for run %d", run_id, exc_info=True)
 
     # Sync terminal status back to the linked ticket so the board always
     # reflects the actual workflow outcome without waiting for a lane move.
