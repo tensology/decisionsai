@@ -105,6 +105,7 @@ docs/skills/*
 !docs/skills/jcode-agentmanager-harness-assessment.md
 
 # --- Dev scratch at repo root ---
+.superpowers/
 test.js
 server.log
 
