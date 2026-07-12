@@ -23,6 +23,7 @@ from distr.core.db.workflow import (
 )
 from distr.core.workflow.tools import normalize_tool_list, tools_for_action
 from distr.core.workflow.verification import _run_verification, build_validation_snapshot
+from distr.core.workflow.runtime_contract import emit_step_activity, should_pause_after_step
 from distr.core.kanban.result_packet import append_workflow_step_to_packet
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 from distr.core.workflow.chat_trace import record_workflow_chat_event
@@ -93,7 +94,11 @@ class StepRouter:
 
             # ── wait_for_continue gate ──
             # Skip when resuming from feedback (the step has already waited)
-            if step.wait_for_continue and not skip_wait:
+            if should_pause_after_step(
+                run_id=run_id,
+                step_wait_for_continue=bool(step.wait_for_continue),
+                skip_wait=skip_wait,
+            ):
                 return self._enter_wait_state(db, step, run_id, result, passed)
 
             # ── verify ──
@@ -202,6 +207,18 @@ class StepRouter:
 
             # ── determine next step ──
             decision = self._determine_next(db, step, run, verified_passed, result)
+            emit_step_activity(
+                run_id=run_id,
+                step_id=step_id,
+                event_type="workflow_step_route_decided",
+                status="running" if decision.get("action") == "next_step" else decision.get("status", status),
+                summary=(
+                    f"Next step: {decision.get('step_id')}"
+                    if decision.get("action") == "next_step"
+                    else f"Run decision: {decision.get('status', status)}"
+                ),
+                payload={"decision": decision, "passed": bool(verified_passed)},
+            )
             # ── update canonical result packet in run_data ──
             try:
                 run_data = json.loads(run.run_data or "{}")

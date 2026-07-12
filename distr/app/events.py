@@ -64,15 +64,63 @@ class EventHandlerMixin:
                 k: v for k, v in self._event_dedup_cache.items() if now - v < 10.0
             }
 
-        for _ in range(50):
+        drain_started = time.perf_counter()
+        processed = 0
+        try:
+            queue_depth_before = self.agent_event_queue.qsize()
+        except (AttributeError, NotImplementedError):
+            queue_depth_before = None
+
+        # Prefer a short wall-clock budget over a low fixed count: token bursts
+        # are cheap, while a slow handler must yield back to Qt quickly.
+        for _ in range(200):
+            if processed and time.perf_counter() - drain_started >= 0.008:
+                break
             try:
-                event, data = self.agent_event_queue.get_nowait()
-                logger.info(f"[EVENT QUEUE] Received event: {event} with data: {data}")
+                raw_event = self.agent_event_queue.get_nowait()
+                if isinstance(raw_event, dict):
+                    event = raw_event.get("type") or raw_event.get("event")
+                    data = dict(raw_event)
+                    data.pop("type", None)
+                    data.pop("event", None)
+                elif isinstance(raw_event, (tuple, list)) and len(raw_event) >= 2:
+                    event, data = raw_event[0], raw_event[1]
+                else:
+                    logger.warning("[EVENT QUEUE] Ignoring malformed event: %r", raw_event)
+                    continue
+                if event == "chat_stream_token":
+                    logger.debug("[EVENT QUEUE] Received stream token (%d chars)", len(data.get("token", "")))
+                else:
+                    logger.info("[EVENT QUEUE] Received event: %s with data: %s", event, data)
+                event_started = time.perf_counter()
                 self._dispatch_agent_event(event, data)
+                processed += 1
+                event_elapsed = time.perf_counter() - event_started
+                if event_elapsed >= 0.100:
+                    logger.warning(
+                        "[UI WATCHDOG] Slow agent event handler: event=%s elapsed=%.3fs",
+                        event,
+                        event_elapsed,
+                    )
             except _queue.Empty:
                 break
             except Exception as e:
                 logger.error(f"Error processing agent event: {e}")
+
+        drain_elapsed = time.perf_counter() - drain_started
+        if drain_elapsed >= 0.100 or (queue_depth_before is not None and queue_depth_before > 200):
+            try:
+                queue_depth_after = self.agent_event_queue.qsize()
+            except (AttributeError, NotImplementedError):
+                queue_depth_after = None
+            logger.warning(
+                "[UI WATCHDOG] Agent event drain pressure: processed=%d elapsed=%.3fs "
+                "queue_before=%s queue_after=%s",
+                processed,
+                drain_elapsed,
+                queue_depth_before,
+                queue_depth_after,
+            )
 
     # ------------------------------------------------------------------
     # Dispatcher
@@ -160,6 +208,8 @@ class EventHandlerMixin:
             self._evt_get_mouse_screen()
         elif event == 'file_operation_confirmation_request':
             self._evt_file_operation_confirmation(data)
+        elif event == 'confirmation_request':
+            self._evt_generic_confirmation(data)
         elif event == 'rename_preview_request':
             self._evt_rename_preview(data)
 
@@ -236,6 +286,8 @@ class EventHandlerMixin:
             self._tts_non_interrupt_fallback_timer.timeout.connect(self._on_tts_non_interrupt_fallback_timeout)
         if not hasattr(self, '_tts_player_generation'):
             self._tts_player_generation = 0
+        if not hasattr(self, '_tts_current_playback_id'):
+            self._tts_current_playback_id = None
         if event == 'tts_started':
             source = data.get("source") if isinstance(data, dict) else None
             if source != "transport":
@@ -244,6 +296,14 @@ class EventHandlerMixin:
                     "deferring player open until transport audio starts (source=%s)",
                     source or "provider",
                 )
+                return
+
+            playback_id = data.get("playback_id")
+            if not playback_id:
+                logger.warning("[EVENT QUEUE] Ignoring transport tts_started without playback_id")
+                return
+            if playback_id == self._tts_current_playback_id:
+                logger.debug("[EVENT QUEUE] Duplicate tts_started playback_id=%s", playback_id)
                 return
 
             # Dedup bursty duplicate starts (e.g., direct speak + provider start).
@@ -264,7 +324,8 @@ class EventHandlerMixin:
                 )
                 return
             self._event_dedup_cache[dedup_key] = now
-            self._tts_active_sessions += 1
+            self._tts_current_playback_id = playback_id
+            self._tts_active_sessions = 1
             self.last_tts_start_time = time.time()
             logger.info(
                 "[EVENT QUEUE] tts_started: active_sessions=%d player_visible=%s",
@@ -280,13 +341,19 @@ class EventHandlerMixin:
             player_generation = self._tts_player_generation
             if hasattr(self, 'oracle_window') and self.oracle_window:
                 if hasattr(self.oracle_window, 'position_player_window'):
-                    QtWidgets.QApplication.processEvents()
                     self.oracle_window.position_player_window()
-                    QtWidgets.QApplication.processEvents()
             QTimer.singleShot(20, lambda gen=player_generation: self._emit_player_signal_if_tts_active(gen, "show"))
             QTimer.singleShot(350, lambda gen=player_generation: self._emit_player_signal_if_tts_active(gen, "play"))
 
         elif event == 'playback_finished':
+            playback_id = data.get("playback_id") if isinstance(data, dict) else None
+            if playback_id and playback_id != self._tts_current_playback_id:
+                logger.warning(
+                    "[EVENT QUEUE] Ignoring stale playback_finished id=%s current=%s",
+                    playback_id,
+                    self._tts_current_playback_id,
+                )
+                return
             logger.info("[EVENT QUEUE] Playback finished event received - closing player immediately")
             # playback_finished is authoritative end-of-utterance for normal paths
             self._tts_active_sessions = max(0, self._tts_active_sessions - 1)
@@ -300,6 +367,7 @@ class EventHandlerMixin:
             if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                 self._player_safety_timer.stop()
             if self._tts_active_sessions <= 0:
+                self._tts_current_playback_id = None
                 self._tts_player_generation += 1
             # Important: do NOT cancel fallback if there are still pending non-interrupt
             # closes (multi-utterance/subagent bursts may emit fewer playback_finished events).
@@ -349,14 +417,23 @@ class EventHandlerMixin:
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
                 self._tts_active_sessions = 0
                 self._tts_pending_non_interrupt_closes = 0
+                self._tts_current_playback_id = None
                 self._tts_player_generation += 1
                 if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                     self._player_safety_timer.stop()
                 if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
                     self._tts_non_interrupt_fallback_timer.stop()
-                QtWidgets.QApplication.processEvents()
                 self._close_player_if_tts_complete("tts_stopped interrupt")
             else:
+                # Provider synthesis completion is not playback completion.
+                # The correlated transport playback_finished event is the sole
+                # normal authority, avoiding cross-producer queue reordering.
+                if not data.get("playback_id"):
+                    logger.debug(
+                        "[EVENT QUEUE] Ignoring uncorrelated provider tts_stopped duration=%.3f",
+                        float(duration or 0.0),
+                    )
+                    return
                 # Normal non-interrupt stop: playback may still be draining.
                 if self._tts_active_sessions <= 0:
                     logger.warning(
@@ -588,9 +665,17 @@ class EventHandlerMixin:
             chat_id = data.get('chat_id')
             response_text = data.get('response_text')
             self._last_stream_response_text = response_text
+            cleanup_only = response_text == '' and getattr(self, '_web_stream_chat_id', None) is None
             # Do not time-dedupe stream_finished: interrupt cleanup often fires within 2s of
             # normal completion; dropping it leaves the web UI stuck on the streaming bubble.
             signal_manager.chat_stream_finished.emit(chat_id)
+            if cleanup_only:
+                logger.debug(
+                    "[EVENT QUEUE] Stream cleanup finished with no active web stream; "
+                    "skipping Oracle/backend side effects (chat_id=%s)",
+                    chat_id,
+                )
+                return
             try:
                 from distr.core.kanban.ticket_context_notes import maybe_capture_orchestrator_turn
 
@@ -1944,3 +2029,31 @@ class EventHandlerMixin:
             self._send_command_to_agent('speak_text_directly', {'text': message})
         except Exception as e:
             logger.error(f"[QUOTA FALLBACK] Error speaking message: {e}", exc_info=True)
+    def _evt_generic_confirmation(self, data):
+        confirmation_id = data.get("confirmation_id")
+        if not confirmation_id:
+            logger.warning("[EVENT QUEUE] Generic confirmation missing confirmation_id")
+            return
+        title = data.get("title") or "Confirm action"
+        message = data.get("message") or "Allow this action?"
+        result_store = getattr(self, "confirmation_results_dict", None)
+
+        def show_confirmation():
+            answer = QtWidgets.QMessageBox.question(
+                getattr(self, "oracle_window", None),
+                title,
+                message,
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            approved = answer == QtWidgets.QMessageBox.StandardButton.Yes
+            if result_store is not None:
+                result_store[confirmation_id] = {"approved": approved}
+            logger.info(
+                "[EVENT QUEUE] Generic confirmation result approved=%s id=%s",
+                approved,
+                confirmation_id,
+            )
+
+        QTimer.singleShot(0, show_confirmation)

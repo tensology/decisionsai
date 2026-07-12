@@ -62,6 +62,7 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._one_shot_dictation_armed = False
         self._dictation_one_shot = False  # True for command-driven one-shot dictation.
         self._dictation_release_pending = False
+        self._dictation_ui_stop_sent = False
         self._dictation_output_mode = "plain"
         self._dictation_ticket_rewrite = False
         self._hands_free_before_dictation = False

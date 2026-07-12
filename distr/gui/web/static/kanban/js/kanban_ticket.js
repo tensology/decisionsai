@@ -4,6 +4,7 @@
     function createTicketUi(deps) {
         var agentMenuEl = null;
         var agentMenuBound = false;
+        var ticketActionMenuBound = false;
 
         function backendReady(backends, backendId) {
             var row = (backends || []).find(function(b) { return b && b.id === backendId; });
@@ -181,75 +182,109 @@
             });
         }
 
-        function actionButtonHtml(config) {
+        function actionIconSvg(key) {
+            var icons = {
+                copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
+                agent: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>',
+                workflowQueue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+                cli: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+                project: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+                workflow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>',
+                transfer: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
+                delete: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>',
+                menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
+                chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
+            };
+            return icons[key] || "";
+        }
+
+        function actionMenuItemHtml(config) {
             if (config.hidden) return "";
-            var disabled = !!config.disabled;
-            var stateClass = disabled ? "text-gray-700 cursor-not-allowed" : "text-white";
+            var dangerClass = config.danger ? " is-danger" : "";
+            return '<button type="button" class="kb-card-action-menu-item' + dangerClass + '" data-kb-card-action="' + deps.esc(config.action) + '" role="menuitem">' +
+                actionIconSvg(config.icon) +
+                '<span>' + deps.esc(config.label) + "</span>" +
+                "</button>";
+        }
+
+        function legacyActionButtonHtml(config) {
+            if (config.hidden) return "";
             var tooltip = config.tooltip || "";
             return '<span class="kb-card-action-tip" data-tooltip="' + deps.esc(tooltip) + '">' +
-                '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" aria-label="' + deps.esc(tooltip) + '"' + (disabled ? " disabled" : "") + ">" +
-                config.iconSvg + "</button></span>";
+                '<button type="button" class="' + config.keyClass + ' kb-card-action-btn text-white transition-colors" aria-label="' + deps.esc(tooltip) + '">' +
+                actionIconSvg(config.icon) + "</button></span>";
+        }
+
+        function buildWorkflowQueueActionRow(opts) {
+            return legacyActionButtonHtml({
+                keyClass: "kb-act-add-workflow",
+                icon: "workflowQueue",
+                tooltip: "Add to workflow queue",
+                hidden: !opts.showAddToWorkflow,
+            });
         }
 
         function buildActionRow(opts) {
             opts = opts || {};
-            var primaryActions = [
-                actionButtonHtml({
-                    keyClass: "kb-act-copy",
-                    tooltip: "Copy title and description",
+            if (opts.showAddToWorkflow) {
+                return buildWorkflowQueueActionRow(opts);
+            }
+            var actions = [
+                actionMenuItemHtml({
+                    action: "copy",
+                    icon: "copy",
+                    label: "Copy details",
                     hidden: !!opts.hideCopy,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-agent",
-                    tooltip: "Send to Orchestrator",
+                actionMenuItemHtml({
+                    action: "agent",
+                    icon: "agent",
+                    label: "Discuss in Orchestrator",
                     hidden: !!opts.hideAgent,
-                    disabled: false,
-                    nativeTooltip: true,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-add-workflow",
-                    tooltip: "Add to workflow queue",
+                actionMenuItemHtml({
+                    action: "add-workflow",
+                    icon: "workflowQueue",
+                    label: "Add to workflow queue",
                     hidden: !opts.showAddToWorkflow,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-cli",
-                    tooltip: "Run with Cursor/Codex",
+                actionMenuItemHtml({
+                    action: "cli",
+                    icon: "cli",
+                    label: "Run with Cursor/Codex",
                     hidden: opts.layout === "list" || !opts.hasProject,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-project",
-                    tooltip: "Send to Project",
+                actionMenuItemHtml({
+                    action: "project",
+                    icon: "project",
+                    label: "Send to Project",
                     hidden: opts.layout === "list" || !opts.hasProject,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-workflow",
-                    tooltip: "Send to Workflow",
+                actionMenuItemHtml({
+                    action: "workflow",
+                    icon: "workflow",
+                    label: "Send to Workflow",
                     hidden: opts.hideWorkflow,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-transfer",
-                    tooltip: "Copy to local board",
+                actionMenuItemHtml({
+                    action: "transfer",
+                    icon: "transfer",
+                    label: "Copy to local board",
                     hidden: !opts.canTransfer,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
                 })
             ];
-            var deleteAction = actionButtonHtml({
-                keyClass: "kb-act-delete",
-                tooltip: "Delete ticket",
+            var deleteAction = actionMenuItemHtml({
+                action: "delete",
+                icon: "delete",
+                label: "Delete ticket",
                 hidden: !opts.canDelete,
-                iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>',
+                danger: true,
             });
-            if (opts.layout === "list") {
-                return primaryActions.join("") + deleteAction;
-            }
-            return '<div class="kb-card-actions-left">' + primaryActions.join("") + "</div>" +
-                '<div class="kb-card-actions-right">' + deleteAction + "</div>";
+            var menuItems = actions.join("") + deleteAction;
+            return '<div class="kb-card-actions-menu-wrap">' +
+                '<button type="button" class="kb-card-action-btn kb-card-actions-trigger" aria-label="Ticket actions" aria-haspopup="menu" aria-expanded="false"><span>Actions</span>' + actionIconSvg("chevron") + "</button>" +
+                '<div class="kb-card-actions-menu hidden" role="menu">' + menuItems + "</div>" +
+                "</div>";
         }
 
         function initListRowMarquee(row) {
@@ -301,48 +336,108 @@
             });
         }
 
+        function closeTicketActionMenus(scope) {
+            var root = scope || document;
+            root.querySelectorAll(".kb-card-actions-menu:not(.hidden)").forEach(function(menu) {
+                menu.classList.add("hidden");
+                menu.style.left = "";
+                menu.style.top = "";
+                var wrap = menu.closest(".kb-card-actions-menu-wrap");
+                var trigger = wrap ? wrap.querySelector(".kb-card-actions-trigger") : null;
+                if (trigger) trigger.setAttribute("aria-expanded", "false");
+            });
+        }
+
+        function positionTicketActionMenu(menu, trigger) {
+            if (!menu || !trigger) return;
+            var gap = 6;
+            var margin = 8;
+            var rect = trigger.getBoundingClientRect();
+            var menuWidth = menu.offsetWidth || 220;
+            var menuHeight = menu.offsetHeight || 220;
+            var left = rect.right - menuWidth;
+            left = Math.max(margin, Math.min(left, window.innerWidth - menuWidth - margin));
+            var top = rect.bottom + gap;
+            if (top + menuHeight > window.innerHeight - margin) {
+                top = rect.top - menuHeight - gap;
+            }
+            top = Math.max(margin, Math.min(top, window.innerHeight - menuHeight - margin));
+            menu.style.left = Math.round(left) + "px";
+            menu.style.top = Math.round(top) + "px";
+        }
+
         function bindTicketActions(rootEl, ticket, isLocal, hasProject) {
             var currentBoard = deps.getCurrentBoard();
+            if (!ticketActionMenuBound) {
+                ticketActionMenuBound = true;
+                document.addEventListener("click", function(e) {
+                    if (e.target.closest(".kb-card-actions-menu-wrap")) return;
+                    closeTicketActionMenus(document);
+                });
+                document.addEventListener("keydown", function(e) {
+                    if (e.key === "Escape") closeTicketActionMenus(document);
+                });
+                window.addEventListener("resize", function() {
+                    closeTicketActionMenus(document);
+                });
+                window.addEventListener("scroll", function() {
+                    closeTicketActionMenus(document);
+                }, true);
+            }
             rootEl.addEventListener("click", function(e) {
                 if (e.target.closest(".kb-card-actions") || e.target.closest(".kb-ticket-list-actions") || e.target.closest(".kb-ticket-list-drag-handle") || e.target.closest(".kb-ticket-list-badges") || e.target.closest("a")) return;
                 if (isLocal) deps.openTicketModal(ticket.id);
                 else openExternalTicketModal(ticket, currentBoard.source);
             });
-            var agentBtn = rootEl.querySelector(".kb-act-agent");
-            if (agentBtn) {
-                agentBtn.addEventListener("click", function(e) {
+            var actionTrigger = rootEl.querySelector(".kb-card-actions-trigger");
+            var actionMenu = rootEl.querySelector(".kb-card-actions-menu");
+            if (actionTrigger && actionMenu) {
+                actionTrigger.addEventListener("click", function(e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    deps.startTicketDiscussion(ticket, isLocal);
+                    var wasOpen = !actionMenu.classList.contains("hidden");
+                    closeTicketActionMenus(document);
+                    if (!wasOpen) {
+                        actionMenu.classList.remove("hidden");
+                        actionTrigger.setAttribute("aria-expanded", "true");
+                        positionTicketActionMenu(actionMenu, actionTrigger);
+                    }
                 });
-                agentBtn.addEventListener("contextmenu", function(e) {
-                    showAgentMenu(e, ticket, isLocal, agentBtn, { hasProject: hasProject });
-                });
-            }
-            var copyBtn = rootEl.querySelector(".kb-act-copy");
-            if (copyBtn) {
-                copyBtn.addEventListener("click", function(e) {
+                actionMenu.addEventListener("click", function(e) {
+                    var item = e.target.closest("[data-kb-card-action]");
+                    if (!item) return;
                     e.preventDefault();
                     e.stopPropagation();
-                    copyTicketToClipboard(ticket);
+                    var action = item.getAttribute("data-kb-card-action");
+                    closeTicketActionMenus(document);
+                    if (action === "copy") {
+                        copyTicketToClipboard(ticket);
+                    } else if (action === "agent") {
+                        deps.startTicketDiscussion(ticket, isLocal);
+                    } else if (action === "cli") {
+                        if (isLocal) deps.pushTicketToCli(ticket.id, actionTrigger);
+                        else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "cli", null, "", actionTrigger);
+                    } else if (action === "project") {
+                        if (isLocal) deps.sendTicketToProjectById(ticket.id, actionTrigger);
+                        else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project", null, "", actionTrigger);
+                    } else if (action === "add-workflow") {
+                        if (typeof deps.addTicketToWorkflowQueue === "function") {
+                            deps.addTicketToWorkflowQueue(ticket, isLocal, actionTrigger);
+                        }
+                    } else if (action === "workflow") {
+                        deps.openSendWorkflowModal(ticket, isLocal ? "database" : currentBoard.source);
+                    } else if (action === "transfer") {
+                        deps.openCopyModal(ticket);
+                    } else if (action === "delete") {
+                        deleteLocalTicket(ticket);
+                    }
                 });
-            }
-            var cliBtn = rootEl.querySelector(".kb-act-cli");
-            if (cliBtn) {
-                cliBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isLocal) deps.pushTicketToCli(ticket.id, cliBtn);
-                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "cli", null, "", cliBtn);
-                });
-            }
-            var projectBtn = rootEl.querySelector(".kb-act-project");
-            if (projectBtn) {
-                projectBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
-                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project", null, "", projectBtn);
+                actionMenu.addEventListener("keydown", function(e) {
+                    if (e.key === "Escape") {
+                        e.preventDefault();
+                        closeTicketActionMenus(document);
+                        actionTrigger.focus();
+                    }
                 });
             }
             var addWorkflowBtn = rootEl.querySelector(".kb-act-add-workflow");
@@ -353,30 +448,6 @@
                     if (typeof deps.addTicketToWorkflowQueue === "function") {
                         deps.addTicketToWorkflowQueue(ticket, isLocal, addWorkflowBtn);
                     }
-                });
-            }
-            var workflowBtn = rootEl.querySelector(".kb-act-workflow");
-            if (workflowBtn) {
-                workflowBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deps.openSendWorkflowModal(ticket, isLocal ? "database" : currentBoard.source);
-                });
-            }
-            var transferBtn = rootEl.querySelector(".kb-act-transfer");
-            if (transferBtn) {
-                transferBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deps.openCopyModal(ticket);
-                });
-            }
-            var deleteBtn = rootEl.querySelector(".kb-act-delete");
-            if (deleteBtn) {
-                deleteBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deleteLocalTicket(ticket);
                 });
             }
             var wfBadge = rootEl.querySelector(".kb-wf-status-badge");

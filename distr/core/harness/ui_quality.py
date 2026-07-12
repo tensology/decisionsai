@@ -77,6 +77,7 @@ def evaluate_ui_artifacts(
     artifacts: dict[str, Any] | None,
     *,
     taste_summary: dict[str, Any] | None = None,
+    standards_context: str = "",
 ) -> dict[str, Any]:
     """Evaluate whether a UI result has enough evidence to be completed."""
     data = artifacts or {}
@@ -94,13 +95,22 @@ def evaluate_ui_artifacts(
         label = str(requirement["label"])
         if not _taste_check_present(data, label):
             missing.append(f"taste_check:{label}")
+    global_standards_required = "[GLOBAL USER STANDARDS]" in str(standards_context or "")
+    if global_standards_required and not _present(
+        data.get("standards_assessment")
+        or data.get("global_standards_assessment")
+        or data.get("user_standards_check")
+    ):
+        missing.append("standards_assessment")
     return {
         "verdict": "pass" if not missing else "fail",
         "missing": missing,
         "required": list(REQUIRED_UI_ARTIFACT_FIELDS)
         + ["before_screenshot_or_reason"]
-        + [f"taste_check:{item['label']}" for item in taste_requirements],
+        + [f"taste_check:{item['label']}" for item in taste_requirements]
+        + (["standards_assessment"] if global_standards_required else []),
         "taste_requirements": taste_requirements,
+        "global_standards_required": global_standards_required,
         "artifacts": data,
     }
 

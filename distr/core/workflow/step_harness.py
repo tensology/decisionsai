@@ -25,6 +25,7 @@ ACTION_TYPES = (
     "run_command",
     "agent_instruction",
     "playwright",
+    "browser_use",
     "computer_use",
     "execute_code",
     "http_request",
@@ -37,6 +38,7 @@ BACKEND_BY_ACTION: dict[str, str] = {
     "run_command": "",
     "agent_instruction": "",
     "playwright": "",
+    "browser_use": "",
     "computer_use": "",
 }
 
@@ -54,8 +56,10 @@ def derive_action_type_from_ui_tools(tools: list[str] | None) -> str:
     selected = [tool for tool in selected if tool]
     if "computer_use" in selected:
         return "computer_use"
-    if "playwright" in selected or "browser_use" in selected:
+    if "playwright" in selected:
         return "playwright"
+    if "browser_use" in selected:
+        return "browser_use"
     if "cli" in selected:
         return "send_to_project_cli"
     if "python" in selected:
@@ -108,7 +112,7 @@ def suggest_step_harness(
             action_type = archetype_spec.get("primary_action") or "send_to_project_cli"
 
     skills = list(ARCHETYPE_SKILL_BUNDLES.get(archetype) or [])
-    if action_type == "playwright":
+    if action_type in {"playwright", "browser_use"}:
         skills = ["webapp-testing", "e2e-testing"]
     elif action_type == "run_command":
         skills = ["verification-loop", "tdd-workflow"]
@@ -120,7 +124,7 @@ def suggest_step_harness(
 
     complexity = "medium"
     model = "auto"
-    if action_type in ("playwright", "computer_use"):
+    if action_type in ("playwright", "browser_use", "computer_use"):
         complexity = "low"
         model = "auto"
         config["complexity"] = complexity

@@ -19,6 +19,32 @@ class DummyChatManager:
         return self._messages
 
 
+class DummyEventQueue:
+    def __init__(self):
+        self.items = []
+
+    def put(self, item, block=False):
+        self.items.append(item)
+
+
+class DummyLifecycleDictation(VoiceDictationMixin):
+    def __init__(self):
+        self._is_dictating = False
+        self._is_hands_free = False
+        self._is_listening = True
+        self._hands_free_before_dictation = False
+        self._one_shot_dictation_armed = False
+        self._dictation_release_pending = False
+        self._dictation_one_shot = False
+        self._dictation_output_mode = "plain"
+        self._dictation_ticket_rewrite = False
+        self._dictation_ui_stop_sent = False
+        self.event_queue = DummyEventQueue()
+
+    def set_hands_free(self, enabled):
+        self._is_hands_free = enabled
+
+
 def test_contextual_typeout_command_types_last_assistant_message():
     dummy = DummyDictation(messages=[
         {"role": "user", "content": "summarize this"},
@@ -67,6 +93,17 @@ def test_normal_dictation_text_is_unchanged():
     assert dummy._process_dictation_text("Can you type that out in Python tomorrow?") == (
         "Can you type that out in Python tomorrow?"
     )
+
+
+def test_hold_dictation_release_posts_single_ui_stop():
+    dummy = DummyLifecycleDictation()
+
+    dummy._start_dictation()
+    dummy._finish_dictation_after_pending_transcript()
+    dummy._stop_dictation()
+
+    assert dummy.event_queue.items.count(("set_dictating", {"enabled": False})) == 1
+    assert dummy.event_queue.items.count(("dictation_stopped", {})) == 1
 
 
 def test_ticket_rewrite_only_runs_for_one_shot_when_enabled(monkeypatch):

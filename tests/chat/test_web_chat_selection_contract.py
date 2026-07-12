@@ -499,6 +499,27 @@ def test_poll_and_render_skip_duplicate_assistant_rows():
     )[0]
 
 
+def test_chat_websocket_reconnects_while_streaming_and_uses_heartbeat():
+    src = _chat_js_source()
+    start_block = src.split("function startChatWebSocket(force) {", 1)[1].split(
+        "/** Track user message content", 1
+    )[0]
+
+    assert "if (!force && isStreaming) return;" not in start_block
+    assert "startChatWebSocket(true);" in start_block
+    assert "CHAT_WS_HEARTBEAT_MS" in src
+    assert "CHAT_WS_STALE_MS" in src
+    assert "type: 'ping'" in start_block
+
+
+def test_stream_waiters_are_scoped_by_chat_and_stream_token():
+    src = _chat_js_source()
+
+    assert "const _agentStreamWaiters = new Map()" in src
+    assert "current.token !== _streamToken" in src
+    assert "window._agentStreamResolve" not in src
+
+
 def test_live_tool_activity_uses_same_visibility_contract_as_reload():
     src = _chat_js_source()
     tool_block = src.split("function handleChatEventToolExecuted(msg) {", 1)[1].split(

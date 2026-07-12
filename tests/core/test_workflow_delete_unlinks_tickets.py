@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorValidationRecord
 from distr.core.db.workflow import AutoWorkflow
 from distr.core.workflow.service import delete_workflow
 
@@ -71,4 +72,38 @@ def test_delete_workflow_unlinks_linked_tickets():
     assert row is not None
     assert row.linked_workflow_id is None
     assert row.workflow_queue_position == 0
+    session.close()
+
+
+def test_delete_workflow_removes_scoped_orchestrator_evidence():
+    factory = _make_session_factory()
+    session = factory()
+    workflow = AutoWorkflow(name="Disposable flow", workflow_type="manual")
+    session.add(workflow)
+    session.flush()
+    workflow_id = workflow.id
+    session.add(
+        OrchestratorEvent(
+            event_uid="delete-workflow-event",
+            source="workflow",
+            event_type="workflow_step_completed",
+            workflow_id=workflow_id,
+        )
+    )
+    session.add(
+        OrchestratorValidationRecord(
+            workflow_id=workflow_id,
+            validation_type="browser_ui",
+            verdict="pass",
+        )
+    )
+    session.commit()
+    session.close()
+
+    with _patch_service_session(factory):
+        assert delete_workflow(workflow_id) is True
+
+    session = factory()
+    assert session.query(OrchestratorEvent).filter_by(workflow_id=workflow_id).count() == 0
+    assert session.query(OrchestratorValidationRecord).filter_by(workflow_id=workflow_id).count() == 0
     session.close()

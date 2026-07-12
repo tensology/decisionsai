@@ -113,20 +113,24 @@ def _workflow_step_visibility_context(step: Optional[AutoWorkflowStep]) -> Dict[
             "current_step_action_type": "",
             "current_step_tools": [],
             "current_step_skills": [],
+            "current_step_context": [],
         }
     config = _safe_json_loads(step.config)
     if not isinstance(config, dict):
         config = {}
     tools = config.get("tools") if isinstance(config.get("tools"), list) else []
     skills = config.get("skills") if isinstance(config.get("skills"), list) else []
+    context = config.get("context") if isinstance(config.get("context"), list) else []
     from distr.core.workflow.tools import normalize_tool_list
 
     clean_tools = normalize_tool_list(tools)
     clean_skills = [str(item).strip() for item in skills if str(item or "").strip()]
+    clean_context = [str(item).strip() for item in context if str(item or "").strip()]
     return {
         "current_step_action_type": step.action_type or step.step_type or "",
         "current_step_tools": clean_tools or _step_tools_for_action(step.action_type or step.step_type or ""),
         "current_step_skills": clean_skills,
+        "current_step_context": clean_context,
     }
 
 
@@ -780,6 +784,24 @@ def delete_workflow(workflow_id: int) -> bool:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return False
+        # SQLite can reuse a deleted workflow id. Remove workflow-scoped ledger
+        # rows explicitly so a later workflow with that id cannot inherit stale
+        # timeline, validation, or correction evidence.
+        from distr.core.db.orchestrator import (
+            OrchestratorCorrectionAttempt,
+            OrchestratorEvent,
+            OrchestratorValidationRecord,
+        )
+
+        db.query(OrchestratorCorrectionAttempt).filter(
+            OrchestratorCorrectionAttempt.workflow_id == workflow_id
+        ).delete(synchronize_session=False)
+        db.query(OrchestratorValidationRecord).filter(
+            OrchestratorValidationRecord.workflow_id == workflow_id
+        ).delete(synchronize_session=False)
+        db.query(OrchestratorEvent).filter(
+            OrchestratorEvent.workflow_id == workflow_id
+        ).delete(synchronize_session=False)
         _unlink_workflow_tickets(db, [workflow_id])
         step_ids = [
             row[0]
@@ -1159,13 +1181,14 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
     }
 
 
-def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
+def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflow_ui") -> dict[str, Any]:
     """Steer the active harness for a workflow run without restarting the step."""
     import time
 
     instruction = str(message or "").strip()
     if not instruction:
         return {"error": "Steer message is required", "status_code": 400}
+    steer_source = (source or "workflow_ui").strip() or "workflow_ui"
 
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -1208,6 +1231,7 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
             "backend_id": steer_result.get("backend_id") or backend_id,
             "delivered": bool(steer_result.get("delivered")),
             "method": steer_result.get("method") or "queued",
+            "source": steer_source,
             "human_intervention_state": "steer_delivered" if steer_result.get("delivered") else "steer_queued",
         }
         history = run_data.get("pending_harness_steers") or []
@@ -1247,6 +1271,7 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
                 "backend_id": steer_result.get("backend_id") or backend_id,
                 "method": steer_result.get("method"),
                 "delivered": bool(steer_result.get("delivered")),
+                "source": steer_source,
             },
         )
     except Exception:
@@ -1298,7 +1323,7 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
             board_id=board_id,
             ticket_id=ticket_id,
             project_id=int(project_id) if project_id else None,
-            source="workflow_ui",
+            source=steer_source,
             event_type="user_steer",
         )
     except Exception:
@@ -1394,6 +1419,43 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             ticket_rows = db.query(KanbanTicket.id, KanbanTicket.title).filter(KanbanTicket.id.in_(ticket_ids)).all()
             ticket_title_by_id = {tid: title for tid, title in ticket_rows}
 
+        run_ids = {int(r.id) for r in rows if r.id is not None}
+        recent_steps_by_run: Dict[int, List[str]] = {}
+        recent_tools_by_run: Dict[int, List[str]] = {}
+        recent_context_by_run: Dict[int, List[str]] = {}
+        if run_ids:
+            recent_rows = (
+                db.query(AutoWorkflowStepResult, AutoWorkflowStep)
+                .join(AutoWorkflowStep, AutoWorkflowStep.id == AutoWorkflowStepResult.step_id)
+                .filter(AutoWorkflowStepResult.run_id.in_(run_ids))
+                .order_by(AutoWorkflowStepResult.created_at.desc(), AutoWorkflowStepResult.id.desc())
+                .limit(max(20, len(run_ids) * 6))
+                .all()
+            )
+            for result_row, step_row in recent_rows:
+                rid = int(result_row.run_id or 0)
+                if not rid:
+                    continue
+                bucket = recent_steps_by_run.setdefault(rid, [])
+                name = (step_row.name if step_row else "") or f"Step {result_row.step_id}"
+                if name not in bucket:
+                    bucket.append(name)
+                if step_row:
+                    step_config = _safe_json_loads(step_row.config)
+                    if isinstance(step_config, dict):
+                        from distr.core.workflow.tools import normalize_tool_list
+
+                        tools_bucket = recent_tools_by_run.setdefault(rid, [])
+                        for tool_name in normalize_tool_list(step_config.get("tools") if isinstance(step_config.get("tools"), list) else []):
+                            if tool_name not in tools_bucket:
+                                tools_bucket.append(tool_name)
+                        context_bucket = recent_context_by_run.setdefault(rid, [])
+                        context_names = step_config.get("context") if isinstance(step_config.get("context"), list) else []
+                        for context_name in context_names:
+                            value = str(context_name or "").strip()
+                            if value and value not in context_bucket:
+                                context_bucket.append(value)
+
         now = utc_now_naive()
         results = []
         for r in rows:
@@ -1419,6 +1481,9 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "waiting_kind": run_data.get("waiting_kind") or "",
                 "approval_decision": run_data.get("approval_decision") or None,
                 "auto_queued_from_run_id": run_data.get("auto_queued_from_run_id"),
+                "recent_step_names": recent_steps_by_run.get(int(r.id), []),
+                "recent_step_tools": recent_tools_by_run.get(int(r.id), []),
+                "recent_step_context": recent_context_by_run.get(int(r.id), []),
             })
         return results
 
@@ -1835,13 +1900,13 @@ def _dispatch_step(
         done = complete_step(step_id, output_text, passed)
         return {"success": passed, "output": output_text, "status": done.get("status", "failed")}
 
-    step_type = StepType.PLAYWRIGHT if normalized_action == "playwright" else StepType.EXECUTE_CODE
+    step_type = StepType.PLAYWRIGHT if normalized_action in {"playwright", "browser_use"} else StepType.EXECUTE_CODE
     executable_code = (code or "").strip()
     if not executable_code:
         executable_code = CodeGeneratorService().generate_code(instruction or "", step_type)
 
     test_loop = TestLoopService()
-    exec_result = test_loop._execute_playwright(executable_code) if normalized_action == "playwright" else test_loop._execute_python(executable_code)
+    exec_result = test_loop._execute_playwright(executable_code) if normalized_action in {"playwright", "browser_use"} else test_loop._execute_python(executable_code)
     stdout = getattr(exec_result, "stdout", "") or ""
     stderr = getattr(exec_result, "stderr", "") or ""
     output_text = "\n".join([part for part in [stdout, stderr] if part]).strip() or "(no output)"

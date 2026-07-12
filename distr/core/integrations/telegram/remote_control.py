@@ -226,7 +226,7 @@ class TelegramRemoteControlMixin:
         """
         Handle remote control commands from the server via WebSocket.
         Supported commands: list_screens, screenshot, set_mouse_position, left_click, right_click, double_click, type_text, paste_text,
-        key_up, key_down, key_enter, key_page_up, key_page_down, key_break,
+        key_up, key_down, key_enter, key_space, key_page_up, key_page_down, key_break,
         key_select_all, key_copy, key_paste, instruction
         """
         # Emit signal for app visibility
@@ -814,6 +814,17 @@ class TelegramRemoteControlMixin:
                         {
                             "type": "remote_control_response",
                             "command": "key_enter",
+                            "request_id": request_id,
+                            "data": {"success": success},
+                        }
+                    )
+
+                elif command == "key_space":
+                    success = self._press_key("space", take_screenshot=take_screenshot)
+                    self._send_websocket_message(
+                        {
+                            "type": "remote_control_response",
+                            "command": "key_space",
                             "request_id": request_id,
                             "data": {"success": success},
                         }
@@ -2058,16 +2069,26 @@ class TelegramRemoteControlMixin:
                 key_code = applescript_key_map.get(pyautogui_key)
                 if key_code:
                     try:
-                        subprocess.run(
+                        result = subprocess.run(
                             [
                                 "osascript",
                                 "-e",
                                 f'tell application "System Events" to key code {key_code}',
                             ],
                             capture_output=True,
+                            text=True,
                             timeout=5,
                         )
-                        success = True
+                        if result.returncode == 0:
+                            success = True
+                        else:
+                            logger.warning(
+                                "Remote key osascript failed for %s: %s",
+                                pyautogui_key,
+                                (result.stderr or result.stdout or "").strip(),
+                            )
+                            pyautogui.press(pyautogui_key)
+                            success = True
                     except Exception:
                         # Fallback to pyautogui
                         pyautogui.press(pyautogui_key)
@@ -2110,6 +2131,7 @@ class TelegramRemoteControlMixin:
                 except Exception as e:
                     logger.error(f"Error taking screenshot after key press: {e}")
 
+            logger.info("Remote control key press result: key=%s success=%s", pyautogui_key, success)
             return success
         except Exception as e:
             logger.error(f"Error pressing key: {e}", exc_info=True)

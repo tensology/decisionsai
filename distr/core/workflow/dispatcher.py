@@ -88,6 +88,11 @@ def _run_project_id(run: AutoWorkflowRun) -> Optional[str]:
 from distr.core.workflow.step_validator import build_step_config, validate_before_dispatch as _validate_step  # noqa: E402
 from distr.core.workflow.step_executor import StepExecutorMixin
 from distr.core.workflow.post_execution import PostExecutionMixin
+from distr.core.workflow.runtime_contract import (
+    build_step_preflight,
+    emit_step_activity,
+    should_pause_after_step,
+)
 
 
 # ── Run-context infrastructure ──────────────────────────────────────
@@ -237,6 +242,7 @@ def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_s
 _E2E_SMOKE_SLUGS = frozenset({
     "dogfood-e2e-smoke",
     "dogfood-spawn-e2e",
+    "e2e-until-green",
     "spotify-e2e-ideation",
     "spotify-e2e-dev",
     "spotify-e2e-polish",
@@ -1830,9 +1836,29 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         if "error" in step_data:
             return step_data
         self._set_run_phase(run_id, step_data)
+        emit_step_activity(
+            run_id=run_id,
+            step_id=step_id,
+            event_type="workflow_step_started",
+            status="running",
+            summary=f"Started {step_data.get('name') or f'step {step_id}'}.",
+            payload={
+                "step_name": step_data.get("name"),
+                "action_type": step_data.get("action_type"),
+                "position": step_data.get("position"),
+            },
+        )
         errors = self._validate_before_dispatch(step_data)
         if errors:
             self._fail_step(step_id, f"Validation failed: {errors}")
+            emit_step_activity(
+                run_id=run_id,
+                step_id=step_id,
+                event_type="workflow_step_preflight_failed",
+                status="failed",
+                summary=f"Validation failed: {errors}",
+                payload={"phase": "validation", "error": errors},
+            )
             record_workflow_chat_event(
                 run_id,
                 "step_failed",
@@ -1842,6 +1868,34 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                 summary=f"Validation failed: {errors}",
             )
             return {"error": errors}
+        preflight = build_step_preflight(step_data, run_id)
+        emit_step_activity(
+            run_id=run_id,
+            step_id=step_id,
+            event_type="workflow_step_preflight",
+            status="passed" if preflight.get("ok") else "failed",
+            summary=preflight.get("summary") or "Preflight checked.",
+            payload=preflight,
+        )
+        if not preflight.get("ok"):
+            error_text = preflight.get("summary") or "Preflight failed."
+            failed_checks = [
+                str(item.get("message") or item.get("name") or "")
+                for item in preflight.get("checks", [])
+                if not item.get("ok")
+            ]
+            if failed_checks:
+                error_text = f"{error_text} {'; '.join(failed_checks)}"
+            self._fail_step(step_id, error_text)
+            record_workflow_chat_event(
+                run_id,
+                "step_failed",
+                status="failed",
+                step_id=step_id,
+                step_name=step_data.get("name"),
+                summary=error_text,
+            )
+            return {"error": error_text, "preflight": preflight}
         self._set_status(step_id, "running")
         record_workflow_chat_event(
             run_id,
@@ -1898,7 +1952,11 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         # If step entered waiting state, return early — routing handled by wait state
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
-            if step and step.wait_for_continue and step.status == "waiting":
+            if step and should_pause_after_step(
+                run_id=run_id,
+                step_wait_for_continue=bool(step.wait_for_continue),
+                skip_wait=bool(result.get("skip_wait", False)),
+            ) and step.status == "waiting":
                 return {"success": True, "status": "waiting",
                         "output": result.get("output", ""), "passed": result.get("passed", False)}
         return {

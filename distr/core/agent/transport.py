@@ -11,7 +11,7 @@ from distr.core.audio.stream_resampler import LinearStreamResampler
 from distr.core.audio.time_stretcher import TimeStretcher
 from .libs import (
     LocalAudioTransport, LocalAudioInputTransport, LocalAudioOutputTransport, AudioRawFrame, InputAudioRawFrame, EndFrame, TTSStoppedFrame, LLMFullResponseEndFrame, TTSStartedFrame, InterruptionFrame,
-    librosa, pyaudio
+    librosa, pyaudio, sd
 )
 from enum import IntEnum, auto
 
@@ -318,6 +318,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._speed = 1.0
         self._output_device_name = _normalize_output_device_name(output_device_name)
         self._resolved_output_device_index = getattr(params, 'output_device_index', None)
+        self._output_channels = max(1, int(getattr(params, 'audio_out_channels', 1) or 1))
         
         # AEC reference buffer — output audio is pushed here so the input
         # filter can subtract it from the mic signal.
@@ -347,9 +348,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._stream_start_time = None
         self._hardware_check_disabled = False
         self._resolved_default_output_name = None
+        self._last_opened_default_output_name = None
+        self._last_output_route_audit_at = 0.0
         self._last_burst_output_bytes = 0  # bytes queued since last TTSStartedFrame
         self._burst_needs_reset = False  # reset burst counter on next audio frame
         self._tts_started_event_emitted = False
+        self._playback_id = None
         # Playback watermark: the wall-clock time at which all currently-queued
         # audio will have finished playing.  Accounts for generation gaps
         # (silence between sentences while Kokoro generates the next one).
@@ -425,6 +429,22 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 )
                 return index
 
+        try:
+            from distr.core.agent.config_loader import resolve_device_index
+
+            fresh_index = resolve_device_index(configured_name, is_input=False, sd_module=sd)
+            if fresh_index is not None:
+                self._resolved_default_output_name = None
+                logger.info(
+                    "Transport: Output device match from fresh resolver: requested '%s' -> index %d (%s)",
+                    configured_name,
+                    fresh_index,
+                    self._describe_output_device(fresh_index),
+                )
+                return fresh_index
+        except Exception as exc:
+            logger.debug("Transport: Fresh output resolver failed for '%s': %s", configured_name, exc)
+
         logger.warning(
             "Transport: Configured output device '%s' is unavailable; falling back to system default",
             configured_name,
@@ -448,36 +468,75 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         except Exception:
             return False
 
+    def _active_output_route(self) -> dict:
+        device_index = getattr(self, "_resolved_output_device_index", None)
+        return {
+            "configured_output": _normalize_output_device_name(getattr(self, "_output_device_name", None)),
+            "output_device_index": device_index,
+            "output_device_name": self._describe_output_device(device_index),
+            "system_default_output": getattr(self, "_resolved_default_output_name", None),
+            "output_channels": int(getattr(self, "_output_channels", 1) or 1),
+            "stream_active": self._output_stream_is_active(),
+        }
+
+    def _log_output_route(self, *, reason: str, force: bool = False) -> None:
+        now = time.time()
+        if not force and now - getattr(self, "_last_output_route_audit_at", 0.0) < 1.0:
+            return
+        self._last_output_route_audit_at = now
+        route = self._active_output_route()
+        logger.info(
+            "Transport: output route for %s: configured='%s' device=%s (%s) "
+            "system_default='%s' channels=%s stream_active=%s",
+            reason,
+            route["configured_output"],
+            route["output_device_index"],
+            route["output_device_name"],
+            route["system_default_output"],
+            route["output_channels"],
+            route["stream_active"],
+        )
+
     def _ensure_output_stream_for_configured_device(self, *, reason: str) -> None:
         target_index = self._resolve_configured_output_device_index()
         current_index = self._resolved_output_device_index
+        target_channels = self._device_output_channels(target_index)
         configured_name = _normalize_output_device_name(self._output_device_name)
         default_name_changed = False
         if configured_name == "System Default":
             resolved_name = getattr(self, "_resolved_default_output_name", None)
             if resolved_name and resolved_name != getattr(self, "_last_opened_default_output_name", None):
                 default_name_changed = True
+        channel_count_changed = (
+            int(getattr(self, "_output_channels", 1) or 1) != target_channels
+            or int(getattr(self._params, "audio_out_channels", 1) or 1) != target_channels
+        )
         if (
             self._output_stream_is_active()
             and current_index == target_index
             and self._params.output_device_index == target_index
             and not default_name_changed
+            and not channel_count_changed
         ):
             return
         if (
             self._output_stream_is_active()
             and getattr(self, "_failed_output_device_index", None) == target_index
             and not default_name_changed
+            and not channel_count_changed
         ):
             return
 
         logger.info(
-            "Transport: Refreshing output stream for %s: configured='%s' current=%s target=%s (%s)",
+            "Transport: Refreshing output stream for %s: configured='%s' current=%s target=%s (%s) "
+            "channels=%s current_channels=%s",
             reason,
             self._output_device_name,
             current_index,
             target_index,
             self._describe_output_device(target_index),
+            target_channels,
+            getattr(self, "_output_channels", None),
         )
         self._params.output_device_index = target_index
         if not self._reopen_output_stream(target_index):
@@ -606,6 +665,26 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         rate = int(getattr(self, "_sample_rate", None) or self._original_sample_rate or 24000)
         return max(512, int(rate * 0.04))
 
+    def _device_output_channels(self, device_index: Optional[int]) -> int:
+        """Choose a channel count accepted by the current CoreAudio device."""
+        try:
+            if device_index is None:
+                info = self._py_audio.get_default_output_device_info()
+            else:
+                info = self._py_audio.get_device_info_by_index(device_index)
+            max_channels = int(info.get("maxOutputChannels") or 0)
+        except Exception:
+            max_channels = int(getattr(self._params, "audio_out_channels", 1) or 1)
+        return 2 if max_channels >= 2 else 1
+
+    def _pcm16_bytes_for_output_channels(self, mono_audio: np.ndarray) -> bytes:
+        """Encode mono float audio as PCM16 matching the active output stream."""
+        channels = max(1, int(getattr(self, "_output_channels", 1) or 1))
+        clipped = np.clip(mono_audio, -1.0, 1.0)
+        if channels >= 2:
+            clipped = np.repeat(clipped[:, None], channels, axis=1)
+        return (clipped * 32767.0).astype(np.int16).tobytes()
+
     async def write_audio_frame(self, frame) -> bool:
         """Override to write silence when interrupted and recover dead streams."""
         if self._force_silence:
@@ -647,9 +726,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             except Exception:
                 pass
         try:
+            output_channels = self._device_output_channels(self._params.output_device_index)
+            self._output_channels = output_channels
+            self._params.audio_out_channels = output_channels
             self._out_stream = self._py_audio.open(
                 format=self._py_audio.get_format_from_width(2),
-                channels=self._params.audio_out_channels,
+                channels=output_channels,
                 rate=self._sample_rate,
                 frames_per_buffer=self._output_buffer_frames(),
                 output=True,
@@ -658,8 +740,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._out_stream.start_stream()
             self._resolved_output_device_index = self._params.output_device_index
             logger.info(
-                "Transport: Output stream recreated successfully on %s",
+                "Transport: Output stream recreated successfully on %s (%d channel%s)",
                 self._describe_output_device(self._resolved_output_device_index),
+                output_channels,
+                "" if output_channels == 1 else "s",
             )
             self._stream_error_count = 0
             self._stream_error_logged = False
@@ -753,7 +837,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
             await self._transition_to(AudioPlaybackState.COMPLETED)
             if self.event_queue:
-                self.event_queue.put(('playback_finished', {}), block=False)
+                self.event_queue.put(
+                    ('playback_finished', {'playback_id': self._playback_id}),
+                    block=False,
+                )
             logger.debug(f"Transport: [Complete {task_id}] Emitted playback_finished")
 
         except asyncio.CancelledError:
@@ -765,7 +852,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(False)
             if self.event_queue:
-                self.event_queue.put(('playback_finished', {}), block=False)
+                self.event_queue.put(
+                    ('playback_finished', {'playback_id': self._playback_id}),
+                    block=False,
+                )
 
     async def wait_for_playback_idle(self, timeout: float = 10.0) -> None:
         """Block until current TTS playback has drained (or timeout)."""
@@ -811,6 +901,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 self._state.name, self._pipeline_cut,
             )
             await self._ensure_output_stream_ready_async(reason="TTS session start")
+            self._log_output_route(reason="TTS session start", force=True)
             # Signal AEC that speaker is active
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(True)
@@ -832,6 +923,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             # _wait_for_playback_complete think only the last sentence
             # exists, causing premature player close.
             if self._state in (AudioPlaybackState.IDLE, AudioPlaybackState.COMPLETED, AudioPlaybackState.DRAINING):
+                self._playback_id = str(uuid.uuid4())
                 await self._transition_to(AudioPlaybackState.SYNTHESIZING)
                 self._pcm_resampler.reset()
                 self._last_frame_sample_rate = self._original_sample_rate
@@ -935,7 +1027,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     if self._volume != 1.0:
                         remaining_audio = remaining_audio * self._volume
                     remaining_audio = np.clip(remaining_audio, -1.0, 1.0)
-                    output_bytes = (remaining_audio * 32767.0).astype(np.int16).tobytes()
+                    output_bytes = self._pcm16_bytes_for_output_channels(remaining_audio)
                     self._total_output_bytes += len(output_bytes)
                     self._last_burst_output_bytes += len(output_bytes)
                     self._total_audio_duration += tail_duration
@@ -948,7 +1040,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     tail_frame = AudioRawFrame(
                         audio=output_bytes,
                         sample_rate=self._original_sample_rate,
-                        num_channels=1
+                        num_channels=self._output_channels
                     )
                     tail_frame.id = str(uuid.uuid4())
                     tail_frame.transport_destination = getattr(frame, 'transport_destination', None)
@@ -983,7 +1075,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 if self._volume != 1.0:
                     remaining_audio = remaining_audio * self._volume
                 remaining_audio = np.clip(remaining_audio, -1.0, 1.0)
-                output_bytes = (remaining_audio * 32767.0).astype(np.int16).tobytes()
+                output_bytes = self._pcm16_bytes_for_output_channels(remaining_audio)
                 self._total_output_bytes += len(output_bytes)
                 self._last_burst_output_bytes += len(output_bytes)
                 self._total_audio_duration += tail_duration
@@ -996,7 +1088,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 tail_frame = AudioRawFrame(
                     audio=output_bytes,
                     sample_rate=self._original_sample_rate,
-                    num_channels=1
+                    num_channels=self._output_channels
                 )
                 tail_frame.id = str(uuid.uuid4())
                 tail_frame.transport_destination = getattr(frame, 'transport_destination', None)
@@ -1014,7 +1106,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     if self._aec_ref_buf is not None:
                         self._aec_ref_buf.set_active(False)
                     await self._transition_to(AudioPlaybackState.COMPLETED)
-                    self.event_queue.put(('playback_finished', {}), block=False)
+                    self.event_queue.put(
+                        ('playback_finished', {'playback_id': self._playback_id}),
+                        block=False,
+                    )
                 else:
                     await self._transition_to(AudioPlaybackState.DRAINING)
 
@@ -1048,8 +1143,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._pipeline_cut = False
             self._force_silence = False
             self._tts_started_event_emitted = False
+            self._playback_id = str(uuid.uuid4())
             # Some TTS paths skipped TTSStartedFrame; mirror its side effects here.
             await self._ensure_output_stream_ready_async(reason="first audio frame")
+            self._log_output_route(reason="first audio frame", force=True)
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(True)
             if self._input_transport is not None:
@@ -1072,7 +1169,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     self._last_burst_output_bytes = 0
                     self._burst_needs_reset = False
 
-                bytes_per_sample = 2
                 channels = max(1, int(getattr(frame, 'num_channels', 1) or 1))
                 sample_rate = int(getattr(frame, 'sample_rate', self._original_sample_rate) or self._original_sample_rate)
                 audio_data = self._decode_and_resample_frame(
@@ -1099,10 +1195,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                         processed_audio = processed_audio * self._volume
                     
                     processed_audio = np.clip(processed_audio, -1.0, 1.0)
-                    output_bytes = (processed_audio * 32767.0).astype(np.int16).tobytes()
+                    output_bytes = self._pcm16_bytes_for_output_channels(processed_audio)
                     
                     # Compute actual output duration (after time-stretching)
-                    output_duration = len(output_bytes) / (self._original_sample_rate * bytes_per_sample)
+                    output_duration = len(processed_audio) / self._original_sample_rate
                     
                     # Advance playback watermark using output duration.
                     # If the queue was empty (generation gap), start from now.
@@ -1114,7 +1210,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     
                     frame.audio = output_bytes
                     frame.sample_rate = self._original_sample_rate
-                    frame.num_channels = 1
+                    frame.num_channels = self._output_channels
                     self._total_output_bytes += len(output_bytes)
                     self._last_burst_output_bytes += len(output_bytes)
                     
@@ -1129,29 +1225,45 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                         and has_audible_samples
                         and self._state not in (AudioPlaybackState.DRAINING, AudioPlaybackState.COMPLETED)
                     )
-                    if should_emit_tts_started and await self._ready_to_emit_confirmed_tts_started():
+                    ready_to_confirm_tts_started = (
+                        should_emit_tts_started
+                        and await self._ready_to_emit_confirmed_tts_started()
+                    )
+                    
+                    await super().process_frame(frame, direction)
+
+                    if (
+                        ready_to_confirm_tts_started
+                        and self._output_stream_is_active()
+                        and not self._tts_started_event_emitted
+                    ):
                         try:
+                            route = self._active_output_route()
                             self.event_queue.put(
                                 (
                                     'tts_started',
                                     {
                                         'source': 'transport',
+                                        'playback_id': self._playback_id,
                                         'bytes': len(output_bytes),
                                         'sample_rate': self._original_sample_rate,
+                                        **route,
                                     },
                                 ),
                                 block=False,
                             )
                             self._tts_started_event_emitted = True
-                            logger.debug(
-                                "Transport: emitted confirmed tts_started bytes=%d sample_rate=%s",
+                            logger.info(
+                                "Transport: emitted confirmed tts_started after output write "
+                                "bytes=%d sample_rate=%s device=%s (%s) channels=%s",
                                 len(output_bytes),
                                 self._original_sample_rate,
+                                route["output_device_index"],
+                                route["output_device_name"],
+                                route["output_channels"],
                             )
                         except Exception as e:
                             logger.debug("Transport: could not emit confirmed tts_started: %s", e)
-                    
-                    await super().process_frame(frame, direction)
                     
                     if self._stream_start_time is None:
                         try:
@@ -1211,9 +1323,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 logger.error(f"Error closing output stream: {e}")
 
         try:
+            output_channels = self._device_output_channels(device_index)
+            self._output_channels = output_channels
+            self._params.audio_out_channels = output_channels
             self._out_stream = self._py_audio.open(
                 format=self._py_audio.get_format_from_width(2),
-                channels=self._params.audio_out_channels,
+                channels=output_channels,
                 rate=self._sample_rate,
                 frames_per_buffer=self._output_buffer_frames(),
                 output=True,
@@ -1229,8 +1344,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             if configured_name == "System Default":
                 self._last_opened_default_output_name = getattr(self, "_resolved_default_output_name", None)
             logger.info(
-                "Output device switched successfully to %s",
+                "Output device switched successfully to %s (%d channel%s)",
                 self._describe_output_device(device_index),
+                output_channels,
+                "" if output_channels == 1 else "s",
             )
             return True
         except Exception as e:

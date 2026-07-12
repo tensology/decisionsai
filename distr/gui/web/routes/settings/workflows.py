@@ -2475,6 +2475,27 @@ def register_routes(router, templates):
             logger.error("Workflow timeline failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "timeline"), status_code=500)
 
+    @router.get("/workflows/{workflow_id}/runs/{run_id}/current-step/activity")
+    async def workflow_current_step_activity(workflow_id: int, run_id: int, limit: int = 60):
+        """Return compact activity for the run's current active step only."""
+        try:
+            from distr.core.workflow.runtime_contract import current_step_activity
+
+            result = current_step_activity(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                limit=limit,
+            )
+            if not result.get("success"):
+                return JSONResponse(
+                    _workflow_error_payload(result.get("error") or "Run not found", "current_step_activity"),
+                    status_code=404,
+                )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow current step activity failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "current_step_activity"), status_code=500)
+
     @router.get("/workflows/{workflow_id}/active-run")
     async def workflow_active_run(workflow_id: int):
         try:

@@ -279,10 +279,9 @@ class PlayerWindow(QtWidgets.QWidget):
         if self.movie:
             self.movie.stop()
             self.animation_timer.stop()
-            # Reset to frame 0 first, then advance to frame 144
-            self.movie.jumpToFrame(0)
-            for _ in range(144):
-                self.movie.jumpToNextFrame()
+            # QMovie supports direct seeking. Iterating through 144 decoded
+            # frames here blocked the Qt thread at the exact moment TTS began.
+            self.movie.jumpToFrame(144)
             self.movie.setPaused(True)
             self.logger.debug("[PlayerWindow] GIF reset to frame 144 before showing")
         
@@ -294,14 +293,10 @@ class PlayerWindow(QtWidgets.QWidget):
             else:
                 self.update_position()
             self.show()
-            QtWidgets.QApplication.processEvents()
         
         # Position - delegate to Oracle (it knows its own position)
         if self.oracle_window and hasattr(self.oracle_window, 'position_player_window'):
             self.oracle_window.position_player_window()
-        
-        # CRITICAL: Process events again after positioning
-        QtWidgets.QApplication.processEvents()
         
         # Ensure visible and on top (it might be offscreen if position failed, but oracle should handle it)
         if not self.isVisible():
@@ -510,5 +505,4 @@ class PlayerWindow(QtWidgets.QWidget):
                 self.movie.jumpToNextFrame()
             self.movie.setPaused(True)
             self.logger.info("[PlayerWindow] Animation stopped and reset to frame 144")
-
 

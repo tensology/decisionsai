@@ -1063,17 +1063,6 @@ async def run_project_task(
 
     backend_id = normalize_backend_id(backend_id_override) if backend_id_override else get_project_backend_id(project)
     backend = get_backend(backend_id)
-    if any_live_session_running(int(project.id), exclude_backend_id=backend_id, board_id=board_id):
-        return BackendTaskResult(
-            False,
-            backend_id,
-            backend_id,
-            error="Another workflow CLI is already processing work for this board. Wait for it to finish before starting a different backend.",
-        )
-    setup_status = backend.setup_status()
-    if not setup_status.ready:
-        msg = (setup_status.message or setup_status.setup_instructions or f"{backend.name or backend_id} is not ready.").strip()
-        return BackendTaskResult(False, backend_id, backend_id, error=msg)
     from .ide_handoff import is_ide_backend, plugin_source_for
 
     ide_mode = is_ide_backend(backend_id)
@@ -1166,6 +1155,102 @@ async def run_project_task(
         },
     )
     task.execution_session_id = execution_session_id
+
+    def _status_payload(status: Any) -> dict[str, Any]:
+        if status is None:
+            return {}
+        try:
+            raw = status.to_dict()
+            if isinstance(raw, dict):
+                return raw
+        except Exception:
+            pass
+        return {
+            "id": getattr(status, "id", backend_id),
+            "name": getattr(status, "name", getattr(backend, "name", "") or backend_id),
+            "ready": bool(getattr(status, "ready", False)),
+            "state": getattr(status, "state", "") or "",
+            "message": getattr(status, "message", "") or "",
+            "setup_required": bool(getattr(status, "setup_required", False)),
+            "setup_instructions": getattr(status, "setup_instructions", "") or "",
+        }
+
+    setup_status = backend.setup_status()
+    preflight_payload = {
+        "backend_id": backend_id,
+        "backend_name": getattr(backend, "name", "") or backend_id,
+        "route_type": route_type,
+        "route_backend": route_backend,
+        "model": selected_model,
+        "project_id": task.project_id,
+        "project_name": task.project_name,
+        "folder": task.folder,
+        "preflight": _status_payload(setup_status),
+    }
+    if any_live_session_running(int(project.id), exclude_backend_id=backend_id, board_id=board_id):
+        msg = "Another workflow CLI is already processing work for this board. Wait for it to finish before starting a different backend."
+        append_execution_event(
+            execution_session_id,
+            "preflight",
+            status="failed",
+            message=msg,
+            payload={**preflight_payload, "reason": "live_session_conflict"},
+        )
+        complete_execution_session(
+            execution_session_id,
+            success=False,
+            output_packet={
+                "backend_id": backend_id,
+                "engine": backend_id,
+                "success": False,
+                "error": msg,
+                "preflight": preflight_payload["preflight"],
+            },
+            error=msg,
+        )
+        return BackendTaskResult(
+            False,
+            backend_id,
+            backend_id,
+            error=msg,
+            execution_session_id=execution_session_id,
+        )
+    if not setup_status.ready:
+        msg = (setup_status.message or setup_status.setup_instructions or f"{backend.name or backend_id} is not ready.").strip()
+        append_execution_event(
+            execution_session_id,
+            "preflight",
+            status="failed",
+            message=msg,
+            payload=preflight_payload,
+        )
+        complete_execution_session(
+            execution_session_id,
+            success=False,
+            output_packet={
+                "backend_id": backend_id,
+                "engine": backend_id,
+                "success": False,
+                "error": msg,
+                "preflight": preflight_payload["preflight"],
+            },
+            error=msg,
+        )
+        return BackendTaskResult(
+            False,
+            backend_id,
+            backend_id,
+            error=msg,
+            execution_session_id=execution_session_id,
+        )
+
+    append_execution_event(
+        execution_session_id,
+        "preflight",
+        status="completed",
+        message=f"{getattr(backend, 'name', '') or backend_id} is ready.",
+        payload=preflight_payload,
+    )
     setattr(task, "loop_context_summary", str(loop_extra.get("loop_context_summary") or ""))
     setattr(task, "run_briefing_steering", str(loop_extra.get("run_briefing_steering") or ""))
     handoff_packet: dict[str, Any] = {}

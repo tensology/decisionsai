@@ -285,7 +285,17 @@ class SpecialKeyTool(BaseTool):
         
         # "press <key>" pattern — grab the word after "press"
         if "press " in text_lower:
-            after_press = text_lower.split("press ", 1)[1].strip().split()[0]
+            after_press_text = text_lower.split("press ", 1)[1].strip()
+            if after_press_text.startswith("the "):
+                after_press_text = after_press_text[4:].strip()
+            if after_press_text.startswith("space bar"):
+                after_press = "space"
+            elif after_press_text.startswith("page up"):
+                after_press = "pageup"
+            elif after_press_text.startswith("page down"):
+                after_press = "pagedown"
+            else:
+                after_press = after_press_text.split()[0]
             if resolve_key(after_press):
                 return after_press
         

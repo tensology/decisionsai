@@ -232,8 +232,6 @@ def human_checkpoint_enabled(run_data: dict[str, Any] | None) -> bool:
     settings = data.get("run_settings") if isinstance(data.get("run_settings"), dict) else {}
     if settings.get("human_checkpoints") is False:
         return False
-    if data.get("ticket_id") or data.get("loop_contract"):
-        return True
     return bool(settings.get("human_checkpoints"))
 
 

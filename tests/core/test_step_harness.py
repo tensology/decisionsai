@@ -66,6 +66,8 @@ def test_harness_tool_aliases_normalize_to_specific_capabilities():
     assert derive_action_type_from_ui_tools(["python"]) == "execute_code"
     assert derive_action_type_from_ui_tools(["shell"]) == "run_command"
     assert derive_action_type_from_ui_tools(["agent"]) == "agent_instruction"
+    assert derive_action_type_from_ui_tools(["browser_use"]) == "browser_use"
+    assert derive_action_type_from_ui_tools(["playwright", "browser_use"]) == "playwright"
 
 
 def test_suggest_step_harness_llm_returns_step_improvement_packet(monkeypatch):

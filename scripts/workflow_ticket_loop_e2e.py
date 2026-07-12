@@ -518,7 +518,18 @@ class WorkflowTicketLoopHarness:
         """Remove disposable E2E harness workflows, boards, and projects."""
         deleted: dict[str, list[int]] = {"workflows": [], "boards": [], "projects": []}
         workflow_ids: set[int] = set()
-        for search in E2E_LEGACY_WORKFLOW_SEARCHES:
+        workflow_searches = list(E2E_LEGACY_WORKFLOW_SEARCHES)
+        if profile == "until-green":
+            workflow_searches.append(e2e_fixture_names(profile)["workflow_name"])
+        elif profile == "spotify-remake":
+            workflow_searches.extend(
+                (
+                    e2e_spotify_program_names()["ideation_workflow_name"],
+                    e2e_spotify_program_names()["development_workflow_name"],
+                    e2e_spotify_program_names()["polish_workflow_name"],
+                )
+            )
+        for search in dict.fromkeys(workflow_searches):
             if not include_legacy and search != E2E_HARNESS_PREFIX:
                 continue
             rows = self.api_request(
@@ -559,6 +570,16 @@ class WorkflowTicketLoopHarness:
         project_dir = root / "workflow-project"
         project_dir.mkdir(parents=True, exist_ok=True)
         marker_path = root / "workflow-green-marker.txt"
+        browser_fixture_path = project_dir / "index.html"
+        browser_fixture_green_html = (
+            '<!doctype html><html><head><meta charset="utf-8"><title>Workflow validation</title></head>'
+            '<body><main><h1>Workflow validation</h1><p id="status">GREEN</p></main></body></html>'
+        )
+        browser_fixture_path.write_text(
+            "<!doctype html><html><head><meta charset='utf-8'><title>Workflow validation</title></head>"
+            "<body><main><h1>Workflow validation</h1><p id='status'>RED</p></main></body></html>",
+            encoding="utf-8",
+        )
 
         workflow_name = names["workflow_name"]
         board_name = names["board_name"]
@@ -649,6 +670,8 @@ class WorkflowTicketLoopHarness:
             method="PATCH",
             data={
                 "workflow_input": json.dumps({
+                    "e2e_smoke": True,
+                    "slug": "e2e-until-green",
                     "goal": "Exit only when the Playwright/browser-use check is green.",
                     "max_iterations": 3,
                     "exit_when": "validation output is GREEN",
@@ -702,6 +725,8 @@ class WorkflowTicketLoopHarness:
                     "command": (
                         f"sleep 12; mkdir -p {_quote_shell(root)}; "
                         f"printf green > {_quote_shell(marker_path)}; "
+                        f"printf %s {_quote_shell(Path(browser_fixture_green_html))} "
+                        f"> {_quote_shell(browser_fixture_path)}; "
                         "echo 'fixed: result packet now green-ready'"
                     ),
                     "timeout_seconds": 20,
@@ -726,16 +751,25 @@ class WorkflowTicketLoopHarness:
                     "context": ["ticket_workflow_brief", "prior_step_result", "result_packet", "route_decision"],
                     "code": (
                         "from pathlib import Path\n"
-                        f"marker = Path({str(marker_path)!r})\n"
-                        "if marker.exists():\n"
-                        "    print('GREEN validation passed: ticket brief, prior result, and route decision transferred.')\n"
+                        "from playwright.sync_api import sync_playwright\n"
+                        f"fixture = Path({str(browser_fixture_path)!r})\n"
+                        f"screenshot = Path({str(root / 'workflow-validation.png')!r})\n"
+                        "with sync_playwright() as playwright:\n"
+                        "    browser = playwright.chromium.launch(headless=_HEADLESS)\n"
+                        "    page = browser.new_page(viewport={'width': 960, 'height': 640})\n"
+                        "    page.goto(fixture.as_uri(), wait_until='domcontentloaded')\n"
+                        "    status = page.locator('#status').inner_text().strip()\n"
+                        "    page.screenshot(path=str(screenshot), full_page=True)\n"
+                        "    browser.close()\n"
+                        "if status == 'GREEN':\n"
+                        "    print('GREEN validation passed: Playwright opened the dummy project and observed #status=GREEN.')\n"
                         "    print('flow summary: Selected the workflow, queued the ticket, started the run, watched the loop return red to fix, and confirmed green exit.')\n"
                         "    print('layout hierarchy notes: Queue, loop, active run, route, and activity panels stayed distinct with the active step and loop iteration visible.')\n"
                         "    print('1. [click] Select until-green workflow -> workflow detail loaded')\n"
                         "    print('2. [click] Add ticket to workflow queue -> queued ticket row visible')\n"
                         "    print('3. [click] Start run -> active run and loop activity visible')\n"
                         "else:\n"
-                        "    print('RED validation failed: marker missing, loop back to fix step.')\n"
+                        "    print(f'RED validation failed: Playwright observed #status={status!r}; loop back to fix step.')\n"
                         "    raise SystemExit(1)\n"
                     ),
                 },
@@ -749,8 +783,27 @@ class WorkflowTicketLoopHarness:
                 "position": 3,
                 "name": "Inspect with Browser Use",
                 "action_type": "browser_use",
-                "instruction": "Browser-use smoke coverage step for visible tool selection and activity evidence.",
-                "config": {"skills": ["browser-qa"], "tools": ["browser_use"]},
+                "instruction": "Open the fixed dummy project through Browser Use and verify the green status.",
+                "config": {
+                    "headless": True,
+                    "skills": ["browser-qa"],
+                    "tools": ["browser_use"],
+                    "code": (
+                        "from pathlib import Path\n"
+                        "from playwright.sync_api import sync_playwright\n"
+                        f"fixture = Path({str(browser_fixture_path)!r})\n"
+                        f"screenshot = Path({str(root / 'browser-use-validation.png')!r})\n"
+                        "with sync_playwright() as playwright:\n"
+                        "    browser = playwright.chromium.launch(headless=_HEADLESS)\n"
+                        "    page = browser.new_page(viewport={'width': 960, 'height': 640})\n"
+                        "    page.goto(fixture.as_uri(), wait_until='domcontentloaded')\n"
+                        "    status = page.locator('#status').inner_text().strip()\n"
+                        "    page.screenshot(path=str(screenshot), full_page=True)\n"
+                        "    browser.close()\n"
+                        "assert status == 'GREEN', f'Browser Use observed #status={status!r}'\n"
+                        "print('BROWSER_USE_GREEN: explicit Browser Use action verified the fixed dummy project.')\n"
+                    ),
+                },
             },
         )
         computer_step = self._add_step(
@@ -772,12 +825,17 @@ class WorkflowTicketLoopHarness:
         self.api_request(
             f"/workflows/{workflow_id}/steps/{check_step['id']}",
             method="PATCH",
-            data={"on_fail_goto": int(fix_step["id"]), "on_pass_goto": -1},
+            data={"on_fail_goto": int(fix_step["id"]), "on_pass_goto": int(browser_step["id"])},
         )
         self.api_request(
             f"/workflows/{workflow_id}/steps/{fix_step['id']}",
             method="PATCH",
             data={"on_pass_goto": int(check_step["id"])},
+        )
+        self.api_request(
+            f"/workflows/{workflow_id}/steps/{browser_step['id']}",
+            method="PATCH",
+            data={"on_pass_goto": -1},
         )
 
         return {
@@ -795,6 +853,9 @@ class WorkflowTicketLoopHarness:
             "browser_step_id": int(browser_step["id"]),
             "computer_step_id": int(computer_step["id"]),
             "marker_path": str(marker_path),
+            "browser_fixture_path": str(browser_fixture_path),
+            "browser_screenshot_path": str(root / "workflow-validation.png"),
+            "browser_use_screenshot_path": str(root / "browser-use-validation.png"),
             "work_dir": str(root),
         }
 

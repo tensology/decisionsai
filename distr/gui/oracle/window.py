@@ -2030,7 +2030,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             if current_size.width() != self.total_size or current_size.height() != self.total_size:
                 logger.debug(f"[Oracle] Window size incorrect ({current_size.width()}x{current_size.height()}), setting to total_size: {self.total_size}")
                 self.setFixedSize(self.total_size, self.total_size)
-                QtWidgets.QApplication.processEvents()
 
             oracle_width = self.total_size
             oracle_height = self.total_size

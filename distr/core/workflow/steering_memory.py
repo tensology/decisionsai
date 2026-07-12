@@ -108,11 +108,16 @@ def record_run_steering_feedback(
     except Exception:
         pass
 
-    if capture_standard and workflow_id:
+    if capture_standard:
         try:
-            from distr.core.workflow.standards_memory import capture_feedback_as_standard
+            from distr.core.workflow.standards_memory import capture_feedback_as_memory
 
-            capture_feedback_as_standard(int(workflow_id), text)
+            capture_feedback_as_memory(
+                text,
+                workflow_id=int(workflow_id) if workflow_id else None,
+                board_id=board_id,
+                project_id=project_id,
+            )
         except Exception:
             pass
 

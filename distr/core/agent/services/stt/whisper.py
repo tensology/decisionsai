@@ -273,11 +273,9 @@ class WhisperSTTService(BaseSTTService):
                     for pattern in ["change mode", "switch mode", "toggle mode", "ptt mode", "continuous mode", "hands free mode"]
                 )
                 
-                # CRITICAL: In PTT mode, ALWAYS send transcriptions (don't filter as artifacts)
-                # The LLM will handle filtering - we need to send everything so "change mode" can be detected
                 if not self._is_hands_free:
-                    # PTT mode: send most transcriptions to LLM, but still filter obvious audio artifacts
-                    if not is_change_mode_command and text_lower in self._audio_artifacts:
+                    # PTT mode: keep mode-switch commands, but still drop STT caption/noise artifacts.
+                    if not is_change_mode_command and not self._is_meaningful_text(text):
                         logger.debug(f"STT: Rejected audio artifact in PTT mode: '{text}'")
                     else:
                         logger.debug(f"STT: PTT mode - sending transcription to LLM: '{text}'")

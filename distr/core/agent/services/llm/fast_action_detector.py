@@ -795,8 +795,8 @@ class FastActionDetector:
              ActionType.CARET_MOVEMENT, "caret_movement", {"direction": "delete_forward", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             
             # === SPECIAL KEYS ===
-            # "space", "spacebar", "space bar"
-            (re.compile(r'^(space\s*bar|spacebar|space)\.?$', re.IGNORECASE), 
+            # "space", "spacebar", "space bar", "press the space bar"
+            (re.compile(r'^(?:press\s+(?:the\s+)?)?(space\s*bar|spacebar|space)\.?$', re.IGNORECASE), 
              ActionType.SPECIAL_KEY, "special_key", {"key": "space", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "enter", "enter this", "press enter"
             (re.compile(r'^(press\s+)?(enter\s+this|enter)\.?$', re.IGNORECASE), 

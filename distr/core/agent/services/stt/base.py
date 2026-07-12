@@ -1,6 +1,7 @@
 """Base STT service with shared state, PTT, hands-free, and frame handling."""
 import asyncio
 import logging
+import re
 import string
 import time
 import numpy as np
@@ -42,8 +43,23 @@ _AUDIO_ARTIFACTS = {a.lower() for a in [
     "[dog barks]", "(cough)", "(breathing heavily)",
     "[BLANK_AUDIO]", "[BLANK]", "blank_audio", "blankaudio", "blank",
     "thank you", "thanks", "(dramatic music)", "(soft music)",
-    "dramatic music", "soft music",
+    "(gentle music)", "(background music)", "(upbeat music)",
+    "(calm music)", "(intro music)", "(outro music)",
+    "dramatic music", "soft music", "gentle music", "background music",
+    "upbeat music", "calm music", "intro music", "outro music",
 ]}
+
+_CAPTIONED_AUDIO_ARTIFACT_RE = re.compile(
+    r"^\s*[\[\(]?\s*"
+    r"(?:"
+    r"(?:gentle|dramatic|soft|background|upbeat|calm|intro|outro|theme|"
+    r"ambient|relaxing|suspenseful|emotional|sad|happy|tense)\s+music|"
+    r"music|applause|laughter|laughing|clapping|silence|static|noise|"
+    r"beep|bleep|bell|clicking|tapping|coughing|sighing|breathing"
+    r")"
+    r"\s*[\]\)]?\s*[\.\!\?]*\s*$",
+    re.IGNORECASE,
+)
 
 
 class BaseSTTService(STTService):
@@ -159,6 +175,8 @@ class BaseSTTService(STTService):
         if not text:
             return False
         text_lower = text.strip().lower()
+        if _CAPTIONED_AUDIO_ARTIFACT_RE.match(text_lower):
+            return False
         if text_lower in self._audio_artifacts:
             return False
         # Also check after stripping trailing punctuation (e.g. "[BLANK_AUDIO].")

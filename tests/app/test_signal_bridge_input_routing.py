@@ -173,7 +173,7 @@ def test_web_create_chat_initial_message_skips_second_persist(monkeypatch):
 def test_web_chat_events_are_queued_for_ordered_delivery():
     src = inspect.getsource(SignalBridgeMixin._bridge_signals_to_agent)
 
-    assert "self._web_chat_event_queue = Queue()" in src
+    assert "self._web_chat_event_queue = Queue(maxsize=1000)" in src
     assert "name=\"web-chat-event-bridge\"" in src
-    assert "self._web_chat_event_queue.put(dict(payload or {}))" in src
+    assert "self._web_chat_event_queue.put_nowait(item)" in src
     assert "threading.Thread(target=_do_post" not in src

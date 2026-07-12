@@ -1074,22 +1074,47 @@ class AgentSession:
         hot_swap_cfg = descriptor.get_hot_swap_config(voice_model, self.settings or {})
 
         # No-op guard: if target TTS config already matches current runtime config,
-        # do not recreate/swap the service.
+        # do not recreate/swap the service.  The live service check matters for
+        # voice saves that arrive while a response is streaming: persisted config
+        # can be behind the already-running service, and replacing the same voice
+        # mid-stream drops the TTS session that received LLMFullResponseStartFrame.
         current_engine = self.config['tts'].get('engine')
         current_voice_name = self.config['tts'].get('voice_name')
         current_voice_id = self.config['tts'].get('voice_id')
         target_engine = hot_swap_cfg.get('engine')
         target_voice_name = hot_swap_cfg.get('voice_name')
         target_voice_id = hot_swap_cfg.get('voice_id')
-        if (
-            old_service is not None
-            and current_engine == target_engine
+        config_already_matches = (
+            current_engine == target_engine
             and current_voice_name == target_voice_name
             and current_voice_id == target_voice_id
-        ):
+        )
+        live_service_already_matches = self._tts_service_matches_target(
+            old_service,
+            target_engine=target_engine,
+            target_voice_name=target_voice_name,
+            target_voice_id=target_voice_id,
+        )
+        if old_service is not None and (config_already_matches or live_service_already_matches):
+            if live_service_already_matches and not config_already_matches:
+                self.config['tts']['engine'] = target_engine
+                if target_voice_name is not None:
+                    self.config['tts']['voice_name'] = target_voice_name
+                if target_voice_id is not None:
+                    self.config['tts']['voice_id'] = target_voice_id
+                if 'api_key' in hot_swap_cfg:
+                    self.config['tts']['api_key'] = hot_swap_cfg['api_key']
+                if 'device' in hot_swap_cfg:
+                    self.config['tts']['device'] = hot_swap_cfg['device']
+            if self.chat_manager:
+                self.chat_manager.current_voice_provider = vp
+                self.chat_manager.current_voice_model = voice_model or ''
+            self._apply_agent_name(new_agent_name)
             self.logger.debug(
-                "HOT-SWAP TTS: no-op (already at target config: engine=%s voice_name=%s voice_id=%s)",
-                target_engine, target_voice_name, target_voice_id,
+                "HOT-SWAP TTS: no-op (already at target config/service: engine=%s voice_name=%s voice_id=%s)",
+                target_engine,
+                target_voice_name,
+                target_voice_id,
             )
             return
 
@@ -1200,6 +1225,34 @@ class AgentSession:
         self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
         self.role = self._load_agent_role()
         service_factory.update_agent_name_on_llm(self.llm_service, self.agent_name, self.role)
+
+    def _tts_service_matches_target(self, service, *, target_engine, target_voice_name, target_voice_id) -> bool:
+        if service is None or not target_engine:
+            return False
+
+        service_module = service.__class__.__module__.lower()
+        service_class = service.__class__.__name__.lower()
+        engine = str(target_engine or "").lower()
+        if engine not in service_module and engine not in service_class:
+            return False
+
+        live_voice_values = {
+            str(value).strip()
+            for value in (
+                getattr(service, "voice_id", None),
+                getattr(service, "voice_name", None),
+                getattr(service, "voice", None),
+            )
+            if value is not None and str(value).strip()
+        }
+        target_voice_values = {
+            str(value).strip()
+            for value in (target_voice_id, target_voice_name)
+            if value is not None and str(value).strip()
+        }
+        if not target_voice_values:
+            return True
+        return bool(live_voice_values & target_voice_values)
 
     def _apply_agent_name(self, new_name: str):
         """Update agent name, role (incl. custom voice personality), and LLM system prompt."""

@@ -15,6 +15,16 @@ from distr.core.db import get_session, Chat, Settings
 
 logger = logging.getLogger(__name__)
 
+
+def _chat_params(raw: Optional[str]) -> dict:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
 _PROVIDER_NORMALIZE = {
     "ollama": "Ollama",
     "openai": "OpenAI",
@@ -416,6 +426,11 @@ class ChatService:
                     modified_date=now,
                 )
                 session.add(child)
+                session.commit()
+                session.refresh(child)
+                params = _chat_params(root.params)
+                params["active_turn_chat_row_id"] = int(child.id)
+                root.params = json.dumps(params)
                 session.commit()
                 record_chat_audit_event(
                     chat_id=int(chat_id),

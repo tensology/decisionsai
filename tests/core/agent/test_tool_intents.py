@@ -91,6 +91,12 @@ def test_forces_type_text_for_type_out_ticket_requests(monkeypatch):
     assert "create_ticket" not in forced
 
 
+def test_forces_special_key_for_keypress_requests():
+    assert "special_key" in forced_tool_names_for_text("press the space bar")
+    assert "special_key" in forced_tool_names_for_text("press enter")
+    assert "special_key" in forced_tool_names_for_text("spacebar")
+
+
 def test_forces_cursor_ticket_for_decisionsai_ticket_only_in_debug(monkeypatch):
     monkeypatch.setenv("DEBUG", "True")
 

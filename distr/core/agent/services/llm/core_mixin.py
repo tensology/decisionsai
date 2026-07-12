@@ -1510,10 +1510,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return
 
         if isinstance(frame, CancelFrame):
-            if self._is_critical_tool_run_in_progress():
-                logger.info("LLM: Ignoring CancelFrame during critical tool execution")
-                await self.push_frame(frame, direction)
-                return
             if hasattr(self, '_generation_requested_at') and self._generation_requested_at > 0:
                 now = time.monotonic()
                 if (now - self._generation_requested_at) < 0.5:
@@ -1547,10 +1543,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return
 
         if isinstance(frame, InterruptionFrame):
-            if self._is_critical_tool_run_in_progress():
-                logger.info("LLM: Ignoring InterruptionFrame during critical tool execution")
-                await self.push_frame(frame, direction)
-                return
             self._cancelled = True
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                 self._generation_task.cancel()
@@ -1762,9 +1754,6 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             self._messages.append({"role": "user", "content": user_content})
 
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
-                if self._is_critical_tool_run_in_progress():
-                    logger.info("LLM: New transcription received while critical tool execution is running; keeping current task alive")
-                    return
                 self._cancelled = True
                 self._generation_task.cancel()
                 try:

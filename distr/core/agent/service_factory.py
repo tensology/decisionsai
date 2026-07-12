@@ -326,8 +326,27 @@ def swap_processor_in_pipeline(pipeline, old_service, new_service):
                 logger.info("Replaced processor at index %d in pipeline.%s", i, attr_name)
 
                 # --- 1. Re-link _next/_prev so frames route through the new service ---
+                # Hot-swaps can happen before Pipecat has populated the private
+                # linked-list pointers on every processor. In that case, the
+                # authoritative order is still the pipeline processor list.
                 prev_proc = getattr(old_service, '_prev', None)
                 next_proc = getattr(old_service, '_next', None)
+                if prev_proc is None and i > 0:
+                    prev_proc = proc_list[i - 1]
+                    logger.info(
+                        "HOT-SWAP: recovered previous processor from pipeline.%s[%d]: %s",
+                        attr_name,
+                        i - 1,
+                        type(prev_proc).__name__,
+                    )
+                if next_proc is None and i + 1 < len(proc_list):
+                    next_proc = proc_list[i + 1]
+                    logger.info(
+                        "HOT-SWAP: recovered next processor from pipeline.%s[%d]: %s",
+                        attr_name,
+                        i + 1,
+                        type(next_proc).__name__,
+                    )
 
                 if prev_proc is not None:
                     prev_proc._next = new_service

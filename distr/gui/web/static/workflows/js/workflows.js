@@ -81,6 +81,7 @@
     var workflowLoopSkillsCatalog = null;
     var workflowLoopSkillsCatalogLoading = null;
     var workflowLoopStepContentTab = "instruction";
+    var pendingUiTasteFeedback = null;
     var LOOP_STEP_TOOL_OPTIONS = [
         { id: "agent", label: "Agent", emoji: "◎" },
         { id: "playwright", label: "Playwright", emoji: "🎭" },
@@ -1390,6 +1391,55 @@
             '</div>';
     }
 
+    function closeUiTasteFeedbackModal() {
+        var modal = document.getElementById("wf-ui-feedback-modal");
+        if (modal) {
+            modal.classList.add("hidden");
+            modal.classList.remove("flex");
+        }
+        pendingUiTasteFeedback = null;
+    }
+
+    function ensureUiTasteFeedbackModal() {
+        var existing = document.getElementById("wf-ui-feedback-modal");
+        if (existing) return existing;
+        var shell = document.createElement("div");
+        shell.id = "wf-ui-feedback-modal";
+        shell.className = "hidden fixed inset-0 z-[100] items-center justify-center bg-black/70 p-4";
+        shell.setAttribute("role", "dialog");
+        shell.setAttribute("aria-modal", "true");
+        shell.setAttribute("aria-labelledby", "wf-ui-feedback-title");
+        shell.innerHTML = '' +
+            '<div class="w-full max-w-lg rounded-xl border border-white/15 bg-[#111936] shadow-2xl">' +
+                '<div class="flex items-center justify-between border-b border-white/10 px-4 py-3">' +
+                    '<h3 id="wf-ui-feedback-title" class="text-sm font-semibold text-white">Teach interface standard</h3>' +
+                    '<button type="button" id="wf-ui-feedback-close" class="text-xl leading-none text-gray-400 hover:text-white" aria-label="Close feedback dialog">&times;</button>' +
+                '</div>' +
+                '<div class="space-y-3 p-4">' +
+                    '<p id="wf-ui-feedback-help" class="text-xs text-gray-400"></p>' +
+                    '<label class="block text-xs text-gray-300" for="wf-ui-feedback-reason">What should this and future projects learn?</label>' +
+                    '<textarea id="wf-ui-feedback-reason" rows="5" class="w-full rounded-md border border-white/15 bg-[#0d1333] px-3 py-2 text-sm text-white outline-none focus:border-[#f97316]" placeholder="Describe the reusable interface standard, not only this one symptom."></textarea>' +
+                    '<div id="wf-ui-feedback-baseline-fields" class="hidden grid gap-2 sm:grid-cols-2">' +
+                        '<label class="text-xs text-gray-300">Baseline name<input id="wf-ui-feedback-baseline-name" class="mt-1 w-full rounded border border-white/15 bg-[#0d1333] px-2 py-1.5 text-sm text-white" value="Approved UI"></label>' +
+                        '<label class="text-xs text-gray-300">Screen name<input id="wf-ui-feedback-screen-name" class="mt-1 w-full rounded border border-white/15 bg-[#0d1333] px-2 py-1.5 text-sm text-white"></label>' +
+                    '</div>' +
+                    '<p id="wf-ui-feedback-error" class="hidden text-xs text-red-300"></p>' +
+                '</div>' +
+                '<div class="flex justify-end gap-2 border-t border-white/10 px-4 py-3">' +
+                    '<button type="button" id="wf-ui-feedback-cancel" class="rounded border border-white/20 px-3 py-1.5 text-xs text-gray-300 hover:bg-white/10">Cancel</button>' +
+                    '<button type="button" id="wf-ui-feedback-save" class="rounded bg-[#f97316] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#ea580c]">Save standard</button>' +
+                '</div>' +
+            '</div>';
+        document.body.appendChild(shell);
+        document.getElementById("wf-ui-feedback-close").onclick = closeUiTasteFeedbackModal;
+        document.getElementById("wf-ui-feedback-cancel").onclick = closeUiTasteFeedbackModal;
+        shell.addEventListener("click", function (evt) {
+            if (evt.target === shell) closeUiTasteFeedbackModal();
+        });
+        document.getElementById("wf-ui-feedback-save").onclick = submitUiTasteFeedbackFromModal;
+        return shell;
+    }
+
     function submitUiTasteFeedback(button) {
         if (!button) return;
         var workflowId = button.dataset.workflowId || currentWorkflowId;
@@ -1402,39 +1452,77 @@
         if (wrap && wrap.dataset.uiFeedbackMeta) {
             try { metadata = JSON.parse(wrap.dataset.uiFeedbackMeta) || {}; } catch (e) { metadata = {}; }
         }
-        var promptText = label === "approved" ? "Optional note for what worked:" : "What should change next time?";
-        var reason = window.prompt ? window.prompt(promptText, "") : "";
-        if (reason === null) return;
         var saveAsBaseline = button.dataset.uiSaveBaseline === "true";
-        var visualBaselineName = "";
-        var baselineScreenName = "";
-        if (saveAsBaseline) {
-            visualBaselineName = window.prompt ? window.prompt("Baseline name:", "Approved UI") : "Approved UI";
-            if (visualBaselineName === null) return;
-            baselineScreenName = window.prompt ? window.prompt("Baseline screen name:", "Run " + runId) : "Run " + runId;
-            if (baselineScreenName === null) return;
-        }
-        button.disabled = true;
-        api("POST", "/workflows/" + workflowId + "/runs/" + runId + "/ui-feedback", {
+        pendingUiTasteFeedback = {
+            button: button,
+            workflowId: workflowId,
+            runId: runId,
             label: label,
-            reason: reason || "",
-            ticket_id: metadata.ticket_id || null,
-            board_id: metadata.board_id || null,
-            project_id: metadata.project_id || null,
-            execution_session_id: metadata.execution_session_id || null,
-            screenshot_paths: screenshotPaths,
-            save_as_visual_baseline: saveAsBaseline,
-            visual_baseline_name: visualBaselineName || null,
-            baseline_screen_name: baselineScreenName || null
+            metadata: metadata,
+            screenshotPaths: screenshotPaths,
+            saveAsBaseline: saveAsBaseline
+        };
+        var modal = ensureUiTasteFeedbackModal();
+        var reasonEl = document.getElementById("wf-ui-feedback-reason");
+        var helpEl = document.getElementById("wf-ui-feedback-help");
+        var baselineFields = document.getElementById("wf-ui-feedback-baseline-fields");
+        var screenName = document.getElementById("wf-ui-feedback-screen-name");
+        var errorEl = document.getElementById("wf-ui-feedback-error");
+        if (reasonEl) reasonEl.value = "";
+        if (helpEl) helpEl.textContent = label === "approved"
+            ? "Describe what worked so it can become a reusable standard."
+            : "Explain the reusable principle that should prevent this problem in future projects.";
+        if (baselineFields) baselineFields.classList.toggle("hidden", !saveAsBaseline);
+        if (screenName) screenName.value = "Run " + runId;
+        if (errorEl) errorEl.classList.add("hidden");
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+        if (reasonEl) reasonEl.focus();
+    }
+
+    function submitUiTasteFeedbackFromModal() {
+        var pending = pendingUiTasteFeedback;
+        if (!pending) return;
+        var reasonEl = document.getElementById("wf-ui-feedback-reason");
+        var reason = reasonEl ? reasonEl.value.trim() : "";
+        var errorEl = document.getElementById("wf-ui-feedback-error");
+        if (!reason) {
+            if (errorEl) {
+                errorEl.textContent = "Describe the reusable standard before saving.";
+                errorEl.classList.remove("hidden");
+            }
+            if (reasonEl) reasonEl.focus();
+            return;
+        }
+        var saveButton = document.getElementById("wf-ui-feedback-save");
+        var baselineNameEl = document.getElementById("wf-ui-feedback-baseline-name");
+        var screenNameEl = document.getElementById("wf-ui-feedback-screen-name");
+        if (saveButton) saveButton.disabled = true;
+        if (pending.button) pending.button.disabled = true;
+        api("POST", "/workflows/" + pending.workflowId + "/runs/" + pending.runId + "/ui-feedback", {
+            label: pending.label,
+            reason: reason,
+            ticket_id: pending.metadata.ticket_id || null,
+            board_id: pending.metadata.board_id || null,
+            project_id: pending.metadata.project_id || null,
+            execution_session_id: pending.metadata.execution_session_id || null,
+            screenshot_paths: pending.screenshotPaths,
+            save_as_visual_baseline: pending.saveAsBaseline,
+            visual_baseline_name: pending.saveAsBaseline && baselineNameEl ? baselineNameEl.value.trim() || "Approved UI" : null,
+            baseline_screen_name: pending.saveAsBaseline && screenNameEl ? screenNameEl.value.trim() || ("Run " + pending.runId) : null
         })
             .then(function (data) {
                 snack(workflowFeedbackText(data, "UI feedback recorded"));
                 loadOrchestratorTimeline({ quiet: true });
+                closeUiTasteFeedbackModal();
             })
             .catch(function (e) {
                 snack(workflowErrorText(e, "Failed to record UI feedback"), "error");
             })
-            .finally(function () { button.disabled = false; });
+            .finally(function () {
+                if (saveButton) saveButton.disabled = false;
+                if (pending.button) pending.button.disabled = false;
+            });
     }
 
     function renderRunPacketEvidence(packet, run) {
@@ -6012,11 +6100,7 @@
             }
             attachWorkflowBoardWhatsappLinks(data, selected).then(function (merged) {
                 if (token !== workflowBoardLoadToken) return;
-                var note = "";
-                if (selected.source !== "database" && merged && merged.cache_stale) {
-                    note = "Refreshing board tickets in the background...";
-                }
-                renderWorkflowBoardTickets(merged, selected, note);
+                renderWorkflowBoardTickets(merged, selected, "");
             });
         }).catch(function (e) {
             if (token !== workflowBoardLoadToken) return;
@@ -6649,48 +6733,9 @@
     function renderLoopRunTicketContext() {
         var mainEl = document.getElementById("wf-loop-run-ticket-context");
         var feedEl = document.getElementById("wf-loop-feed-ticket-context");
-        var contextRun = loopFeedContextRun();
         if (mainEl) {
-            var bannerTicketId = selectedWorkflowQueueTicketId || (contextRun && contextRun.ticket_id);
-            var ticket = bannerTicketId ? workflowQueueTicketById(bannerTicketId) : null;
-            if (ticket) {
-                var run = activeRunByTicketId(ticket.id);
-                var locked = !!run;
-                var timeLabel = workflowQueueTicketTimeLabel(ticket);
-                var timeLive = workflowQueueTicketTimeIsLive(ticket);
-                var timeClass = timeLive ? "bg-sky-500/20 text-sky-200" : "bg-white/10 text-gray-300";
-                var badgeOpts = { interactive: false, ticketId: ticket.id, locked: true };
-                var title = ticket.title || ("Ticket #" + ticket.id);
-                var cleanDesc = stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
-                mainEl.classList.remove("hidden");
-                mainEl.innerHTML =
-                    '<div class="wf-loop-ticket-banner" data-ticket-id="' + esc(ticket.id) + '">' +
-                        '<div class="wf-loop-ticket-banner-badges">' +
-                            workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
-                            workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
-                        '</div>' +
-                        '<div class="wf-loop-ticket-banner-main">' +
-                            '<div class="wf-loop-ticket-banner-title" title="' + esc(title) + '">' + esc(title) + '</div>' +
-                            (cleanDesc ? '<div class="wf-loop-ticket-banner-desc" title="' + esc(cleanDesc) + '">' + esc(cleanDesc) + '</div>' : '') +
-                        '</div>' +
-                        '<div class="wf-workflow-queue-actions wf-loop-ticket-banner-actions">' +
-                            '<span class="wf-ticket-time-display inline-flex h-6 min-w-[3.15rem] items-center justify-center whitespace-nowrap text-[9px] px-1 rounded tabular-nums leading-none ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '" title="Time spent on this ticket">' + esc(timeLabel) + '</span>' +
-                            '<button type="button" class="wf-workflow-ticket-copy kb-card-action-btn kb-act-copy" data-ticket-id="' + esc(ticket.id) + '" title="Copy title and description" aria-label="Copy title and description"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>' +
-                            '<button type="button" class="wf-workflow-ticket-orchestrator kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Send to Orchestrator" aria-label="Send to Orchestrator"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg></button>' +
-                            '<button type="button" class="wf-workflow-ticket-loop kb-card-action-btn kb-act-loop" data-ticket-id="' + esc(ticket.id) + '" title="Open this ticket in the loop tab" aria-label="Open ticket loop">' + SVG_LOOP + '</button>' +
-                            (!run ? '<button type="button" class="wf-workflow-ticket-run kb-card-action-btn kb-act-play" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow" aria-label="Run ticket">' + SVG_PLAY + '</button>' : '') +
-                        '</div>' +
-                    '</div>';
-                bindWorkflowTicketQueueRows(mainEl);
-            } else {
-                if (contextRun) {
-                    mainEl.classList.remove("hidden");
-                    mainEl.innerHTML = loopRunTicketContextHtml(contextRun, "main");
-                } else {
-                    mainEl.classList.add("hidden");
-                    mainEl.innerHTML = "";
-                }
-            }
+            mainEl.classList.add("hidden");
+            mainEl.innerHTML = "";
         }
         if (feedEl) {
             feedEl.classList.add("hidden");
@@ -6718,33 +6763,12 @@
         var run = (activeRuns || []).filter(function (r) {
             return currentWorkflowId && r && String(r.workflow_id) === String(currentWorkflowId);
         })[0] || null;
-        if (!run) {
-            bar.classList.add("hidden");
-            bar.innerHTML = "";
-            return;
-        }
-        if (run.auto_queued_from_run_id && run.id !== lastAutoAdvanceSnackRunId) {
+        if (run && run.auto_queued_from_run_id && run.id !== lastAutoAdvanceSnackRunId) {
             lastAutoAdvanceSnackRunId = run.id;
             snack("Starting next ticket in queue", "info");
         }
-        var ticketText = run.ticket_title || (run.ticket_id ? ("Ticket #" + run.ticket_id) : "Ticket");
-        var stepText = run.current_step_name || (run.current_step_id ? ("Step #" + run.current_step_id) : "Starting");
-        var statusClass = run.status === "waiting" ? "text-amber-200 bg-amber-500/20" : "text-sky-200 bg-sky-500/20";
-        bar.classList.remove("hidden");
-        bar.innerHTML =
-            '<span class="text-gray-400">Running</span>' +
-            '<span class="text-white font-medium truncate max-w-[40%]" title="' + esc(ticketText) + '">' + esc(ticketText) + "</span>" +
-            '<span class="text-gray-500">·</span>' +
-            '<span class="text-gray-200 truncate max-w-[30%]" title="' + esc(stepText) + '">' + esc(stepText) + "</span>" +
-            '<span class="text-xs px-1.5 py-0.5 rounded ' + statusClass + '">' + esc(run.status || "running") + "</span>" +
-            '<button type="button" class="ml-auto text-[#f97316] hover:underline" id="wf-run-bar-open-runs">View in Runs</button>';
-        var openBtn = document.getElementById("wf-run-bar-open-runs");
-        if (openBtn) {
-            openBtn.addEventListener("click", function () {
-                var runsTab = document.querySelector('.wf-tab[data-tab="runs"]');
-                if (runsTab) runsTab.click();
-            });
-        }
+        bar.classList.add("hidden");
+        bar.innerHTML = "";
     }
 
     function normalizedRunSettings(data) {
@@ -6954,11 +6978,22 @@
                 var projectText = meta.projectText;
                 var sourceText = meta.sourceText;
                 var stepText = r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
+                var recentStepNames = workflowCleanStringList(r.recent_step_names).filter(function (name) {
+                    return name && name !== stepText;
+                }).slice(0, 4);
+                var recentStepsHtml = recentStepNames.length
+                    ? '<div class="md:col-span-2"><span class="text-gray-500">Recent steps:</span> <span class="text-gray-300">' + esc(recentStepNames.join(" → ")) + '</span></div>'
+                    : '';
                 var workflowText = meta.workflowText || ("Workflow #" + r.workflow_id);
                 var routeCard = renderRouteCard(r.execution_route || {}, {
                     pendingApproval: r.pending_route_approval && Object.keys(r.pending_route_approval || {}).length,
                     skills: workflowCleanStringList(r.current_step_skills).concat(workflowCleanStringList((r.execution_route || {}).skills)),
-                    tools: workflowCleanStringList(r.current_step_tools).concat(workflowCleanStringList((r.execution_route || {}).tools))
+                    tools: workflowCleanStringList(r.current_step_tools)
+                        .concat(workflowCleanStringList((r.execution_route || {}).tools))
+                        .concat(workflowCleanStringList(r.recent_step_tools)),
+                    context: workflowCleanStringList(r.current_step_context)
+                        .concat(workflowCleanStringList((r.execution_route || {}).context))
+                        .concat(workflowCleanStringList(r.recent_step_context))
                 });
                 var loopBadge = r.loop_label
                     ? '<span class="text-xs px-1.5 py-0.5 rounded bg-purple-600/20 text-purple-200">' + esc(r.loop_label) + '</span>'
@@ -6996,6 +7031,7 @@
                         '<div><span class="text-gray-500">Source:</span> <span class="text-gray-200">' + esc(sourceText) + '</span></div>' +
                         '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
                         '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
+                        recentStepsHtml +
                     '</div>' +
                     '<div class="mt-2">' + routeCard + '</div>' +
                     decisionCard +
@@ -7304,6 +7340,7 @@
         var pending = options.pendingApproval || route.requires_approval;
         var skills = workflowCleanStringList(options.skills || route.skills);
         var tools = workflowCleanStringList(options.tools || route.tools);
+        var context = workflowCleanStringList(options.context || route.context);
         var html = '<div class="rounded border border-blue-500/25 bg-blue-500/5 px-3 py-2 text-xs">' +
             '<div class="flex flex-wrap items-center gap-2">' +
                 '<span class="text-[10px] uppercase tracking-wide text-blue-200">Route</span>' +
@@ -7315,6 +7352,7 @@
         if (rationale) html += '<p class="mt-1 text-[11px] text-gray-400">' + esc(rationale) + '</p>';
         html += workflowPillListHtml("Skills", skills, "bg-emerald-500/15 text-emerald-200");
         html += workflowPillListHtml("Tools", tools, "bg-purple-500/15 text-purple-200");
+        html += workflowPillListHtml("Context", context, "bg-sky-500/15 text-sky-200");
         html += '</div>';
         return html;
     }
@@ -7592,7 +7630,12 @@
             renderRouteCard(route, {
                 pendingApproval: hasPendingRoute,
                 skills: workflowCleanStringList(run.current_step_skills).concat(workflowCleanStringList(route.skills)),
-                tools: workflowCleanStringList(run.current_step_tools).concat(workflowCleanStringList(route.tools))
+                tools: workflowCleanStringList(run.current_step_tools)
+                    .concat(workflowCleanStringList(route.tools))
+                    .concat(workflowCleanStringList(run.recent_step_tools)),
+                context: workflowCleanStringList(run.current_step_context)
+                    .concat(workflowCleanStringList(route.context))
+                    .concat(workflowCleanStringList(run.recent_step_context))
             }) +
             approvalHtml +
             humanHtml +
@@ -7868,7 +7911,8 @@
         var locked = !!(run || executionSession);
         var loopLocked = workflowHasActiveRuns();
         var canReorder = !options.static && !locked && !loopLocked;
-        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : "");
+        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : (ticket.workflow_status || "queued"));
+        var statusLabel = status ? status.charAt(0).toUpperCase() + status.slice(1) : "Queued";
         var timeLabel = workflowQueueTicketTimeLabel(ticket);
         var timeLive = workflowQueueTicketTimeIsLive(ticket);
         var timeClass = timeLive
@@ -7899,6 +7943,7 @@
                     (options.static ? "" : '<span class="wf-queue-position-label" title="Queue position">' + esc(String(queueId) + ".") + "</span>") +
                     workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
                     workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
+                    '<span class="kb-metric-badge ' + executionSessionStatusClass(status) + '" title="Workflow queue status">' + esc(statusLabel) + "</span>" +
                 "</span>" +
             "</div>" +
             '<div class="' + contentClass + '">' +
@@ -9236,7 +9281,8 @@
     function deriveLoopStepActionType(tools) {
         tools = Array.isArray(tools) ? tools : [];
         if (tools.indexOf("computer_use") >= 0) return "computer_use";
-        if (tools.indexOf("playwright") >= 0 || tools.indexOf("browser_use") >= 0) return "playwright";
+        if (tools.indexOf("playwright") >= 0) return "playwright";
+        if (tools.indexOf("browser_use") >= 0) return "browser_use";
         if (tools.indexOf("cli") >= 0) return "send_to_project_cli";
         if (tools.indexOf("python") >= 0) return "execute_code";
         if (tools.indexOf("shell") >= 0) return "run_command";
@@ -10526,6 +10572,7 @@
             '<option value="http_request"' + (step.action_type === "http_request" ? " selected" : "") + '>HTTP Request</option>' +
             '<option value="execute_code"' + (step.action_type === "execute_code" ? " selected" : "") + '>Execute Code</option>' +
             '<option value="playwright"' + (step.action_type === "playwright" ? " selected" : "") + '>Playwright</option>' +
+            '<option value="browser_use"' + (step.action_type === "browser_use" ? " selected" : "") + '>Browser Use</option>' +
             '</select></div>';
         html += '</div>';
         var isRecording = step.action_type === "play_recording";
@@ -11825,6 +11872,7 @@
 
     function loopFeedKindForEvent(event) {
         var type = String((event && event.event_type) || "").toLowerCase();
+        if (type.indexOf("preflight") >= 0) return "event";
         if (type.indexOf("step") >= 0 || type === "loop_iteration" || type === "loop_started") return "step";
         if (type.indexOf("wait") >= 0 || type === "approval_requested" || type === "route_approval_granted") return "waiting";
         if (type.indexOf("steer") >= 0 || type.indexOf("feedback") >= 0) return "steer";
@@ -11887,6 +11935,15 @@
             lines.push("Route: " + payload.decision.backend + (payload.decision.model ? " / " + payload.decision.model : ""));
             var decisionSkills = workflowCleanStringList(payload.decision.skills);
             if (decisionSkills.length) lines.push("Skills: " + decisionSkills.join(", "));
+        }
+        if (payload.backend_id || payload.model) {
+            lines.push("Route: " + (payload.backend_id || payload.route_backend || "backend") + (payload.model ? " / " + payload.model : ""));
+        }
+        if (payload.preflight && typeof payload.preflight === "object") {
+            var pf = payload.preflight;
+            if (pf.state) lines.push("Setup: " + pf.state);
+            if (pf.message) lines.push(pf.message);
+            if (pf.setup_instructions) lines.push(pf.setup_instructions);
         }
         if (payload.route_backend) lines.push("Backend: " + payload.route_backend);
         var payloadSkills = workflowCleanStringList(payload.skills);
@@ -12020,30 +12077,99 @@
         "</div>";
     }
 
+    function loopFeedItemIsNoise(item) {
+        var type = String((item && item.event_type) || "").toLowerCase();
+        var title = String((item && item.title) || "").toLowerCase();
+        if (type === "workflow_run_started" || type === "user_notified") return true;
+        if (title === "workflow run started" || title === "user notified") return true;
+        return false;
+    }
+
+    function loopFeedItemBelongsToActiveStep(item, run) {
+        if (!item || loopFeedItemIsNoise(item)) return false;
+        if (!run || !run.current_step_id) return true;
+        if (item.optimistic) return true;
+        if (item.step_id != null) return String(item.step_id) === String(run.current_step_id);
+        var type = String(item.event_type || "").toLowerCase();
+        var title = String(item.title || "").toLowerCase();
+        return type.indexOf("route") >= 0 ||
+            type.indexOf("preflight") >= 0 ||
+            type.indexOf("execution") >= 0 ||
+            type.indexOf("worker") >= 0 ||
+            type.indexOf("handoff") >= 0 ||
+            type.indexOf("cli") >= 0 ||
+            title.indexOf("route") >= 0 ||
+            title.indexOf("preflight") >= 0 ||
+            title.indexOf("execution") >= 0 ||
+            title.indexOf("worker") >= 0 ||
+            title.indexOf("handoff") >= 0 ||
+            title.indexOf("cli") >= 0;
+    }
+
+    function loopFeedActiveStepMeta(run) {
+        var workflowSteps = currentWorkflow && Array.isArray(currentWorkflow.steps) ? currentWorkflow.steps : [];
+        var idx = -1;
+        var step = null;
+        if (run && run.current_step_id != null) {
+            workflowSteps.some(function (candidate, i) {
+                if (String(candidate.id) === String(run.current_step_id)) {
+                    idx = i;
+                    step = candidate;
+                    return true;
+                }
+                return false;
+            });
+        }
+        return {
+            index: idx >= 0 ? idx + 1 : "",
+            title: (step && (step.name || step.title)) || (run && run.current_step_name) || "Current step",
+            status: (run && run.status) || (step && step.status) || "running"
+        };
+    }
+
     function renderLoopActivityFeed(items) {
         var list = document.getElementById("wf-loop-feed-messages");
         if (!list) return;
         items = Array.isArray(items) ? items : [];
         latestLoopFeedItems = items;
-        if (!items.length) {
-            list.innerHTML = '<p class="wf-loop-feed-empty">No run activity yet. Start a queued ticket.</p>';
+        var run = loopFeedActiveRun() || currentWorkflowActiveRun();
+        if (!run) {
+            list.innerHTML = '<p class="wf-loop-feed-empty">No active run. Start a queued ticket.</p>';
             return;
         }
-        var groups = loopFeedBuildStepGroups(items);
-        list.innerHTML = groups.map(function (group) {
-            var state = group.state || "pending";
-            var body = group.items.length
-                ? group.items.map(loopFeedRenderItem).join("")
-                : '<p class="wf-loop-feed-step-empty">No activity recorded for this step yet.</p>';
-            return '<details class="wf-loop-feed-step wf-loop-feed-step--' + esc(state) + '"' + (group.open ? " open" : "") + ' data-step-id="' + esc(group.step_id || "") + '">' +
-                '<summary class="wf-loop-feed-step-summary">' +
-                    '<span class="wf-loop-feed-step-index">' + esc(group.index || "") + '</span>' +
-                    '<span class="wf-loop-feed-step-title" title="' + esc(group.title || "Step") + '">' + esc(group.title || "Step") + '</span>' +
+        var meta = loopFeedActiveStepMeta(run);
+        var runStatus = String(run.status || "").toLowerCase();
+        var state = "running";
+        if (runStatus === "waiting") state = "waiting";
+        else if (runStatus === "failed" || runStatus === "error") state = "failed";
+        else if (runStatus === "completed" || runStatus === "done" || runStatus === "passed") state = "passed";
+        else if (runStatus === "cancelled") state = "failed";
+        var meaningfulItems = items.filter(function (item) {
+            return loopFeedItemBelongsToActiveStep(item, run);
+        });
+        var route = run.execution_route || {};
+        if (!meaningfulItems.length && route.backend) {
+            meaningfulItems.push({
+                id: "active-route-" + String(run.id || ""),
+                kind: "event",
+                title: "Route",
+                body: "Using " + route.backend + (route.model ? " / " + route.model : "") + ".",
+                detail: workflowCleanStringList(route.skills).length ? ["Skills: " + workflowCleanStringList(route.skills).join(", ")] : [],
+                ts: 0
+            });
+        }
+        var body = meaningfulItems.length
+            ? meaningfulItems.map(loopFeedRenderItem).join("")
+            : '<p class="wf-loop-feed-step-empty">Waiting for activity from this step.</p>';
+        list.innerHTML =
+            '<section class="wf-loop-feed-step wf-loop-feed-step--' + esc(state) + '" data-step-id="' + esc(run.current_step_id || "") + '">' +
+                '<div class="wf-loop-feed-step-summary">' +
+                    '<span class="wf-loop-feed-step-index">' + esc(meta.index) + '</span>' +
+                    '<span class="wf-loop-feed-step-title" title="' + esc(meta.title) + '">' + esc(meta.title) + '</span>' +
                     '<span class="wf-loop-feed-step-state">' + esc(state) + '</span>' +
-                '</summary>' +
+                '</div>' +
                 '<div class="wf-loop-feed-step-body">' + body + '</div>' +
-            '</details>';
-        }).join("");
+            '</section>';
         if (loopFeedScrollPinned) {
             list.scrollTop = list.scrollHeight;
         }

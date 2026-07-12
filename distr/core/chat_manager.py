@@ -766,17 +766,27 @@ class ChatManagerCore:
         try:
             chat = session.get(Chat, chat_id)
             target = chat
-            if chat and chat.children:
-                target = max(chat.children, key=lambda x: x.created_date)
+            root = None
+            if chat:
+                root_id = _thread_root_id(session, int(chat_id))
+                root = session.get(Chat, root_id)
+                params = _load_chat_params(getattr(root, "params", None))
+                active_row_id = params.get("active_turn_chat_row_id")
+                if active_row_id:
+                    try:
+                        active_target = session.get(Chat, int(active_row_id))
+                    except (TypeError, ValueError):
+                        active_target = None
+                    if active_target and _thread_root_id(session, int(active_target.id)) == root_id:
+                        target = active_target
+                if target is chat and chat.children:
+                    target = max(chat.children, key=lambda x: x.created_date)
             if target:
                 target.response = text_content
                 target.is_hidden = is_hidden
                 target.modified_date = datetime.now(timezone.utc)
-                if chat:
-                    root_id = _thread_root_id(session, int(chat_id))
-                    root = session.get(Chat, root_id)
-                    if root:
-                        _clear_active_turn_chat_row_id(root)
+                if root:
+                    _clear_active_turn_chat_row_id(root)
                 session.commit()
                 record_chat_audit_event(
                     chat_id=int(chat_id),

@@ -252,6 +252,7 @@ class VoiceDictationMixin:
         self._is_dictating = True
         self._dictation_one_shot = bool(one_shot)
         self._dictation_release_pending = False
+        self._dictation_ui_stop_sent = False
         if one_shot:
             self._one_shot_dictation_armed = True
         self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
@@ -279,6 +280,7 @@ class VoiceDictationMixin:
 
         self._dictation_release_pending = True
         self._one_shot_dictation_armed = True
+        self._dictation_ui_stop_sent = True
         logger.info("Dictation: Hotkey released; waiting for flushed dictation transcript")
 
         if self.event_queue:
@@ -297,6 +299,7 @@ class VoiceDictationMixin:
             self._dictation_release_pending = False
             self._one_shot_dictation_armed = False
             self._dictation_one_shot = False
+            self._dictation_ui_stop_sent = False
             self._dictation_output_mode = "plain"
             self._dictation_ticket_rewrite = False
             return
@@ -305,11 +308,13 @@ class VoiceDictationMixin:
         self._dictation_one_shot = False
         self._one_shot_dictation_armed = False
         self._dictation_release_pending = False
+        ui_stop_already_sent = bool(getattr(self, "_dictation_ui_stop_sent", False))
+        self._dictation_ui_stop_sent = False
         self._dictation_output_mode = "plain"
         self._dictation_ticket_rewrite = False
         logger.info("Dictation: Dictation mode stopped")
 
-        if self.event_queue:
+        if self.event_queue and not ui_stop_already_sent:
             try:
                 self.event_queue.put(('set_dictating', {'enabled': False}), block=False)
             except Exception as e:
@@ -326,7 +331,7 @@ class VoiceDictationMixin:
 
         self._hands_free_before_dictation = False
 
-        if self.event_queue:
+        if self.event_queue and not ui_stop_already_sent:
             try:
                 self.event_queue.put(('dictation_stopped', {}), block=False)
             except Exception as e:

@@ -127,9 +127,19 @@ class TTSPipelineMixin:
         queue = self._speak_queue
         if queue is None:
             return
+        started = time.monotonic()
+        queued = queue.qsize()
         await queue.join()
         while self._speak_busy:
             await asyncio.sleep(0.02)
+        elapsed = time.monotonic() - started
+        if elapsed >= 0.750:
+            logger.warning(
+                "TTS: response completion waited %.3fs for synthesis/playback queue "
+                "(queued_at_start=%d)",
+                elapsed,
+                queued,
+            )
 
     async def _play_queued_sentence(self, sentence: str, generation: int, direction: Any) -> None:
         """Default: stream audio frames from ``run_tts``."""
@@ -138,6 +148,8 @@ class TTSPipelineMixin:
             return
         push_direction = self._resolve_tts_push_direction(direction)
         logger.info("TTS SENTENCE EMIT: sentence=%r", sentence[:120])
+        sentence_started = time.monotonic()
+        first_audio_at = None
         audio_frame_count = 0
         truncated = False
         async for audio_frame in self.run_tts(sentence):  # type: ignore[attr-defined]
@@ -162,6 +174,8 @@ class TTSPipelineMixin:
             try:
                 self._apply_volume_to_audio_frame(audio_frame)
                 await self.push_frame(audio_frame, push_direction)  # type: ignore[attr-defined]
+                if first_audio_at is None:
+                    first_audio_at = time.monotonic()
                 audio_frame_count += 1
             except Exception as e:
                 logger.error("TTS: Error pushing frame: %s", e, exc_info=True)
@@ -174,6 +188,19 @@ class TTSPipelineMixin:
             )
         elif audio_frame_count > 0:
             logger.debug("TTS: Pushed %s audio frames for sentence", audio_frame_count)
+        elapsed = time.monotonic() - sentence_started
+        first_audio_latency = (
+            first_audio_at - sentence_started if first_audio_at is not None else None
+        )
+        if elapsed >= 1.000 or first_audio_latency is None or first_audio_latency >= 0.750:
+            logger.warning(
+                "TTS: sentence timing provider=%s total=%.3fs first_audio=%s frames=%d truncated=%s",
+                type(self).__name__,
+                elapsed,
+                f"{first_audio_latency:.3f}s" if first_audio_latency is not None else "none",
+                audio_frame_count,
+                truncated,
+            )
 
     def _resolve_tts_push_direction(self, direction: Any) -> Any:
         if direction is not None:

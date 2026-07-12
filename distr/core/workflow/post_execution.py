@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.workflow.verification import _run_verification
+from distr.core.workflow.runtime_contract import should_pause_after_step
 from distr.gui.web.workflow_events import increment_workflow_updated
 
 logger = logging.getLogger(__name__)
@@ -213,7 +214,11 @@ class PostExecutionMixin:
             if not step:
                 return
             # Check wait_for_continue before finalizing
-            if step.wait_for_continue and not skip_wait:
+            if should_pause_after_step(
+                run_id=run_id,
+                step_wait_for_continue=bool(step.wait_for_continue),
+                skip_wait=skip_wait,
+            ):
                 if self._enter_wait_state(step_id, result_text, passed, run_id=run_id):
                     return
             verified_passed = _run_verification(step, result_text, passed)

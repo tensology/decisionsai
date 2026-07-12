@@ -1190,6 +1190,18 @@ def record_ui_feedback_label(
         summary=summary,
         payload=payload,
     )
+    try:
+        from distr.core.workflow.standards_memory import capture_feedback_as_global_standard
+
+        capture_feedback_as_global_standard(
+            f"UI feedback {normalized}: {reason or summary}",
+            category="ui_design_standard",
+            source_type="ui_feedback",
+            source_id=str(event_id or ""),
+            project_id=project_id,
+        )
+    except Exception:
+        pass
     return event_id
 
 
@@ -1291,7 +1303,11 @@ def record_ui_quality_validation(
         or artifact_data.get("baseline_name")
     )
     taste_summary = build_visual_taste_summary(board_id=board_id, project_id=project_id)
-    evaluation = evaluate_ui_artifacts(artifacts, taste_summary=taste_summary)
+    evaluation = evaluate_ui_artifacts(
+        artifacts,
+        taste_summary=taste_summary,
+        standards_context=standards_context,
+    )
     baseline = get_visual_baseline_set(
         baseline_set_id=selected_baseline_id,
         name=selected_baseline_name,
@@ -1349,7 +1365,7 @@ def record_ui_quality_validation(
         correction_hint=(
             ""
             if verdict == "pass"
-            else "Attach before/after screenshots, compare against the selected visual baseline, and include a concise happy-path flow summary before marking UI work complete."
+            else "Attach before/after screenshots, compare against the selected visual baseline, explicitly assess the result against learned global user standards, and include a concise happy-path flow summary before marking UI work complete."
         ),
         payload={
             "ui_quality": evaluation,

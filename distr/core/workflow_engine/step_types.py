@@ -18,6 +18,7 @@ class StepType(str, Enum):
     HTTP_REQUEST = "http_request"
     EXECUTE_CODE = "execute_code"
     PLAYWRIGHT = "playwright"
+    BROWSER_USE = "browser_use"
     SEND_TO_PROJECT_CLI = "send_to_project_cli"
     COMPUTER_USE = "computer_use"
     DECISIONS_ACTION = "decision_action"

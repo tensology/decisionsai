@@ -1505,10 +1505,10 @@ class ClearWorkflowHistoryTool(BaseTool):
 
 # --- Continue a waiting workflow ---
 class ContinueWorkflowInput(BaseModel):
-    run_id: Optional[int] = Field(default=None, description="Workflow run ID that is in waiting state. If omitted, auto-resolve latest waiting run.")
+    run_id: Optional[int] = Field(default=None, description="Workflow run ID to continue or steer. If omitted, auto-resolve the latest waiting or steerable run.")
     workflow_id: Optional[int] = Field(default=None, description="Optional workflow ID to narrow auto-resolution when run_id is omitted.")
     workflow_name: Optional[str] = Field(default=None, description="Workflow name if workflow_id omitted")
-    user_input: str = Field(default="", description="Optional user input/feedback to pass to the next step")
+    user_input: str = Field(default="", description="Optional user input/feedback to pass to the next step or steer the active backend run")
 
 
 class ContinueWorkflowTool(BaseTool):
@@ -1516,15 +1516,33 @@ class ContinueWorkflowTool(BaseTool):
     description: str = (
         "Resume a workflow that is waiting for you. "
         "Use when the user confirms starting a run, wants to continue after a step, "
-        "steers the work with new direction, or says to stop. "
+        "steers running Codex, Hermes, Cursor, or Pi work with new direction, or says to stop. "
         "Pass their exact words as user_input when they steer or refine the plan."
     )
     args_schema: Type[BaseModel] = ContinueWorkflowInput
 
-    def _resolve_run_id(self, run_id: Optional[int], workflow_id: Optional[int], workflow_name: Optional[str] = None) -> tuple[Optional[int], Optional[str]]:
-        """Resolve a run_id for continue operations when not provided explicitly."""
+    def _resolve_run_target(
+        self,
+        run_id: Optional[int],
+        workflow_id: Optional[int],
+        workflow_name: Optional[str] = None,
+        *,
+        allow_steer: bool = False,
+    ) -> tuple[Optional[int], Optional[str], str]:
+        """Resolve a run target and whether it should be continued or steered."""
         if run_id is not None:
-            return int(run_id), None
+            if not allow_steer:
+                return int(run_id), None, "continue"
+            try:
+                from distr.core.workflow.service import get_active_runs
+
+                candidates = get_active_runs(limit=50, workflow_id=workflow_id)
+                match = next((r for r in candidates if int(r.get("id") or 0) == int(run_id)), None)
+                if match and str(match.get("status", "")).lower() == "running" and bool(match.get("steerable")):
+                    return int(run_id), None, "steer"
+            except Exception:
+                logger.debug("continue_workflow explicit run steer probe failed", exc_info=True)
+            return int(run_id), None, "continue"
         try:
             from distr.core.workflow.workflow_resolve import resolve_workflow_id
             from distr.core.workflow.service import get_active_runs
@@ -1545,33 +1563,75 @@ class ContinueWorkflowTool(BaseTool):
                     workflow_id=selected.get("workflow_id"),
                     run_id=selected.get("id"),
                 )
-                return int(selected["id"]), None
+                return int(selected["id"]), None, "continue"
             running_runs = [r for r in candidates if str(r.get("status")) == "running"]
             if running_runs:
+                steerable_runs = [r for r in running_runs if bool(r.get("steerable"))]
+                if allow_steer and steerable_runs:
+                    selected = steerable_runs[0]
+                    _remember_workflow_context(
+                        workflow_id=selected.get("workflow_id"),
+                        run_id=selected.get("id"),
+                    )
+                    return int(selected["id"]), None, "steer"
                 return None, (
                     "I found active workflow runs, but none are waiting for input yet. "
-                    "Wait until a step pauses, then continue."
-                )
+                    "Send steering text if you want me to redirect the active backend run."
+                ), "continue"
             remembered_run = _get_remembered_run_id()
             if remembered_run is not None:
                 active_ids = {int(r["id"]) for r in candidates if r.get("id") is not None}
                 if remembered_run in active_ids:
-                    return remembered_run, None
+                    remembered = next((r for r in candidates if int(r.get("id") or 0) == int(remembered_run)), None)
+                    if allow_steer and remembered and bool(remembered.get("steerable")) and str(remembered.get("status", "")).lower() == "running":
+                        return remembered_run, None, "steer"
+                    return remembered_run, None, "continue"
                 return None, (
                     f"Remembered run #{remembered_run} is not active (running/waiting). "
                     "Pass an explicit run_id or start a new run."
-                )
-            return None, "No active workflow runs found to continue."
+                ), "continue"
+            return None, "No active workflow runs found to continue.", "continue"
         except Exception as e:
             logger.error("continue_workflow auto-resolve failed: %s", e, exc_info=True)
-            return None, f"Failed to resolve an active run automatically: {str(e)}"
+            return None, f"Failed to resolve an active run automatically: {str(e)}", "continue"
+
+    def _resolve_run_id(self, run_id: Optional[int], workflow_id: Optional[int], workflow_name: Optional[str] = None) -> tuple[Optional[int], Optional[str]]:
+        """Resolve a run_id for continue operations when not provided explicitly."""
+        resolved_run_id, error, _mode = self._resolve_run_target(
+            run_id,
+            workflow_id,
+            workflow_name,
+            allow_steer=False,
+        )
+        return resolved_run_id, error
 
     def _run(self, run_id: Optional[int] = None, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, user_input: str = "", **kwargs) -> str:
         try:
             from distr.core.workflow.dispatcher import continue_waiting_step
-            resolved_run_id, resolve_error = self._resolve_run_id(run_id, workflow_id, workflow_name)
+            steering_text = str(user_input or "").strip()
+            resolved_run_id, resolve_error, mode = self._resolve_run_target(
+                run_id,
+                workflow_id,
+                workflow_name,
+                allow_steer=bool(steering_text),
+            )
             if resolve_error:
                 return f"Failed: {resolve_error}"
+            if mode == "steer":
+                from distr.core.workflow.service import apply_run_harness_steer
+
+                result = apply_run_harness_steer(
+                    int(resolved_run_id),
+                    steering_text,
+                    source="agent_tool",
+                )
+                if "error" in result:
+                    return f"Failed: {result['error']}"
+                _remember_workflow_context(workflow_id=workflow_id, run_id=resolved_run_id)
+                method = result.get("method") or "queued"
+                backend = result.get("backend_id") or "backend"
+                delivery = "delivered" if result.get("delivered") else "queued"
+                return f"Workflow run {resolved_run_id} steered for {backend}; message {delivery} via {method}."
             result = continue_waiting_step(int(resolved_run_id), user_input)
             if "error" in result:
                 return f"Failed: {result['error']}"

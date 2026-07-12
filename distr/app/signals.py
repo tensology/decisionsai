@@ -4,7 +4,8 @@ import logging
 import json
 import re
 import threading
-from queue import Queue
+import time
+from queue import Full, Queue
 
 from PyQt6.QtCore import QTimer
 
@@ -440,7 +441,7 @@ class SignalBridgeMixin:
         self._web_stream_chat_id = None
         self._web_stream_token_buffer = []
         self._web_stream_flush_timer = None
-        self._web_chat_event_queue = Queue()
+        self._web_chat_event_queue = Queue(maxsize=1000)
         self._web_chat_event_worker_started = False
 
         def _ensure_web_chat_event_worker():
@@ -449,21 +450,31 @@ class SignalBridgeMixin:
             self._web_chat_event_worker_started = True
 
             def _worker():
-                import requests
-                from distr.gui.web.server import get_unified_server
-                from distr.gui.web.security import INTERNAL_AUTH_HEADER, get_internal_api_token
+                from distr.gui.web.routes.chat import publish_chat_event_threadsafe
 
                 while True:
-                    payload = self._web_chat_event_queue.get()
+                    payload, queued_at = self._web_chat_event_queue.get()
                     try:
-                        server = get_unified_server()
-                        if server and server.is_running:
-                            requests.post(
-                                f"{server.get_url()}/api/internal/notify-chat-event",
-                                json=payload,
-                                headers={INTERNAL_AUTH_HEADER: get_internal_api_token()},
-                                timeout=2,
+                        queue_wait = time.monotonic() - queued_at
+                        if queue_wait >= 0.500:
+                            logger.warning(
+                                "[UI WATCHDOG] Web chat event waited %.3fs in bridge queue "
+                                "(event=%s remaining=%d)",
+                                queue_wait,
+                                payload.get("event") or payload.get("type"),
+                                self._web_chat_event_queue.qsize(),
                             )
+                        post_started = time.monotonic()
+                        future = publish_chat_event_threadsafe(payload)
+                        future.result(timeout=2)
+                        if future.done():
+                            post_elapsed = time.monotonic() - post_started
+                            if post_elapsed >= 0.250:
+                                logger.warning(
+                                    "[UI WATCHDOG] Slow web chat event delivery: event=%s elapsed=%.3fs",
+                                    payload.get("event") or payload.get("type"),
+                                    post_elapsed,
+                                )
                     except Exception as e:
                         logger.debug("Notify web chat event failed: %s", e)
                     finally:
@@ -474,7 +485,31 @@ class SignalBridgeMixin:
         def _post_chat_event(payload):
             """Queue chat events for ordered delivery to the web UI."""
             _ensure_web_chat_event_worker()
-            self._web_chat_event_queue.put(dict(payload or {}))
+            depth = self._web_chat_event_queue.qsize()
+            if depth >= 25 and (depth == 25 or depth % 50 == 0):
+                logger.warning(
+                    "[UI WATCHDOG] Web chat event bridge backlog: queued=%d next_event=%s",
+                    depth,
+                    (payload or {}).get("event") or (payload or {}).get("type"),
+                )
+            item = (dict(payload or {}), time.monotonic())
+            try:
+                self._web_chat_event_queue.put_nowait(item)
+            except Full:
+                event_name = item[0].get("event") or item[0].get("type")
+                logger.error(
+                    "[UI WATCHDOG] Web chat event bridge full; event=%s chat_id=%s",
+                    event_name,
+                    item[0].get("chat_id"),
+                )
+                # Never lose terminal state. Scheduling it directly may overtake
+                # stale tokens, which is preferable to leaving the UI streaming.
+                if event_name in {"stream_finished", "stream_error"}:
+                    try:
+                        from distr.gui.web.routes.chat import publish_chat_event_threadsafe
+                        publish_chat_event_threadsafe(item[0])
+                    except Exception as exc:
+                        logger.error("Failed direct terminal chat event delivery: %s", exc)
 
         def _flush_stream_tokens():
             """Flush buffered stream tokens as one batched POST."""

@@ -70,6 +70,7 @@ def test_workflow_tool_registry_maps_actions_to_specific_capabilities():
     assert tools_for_action("play_recording") == ["macro"]
     assert tools_for_action("send_to_project_cli") == ["cli"]
     assert tools_for_action("playwright") == ["playwright", "browser_use"]
+    assert tools_for_action("browser_use") == ["browser_use"]
     assert tools_for_action("computer_use") == ["computer_use"]
     assert "other" not in {
         tool

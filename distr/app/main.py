@@ -611,27 +611,73 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Configure startup behavior
         self._configure_startup()
         
-        # Start polling for agent events (500ms — 2 polls/sec)
+        # Drain agent events frequently enough for fluid streaming.  The
+        # handler has its own per-tick time budget to protect Qt painting.
         self.event_timer = QTimer()
         self.event_timer.timeout.connect(self.check_agent_events)
-        self.event_timer.start(500)
+        self.event_timer.start(50)
+
+        # Main-thread responsiveness watchdog.  A Qt timer only fires when the
+        # event loop gets control, so drift is a cheap, reliable indication
+        # that a GUI-thread callback (or native call holding the GIL) stalled
+        # painting, animation, input, and agent-event delivery together.
+        self._ui_watchdog_interval_ms = 250
+        self._ui_watchdog_expected_at = time.monotonic() + (self._ui_watchdog_interval_ms / 1000.0)
+        self._ui_watchdog_last_warning_at = 0.0
+        self.ui_watchdog_timer = QTimer(self)
+        self.ui_watchdog_timer.setTimerType(Qt.TimerType.PreciseTimer)
+
+        def _check_ui_event_loop_lag():
+            now = time.monotonic()
+            lag = max(0.0, now - self._ui_watchdog_expected_at)
+            self._ui_watchdog_expected_at = now + (self._ui_watchdog_interval_ms / 1000.0)
+            if lag < 0.75 or now - self._ui_watchdog_last_warning_at < 2.0:
+                return
+            self._ui_watchdog_last_warning_at = now
+            try:
+                agent_queue_depth = self.agent_event_queue.qsize()
+            except (AttributeError, NotImplementedError):
+                agent_queue_depth = "unknown"
+            web_queue = getattr(self, "_web_chat_event_queue", None)
+            try:
+                web_queue_depth = web_queue.qsize() if web_queue is not None else 0
+            except (AttributeError, NotImplementedError):
+                web_queue_depth = "unknown"
+            logger.warning(
+                "[UI WATCHDOG] Qt event loop stalled for %.3fs "
+                "(agent_queue=%s web_queue=%s threads=%d gc=%s)",
+                lag,
+                agent_queue_depth,
+                web_queue_depth,
+                threading.active_count(),
+                gc.get_count(),
+            )
+
+        self.ui_watchdog_timer.timeout.connect(_check_ui_event_loop_lag)
+        self.ui_watchdog_timer.start(self._ui_watchdog_interval_ms)
         
         # Start periodic health check (every 30 seconds - detect crashes quickly)
         self.health_check_timer = QTimer()
-        self.health_check_timer.timeout.connect(self.check_agent_health)
+        self.health_check_timer.timeout.connect(
+            lambda: self._run_ui_callback_timed("agent_health_check", self.check_agent_health)
+        )
         self.health_check_timer.start(30000)  # 30 seconds in milliseconds
         logger.info("Started periodic agent health check (interval: 30 seconds)")
         
         # Start periodic screen info update (every 2 seconds) to keep cache fresh
         self.screen_info_timer = QTimer()
-        self.screen_info_timer.timeout.connect(self._update_screen_info_cache)
+        self.screen_info_timer.timeout.connect(
+            lambda: self._run_ui_callback_timed("screen_info_cache", self._update_screen_info_cache)
+        )
         self.screen_info_timer.start(2000)  # 2 seconds
         # Update immediately
         QTimer.singleShot(100, self._update_screen_info_cache)
         
         # Initialize device check timer but don't start it yet - will start after initialization
         self.device_check_timer = QTimer()
-        self.device_check_timer.timeout.connect(self.check_audio_device_changes)
+        self.device_check_timer.timeout.connect(
+            lambda: self._run_ui_callback_timed("audio_device_check", self.check_audio_device_changes)
+        )
         self._last_device_hash = None
         self._last_default_device_fingerprint = None
         self._device_check_enabled = False  # Will be enabled after initialization
@@ -665,7 +711,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         from distr.gui.web.workflow_events import register_workflow_updated_callback
 
         self.workflow_scheduler_timer = QTimer()
-        self.workflow_scheduler_timer.timeout.connect(self._run_workflow_scheduled)
+        self.workflow_scheduler_timer.timeout.connect(
+            lambda: self._run_ui_callback_timed("workflow_scheduler", self._run_workflow_scheduled)
+        )
 
         def _sync_workflow_scheduler_timer():
             previous_ms = self.workflow_scheduler_timer.interval()
@@ -702,6 +750,20 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         
     
     
+    def _run_ui_callback_timed(self, name, callback):
+        """Run a periodic GUI-thread callback and report user-visible stall risk."""
+        started = time.perf_counter()
+        try:
+            return callback()
+        finally:
+            elapsed = time.perf_counter() - started
+            if elapsed >= 0.100:
+                logger.warning(
+                    "[UI WATCHDOG] Slow periodic callback: name=%s elapsed=%.3fs",
+                    name,
+                    elapsed,
+                )
+
     def _enable_device_check_timer(self):
         """Enable the device check timer after initialization is complete."""
         if not self._device_check_enabled:

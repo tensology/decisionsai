@@ -19,7 +19,7 @@ def build_step_config(step_data: dict) -> dict:
     """
     action_type = step_data["action_type"]
     config = dict(step_data.get("config") or {})
-    if action_type in ("execute_code", "playwright"):
+    if action_type in ("execute_code", "playwright", "browser_use"):
         config.setdefault("code", step_data.get("code", ""))
         config.setdefault("instruction", step_data.get("instruction", ""))
     elif action_type == "computer_use":

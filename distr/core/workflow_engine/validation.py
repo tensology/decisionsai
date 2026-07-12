@@ -35,6 +35,7 @@ class StepValidator:
             StepType.HTTP_REQUEST.value: self.validate_http_request,
             StepType.EXECUTE_CODE.value: self.validate_execute_code,
             StepType.PLAYWRIGHT.value: self.validate_playwright,
+            StepType.BROWSER_USE.value: self.validate_playwright,
             StepType.SEND_TO_PROJECT_CLI.value: self.validate_send_to_project_cli,
             StepType.COMPUTER_USE.value: self.validate_computer_use,
             StepType.DECISIONS_ACTION.value: self.validate_decisions_action,

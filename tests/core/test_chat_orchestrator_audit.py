@@ -93,6 +93,37 @@ def test_chat_service_starting_question_records_hermes_audit_event(monkeypatch):
     assert "first chat turn" in payload["content_preview"]
 
 
+def test_starting_question_uses_child_row_as_active_turn(monkeypatch):
+    from distr.core.chat import ChatService
+    from distr.core.chat_manager import ChatManagerCore
+
+    factory = _factory()
+    monkeypatch.setattr("distr.core.chat.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.chat_manager.get_session", lambda: factory())
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
+
+    chat_id, first_message = ChatService.create_new_chat(
+        llm_provider="Ollama",
+        llm_model="m",
+        title="Start",
+        starting_question="hello",
+    )
+
+    manager = ChatManagerCore()
+    manager.chat_histories[chat_id] = [{"role": "user", "content": first_message}]
+    manager.add_assistant_message(chat_id, "Hi there.")
+
+    with _session_ctx(factory) as session:
+        root = session.get(Chat, chat_id)
+        children = list(root.children)
+
+    assert root.input is None
+    assert len(children) == 1
+    assert children[0].input == "hello"
+    assert children[0].response == "Hi there."
+    assert "active_turn_chat_row_id" not in json.loads(root.params or "{}")
+
+
 def test_chat_manager_assistant_message_records_hermes_audit_event(monkeypatch):
     from distr.core.chat_manager import ChatManagerCore
 

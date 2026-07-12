@@ -427,6 +427,7 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         "http_request",
         "execute_code",
         "playwright",
+        "browser_use",
         "computer_use",
         "play_recording",
         "decision_action",
@@ -773,7 +774,7 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
                 steps = []
                 valid_action_types = {
                     "agent_instruction", "run_command", "send_to_project_cli", "http_request",
-                    "execute_code", "playwright", "computer_use", "play_recording", "decision_action",
+                    "execute_code", "playwright", "browser_use", "computer_use", "play_recording", "decision_action",
                 }
                 for i, item in enumerate(parsed):
                     if isinstance(item, dict):

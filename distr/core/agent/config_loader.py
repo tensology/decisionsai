@@ -19,6 +19,53 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 
+_VIRTUAL_OUTPUT_NAME_MARKERS = (
+    "microsoft teams audio",
+    "zoomaudiodevice",
+    "zoom audio",
+    "blackhole",
+    "soundflower",
+    "vb-cable",
+    "loopback",
+    "obs",
+)
+
+_PREFERRED_AUDIBLE_OUTPUT_MARKERS = (
+    "macbook",
+    "built-in",
+    "speaker",
+    "headphone",
+    "airpods",
+    "jbl",
+)
+
+
+def _is_virtual_output_name(name: str | None) -> bool:
+    lowered = (name or "").strip().lower()
+    return any(marker in lowered for marker in _VIRTUAL_OUTPUT_NAME_MARKERS)
+
+
+def _audible_output_sort_key(device: Tuple[int, str, int, int]) -> tuple[int, int, str]:
+    index, name, _max_in, _max_out = device
+    lowered = (name or "").strip().lower()
+    preferred = any(marker in lowered for marker in _PREFERRED_AUDIBLE_OUTPUT_MARKERS)
+    return (0 if preferred else 1, int(index), lowered)
+
+
+def _fallback_audible_output_from_fresh_list(
+    devices: List[Tuple[int, str, int, int]],
+) -> Tuple[Optional[int], Optional[str]]:
+    candidates = [
+        device
+        for device in devices
+        if int(device[3] or 0) > 0 and not _is_virtual_output_name(device[1])
+    ]
+    if not candidates:
+        return None, None
+    index, name, _max_in, _max_out = sorted(candidates, key=_audible_output_sort_key)[0]
+    return int(index), str(name or "").strip() or None
+
+
 def resolve_stt_config(transcription_model: str) -> dict:
     """Parse a transcription_model string into an STT config dict.
 
@@ -164,6 +211,20 @@ except Exception as exc:
         name = (payload.get("name") or "").strip() or None
         if index is None:
             return None, name
+        if _is_virtual_output_name(name):
+            fresh_devices = _query_devices_fresh_subprocess()
+            if fresh_devices:
+                fallback_index, fallback_name = _fallback_audible_output_from_fresh_list(fresh_devices)
+                if fallback_index is not None:
+                    logger.warning(
+                        "Fresh default output resolved to virtual device '%s' (index %s); "
+                        "using audible fallback '%s' (index %s)",
+                        name,
+                        index,
+                        fallback_name,
+                        fallback_index,
+                    )
+                    return fallback_index, fallback_name
         return int(index), name
     except (subprocess.TimeoutExpired, json.JSONDecodeError, TypeError, ValueError, OSError) as exc:
         logger.warning("Could not query default output via subprocess: %s", exc)

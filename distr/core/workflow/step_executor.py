@@ -82,6 +82,7 @@ class StepExecutorMixin:
         handlers = {
             "execute_code": lambda: self._run_code(step_data, config, run_id=run_id),
             "playwright": lambda: self._run_playwright(step_data, config, run_id=run_id),
+            "browser_use": lambda: self._run_browser_use(step_data, config, run_id=run_id),
             "ytdlp": lambda: self._run_ytdlp(config, run_id=run_id),
             "run_command": lambda: self._run_command(config, run_id=run_id),
             "http_request": lambda: self._run_http(config),
@@ -131,9 +132,9 @@ class StepExecutorMixin:
             return False
         if run_id and self._run_is_e2e_smoke(run_id):
             return False
-        if action_type == "playwright" and config.get("headless", True):
+        if action_type in {"playwright", "browser_use"} and config.get("headless", True):
             return False
-        if action_type in {"computer_use", "playwright"}:
+        if action_type in {"computer_use", "playwright", "browser_use"}:
             return True
         if action_type == "agent_instruction":
             return self._is_computer_use_instruction(step_data.get("instruction") or "")
@@ -247,6 +248,24 @@ class StepExecutorMixin:
                         run_id: Optional[int] = None) -> Dict[str, Any]:
         """Execute Playwright browser automation code."""
         return self._run_code_type(step_data, config, "playwright", run_id=run_id)
+
+    def _run_browser_use(self, step_data: Dict[str, Any], config: dict,
+                         run_id: Optional[int] = None) -> Dict[str, Any]:
+        """Execute a Browser Use step through the deterministic browser adapter.
+
+        Browser Use remains the explicit workflow action/tool identity while its
+        local execution adapter uses Playwright. This keeps runs deterministic
+        and usable without requiring a separately configured agentic-browser LLM.
+        """
+        result = self._run_code_type(step_data, config, "playwright", run_id=run_id)
+        output = str(result.get("output") or "")
+        result["output"] = (
+            "Browser Use executed via the local Playwright adapter."
+            + ("\n" + output if output else "")
+        )
+        result["browser_surface"] = "browser_use"
+        result["browser_adapter"] = "playwright"
+        return result
 
     def _run_ytdlp(self, config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Fetch YouTube/video metadata, subtitles, or search via yt-dlp."""

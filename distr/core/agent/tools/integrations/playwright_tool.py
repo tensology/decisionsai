@@ -464,6 +464,17 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
     # Main execution
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _requires_confirmation(code: str) -> bool:
+        """Return True only for browser scripts that can transmit or mutate data."""
+        lowered = (code or "").lower()
+        mutation_markers = (
+            ".click(", ".dblclick(", ".fill(", ".type(", ".press(",
+            ".check(", ".uncheck(", ".set_input_files(", ".select_option(",
+            ".drag_to(", "expect_download", "page.on(\"dialog\"",
+        )
+        return any(marker in lowered for marker in mutation_markers)
+
     def _run(self, code: str = "", description: Optional[str] = None, analyze_screenshot: Optional[bool] = True, **kwargs) -> str:
         if not code.strip():
             return "Error: No code provided. Write Playwright Python code to execute."
@@ -503,17 +514,16 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
             try:
                 from distr.core.settings import load_settings_from_db
                 settings = load_settings_from_db()
-                if settings.get("initiative_ask_file_changes", True):
+                if settings.get("initiative_ask_file_changes", True) and self._requires_confirmation(code):
                     import uuid, time
                     confirmation_id = str(uuid.uuid4())
                     preview = code[:300] + ("..." if len(code) > 300 else "")
-                    self.event_queue.put({
-                        "type": "confirmation_request",
+                    self.event_queue.put(("confirmation_request", {
                         "confirmation_id": confirmation_id,
                         "title": "Run Playwright Script",
                         "message": f"Execute browser automation?\n\n{preview}",
-                    })
-                    deadline = time.time() + 120
+                    }), block=False)
+                    deadline = time.time() + 30
                     while time.time() < deadline:
                         if self.confirmation_results_dict and confirmation_id in self.confirmation_results_dict:
                             result = self.confirmation_results_dict.pop(confirmation_id)
@@ -540,7 +550,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 [sys.executable, tmp.name],
                 capture_output=True,
                 text=True,
-                timeout=120,
+                timeout=30,
                 cwd=os.path.expanduser("~"),
             )
 
@@ -562,7 +572,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 return f"✗ Playwright script failed (exit code {result.returncode}).\n\nError:\n{error[-1000:]}{hint}"
 
         except subprocess.TimeoutExpired:
-            return "✗ Playwright script timed out after 120 seconds."
+            return "✗ Playwright script timed out after 30 seconds. The browser was stopped so the conversation can continue."
         except Exception as e:
             return f"✗ Failed to run Playwright script: {e}"
         finally:

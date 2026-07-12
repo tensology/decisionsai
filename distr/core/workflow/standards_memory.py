@@ -15,6 +15,14 @@ from distr.core.db.workflow import AutoWorkflow, AutoWorkflowVariable
 
 STANDARDS_CONTEXT_TITLE = "Universal Quality Standards"
 ADAPTIVE_CONTEXT_TITLE = "Adaptive Quality Memory"
+GLOBAL_STANDARDS_CONTEXT_TITLE = "Global User Standards"
+
+GLOBAL_STANDARD_CATEGORIES = {
+    "quality_standard",
+    "ui_design_standard",
+    "product_standard",
+    "user_preference",
+}
 
 
 UNIVERSAL_WORKFLOW_STANDARDS = """[UNIVERSAL WORKFLOW QUALITY STANDARDS]
@@ -56,7 +64,7 @@ _FEEDBACK_SIGNALS = (
 
 
 def build_standards_context(context_rules: Optional[str] = None, board_id: int | None = None) -> str:
-    """Append universal workflow standards and board learned rules to context."""
+    """Append universal, global user, and board-learned standards to context."""
     existing = (context_rules or "").strip()
     standards = UNIVERSAL_WORKFLOW_STANDARDS.strip()
     if not existing:
@@ -66,22 +74,47 @@ def build_standards_context(context_rules: Optional[str] = None, board_id: int |
     else:
         base = existing + "\n\n" + standards
 
+    additions = []
+    try:
+        global_standards = build_global_user_standards_context()
+        if global_standards and "[GLOBAL USER STANDARDS]" not in base:
+            additions.append(global_standards)
+    except Exception:
+        pass
+
     if board_id:
         try:
             from distr.core.orchestrator import build_learned_rules_context, build_visual_taste_context
 
-            additions = []
             learned = build_learned_rules_context(int(board_id))
             if learned and "[BOARD LEARNED RULES]" not in base:
                 additions.append(learned)
             taste = build_visual_taste_context(board_id=int(board_id))
             if taste and "[VISUAL TASTE MEMORY]" not in base:
                 additions.append(taste)
-            if additions:
-                return base + "\n\n" + "\n\n".join(additions)
         except Exception:
             pass
-    return base
+    return base + ("\n\n" + "\n\n".join(additions) if additions else "")
+
+
+def build_global_user_standards_context(*, limit: int = 16) -> str:
+    """Format durable cross-project user standards for workflow prompts."""
+    from distr.core.orchestrator_memory import list_user_memories
+
+    memories = list_user_memories(limit=max(30, int(limit) * 3), include_disabled=False)
+    relevant = [
+        memory for memory in memories
+        if str(memory.get("scope") or "global") == "global"
+        and str(memory.get("category") or "") in GLOBAL_STANDARD_CATEGORIES
+    ][:max(1, int(limit))]
+    if not relevant:
+        return ""
+    lines = ["[GLOBAL USER STANDARDS]"]
+    for memory in relevant:
+        evidence = int(memory.get("evidence_count") or 0)
+        suffix = f" (reinforced {evidence}x)" if evidence > 1 else ""
+        lines.append(f"- {str(memory.get('content') or '').strip()}{suffix}")
+    return "\n".join(lines)
 
 
 def should_capture_feedback(feedback: str) -> bool:
@@ -99,6 +132,34 @@ def feedback_to_standard(feedback: str) -> str:
     if len(text) > 280:
         text = text[:277].rstrip() + "..."
     return f"- Review feedback to apply on future workflow runs: {text}"
+
+
+def capture_feedback_as_global_standard(
+    feedback: str,
+    *,
+    category: str = "quality_standard",
+    source_type: str = "workflow_feedback",
+    source_id: str = "",
+    project_id: int | None = None,
+) -> bool:
+    """Persist reusable feedback as a durable standard available to new projects."""
+    if not should_capture_feedback(feedback):
+        return False
+    clean = " ".join((feedback or "").strip().split())[:900]
+    from distr.core.orchestrator_memory import record_user_memory
+
+    memory_uid = record_user_memory(
+        clean,
+        category=category if category in GLOBAL_STANDARD_CATEGORIES else "quality_standard",
+        source_type=source_type,
+        source_id=source_id,
+        project_id=project_id,
+        tags=["workflow", "learned_standard", "cross_project"],
+        scope="global",
+        confidence=0.82,
+        payload={"original_feedback": clean},
+    )
+    return bool(memory_uid)
 
 
 def _workflow_accepts_adaptive_standards(workflow_id: int) -> bool:
@@ -123,6 +184,11 @@ def capture_feedback_as_memory(
 
     captured = False
     standard = feedback_to_standard(feedback)
+    captured = capture_feedback_as_global_standard(
+        feedback,
+        source_id=str(workflow_id or linked_workflow_id or ""),
+        project_id=project_id,
+    ) or captured
     target_workflow_id = None
     if workflow_id and _workflow_accepts_adaptive_standards(int(workflow_id)):
         target_workflow_id = int(workflow_id)

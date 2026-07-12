@@ -33,6 +33,23 @@
 .tab-btn.active { border-bottom-color: #f97316; color: #fff; }
 .wf-detail-tabbar { min-height: 2.625rem; }
 .wf-tab-trailing { margin-left: auto; }
+@media (max-width: 640px) {
+    .wf-detail-tabbar {
+        flex-wrap: wrap;
+        align-items: stretch;
+    }
+    .wf-detail-tabbar > .flex.items-center.gap-1.min-w-0 {
+        flex: 1 1 100%;
+        overflow-x: auto;
+    }
+    .wf-tab-trailing {
+        margin-left: 0;
+        width: 100%;
+        justify-content: flex-end;
+        padding-bottom: 0.35rem;
+        pointer-events: auto;
+    }
+}
 .wf-workflow-tabbar { min-height: 2.625rem; }
 .wf-workflow-tab {
     flex-shrink: 0;
@@ -1267,10 +1284,11 @@ body.wf-board-pointer-dragging * {
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
 }
 .wf-loop-feed-step--waiting .wf-loop-feed-step-state {
-    color: #fcd34d;
+    color: #86efac;
 }
 .wf-loop-feed-step--waiting .wf-loop-feed-step-state::before {
-    background: #f59e0b;
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
 }
 .wf-loop-feed-step--passed .wf-loop-feed-step-state {
     color: #86efac;
@@ -2558,7 +2576,16 @@ body.wf-board-pointer-dragging * {
     background: linear-gradient(180deg, #4ade80 0%, #16a34a 100%);
     box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
 }
-.wf-loop-step-status--waiting { border-color: rgba(245, 158, 11, 0.65) !important; background: rgba(245, 158, 11, 0.08) !important; }
+.wf-loop-step-status--waiting {
+    border-color: rgba(34, 197, 94, 0.78) !important;
+    background: rgba(34, 197, 94, 0.14) !important;
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.34), 0 10px 28px rgba(34, 197, 94, 0.14) !important;
+}
+.wf-loop-ring-node.wf-loop-step-status--waiting .wf-loop-ring-node-ball,
+.wf-loop-list-row.wf-loop-step-status--waiting .wf-loop-list-step-ball {
+    background: linear-gradient(180deg, #4ade80 0%, #16a34a 100%);
+    box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
+}
 .wf-loop-step-status--done { border-color: rgba(34, 197, 94, 0.98) !important; box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.36), 0 10px 26px rgba(34, 197, 94, 0.12) !important; }
 .wf-loop-step-status--failed { border-color: rgba(239, 68, 68, 0.55) !important; }
 .wf-loop-step-modal {

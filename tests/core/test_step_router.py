@@ -156,9 +156,10 @@ class TestSelfRoutingGuard:
 class TestWaitState:
     @patch("distr.core.workflow.router.StepRouter._emit_waiting_for_feedback")
     @patch("distr.core.workflow.router.StepRouter._notify_main_agent")
+    @patch("distr.core.workflow.router.should_pause_after_step", return_value=True)
     @patch("distr.core.workflow.router.increment_workflow_updated")
     @patch("distr.core.workflow.router.get_session")
-    def test_wait_for_continue_enters_waiting(self, mock_get_session, mock_ws, mock_notify, mock_emit):
+    def test_wait_for_continue_enters_waiting(self, mock_get_session, mock_ws, mock_pause, mock_notify, mock_emit):
         step = _make_step(id=1, wait_for_continue=True)
         run = _make_run(id=10, run_data="{}")
 
@@ -174,11 +175,42 @@ class TestWaitState:
         assert decision["notify_main_agent"] is True
         assert step.status == "waiting"
         assert run.status == "waiting"
+        mock_pause.assert_called_once()
 
-    @patch("distr.core.workflow.router.StepRouter._notify_main_agent")
+    @patch("distr.core.workflow.router.should_pause_after_step", return_value=False)
     @patch("distr.core.workflow.router.increment_workflow_updated")
     @patch("distr.core.workflow.router.get_session")
-    def test_wait_emits_step_waiting_for_feedback(self, mock_get_session, mock_ws, mock_notify):
+    @patch("distr.core.workflow.router._run_verification", return_value=True)
+    def test_wait_for_continue_is_ignored_when_checkpoints_are_not_enabled(
+        self,
+        mock_verify,
+        mock_get_session,
+        mock_ws,
+        mock_pause,
+    ):
+        step = _make_step(id=1, wait_for_continue=True)
+        run = _make_run(id=10, run_data="{}")
+        next_step = _make_step(id=2, position=1)
+
+        db = MagicMock()
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
+        db.query.return_value.filter.return_value.order_by.return_value.first.return_value = next_step
+
+        router = StepRouter()
+        decision = router.route(1, "done", True, 10)
+
+        assert decision["action"] == "next_step"
+        assert decision["step_id"] == 2
+        assert step.status == "passed"
+        mock_pause.assert_called_once()
+
+    @patch("distr.core.workflow.router.StepRouter._notify_main_agent")
+    @patch("distr.core.workflow.router.should_pause_after_step", return_value=True)
+    @patch("distr.core.workflow.router.increment_workflow_updated")
+    @patch("distr.core.workflow.router.get_session")
+    def test_wait_emits_step_waiting_for_feedback(self, mock_get_session, mock_ws, mock_pause, mock_notify):
         step = _make_step(id=3, workflow_id=200, wait_for_continue=True, name="Review")
         run = _make_run(id=15, run_data="{}")
 

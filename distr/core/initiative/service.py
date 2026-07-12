@@ -370,6 +370,8 @@ class InitiativeService:
         self._qt_bridge.reset_idle_timer_requested.connect(self._reset_idle_timer_on_qt)
         self._cycle_lock = threading.Lock()
         self._cycle_running = False
+        self._schedule_tick_running = False
+        self._schedule_tick_lock = threading.Lock()
         self._stopped = False
         self._started = False
         self._last_cycle_error: Optional[str] = None
@@ -544,6 +546,28 @@ class InitiativeService:
     def _on_schedule_tick(self) -> None:
         if self._stopped:
             return
+        with self._schedule_tick_lock:
+            if self._schedule_tick_running:
+                logger.debug("InitiativeService: previous schedule tick still running; skipping")
+                return
+            self._schedule_tick_running = True
+        threading.Thread(
+            target=self._run_schedule_tick_background,
+            daemon=True,
+            name="initiative-schedule-tick",
+        ).start()
+
+    def _run_schedule_tick_background(self) -> None:
+        """Run all network/DB-heavy scheduled work away from the Qt thread."""
+        try:
+            self._run_schedule_tick_background_inner()
+        finally:
+            with self._schedule_tick_lock:
+                self._schedule_tick_running = False
+
+    def _run_schedule_tick_background_inner(self) -> None:
+        if self._stopped:
+            return
         try:
             from distr.core.mcp.runtime import tick_mcp_reconnect
 
@@ -557,18 +581,14 @@ class InitiativeService:
         except Exception:
             logger.debug("tick_sidecar_tool_availability skipped", exc_info=True)
         # R3: DB-backed proactive tasks (Morning Brief, planners, etc.)
-        threading.Thread(target=self._maybe_run_proactive_scheduler, daemon=True).start()
+        self._maybe_run_proactive_scheduler()
         try:
             from distr.core.utils import load_settings_from_db
             settings = load_settings_from_db()
         except Exception:
             logger.error("InitiativeService: failed to load settings on schedule tick", exc_info=True)
             return
-        threading.Thread(
-            target=self._maybe_send_execution_nudges,
-            args=(settings,),
-            daemon=True,
-        ).start()
+        self._maybe_send_execution_nudges(settings)
         try:
             from distr.core.initiative.daily_plan_prompt import maybe_suggest_daily_plan_automation
 
@@ -587,7 +607,7 @@ class InitiativeService:
         with self._cycle_lock:
             if self._cycle_running:
                 return
-        QTimer.singleShot(0, lambda: self._dispatch_cycle("schedule_tick"))
+        self._dispatch_cycle("schedule_tick")
 
     def _on_chat_started(self, chat_id: int) -> None:
         """Surface pending drafts when a chat stream starts."""

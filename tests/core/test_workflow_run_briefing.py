@@ -61,6 +61,8 @@ def test_build_step_review_message():
     assert "**Recommendation:**" in message
 
 
-def test_human_checkpoint_enabled_for_ticket_runs():
-    assert human_checkpoint_enabled({"ticket_id": 124, "loop_contract": {"goal": "ship"}})
+def test_human_checkpoint_requires_explicit_run_setting():
+    assert not human_checkpoint_enabled({"ticket_id": 124, "loop_contract": {"goal": "ship"}})
+    assert human_checkpoint_enabled({"run_settings": {"human_checkpoints": True}})
+    assert not human_checkpoint_enabled({"run_settings": {"human_checkpoints": False}, "ticket_id": 124})
     assert not human_checkpoint_enabled({"skip_human_checkpoints": True, "ticket_id": 124})

@@ -23,6 +23,40 @@ from datetime import UTC, datetime
 _chat_ws_connections: Dict[int, Set[WebSocket]] = {}
 _chat_ws_lock = threading.Lock()
 
+
+async def broadcast_chat_event(payload: Dict[str, Any]) -> int:
+    """Broadcast an already validated event to subscribers for its chat."""
+    chat_id = int(payload["chat_id"])
+    encoded = json.dumps(payload)
+    with _chat_ws_lock:
+        conns = list(_chat_ws_connections.get(chat_id, set()))
+    failed = []
+    for ws in conns:
+        try:
+            await ws.send_text(encoded)
+        except Exception as exc:
+            logger.debug("WebSocket send error: %s", exc)
+            failed.append(ws)
+    if failed:
+        with _chat_ws_lock:
+            registered = _chat_ws_connections.get(chat_id)
+            if registered is not None:
+                registered.difference_update(failed)
+                if not registered:
+                    _chat_ws_connections.pop(chat_id, None)
+    return len(conns) - len(failed)
+
+
+def publish_chat_event_threadsafe(payload: Dict[str, Any]):
+    """Schedule a chat broadcast directly on the embedded server loop."""
+    from distr.gui.web.server import get_unified_server
+
+    server = get_unified_server()
+    loop = getattr(server, "asyncio_loop", None) if server else None
+    if not server or not server.is_running or loop is None or loop.is_closed():
+        raise RuntimeError("Unified web server event loop is unavailable")
+    return asyncio.run_coroutine_threadsafe(broadcast_chat_event(dict(payload)), loop)
+
 from distr.core.db import get_session, Chat
 from distr.core.chat import ChatService, record_chat_audit_event
 from distr.core.settings import load_settings_from_db
@@ -731,6 +765,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 data = await websocket.receive_text()
                 try:
                     msg = json.loads(data)
+                    if msg.get("type") == "ping":
+                        await websocket.send_json(
+                            {"type": "pong", "sent_at": msg.get("sent_at")}
+                        )
+                        continue
                     cid = msg.get("subscribe")
                     if cid is not None:
                         with _chat_ws_lock:
@@ -818,15 +857,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             return JSONResponse({"ok": False, "disconnected": True})
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid body")
-        payload = json.dumps(body)
-        with _chat_ws_lock:
-            conns = list(_chat_ws_connections.get(chat_id, set()))
-        for ws in conns:
-            try:
-                await ws.send_text(payload)
-            except Exception as e:
-                logger.debug("WebSocket send error: %s", e)
-        return JSONResponse({"ok": True})
+        delivered = await broadcast_chat_event(body)
+        return JSONResponse({"ok": True, "delivered": delivered})
 
     @router.get("/chats")
     async def get_chats():

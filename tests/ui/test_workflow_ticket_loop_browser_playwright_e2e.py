@@ -142,7 +142,7 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(active_runs).to_contain_text("codex")
     expect(active_runs).to_contain_text(re.compile(r"gpt-5.*codex"))
     expect(active_runs).to_contain_text("webapp-testing")
-    expect(active_runs).to_contain_text("other")
+    expect(active_runs).to_contain_text("agent")
 
     page.locator("#wf-runs-tab-btn").click()
     page.locator(".wf-runs-subtab[data-runs-tab='timeline']").click()
@@ -152,6 +152,7 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(timeline).to_contain_text("Tools: playwright, browser_use")
     expect(timeline).to_contain_text("RED validation failed")
     expect(timeline).to_contain_text("GREEN validation passed", timeout=60000)
+    expect(timeline).to_contain_text("BROWSER_USE_GREEN", timeout=60000)
     expect(timeline).to_contain_text("workflow_run_completed", timeout=60000)
 
     harness.wait_until_ticket_not_active(str(ids["ticket_title"]))
@@ -193,6 +194,14 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     ]
     assert passed_step, "SSE stream missing final Playwright step pass"
     assert passed_step[0].get("payload", {}).get("tools") == ["playwright", "browser_use"]
+    browser_use_step = [
+        event for event in sse_orchestration
+        if event.get("event_type") == "workflow_step_completed"
+        and event.get("status") == "passed"
+        and event.get("payload", {}).get("step_name") == "Inspect with Browser Use"
+    ]
+    assert browser_use_step, "SSE stream missing explicit Browser Use step pass"
+    assert browser_use_step[0].get("payload", {}).get("tools") == ["browser_use"]
 
     assert not failed_requests, f"Unexpected failed browser requests: {failed_requests[:5]}"
     assert not _relevant_console_errors(console_errors), f"Unexpected console errors: {console_errors[:5]}"

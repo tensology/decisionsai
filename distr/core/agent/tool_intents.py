@@ -128,6 +128,13 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "special_key",
+        (
+            r"\b(?:press|hit|tap)\s+(?:the\s+)?(?:space\s*bar|spacebar|space|enter|return|tab|escape|esc|backspace|delete|up|down|left|right|page\s+up|page\s+down|home|end|[a-z0-9])\b",
+            r"^(?:space\s*bar|spacebar|space|enter|return|tab|escape|esc|backspace|delete|up|down|left|right|home|end)\.?$",
+        ),
+    ),
+    (
         "exit_app",
         (
             r"\b(exit|quit|close)\s+(?:the\s+)?(?:app|application|decisionsai)\b",

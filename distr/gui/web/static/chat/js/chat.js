@@ -12,6 +12,30 @@ let chatWs = null;
 let chatWsSubscribedId = null;
 let chatWsReconnectTimer = null;
 let chatWsReconnectDelay = 1000; // ms, doubles on each failure up to 30s
+let chatWsHeartbeatTimer = null;
+let chatWsLastPongAt = 0;
+const CHAT_WS_HEARTBEAT_MS = 15000;
+const CHAT_WS_STALE_MS = 45000;
+const _agentStreamWaiters = new Map();
+
+function _setAgentStreamWaiter(chatId, token, resolve) {
+    _agentStreamWaiters.set(Number(chatId), { token, resolve });
+}
+
+function _clearAgentStreamWaiter(chatId, resolve) {
+    const key = Number(chatId);
+    const current = _agentStreamWaiters.get(key);
+    if (current && (!resolve || current.resolve === resolve)) _agentStreamWaiters.delete(key);
+}
+
+function _resolveAgentStreamWaiter(chatId) {
+    const key = Number(chatId);
+    const current = _agentStreamWaiters.get(key);
+    if (!current || current.token !== _streamToken) return false;
+    _agentStreamWaiters.delete(key);
+    current.resolve();
+    return true;
+}
 let queuedTranscriptionStatusUpdate = null;
 let transcriptionStatusFlushScheduled = false;
 /** When non-null, we are showing a streamed assistant message for this chat (PTT/voice). */
@@ -189,6 +213,32 @@ function _hasActiveAssistantStreamForCurrentChat() {
     if (isStreaming && streamingChatId === currentChatId) return true;
     const state = _getLiveChatState(currentChatId);
     return Boolean(state && state.assistantStreaming);
+}
+
+function _hasLiveTranscriptionStateForCurrentChat() {
+    if (currentChatId == null) return false;
+    const state = _getLiveChatState(currentChatId);
+    return Boolean(
+        state
+        && state.pendingUserPhase === 'preview'
+        && _normalizeMsgPlain(state.pendingUserText || '')
+    );
+}
+
+function _pendingLiveTranscriptionPlainForCurrentChat() {
+    if (currentChatId == null) return '';
+    const state = _getLiveChatState(currentChatId);
+    if (!state || state.pendingUserPhase !== 'preview') return '';
+    return _normalizeMsgPlain(state.pendingUserText || '');
+}
+
+function _messagesContainUserPlain(messages, plain) {
+    if (!plain || !Array.isArray(messages)) return false;
+    return messages.some(msg => (
+        msg
+        && msg.role === 'user'
+        && _normalizeMsgPlain(msg.content || '') === plain
+    ));
 }
 
 // DOM Elements
@@ -698,6 +748,7 @@ function getChatWsUrl() {
 
 function stopChatWebSocket() {
     if (chatWsReconnectTimer) { clearTimeout(chatWsReconnectTimer); chatWsReconnectTimer = null; }
+    if (chatWsHeartbeatTimer) { clearInterval(chatWsHeartbeatTimer); chatWsHeartbeatTimer = null; }
     chatWsReconnectDelay = 1000;
     if (chatWs) {
         chatWs.onclose = null; // prevent reconnect on intentional close
@@ -713,7 +764,6 @@ function stopChatWebSocket() {
  */
 function startChatWebSocket(force) {
     if (currentChatId == null) return;
-    if (!force && isStreaming) return;
     const chatId = currentChatId;
     if (chatWs && chatWs.readyState === WebSocket.OPEN) {
         if (chatWsSubscribedId === chatId) return;
@@ -737,6 +787,10 @@ function startChatWebSocket(force) {
         chatWs.onmessage = (event) => {
             try {
                 const msg = JSON.parse(event.data);
+                if (msg.type === 'pong') {
+                    chatWsLastPongAt = Date.now();
+                    return;
+                }
                 if (msg.event === 'message_added') {
                     handleChatEventMessageAdded(msg);
                     return;
@@ -777,7 +831,7 @@ function startChatWebSocket(force) {
                     return;
                 }
                 if (msg.type === 'chat_updated' && msg.chat_id === currentChatId) {
-                    if (streamingChatId === currentChatId && window._agentStreamResolve) {
+                    if (streamingChatId === currentChatId && _agentStreamWaiters.has(Number(currentChatId))) {
                         // Fallback: stream_finished never fired (e.g. legacy provider). Fetch and render, then resolve.
                         fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
                             const wrap = document.getElementById('streamingAssistantMessage');
@@ -802,10 +856,7 @@ function startChatWebSocket(force) {
                             }
                             streamingChatId = null;
                             removeTypingIndicator();
-                            if (window._agentStreamResolve) {
-                                window._agentStreamResolve();
-                                window._agentStreamResolve = null;
-                            }
+                            _resolveAgentStreamWaiter(currentChatId);
                             updateChatSettingsDisplay({
                                 title: data.title || 'New Chat',
                                 provider: data.provider || '-',
@@ -865,6 +916,7 @@ function startChatWebSocket(force) {
             } catch (e) {}
         };
         chatWs.onclose = () => {
+            if (chatWsHeartbeatTimer) { clearInterval(chatWsHeartbeatTimer); chatWsHeartbeatTimer = null; }
             chatWs = null;
             chatWsSubscribedId = null;
             // Auto-reconnect if we still have an active chat, with exponential backoff
@@ -872,15 +924,26 @@ function startChatWebSocket(force) {
                 chatWsReconnectTimer = setTimeout(() => {
                     chatWsReconnectTimer = null;
                     chatWsReconnectDelay = Math.min(chatWsReconnectDelay * 2, 30000);
-                    startChatWebSocket();
+                    startChatWebSocket(true);
                 }, chatWsReconnectDelay);
             }
         };
         chatWs.onopen = () => {
             chatWsReconnectDelay = 1000; // reset backoff on successful connect
+            chatWsLastPongAt = Date.now();
             if (chatWsSubscribedId != null && chatWs.readyState === WebSocket.OPEN) {
                 chatWs.send(JSON.stringify({ subscribe: chatWsSubscribedId }));
             }
+            if (chatWsHeartbeatTimer) clearInterval(chatWsHeartbeatTimer);
+            chatWsHeartbeatTimer = setInterval(() => {
+                if (!chatWs || chatWs.readyState !== WebSocket.OPEN) return;
+                if (Date.now() - chatWsLastPongAt > CHAT_WS_STALE_MS) {
+                    console.warn('Chat WebSocket heartbeat stale; reconnecting');
+                    chatWs.close();
+                    return;
+                }
+                chatWs.send(JSON.stringify({ type: 'ping', sent_at: Date.now() }));
+            }, CHAT_WS_HEARTBEAT_MS);
         };
     } catch (e) {
         console.debug('Chat WebSocket error:', e);
@@ -1575,10 +1638,7 @@ function handleChatEventStreamFinished(msg) {
     // still holds for any in-flight poll tick that fires before the microtask queue drains.
     // Resolve pending WebSocket-based wait (sendToAgentAndPoll / pollUntilAgentResponse)
     // Only fire if this stream_finished is for the currently active stream token (guards against stale events from old chats)
-    if (window._agentStreamResolve) {
-        window._agentStreamResolve();
-        window._agentStreamResolve = null;
-    }
+    _resolveAgentStreamWaiter(msg.chat_id);
     streamingChatId = null;
     scheduleRefreshChatHeaderStats({ checkTitle: true });
     // Reset input state in case the message came from voice/PTT (not web sendMessage)
@@ -1630,10 +1690,7 @@ function handleChatEventStreamError(msg) {
         chatMessages.appendChild(errorEl);
         scrollToBottom();
     }
-    if (window._agentStreamResolve) {
-        window._agentStreamResolve();
-        window._agentStreamResolve = null;
-    }
+    _resolveAgentStreamWaiter(msg.chat_id != null ? msg.chat_id : currentChatId);
     _clearLiveChatState(msg.chat_id != null ? msg.chat_id : currentChatId);
     streamingChatId = null;
 }
@@ -1928,6 +1985,11 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
     }
 
     // Live speech-to-text (updates while you talk)
+    if (trimmed && hasRenderedUserMessagePlain(_normalizeMsgPlain(trimmed))) {
+        _acknowledgePersistedLiveUser(currentChatId, trimmed);
+        _discardLiveTranscriptionUi();
+        return;
+    }
     let wrap = document.getElementById('transcriptionStatus');
     if (!wrap) {
         wrap = document.createElement('div');
@@ -3061,6 +3123,15 @@ function renderMessages(messages, preserveOnEmpty) {
         }
     }
     const preserveLiveUi = _hasActiveAssistantStreamForCurrentChat();
+    const pendingLiveTranscriptionPlain = _pendingLiveTranscriptionPlainForCurrentChat();
+    const persistedLiveTranscriptionArrived = _messagesContainUserPlain(messages, pendingLiveTranscriptionPlain);
+    const preserveLiveTranscriptionUi = Boolean(pendingLiveTranscriptionPlain && !persistedLiveTranscriptionArrived);
+    const preservedTranscriptionEl = preserveLiveTranscriptionUi
+        ? document.getElementById('transcriptionStatus')
+        : null;
+    if (persistedLiveTranscriptionArrived) {
+        _acknowledgePersistedLiveUser(currentChatId, pendingLiveTranscriptionPlain);
+    }
     if (!preserveLiveUi) {
         removeTypingIndicator();
         const streamingEl = document.getElementById('streamingAssistantMessage');
@@ -3068,9 +3139,11 @@ function renderMessages(messages, preserveOnEmpty) {
         const streamingActivityEl = document.getElementById('streamingAssistantActivity');
         if (streamingActivityEl) streamingActivityEl.remove();
     }
-    // Incremental reload from API does not wipe innerHTML — remove live STT preview so
-    // "Listening…" never sits next to persisted rows from the socket.
-    _discardLiveTranscriptionUi();
+    // Chat refreshes can race the STT preview event. Keep a real pending
+    // transcript visible until message_added / clear_live_preview replaces it.
+    if (!preserveLiveTranscriptionUi) {
+        _discardLiveTranscriptionUi();
+    }
 
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;
@@ -3123,6 +3196,10 @@ function renderMessages(messages, preserveOnEmpty) {
             }
         }
         _renderedMessageCount = messages.length;
+        if (preservedTranscriptionEl && preservedTranscriptionEl.parentNode !== chatMessages) {
+            chatMessages.appendChild(preservedTranscriptionEl);
+            _ensureTranscriptionPreviewPlacement();
+        }
         scrollToBottom();
         return;
     }
@@ -3139,6 +3216,10 @@ function renderMessages(messages, preserveOnEmpty) {
             finalizeMessageElementMount(messageDiv, message);
         }
     });
+    if (preservedTranscriptionEl) {
+        chatMessages.appendChild(preservedTranscriptionEl);
+        _ensureTranscriptionPreviewPlacement();
+    }
     _renderedMessageCount = toRender.length;
     scrollToBottomImmediate();
 }
@@ -4034,7 +4115,7 @@ async function pollUntilAgentResponse(abortSignal) {
         pollDone = true;
         if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
         if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; }
-        if (window._agentStreamResolve === resolveStream) window._agentStreamResolve = null;
+        _clearAgentStreamWaiter(myChatId, resolveStream);
         removeTypingIndicator();
         if (streamingChatId === myChatId) streamingChatId = null;
     };
@@ -4043,7 +4124,7 @@ async function pollUntilAgentResponse(abortSignal) {
     return new Promise((resolve, reject) => {
         const finish = () => { done(); resolve(); };
         resolveStream = finish;
-        window._agentStreamResolve = finish;
+        _setAgentStreamWaiter(myChatId, myToken, finish);
 
         pollInterval = setInterval(async () => {
             if (pollDone || (abortSignal && abortSignal.aborted)) return;
@@ -4137,7 +4218,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
         pollDone = true;
         if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
         if (pollTimeout) { clearTimeout(pollTimeout); pollTimeout = null; }
-        if (window._agentStreamResolve === resolveStream) window._agentStreamResolve = null;
+        _clearAgentStreamWaiter(myChatId, resolveStream);
         removeTypingIndicator();
         if (streamingChatId === myChatId) streamingChatId = null;
     };
@@ -4146,7 +4227,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
     return new Promise((resolve, reject) => {
         const finish = () => { done(); resolve(); };
         resolveStream = finish;
-        window._agentStreamResolve = finish;
+        _setAgentStreamWaiter(myChatId, myToken, finish);
 
         pollInterval = setInterval(async () => {
             if (pollDone || (abortSignal && abortSignal.aborted)) return;
@@ -5089,25 +5170,13 @@ function getCurrentConversationalBenchmarkContext() {
 
 function openChatBenchmarkInfoModal() {
     const context = getCurrentConversationalBenchmarkContext();
-    if (typeof window.openLLMBenchmarkModal === 'function') {
-        window.openLLMBenchmarkModal('conversational', {
+    if (window.DecisionsBenchmark && typeof window.DecisionsBenchmark.open === 'function') {
+        window.DecisionsBenchmark.open('conversational', {
             provider: context.provider,
             model: context.model,
             compareProvider: context.provider,
             compareModel: context.model
         });
-        return;
-    }
-    if (typeof window.dispatchEvent === 'function') {
-        window.dispatchEvent(new CustomEvent('open-llm-benchmark', {
-            detail: {
-                type: 'conversational',
-                provider: context.provider,
-                model: context.model,
-                compareProvider: context.provider,
-                compareModel: context.model
-            }
-        }));
     }
 }
 

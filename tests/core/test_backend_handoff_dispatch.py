@@ -137,3 +137,74 @@ def test_run_project_task_does_not_treat_same_backend_live_session_as_another_cl
     assert result.success is True
     assert result.error == ""
     assert result.execution_session_id == 88
+
+
+def test_run_project_task_records_preflight_failure_before_dispatch(monkeypatch):
+    from distr.core.project_cli_backends import registry
+
+    class FakeBackend:
+        id = "codex"
+        name = "Codex"
+
+        def setup_status(self):
+            return SimpleNamespace(
+                ready=False,
+                message="Codex CLI authentication required.",
+                setup_instructions="Run codex login.",
+                to_dict=lambda: {
+                    "id": "codex",
+                    "ready": False,
+                    "state": "auth_required",
+                    "message": "Codex CLI authentication required.",
+                },
+            )
+
+        async def send_task(self, task, on_event=None):
+            raise AssertionError("preflight failure must not dispatch work")
+
+    events = []
+    completed = []
+
+    monkeypatch.setattr(registry, "get_backend", lambda backend_id: FakeBackend())
+    monkeypatch.setattr(registry, "_git_status_short", lambda folder: [])
+    monkeypatch.setattr(
+        "distr.core.kanban.project_execution.create_execution_session",
+        lambda **kwargs: 91,
+    )
+    monkeypatch.setattr(
+        "distr.core.kanban.project_execution.append_execution_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "distr.core.kanban.project_execution.complete_execution_session",
+        lambda *args, **kwargs: completed.append((args, kwargs)),
+    )
+    monkeypatch.setattr("distr.core.terminal.get_project_runtime_snapshot", lambda project_id: {})
+
+    result = asyncio.run(
+        registry.run_project_task(
+            SimpleNamespace(
+                id=3,
+                name="Demo",
+                folder_location="/tmp/demo",
+                coding_backend="codex",
+                coding_backend_model="auto",
+            ),
+            "Fix the UI",
+            workflow_id=4,
+            run_id=5,
+            step_id=6,
+            ticket_id=7,
+            backend_id_override="codex",
+        )
+    )
+
+    assert result.success is False
+    assert result.execution_session_id == 91
+    assert "authentication required" in result.error
+    assert events[0][0] == (91, "preflight")
+    assert events[0][1]["status"] == "failed"
+    assert events[0][1]["payload"]["backend_id"] == "codex"
+    assert events[0][1]["payload"]["preflight"]["ready"] is False
+    assert completed[0][0] == (91,)
+    assert completed[0][1]["success"] is False
