@@ -231,7 +231,7 @@ class FastActionMixin:
         if hard_error or failure_like or (pointer_request and not describe_request):
             response_text = self._fa_screenshot_response_text(result_str)
             if not self._cancelled:
-                await self._fa_push_tts(response_text)
+                await self._fa_deliver_spoken_response(response_text)
             self._fa_save_to_history(chat_id, response_text, emit_signals=True)
             self._messages.append({"role": "assistant", "content": response_text})
             return True
@@ -249,7 +249,7 @@ class FastActionMixin:
         # Non-pointer capture-only / short operational result.
         response_text = self._fa_screenshot_response_text(result_str)
         if not self._cancelled:
-            await self._fa_push_tts(response_text)
+            await self._fa_deliver_spoken_response(response_text)
         self._fa_save_to_history(chat_id, response_text, emit_signals=True)
         self._messages.append({"role": "assistant", "content": response_text})
         return True
@@ -287,11 +287,11 @@ class FastActionMixin:
 
         if fast_action.response_type == "tts":
             if not self._cancelled:
-                await self._fa_push_tts(response_text)
+                await self._fa_deliver_spoken_response(response_text)
             self._fa_save_to_history(chat_id, response_text, emit_signals=True)
         else:
-            ack = brief_tool_completion_message(getattr(tool, "name", ""))
-            await self._fa_push_tts(ack)
+            ack = brief_tool_completion_message(getattr(fast_action, "tool_name", ""))
+            await self._fa_deliver_spoken_response(ack)
             self._fa_save_to_history(chat_id, response_text)
 
         self._messages.append({"role": "assistant", "content": response_text})
@@ -305,13 +305,16 @@ class FastActionMixin:
             response_text = result.replace("Error: ", "").replace("Error executing task: ", "").strip()
             if len(response_text) > 200:
                 response_text = response_text[:200] + "..."
-            await self._fa_push_tts(response_text)
+            await self._fa_deliver_spoken_response(response_text)
             self._fa_save_to_history(chat_id, response_text)
         else:
+            response_text = result if isinstance(result, str) and result.strip() else "Action playback started"
             if self.chat_manager and chat_id and result:
                 self.chat_manager.add_assistant_message(
-                    chat_id, result if isinstance(result, str) else "Action playback started"
+                    chat_id, response_text
                 )
+            if getattr(self, "_is_telegram_request", False):
+                await self._fa_deliver_spoken_response(response_text)
         return True
 
     async def _fa_handle_done(self, fast_action, chat_id, result, tool) -> bool:
@@ -365,7 +368,7 @@ class FastActionMixin:
             await self.push_frame(LLMFullResponseStartFrame())
             await self.push_frame(LLMFullResponseEndFrame())
         else:
-            await self._fa_push_tts(response_text)
+            await self._fa_deliver_spoken_response(response_text)
         self._fa_save_to_history(chat_id, response_text)
         return True
 
@@ -377,7 +380,7 @@ class FastActionMixin:
         except Exception:
             response_text = str(result or "").strip() or "I could not read the developer context right now."
         if not self._cancelled:
-            await self._fa_push_tts(response_text)
+            await self._fa_deliver_spoken_response(response_text)
         self._fa_save_to_history(chat_id, response_text, emit_signals=True)
         self._messages.append({"role": "assistant", "content": response_text})
         return True
@@ -458,7 +461,7 @@ class FastActionMixin:
             if not self._cancelled:
                 from distr.core.agent.tool_audio_timing import wait_after_tool_sound_before_tts
                 await wait_after_tool_sound_before_tts(self)
-                await self._fa_push_tts(response_text)
+                await self._fa_deliver_spoken_response(response_text)
             self._fa_save_to_history(chat_id, response_text, emit_signals=True)
             self._messages.append({"role": "assistant", "content": response_text})
             return True
