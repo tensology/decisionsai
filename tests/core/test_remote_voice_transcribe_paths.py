@@ -70,8 +70,8 @@ class _Host(TelegramRemoteControlMixin):
     def _send_websocket_message(self, message):
         self.responses.append(message)
 
-    def _type_text_quick(self, text):
-        self.typed_text.append(text)
+    def _type_text_quick(self, text, **kwargs):
+        self.typed_text.append((text, kwargs))
 
 
 def _install_fake_qt(monkeypatch, app_obj):
@@ -158,6 +158,61 @@ def test_voice_transcribe_reports_agent_not_available(monkeypatch):
     last = host.responses[-1]
     assert last["command"] == "voice_transcribe"
     assert "Agent not available" in (last.get("error") or "")
+
+
+def test_remote_agent_interrupt_cancels_pending_context_and_agent_work(monkeypatch):
+    host = _Host()
+    host._pending_remote_agent_responses = [
+        {"request_id": "old-turn"},
+        {"request_id": "keep-turn"},
+    ]
+    host._pending_remote_agent_response = host._pending_remote_agent_responses[-1]
+
+    class _Queue:
+        def __init__(self):
+            self.items = []
+
+        def put(self, item, **_kwargs):
+            self.items.append(item)
+
+    class _App:
+        agent_command_queue = _Queue()
+
+    _install_fake_qt(monkeypatch, _App())
+    host._handle_remote_control_command(
+        {
+            "command": "remote_agent_interrupt",
+            "request_id": "interrupt-1",
+            "data": {"request_id": "old-turn"},
+        }
+    )
+
+    assert _App.agent_command_queue.items == [("interrupt_tts", {})]
+    assert host._pending_remote_agent_responses == [{"request_id": "keep-turn"}]
+    assert host.responses[-1]["data"]["success"] is True
+
+
+def test_voice_text_input_can_disable_enter_for_dictation():
+    host = _Host()
+
+    host._handle_remote_control_command(
+        {
+            "command": "voice_text_input",
+            "request_id": "text-1",
+            "data": {
+                "text": "leave this in the field",
+                "mode": "dictate",
+                "press_enter": False,
+            },
+        }
+    )
+
+    assert host.typed_text == [
+        (
+            "leave this in the field",
+            {"dictation": True, "press_enter": False},
+        )
+    ]
 
 
 def test_voice_transcribe_reports_timeout(monkeypatch):

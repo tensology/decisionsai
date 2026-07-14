@@ -22,12 +22,17 @@ class DummyManager:
         self._pending_remote_agent_response = None
         self._pending_remote_agent_responses = []
         self._cancelled_remote_audio_requests = set()
+        self.pressed = []
 
     def is_connected(self):
         return self.connected
 
     def _send_websocket_message(self, message):
         self.sent.append(message)
+        return True
+
+    def _press_key(self, key, *, take_screenshot=False):
+        self.pressed.append((key, take_screenshot))
         return True
 
 
@@ -121,3 +126,24 @@ def test_deliver_remote_tts_sends_text_before_audio(tmp_path):
     assert first["audio_streamed"] is True
     assert any(msg.get("type") == "remote_agent_audio_start" for msg in manager.sent)
     cleanup.assert_called()
+
+
+def test_deliver_remote_tts_presses_enter_only_when_requested(tmp_path):
+    manager = DummyManager()
+    ogg_path = tmp_path / "voice.ogg"
+    ogg_path.write_bytes(b"OggS" + b"\x00" * 20)
+    context = build_synthetic_remote_context({"mode": "command"})
+    context["press_enter"] = True
+
+    ok = deliver_remote_tts(
+        manager,
+        "Done.",
+        context,
+        generate_tts=lambda _text: ogg_path,
+        convert_wav_to_ogg=lambda path: path,
+        cleanup_files=lambda *_args: None,
+        send_text_first=True,
+    )
+
+    assert ok is True
+    assert manager.pressed == [("enter", False)]

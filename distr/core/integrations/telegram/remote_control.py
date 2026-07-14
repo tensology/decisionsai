@@ -312,6 +312,61 @@ class TelegramRemoteControlMixin:
                         }
                     )
 
+                elif command == "remote_agent_interrupt":
+                    # The user pressed PTT while a previous remote turn was still
+                    # running. Cancel LLM/TTS first so the next transcribe_file
+                    # command is not stuck behind obsolete work.
+                    interrupted_request_id = str(
+                        command_data.get("request_id") or ""
+                    )
+                    pending_queue = list(
+                        getattr(self, "_pending_remote_agent_responses", []) or []
+                    )
+                    if interrupted_request_id:
+                        pending_queue = [
+                            item
+                            for item in pending_queue
+                            if str((item or {}).get("request_id") or "")
+                            != interrupted_request_id
+                        ]
+                    else:
+                        pending_queue = []
+                    self._pending_remote_agent_responses = pending_queue
+                    self._pending_remote_agent_response = (
+                        pending_queue[-1] if pending_queue else None
+                    )
+
+                    from PyQt6.QtWidgets import QApplication
+
+                    app = QApplication.instance()
+                    if not app or not hasattr(app, "agent_command_queue"):
+                        self._send_websocket_message(
+                            {
+                                "type": "remote_control_response",
+                                "command": "remote_agent_interrupt",
+                                "request_id": request_id,
+                                "error": "Agent not available",
+                                "data": {
+                                    "interrupted_request_id": interrupted_request_id
+                                },
+                            }
+                        )
+                    else:
+                        app.agent_command_queue.put(
+                            ("interrupt_tts", {}), block=False
+                        )
+                        self._send_websocket_message(
+                            {
+                                "type": "remote_control_response",
+                                "command": "remote_agent_interrupt",
+                                "request_id": request_id,
+                                "data": {
+                                    "success": True,
+                                    "interrupted_request_id": interrupted_request_id,
+                                },
+                            }
+                        )
+
                 elif command == "screenshot":
                     # Capture screenshot of specific screen
                     screen_number = command_data.get("screen_number", 1)
@@ -735,6 +790,7 @@ class TelegramRemoteControlMixin:
                             text_to_type,
                             take_screenshot=take_screenshot,
                             dictation=bool(command_data.get("dictation")),
+                            press_enter=bool(command_data.get("press_enter", True)),
                         )
                         self._send_websocket_message(
                             {
@@ -1168,6 +1224,7 @@ class TelegramRemoteControlMixin:
                     # No transcription needed — just route the text
                     text = command_data.get("text", "").strip()
                     mode = command_data.get("mode", "dictate")
+                    press_enter = bool(command_data.get("press_enter", True))
                     if not text:
                         self._send_websocket_message({
                             "type": "remote_control_response", "command": "voice_text_input",
@@ -1183,6 +1240,7 @@ class TelegramRemoteControlMixin:
                                 request_id=request_id,
                                 source_command="voice_text_input",
                                 mode=mode,
+                                press_enter=press_enter,
                             )
                             if hasattr(self, "_current_input_type"):
                                 self._current_input_type = "text"
@@ -1193,7 +1251,11 @@ class TelegramRemoteControlMixin:
                                 speak=False,
                             )
                         elif mode == "dictate":
-                            self._type_text_quick(text, dictation=True)
+                            self._type_text_quick(
+                                text,
+                                dictation=True,
+                                press_enter=press_enter,
+                            )
                         self._send_websocket_message({
                             "type": "remote_control_response", "command": "voice_text_input",
                             "request_id": request_id, "data": {"text": text, "mode": mode},
@@ -1378,7 +1440,11 @@ class TelegramRemoteControlMixin:
                 )
 
     def _mark_remote_agent_response_context(
-        self, request_id: Optional[str], source_command: str, mode: str = "command"
+        self,
+        request_id: Optional[str],
+        source_command: str,
+        mode: str = "command",
+        press_enter: bool = False,
     ) -> None:
         """Store context for routing the next agent response back to remote-app."""
         try:
@@ -1386,6 +1452,7 @@ class TelegramRemoteControlMixin:
                 "request_id": request_id,
                 "source_command": source_command,
                 "mode": mode,
+                "press_enter": bool(press_enter),
                 "created_at": time.time(),
             }
             pending_queue = list(
@@ -1993,13 +2060,23 @@ class TelegramRemoteControlMixin:
             logger.error(f"Error pasting text: {e}", exc_info=True)
             return False
 
-    def _type_text_quick(self, text: str, take_screenshot: bool = False, dictation: bool = False) -> bool:
+    def _type_text_quick(
+        self,
+        text: str,
+        take_screenshot: bool = False,
+        dictation: bool = False,
+        press_enter: bool = True,
+    ) -> bool:
         """Quickly type text as keyboard input."""
         try:
             import time
             from distr.core.audio.dictation import insert_text
 
-            success = insert_text(text, instant=None if dictation else True, press_enter=True)
+            success = insert_text(
+                text,
+                instant=None if dictation else True,
+                press_enter=press_enter,
+            )
 
             if take_screenshot and success:
                 try:

@@ -189,6 +189,21 @@ def deliver_remote_tts(
         remote_ctx.get("source_command"),
     )
 
+    # Agent-modal commands request Enter only after the agent turn has completed.
+    # This keeps the keystroke ordered behind any tools/actions from the turn.
+    if bool(remote_ctx.get("press_enter")) and not is_cancelled():
+        try:
+            manager._press_key("enter", take_screenshot=False)
+            logger.info(
+                "[REMOTE TTS] Pressed Enter after completed remote agent turn: request_id=%s",
+                request_id,
+            )
+        except Exception:
+            logger.exception(
+                "[REMOTE TTS] Failed pressing Enter after remote agent turn: request_id=%s",
+                request_id,
+            )
+
     if send_text_first and not is_cancelled():
         manager._send_websocket_message(
             {
