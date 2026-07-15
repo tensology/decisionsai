@@ -20,12 +20,13 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUNBUFFERED: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Prepare evidence directory
         run: mkdir -p artifacts
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12.13"
+          python-version: "3.12"
+          check-latest: true
           cache: pip
       - name: Install system dependencies
         run: brew install portaudio ffmpeg
@@ -89,13 +90,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12.13"
+          python-version: "3.12"
+          check-latest: true
       - name: Compile Python sources
         run: python -m compileall -q distr scripts tests
       - name: Check patch integrity
-        run: git show --check --format=fuller HEAD
+        run: git diff-tree --check --no-commit-id -r HEAD
       - name: Run Fallow structural audit
         run: npx --yes fallow audit --format json --quiet
