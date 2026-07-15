@@ -39,7 +39,11 @@ finally:
 
 
 class _SignalCollector:
+    def __init__(self):
+        self.calls = 0
+
     def emit(self, *_args):
+        self.calls += 1
         return None
 
 
@@ -75,3 +79,21 @@ def test_api_relay_runs_without_waiting_on_remote_control_lock(monkeypatch):
 
     host._remote_control_lock.release()
     assert calls == ["/api/snippets/summary"]
+
+
+def test_forced_screen_refresh_returns_cache_without_polling(monkeypatch):
+    screen = {
+        "screen_number": 1,
+        "screen_name": "Primary",
+        "geometry": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+    }
+    fake_screen_utils = types.ModuleType("distr.core.screen_utils")
+    fake_screen_utils._screen_info_cache = {"screens": [screen]}
+    monkeypatch.setitem(sys.modules, "distr.core.screen_utils", fake_screen_utils)
+    host = _Host()
+    host._request_screen_update_signal = _SignalCollector()
+
+    assert host._get_screens_list(force_update=True) == [screen]
+    assert host._request_screen_update_signal.calls == 1
+    assert host._get_screens_list(force_update=True) == [screen]
+    assert host._request_screen_update_signal.calls == 1

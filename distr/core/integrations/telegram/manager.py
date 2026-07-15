@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -54,6 +55,20 @@ def relay_endpoint_label(server_url: str) -> str:
         .replace("ws://", "")
         .replace("https://", "")
         .replace("http://", "")
+    )
+
+
+def redact_telegram_log_secrets(value: str) -> str:
+    """Remove relay credentials accidentally persisted by older app versions."""
+    clean = re.sub(
+        r"(?i)([?&]token=)[^\s&]+",
+        r"\1[REDACTED]",
+        str(value or ""),
+    )
+    return re.sub(
+        r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+        "[REDACTED_JWT]",
+        clean,
     )
 
 
@@ -353,6 +368,15 @@ class TelegramWebSocketManager(
                     f.write(
                         f"=== Telegram WebSocket Log Created at {datetime.now()} ===\n"
                     )
+            else:
+                # Older builds logged the complete WebSocket URL. Scrub those
+                # expired credentials once so retained diagnostics are safe.
+                existing = self._detailed_log_file.read_text(
+                    encoding="utf-8", errors="replace"
+                )
+                redacted = redact_telegram_log_secrets(existing)
+                if redacted != existing:
+                    self._detailed_log_file.write_text(redacted, encoding="utf-8")
         except Exception as e:
             logger.error(f"Failed to setup detailed logging: {e}")
 

@@ -10,12 +10,22 @@ from distr.core.integrations.telegram.manager import (
     friendly_telegram_connect_error,
     friendly_telegram_immediate_close_reason,
     friendly_telegram_socket_error,
+    redact_telegram_log_secrets,
     relay_endpoint_label,
 )
 
 
 def test_relay_endpoint_label_strips_scheme():
     assert relay_endpoint_label("wss://www.decisionsai.net/ws/telegram") == "www.decisionsai.net"
+
+
+def test_redact_telegram_log_secrets_removes_query_token_and_bare_jwt():
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcm9vZiJ9.signature"
+    value = f"CONNECTING: wss://relay/ws?token={jwt}\nTOKEN: {jwt}\n"
+    redacted = redact_telegram_log_secrets(value)
+    assert jwt not in redacted
+    assert "token=[REDACTED]" in redacted
+    assert "TOKEN: [REDACTED_JWT]" in redacted
 
 
 @pytest.mark.parametrize(

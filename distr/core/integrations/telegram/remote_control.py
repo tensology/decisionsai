@@ -1527,54 +1527,32 @@ class TelegramRemoteControlMixin:
             return None
 
     def _get_screens_list(self, force_update: bool = False) -> list:
-        """Get list of all screens with their information (thread-safe)."""
+        """Return cached screens and request refresh without blocking a relay thread."""
         screens_info = []
-
-        # Method 1: Try reading from existing cache (unless forcing update)
-        if not force_update:
-            try:
-                from distr.core.screen_utils import _screen_info_cache
-
-                if _screen_info_cache and "screens" in _screen_info_cache:
-                    return _screen_info_cache["screens"]
-            except Exception as e:
-                logger.debug(f"Cache check failed: {e}")
-
-        # Method 2: If cache empty/missing OR forcing update, request update from Main Thread via Signal
-        # This is necessary because we are running in a background thread and cannot access QScreen directly.
         try:
-            import threading
-            import time
+            from distr.core.screen_utils import _screen_info_cache
 
-            if threading.current_thread() is not threading.main_thread():
-                # Emit signal to request main thread to update cache
-                self._request_screen_update_signal.emit()
-                # Wait up to 1 second for cache to be populated
-                for _ in range(10):
-                    time.sleep(0.1)
-                    # If we forced update, we want to ensure we get the NEW data.
-                    # Ideally we would wait for a confirmation, but polling the variable is a decent proxy
-                    # assuming the main thread updates it quickly.
-                    from distr.core.screen_utils import _screen_info_cache
+            if _screen_info_cache and "screens" in _screen_info_cache:
+                screens_info = list(_screen_info_cache["screens"] or [])
 
-                    if _screen_info_cache and "screens" in _screen_info_cache:
-                        # If forcing update, we might want to wait a tiny bit more to ensure it's fresh?
-                        # Actually, _screen_utils logic replaces the dict key, so if we see it, it is likely the 'current' state.
-                        return _screen_info_cache["screens"]
-
-                logger.warning(
-                    "Timed out waiting for screen cache update from main thread"
+            # Qt screen discovery belongs to the GUI thread. Queue a refresh,
+            # but never poll/sleep here: the relay can issue list_screens many
+            # times per second and one waiting thread per request causes a
+            # backlog, CPU churn, and visible animation stalls.
+            if force_update or not screens_info:
+                now = time.monotonic()
+                last_refresh = float(
+                    getattr(self, "_last_screen_refresh_request_at", 0.0) or 0.0
                 )
+                if now - last_refresh >= 0.5:
+                    self._last_screen_refresh_request_at = now
+                    self._request_screen_update_signal.emit()
         except (ConnectionRefusedError, BrokenPipeError, OSError) as e:
-            # During shutdown, connections may be closed - this is expected
             logger.debug(
                 f"Screen update request failed during shutdown (expected): {e}"
             )
         except Exception as e:
             logger.error(f"Error requesting screen update: {e}")
-
-        # Method 3: Fallback (should ideally not be reached if signal works)
-        # Note: We removed the direct QApplication access as it causes crashes in bg threads.
         return screens_info
 
     def _draw_cursor_on_pil_image(self, img, screen_geo: dict):
