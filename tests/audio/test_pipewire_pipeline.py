@@ -18,6 +18,8 @@ sys.path.insert(0, str(project_root))
 
 import pytest
 
+pytestmark = pytest.mark.live_audio
+
 pytest.importorskip("sounddevice")
 pytest.importorskip("pipecat.transports.local.audio")
 
@@ -394,4 +396,3 @@ async def main():
 if __name__ == "__main__":
     exit_code = asyncio.run(main())
     sys.exit(exit_code)
-

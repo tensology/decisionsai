@@ -270,7 +270,7 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
 
         result = StepDispatcher().run_in_workflow(ids["implement_step_id"], ids["run_id"])
 
-    assert result["success"] is True
+    assert result.get("success") is True, result
     assert captured["project_id"] == ids["project_id"]
     assert captured["backend"] == "codex"
     assert captured["model"] == "gpt-5.3-codex-spark"

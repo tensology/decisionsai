@@ -51,6 +51,7 @@ def test_transcribe_file_uses_active_stt_service_instance():
             "audio_file_path": "/tmp/voice.wav",
             "request_id": "req-1",
             "input_type": "voice",
+            "source_message_id": "telegram-101",
         },
     )
 
@@ -62,6 +63,7 @@ def test_transcribe_file_uses_active_stt_service_instance():
     assert payload["success"] is True
     assert payload["transcript"] == "hello from active stt"
     assert payload["input_type"] == "voice"
+    assert payload["source_message_id"] == "telegram-101"
 
 
 def test_transcribe_file_reports_missing_stt_service():
@@ -98,4 +100,3 @@ def test_transcribe_file_reports_provider_without_file_support():
 
 def test_vosk_service_exposes_transcribe_file():
     assert callable(getattr(VoskSTTService, "transcribe_file", None))
-

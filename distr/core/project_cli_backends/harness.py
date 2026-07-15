@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 from distr.core.project_cli_backends.base import BackendTaskResult
+from distr.core.project_cli_backends.contracts import ExecutionResult, normalize_execution_result
 
 
 class HarnessStatus(str, Enum):
@@ -33,6 +34,8 @@ class HarnessContext:
     codex_service_tier: str = ""
     origin: str = "workflow"
     on_event: Optional[Callable[[dict[str, Any]], None]] = None
+    required_capabilities: list[str] = field(default_factory=list)
+    adapter_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -42,6 +45,7 @@ class HarnessHandle:
     result: BackendTaskResult | None = None
     status: HarnessStatus = HarnessStatus.RUNNING
     evidence: dict[str, Any] = field(default_factory=dict)
+    normalized_result: ExecutionResult | None = None
 
 
 async def dispatch_harness(context: HarnessContext) -> HarnessHandle:
@@ -69,6 +73,11 @@ async def dispatch_harness(context: HarnessContext) -> HarnessHandle:
             "error": (getattr(result, "error", "") or "")[:2000],
             "engine": engine,
         },
+        normalized_result=normalize_execution_result(
+            result,
+            backend_id=context.backend_id,
+            attempt_id=int(session_id) if session_id else None,
+        ),
     )
     try:
         from distr.core.orchestration_events import emit_orchestration_event
@@ -105,18 +114,17 @@ def collect_harness_evidence(handle: HarnessHandle) -> dict[str, Any]:
         evidence.setdefault("output", (getattr(handle.result, "output", "") or "")[:8000])
         evidence.setdefault("error", (getattr(handle.result, "error", "") or "")[:2000])
         evidence.setdefault("success", bool(getattr(handle.result, "success", False)))
+    if handle.normalized_result is not None:
+        evidence.setdefault("status", handle.normalized_result.status)
+        evidence.setdefault("artifacts", handle.normalized_result.artifacts)
+        evidence.setdefault("memory_delta", handle.normalized_result.memory_delta)
     return evidence
 
 
-STEERABLE_BACKENDS = frozenset(
-    {"pi", "codex", "codex_ide", "cursor", "cursor_ide", "claude_code", "claude", "hermes_agent"}
-)
-
-
 def is_steerable_backend(backend_id: str) -> bool:
-    from distr.core.project_cli_backends import normalize_backend_id
+    from distr.core.project_cli_backends import get_backend
 
-    return normalize_backend_id(backend_id or "") in STEERABLE_BACKENDS
+    return get_backend(backend_id).supports({"steering"})
 
 
 def steer_harness(
@@ -132,47 +140,26 @@ def steer_harness(
     Pi: sends RPC steer when a live session exists.
     Other CLIs: returns queued=True for persistence on the run record.
     """
-    from distr.core.project_cli_backends import normalize_backend_id
+    from distr.core.project_cli_backends import get_backend, normalize_backend_id
 
     instruction = str(message or "").strip()
     if not instruction:
         return {"success": False, "error": "Steer message is required", "delivered": False}
 
     bid = normalize_backend_id(backend_id or "pi")
-    if bid not in STEERABLE_BACKENDS:
+    backend = get_backend(bid)
+    if not backend.supports({"steering"}):
         return {
             "success": False,
             "error": f"Backend {bid} does not support mid-flight steering",
             "delivered": False,
         }
 
-    if bid == "pi" and project_id:
-        from distr.core.pi_rpc import get_rpc_session
-
-        rpc = get_rpc_session(int(project_id))
-        if rpc and rpc.is_alive:
-            delivered = bool(rpc.steer(instruction))
-            return {
-                "success": delivered,
-                "delivered": delivered,
-                "method": "pi_rpc",
-                "backend_id": bid,
-                "error": "" if delivered else "Pi RPC steer was not accepted",
-            }
-        return {
-            "success": True,
-            "delivered": False,
-            "method": "queued",
-            "backend_id": bid,
-            "error": "No live Pi session — steer queued for when the harness reconnects",
-        }
-
-    return {
-        "success": True,
-        "delivered": False,
-        "method": "queued",
-        "backend_id": bid,
-    }
+    return backend.steer(
+        instruction,
+        project_id=project_id,
+        project_folder=project_folder,
+    )
 
 
 def run_harness_sync(context: HarnessContext) -> HarnessHandle:

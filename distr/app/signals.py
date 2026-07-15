@@ -33,6 +33,36 @@ class SignalBridgeMixin:
         except Exception:
             return True
 
+    def _route_explicit_work_intake(self, chat_id, message, *, source: str = "web") -> bool:
+        """Intercept explicit work commands while preserving normal conversation."""
+        clean = str(message or "").strip()
+        if not clean:
+            return False
+        try:
+            from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+            decision = get_work_intake_service().ingest(
+                WorkIntake(
+                    source=source,
+                    user_text=clean,
+                    source_thread_id=str(chat_id or ""),
+                    metadata={"chat_id": int(chat_id) if str(chat_id or "").isdigit() else None},
+                )
+            )
+            if not decision.handled:
+                return False
+            manager = getattr(self, "chat_manager", None)
+            if manager is not None and chat_id:
+                manager.add_assistant_message(int(chat_id), decision.response_text or "Your request was routed.")
+            logger.info(
+                "Desktop request routed chat_id=%s action=%s ticket=%s run=%s",
+                chat_id, decision.action.value, decision.ticket_id, decision.workflow_run_id,
+            )
+            return True
+        except Exception:
+            logger.exception("Desktop request routing failed; falling back to conversational agent")
+            return False
+
     def _resolve_workflow_report_chat_id(self):
         """Return the active agent chat id for workflow reports, if known."""
         cm = getattr(self, "chat_manager", None)
@@ -639,6 +669,8 @@ class SignalBridgeMixin:
         ):
             """Send message to agent. load-in-agent already ran current_chat_changed; just send the text."""
             try:
+                if self._route_explicit_work_intake(chat_id, message, source="web"):
+                    return
                 speak_bool = coerce_speak_enabled(speak, default=True)
                 opts = options if isinstance(options, dict) else {}
                 params = {
@@ -685,6 +717,8 @@ class SignalBridgeMixin:
             voice_model=None,
         ):
             try:
+                if self._route_explicit_work_intake(chat_id, first_message, source="web"):
+                    return
                 speak_bool = coerce_speak_enabled(speak, default=True)
                 # Interrupt only if playback is actually active; sending interrupt_tts when idle can
                 # race with first-response TTS on new chats and suppress audible output.
@@ -730,6 +764,8 @@ class SignalBridgeMixin:
         def on_web_load_chat_and_process_requested(chat_id, message, speak, skip_user_persist):
             """Load chat history, then process one orchestrator prompt in deterministic order."""
             try:
+                if self._route_explicit_work_intake(chat_id, message, source="web"):
+                    return
                 player_active = bool(
                     hasattr(self, "player_window")
                     and self.player_window

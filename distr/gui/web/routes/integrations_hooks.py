@@ -98,6 +98,23 @@ async def slack_events(request: Request) -> JSONResponse:
         return JSONResponse({"ok": True})
 
     try:
+        from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+        decision = get_work_intake_service().ingest(WorkIntake(
+            source="slack",
+            user_text=str(evt.get("text") or ""),
+            source_user_id=str(evt.get("user") or ""),
+            source_thread_id=str(evt.get("thread_ts") or evt.get("channel") or ""),
+            source_message_id=str(evt.get("ts") or ""),
+            metadata={"channel_id": str(evt.get("channel") or "")},
+        ))
+        if decision.handled:
+            logger.info(
+                "Slack request routed action=%s ticket=%s run=%s",
+                decision.action.value, decision.ticket_id, decision.workflow_run_id,
+            )
+            return JSONResponse({"ok": True, "handled": True, "decision": decision.to_dict()})
+
         route_slack_inbound_to_agent(
             channel_id=str(evt["channel"]).strip(),
             user_id=str(evt["user"]).strip() if evt.get("user") else None,

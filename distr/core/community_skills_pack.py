@@ -157,7 +157,7 @@ def ensure_community_skills_pack_setup(
         if write_projection_skill(path, _projection_text(harness=harness, registry_path=registry_path)):
             written.append(str(path))
 
-    return {
+    payload = {
         "state_version": STATE_VERSION,
         "status": "configured",
         "vendor_ready": _vendor_ready(),
@@ -167,6 +167,8 @@ def ensure_community_skills_pack_setup(
         "written": written,
         "registry_path": str(registry_path),
     }
+    _write_json(_state_path(base_home), payload)
+    return payload
 
 
 def ensure_community_skills_pack_setup_quiet() -> None:

@@ -8,17 +8,12 @@ def test_kanban_project_bound_card_actions_are_hidden_without_project():
     js = (ROOT / "distr/gui/web/static/kanban/js/kanban_ticket.js").read_text(encoding="utf-8")
 
     assert "if (config.hidden) return \"\";" in js
-    assert 'keyClass: "kb-act-copy"' in js
-    assert 'keyClass: "kb-act-agent"' in js
     assert 'keyClass: "kb-act-add-workflow"' in js
-    assert 'keyClass: "kb-act-cli"' in js
-    assert 'keyClass: "kb-act-project"' in js
-    assert 'keyClass: "kb-act-workflow"' in js
-    assert 'keyClass: "kb-act-transfer"' in js
-    assert 'keyClass: "kb-act-delete"' in js
-    assert 'tooltip: "Send to Orchestrator"' in js
-    assert 'tooltip: "Copy title and description"' in js
-    assert 'tooltip: "Copy to local board"' in js
+    for action in ("copy", "agent", "cli", "project", "workflow", "transfer", "delete"):
+        assert f'action: "{action}"' in js
+    assert 'label: "Discuss in Orchestrator"' in js
+    assert 'label: "Copy details"' in js
+    assert 'label: "Copy to local board"' in js
     assert "hasProject" in js
     assert "canTransfer" in js
     assert "canDelete" in js

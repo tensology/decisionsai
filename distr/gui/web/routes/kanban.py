@@ -2661,7 +2661,11 @@ def create_routes():
             if not board:
                 raise HTTPException(404, "Board not found")
             s.delete(board)
-            return JSONResponse({"success": True})
+            s.commit()
+        from distr.core.workspace_memory.lifecycle import hook_remove_workspace
+
+        hook_remove_workspace("boards", board_id)
+        return JSONResponse({"success": True})
 
     @router.post("/tickets/boards/{board_id}/archive")
     async def archive_board(board_id: int):
@@ -3583,8 +3587,45 @@ def create_routes():
                     wa_msg.processed = False
                     wa_msg.processed_date = None
 
+            # Preserve historical runs/sessions while severing the reusable
+            # integer ticket id. SQLite may assign this id to a future ticket;
+            # leaving ledger rows attached leaks old execution history into it.
+            from distr.core.db.kanban import KanbanTicketAuditEntry, ProjectExecutionSession
+            from distr.core.db.orchestrator import (
+                OrchestratorCorrectionAttempt,
+                OrchestratorEvent,
+                OrchestratorValidationRecord,
+            )
+            from distr.core.db.workflow import AutoWorkflowRun
+
+            s.query(ProjectExecutionSession).filter(
+                ProjectExecutionSession.ticket_id == ticket_id
+            ).update({ProjectExecutionSession.ticket_id: None}, synchronize_session=False)
+            s.query(OrchestratorEvent).filter(
+                OrchestratorEvent.ticket_id == ticket_id
+            ).update({OrchestratorEvent.ticket_id: None}, synchronize_session=False)
+            s.query(OrchestratorValidationRecord).filter(
+                OrchestratorValidationRecord.ticket_id == ticket_id
+            ).update({OrchestratorValidationRecord.ticket_id: None}, synchronize_session=False)
+            s.query(OrchestratorCorrectionAttempt).filter(
+                OrchestratorCorrectionAttempt.ticket_id == ticket_id
+            ).update({OrchestratorCorrectionAttempt.ticket_id: None}, synchronize_session=False)
+            s.query(AutoWorkflowRun).filter(
+                AutoWorkflowRun.ticket_id == ticket_id
+            ).update({AutoWorkflowRun.ticket_id: None}, synchronize_session=False)
+            s.query(KanbanTicket).filter(
+                KanbanTicket.parent_ticket_id == ticket_id
+            ).update({KanbanTicket.parent_ticket_id: None}, synchronize_session=False)
+            s.query(KanbanTicketAuditEntry).filter(
+                KanbanTicketAuditEntry.ticket_id == ticket_id
+            ).delete(synchronize_session=False)
+
             s.delete(t)
-            return JSONResponse({"success": True})
+            s.commit()
+        from distr.core.workspace_memory.lifecycle import hook_remove_workspace
+
+        hook_remove_workspace("tickets", ticket_id)
+        return JSONResponse({"success": True})
 
     # ── Ticket Files ──
 
@@ -5262,7 +5303,11 @@ source: kanban_ticket_{t.id}
                 run_metadata["ticket_workflow_brief"] = workflow_brief
 
         # ponytail: start_workflow_run opens its own session — nested SQLite tx = "database is locked"
-        run_result = start_workflow_run(
+        # Workflow-agent cold start can import a large optional tool set. Run it
+        # outside the FastAPI event loop so the UI and progress endpoints do not
+        # freeze while the ticket is being handed off.
+        run_result = await asyncio.to_thread(
+            start_workflow_run,
             workflow_id,
             context=context,
             board_id=board_id_value,

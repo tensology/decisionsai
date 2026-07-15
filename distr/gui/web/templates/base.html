@@ -182,5 +182,35 @@
     })();
     </script>
     <script src="/static/shared/js/events_stream.js"></script>
+    <script>
+    (function () {
+      var lastReport = 0;
+      function report(payload) {
+        var now = Date.now();
+        if (now - lastReport < 10000) return;
+        lastReport = now;
+        payload.path = window.location.pathname;
+        payload.visibility = document.visibilityState;
+        fetch('/api/diagnostics/ui-stall', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+        }).catch(function () {});
+      }
+      if (window.PerformanceObserver) {
+        try {
+          var observer = new PerformanceObserver(function (list) {
+            list.getEntries().forEach(function (entry) {
+              if (entry.duration >= 250) report({duration_ms: Math.round(entry.duration), kind: 'longtask'});
+            });
+          });
+          observer.observe({entryTypes: ['longtask']});
+        } catch (_) {}
+      }
+      var expected = Date.now() + 1000;
+      setInterval(function () {
+        var now = Date.now(); var drift = now - expected; expected = now + 1000;
+        if (drift >= 1000 && document.visibilityState === 'visible') report({drift_ms: drift, kind: 'event_loop_drift'});
+      }, 1000);
+    })();
+    </script>
 </body>
 </html>

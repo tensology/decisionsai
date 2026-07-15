@@ -8,7 +8,9 @@ proposal is surfaced, queued for approval, or executed.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -40,6 +42,10 @@ WORK_KEYWORDS = {
     "meeting",
     "standup",
 }
+
+_EMAIL_SCAN_CACHE_TTL_S = 300.0
+_email_scan_cache: dict[str, Any] | None = None
+_email_scan_lock = threading.Lock()
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
@@ -569,6 +575,34 @@ def _scan_telegram(scan: dict[str, Any]) -> None:
 
 
 def _scan_email(scan: dict[str, Any]) -> None:
+    global _email_scan_cache
+
+    now = time.monotonic()
+    with _email_scan_lock:
+        if _email_scan_cache and now - _email_scan_cache["created_at"] < _EMAIL_SCAN_CACHE_TTL_S:
+            scan["messages"]["email"] = deepcopy(_email_scan_cache["messages"])
+            scan["proposals"].extend(deepcopy(_email_scan_cache["proposals"]))
+            scan["unavailable_sources"].extend(deepcopy(_email_scan_cache["unavailable_sources"]))
+            return
+
+        _scan_email_uncached(scan)
+        _email_scan_cache = {
+            "created_at": time.monotonic(),
+            "messages": deepcopy(scan["messages"]["email"]),
+            "proposals": [
+                deepcopy(row)
+                for row in scan["proposals"]
+                if (row.get("payload") or {}).get("source") == "email"
+            ],
+            "unavailable_sources": [
+                deepcopy(row)
+                for row in scan["unavailable_sources"]
+                if row.get("source") == "email"
+            ],
+        }
+
+
+def _scan_email_uncached(scan: dict[str, Any]) -> None:
     from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
 
     connector = GoogleWorkspaceConnector()

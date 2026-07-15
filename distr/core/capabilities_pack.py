@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata as package_metadata
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ PROJECT_ROOT = project_root()
 ECC_SKILLS = ecc_vendor_dir() / "skills"
 LOCAL_SKILLS = PROJECT_ROOT / "skills"
 STATE_VERSION = 1
+BROWSER_USE_VERSION = "0.11.13"
 
 # ECC skills for browser QA, Playwright, video, Remotion, and content pipelines.
 BROWSER_CONTENT_ECC_SKILLS: tuple[str, ...] = (
@@ -202,12 +204,42 @@ def _ensure_browser_use_package(*, enabled: bool) -> dict[str, Any]:
     try:
         import browser_use  # noqa: F401
 
-        return {"installed": True, "method": "existing"}
+        browser_use_version = package_metadata.version("browser-use")
+        pillow_major = int(package_metadata.version("Pillow").split(".", 1)[0])
+        if browser_use_version == BROWSER_USE_VERSION and pillow_major < 12:
+            return {
+                "installed": True,
+                "method": "existing",
+                "version": browser_use_version,
+            }
     except ImportError:
         pass
+    except (package_metadata.PackageNotFoundError, TypeError, ValueError):
+        pass
     try:
+        # Browser Use 0.13 installs browser-harness, whose Pillow 12 pin also
+        # conflicts with Pipecat. It is not a dependency of the supported line.
+        try:
+            package_metadata.version("browser-harness")
+        except package_metadata.PackageNotFoundError:
+            pass
+        else:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "uninstall", "-y", "browser-harness"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "browser-use"],
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                f"browser-use=={BROWSER_USE_VERSION}",
+                "Pillow>=11.2.1,<12",
+            ],
             capture_output=True,
             text=True,
             timeout=300,
@@ -216,14 +248,16 @@ def _ensure_browser_use_package(*, enabled: bool) -> dict[str, Any]:
         ok = result.returncode == 0
         if ok:
             try:
-                import browser_use  # noqa: F401
-
-                ok = True
-            except ImportError:
+                ok = (
+                    package_metadata.version("browser-use") == BROWSER_USE_VERSION
+                    and int(package_metadata.version("Pillow").split(".", 1)[0]) < 12
+                )
+            except (package_metadata.PackageNotFoundError, TypeError, ValueError):
                 ok = False
         return {
             "installed": ok,
             "method": "pip",
+            "version": package_metadata.version("browser-use") if ok else "",
             "returncode": result.returncode,
             "stderr": (result.stderr or "")[:400],
         }

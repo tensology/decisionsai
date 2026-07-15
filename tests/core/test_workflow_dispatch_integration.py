@@ -129,16 +129,54 @@ class TestWorkflowDispatchIntegration:
 
     def setup_method(self):
         from distr.core.db import Base
-        from distr.core.workflow.dispatcher import _active_runs, _runs_lock
+        from distr.core.workflow.dispatcher import _active_runs, _initializing_runs, _runs_lock
         self.engine = _make_engine()
         Base.metadata.create_all(self.engine)
         self.factory = sessionmaker(bind=self.engine)
         # Clean up any live RunContexts from previous tests to prevent cross-test bleed.
         with _runs_lock:
             _active_runs.clear()
+            _initializing_runs.clear()
 
     def _patched_get_session(self):
         return _session_ctx(self.factory)
+
+    @pytest.mark.timeout(10)
+    def test_async_start_does_not_block_on_worker_cold_start(self):
+        """Agent/tool initialization belongs to the worker thread, not the UI caller."""
+        from distr.core.workflow.dispatcher import cancel_run, start_workflow_run
+
+        ids = _seed_db(self.factory)
+        initializing = threading.Event()
+        release = threading.Event()
+
+        class SlowWorkflowAgent:
+            def __init__(self, **_kwargs):
+                initializing.set()
+                release.wait(timeout=5)
+
+            def shutdown(self):
+                return None
+
+        with patch("distr.core.workflow.dispatcher.get_session", self._patched_get_session), \
+             patch("distr.core.workflow_agent.WorkflowAgent", SlowWorkflowAgent), \
+             patch("distr.core.workflow.dispatcher.append_ticket_audit_entry"), \
+             patch("distr.core.workflow.dispatcher.increment_workflow_updated"), \
+             patch("distr.core.workflow.dispatcher.increment_kanban_updated"):
+            started = time.monotonic()
+            result = start_workflow_run(
+                ids["workflow_id"],
+                board_id=ids["board_id"],
+                ticket_id=ids["ticket_id"],
+                run_metadata={"skip_run_briefing": True},
+                dispatch_async=True,
+            )
+            elapsed = time.monotonic() - started
+            assert result["phase"] == "initializing"
+            assert elapsed < 0.5
+            assert initializing.wait(timeout=1)
+            assert cancel_run(result["run_id"]) is True
+            release.set()
 
     @pytest.mark.timeout(30)
     def test_single_agent_step_runs_to_completion(self):

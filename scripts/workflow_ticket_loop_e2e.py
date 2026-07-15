@@ -353,6 +353,14 @@ def build_spotify_ticket_specs() -> list[SpotifyTicketSpec]:
     ]
 
 
+def select_spotify_ticket_specs(ticket_limit: int | None = None) -> list[SpotifyTicketSpec]:
+    """Return only tickets the live run owns, preventing hidden queue follow-ons."""
+    specs = build_spotify_ticket_specs()
+    if ticket_limit is None:
+        return specs
+    return specs[: max(1, min(len(specs), int(ticket_limit)))]
+
+
 def build_spotify_board_policy(
     *,
     backend_id: str,
@@ -1565,25 +1573,13 @@ console.log('build-check: green');
         }
 
     def _set_spotify_lanes(self, board_id: int) -> dict[str, int]:
-        from distr.core.db import get_session
-        from distr.core.db.kanban import KanbanBoard, KanbanLane
-
-        with get_session() as db:
-            board = db.query(KanbanBoard).filter(KanbanBoard.id == int(board_id)).first()
-            if not board:
-                raise AssertionError(f"Board not found: {board_id}")
-            existing = sorted(list(board.lanes or []), key=lambda lane: lane.position or 0)
-            for pos, name in enumerate(SPOTIFY_LANES):
-                if pos < len(existing):
-                    existing[pos].name = name
-                    existing[pos].position = pos
-                else:
-                    db.add(KanbanLane(board_id=board.id, name=name, position=pos))
-            for extra in existing[len(SPOTIFY_LANES):]:
-                db.delete(extra)
-            db.commit()
-            lanes = db.query(KanbanLane).filter(KanbanLane.board_id == int(board_id)).all()
-            return {lane.name: int(lane.id) for lane in lanes}
+        # A live harness must treat the web API as its sole state boundary. Importing
+        # the application's session here made this method read pytest's temporary
+        # database while the board itself lived in the running server's database.
+        # The program only needs semantic lane aliases, so map the lanes returned by
+        # the same server that created the board instead of mutating storage directly.
+        board = self.api_request(f"/tickets/boards/{int(board_id)}")
+        return self._spotify_lane_map_from_board(board)
 
     def seed_live_spotify_backend_fixture(
         self,
@@ -1592,6 +1588,7 @@ console.log('build-check: green');
         stamp: str,
         development_root: Path | None = None,
         model_map: dict[str, dict[str, str]] | None = None,
+        ticket_limit: int | None = None,
     ) -> dict[str, Any]:
         """Create one disposable project/board/workflow/ticket set for a backend."""
         project_dir = disposable_spotify_project_dir(
@@ -1697,6 +1694,7 @@ console.log('build-check: green');
                     "skills": ["test-driven-development", "webapp-testing", "verification-loop"],
                     "tools": ["cli"],
                     "backend_id": backend_id,
+                    "timeout_seconds": 900,
                 },
                 "validation_type": "none",
             },
@@ -1727,18 +1725,13 @@ console.log('build-check: green');
                 "instruction": "Summarize the final green evidence.",
                 "config": {
                     "command": (
-                        "printf '%s\\n' "
-                        "'GREEN validation passed: Spotify remake ticket reached complete.' "
-                        "'Flow summary: Created the Spotify remake ticket slice, ran the project checks, "
-                        "and confirmed the workflow loop moved the ticket to green evidence.' "
-                        "'Layout hierarchy notes: The workflow UI keeps the loop, active ticket, "
-                        "run details, and activity log visually distinct while the Spotify project "
-                        "keeps navigation, content, and persistent player controls clear.'"
+                        f"{_quote_shell(Path(sys.executable))} "
+                        f"{_quote_shell(ROOT / 'scripts' / 'spotify_ui_proof.py')} "
+                        f"--project-root {_quote_shell(project_dir)}"
                     ),
-                    "timeout_seconds": 20,
+                    "timeout_seconds": 90,
                     "skills": ["verification-before-completion"],
-                    "tools": ["other"],
-                    "capture_ui_evidence": True,
+                    "tools": ["playwright"],
                 },
                 "validation_type": "text_match",
                 "validation_prompt": "GREEN validation passed",
@@ -1757,11 +1750,12 @@ console.log('build-check: green');
         self.api_request(
             f"/workflows/{workflow_id}/steps/{report_step['id']}",
             method="PATCH",
-            data={"on_pass_goto": -1, "on_fail_goto": -1},
+            data={"on_pass_goto": -1, "on_fail_goto": int(implement_step["id"])},
         )
 
+        ticket_specs = select_spotify_ticket_specs(ticket_limit)
         tickets = []
-        for spec in build_spotify_ticket_specs():
+        for spec in ticket_specs:
             ticket = self.api_request(
                 "/tickets/tickets",
                 method="POST",
@@ -1952,10 +1946,32 @@ console.log('build-check: green');
         ]
         if not matching:
             raise AssertionError(f"Execution session missing for ticket {ticket_id} run {run_id}: {sessions}")
+        # A provider failover intentionally records both the failed primary
+        # attempt and the successful fallback. Assert against the authoritative
+        # completed session, not whichever row the API happened to return first.
+        matching.sort(
+            key=lambda row: (
+                str(row.get("status") or "") == "completed",
+                int(row.get("id") or 0),
+            ),
+            reverse=True,
+        )
         session = matching[0]
         if str(session.get("route_backend") or "") not in {backend_id, "codex", "cursor"}:
             raise AssertionError(f"Unexpected route_backend for {backend_id}: {session}")
-        if str(session.get("selected_model") or "auto") != (expected_model or "auto"):
+        actual_model = str(session.get("selected_model") or "auto")
+        expected_model = str(expected_model or "auto")
+        # Pi resolves its portable `auto` policy to a concrete catalog route at
+        # dispatch time (for example kilocode/openrouter/free).  The persisted
+        # execution session is the authoritative route snapshot, so do not
+        # reject that concrete model merely because the board policy retained
+        # the model-agnostic placeholder.
+        accepts_dynamic_pi_model = (
+            backend_id == "pi"
+            and expected_model == "auto"
+            and actual_model not in {"", "auto"}
+        )
+        if actual_model != expected_model and not accepts_dynamic_pi_model:
             raise AssertionError(f"Unexpected selected_model: {session}")
         if str(session.get("complexity") or "") != complexity:
             raise AssertionError(f"Unexpected complexity: {session}")
@@ -1973,6 +1989,7 @@ console.log('build-check: green');
         stamp: str,
         development_root: Path | None = None,
         model_map: dict[str, dict[str, str]] | None = None,
+        ticket_limit: int | None = None,
         cleanup: bool = True,
     ) -> dict[str, Any]:
         fixture: dict[str, Any] = {}
@@ -1983,9 +2000,11 @@ console.log('build-check: green');
                 stamp=stamp,
                 development_root=development_root,
                 model_map=model_map,
+                ticket_limit=ticket_limit,
             )
             lanes = fixture["lanes"]
-            for index, ticket in enumerate(fixture["tickets"]):
+            tickets = fixture["tickets"]
+            for index, ticket in enumerate(tickets):
                 ticket_id = int(ticket["id"])
                 spec: SpotifyTicketSpec = ticket["spec"]
                 self._move_ticket_to_lane(ticket_id, lanes["Ready"], index)
@@ -2090,6 +2109,39 @@ console.log('build-check: green');
                     + (final_check.stderr or "")
                 )
             return {"backend_id": backend_id, "fixture": fixture, "tickets": results}
+        except Exception as exc:
+            diagnostic: dict[str, Any] = {}
+            workflow_id = fixture.get("workflow_id")
+            if workflow_id:
+                try:
+                    workflow = self.api_request(f"/workflows/{int(workflow_id)}")
+                    diagnostic["runs"] = workflow.get("runs") or []
+                    diagnostic["steps"] = [
+                        {
+                            "id": row.get("id"),
+                            "name": row.get("name"),
+                            "status": row.get("status"),
+                        }
+                        for row in (workflow.get("steps") or [])
+                    ]
+                    events = self.api_request(
+                        f"/workflows/{int(workflow_id)}/orchestrator-events?limit=12"
+                    )
+                    diagnostic["events"] = [
+                        {
+                            "event_type": row.get("event_type"),
+                            "status": row.get("status"),
+                            "summary": str(row.get("summary") or "")[:500],
+                            "evidence": str(row.get("evidence") or "")[:1000],
+                            "payload": str(row.get("payload") or "")[:1000],
+                        }
+                        for row in (events or [])
+                    ]
+                except Exception as diagnostic_exc:
+                    diagnostic["collection_error"] = str(diagnostic_exc)
+            raise AssertionError(
+                f"{exc}\nLive fixture diagnostic: {json.dumps(diagnostic, default=str)}"
+            ) from exc
         finally:
             if cleanup and fixture:
                 self.cleanup_live_spotify_fixture(fixture, development_root=development_root)
@@ -2106,113 +2158,17 @@ console.log('build-check: green');
         *,
         development_root: Path | None = None,
     ) -> None:
-        try:
-            from distr.core.db import get_session
-            from distr.core.db.kanban import (
-                KanbanBoard,
-                KanbanTicket,
-                KanbanTicketAuditEntry,
-                ProjectExecutionEvent,
-                ProjectExecutionSession,
-            )
-            from distr.core.db.orchestrator import (
-                OrchestratorCorrectionAttempt,
-                OrchestratorEvent,
-                OrchestratorValidationRecord,
-            )
-            from distr.core.db.projects import Project
-            from distr.core.workflow.service import delete_workflow
-
-            with get_session() as db:
-                ticket_ids = [int(ticket["id"]) for ticket in fixture.get("tickets") or []]
-                workflow_id = int(fixture["workflow_id"]) if fixture.get("workflow_id") else None
-                project_id = int(fixture["project_id"]) if fixture.get("project_id") else None
-                session_query = db.query(ProjectExecutionSession)
-                if project_id is not None:
-                    session_query = session_query.filter(ProjectExecutionSession.project_id == project_id)
-                elif workflow_id is not None:
-                    session_query = session_query.filter(ProjectExecutionSession.workflow_id == workflow_id)
-                elif ticket_ids:
-                    session_query = session_query.filter(ProjectExecutionSession.ticket_id.in_(ticket_ids))
-                sessions = session_query.all()
-                session_ids = [int(row.id) for row in sessions]
-                run_ids = [int(row.run_id) for row in sessions if row.run_id]
-
-                if session_ids:
-                    db.query(ProjectExecutionEvent).filter(ProjectExecutionEvent.session_id.in_(session_ids)).delete(
-                        synchronize_session=False
-                    )
-                    db.query(OrchestratorCorrectionAttempt).filter(
-                        OrchestratorCorrectionAttempt.execution_session_id.in_(session_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorValidationRecord).filter(
-                        OrchestratorValidationRecord.execution_session_id.in_(session_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorEvent).filter(
-                        OrchestratorEvent.execution_session_id.in_(session_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(ProjectExecutionSession).filter(ProjectExecutionSession.id.in_(session_ids)).delete(
-                        synchronize_session=False
-                    )
-                if run_ids:
-                    db.query(OrchestratorCorrectionAttempt).filter(
-                        OrchestratorCorrectionAttempt.run_id.in_(run_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorValidationRecord).filter(
-                        OrchestratorValidationRecord.run_id.in_(run_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorEvent).filter(OrchestratorEvent.run_id.in_(run_ids)).delete(
-                        synchronize_session=False
-                    )
-                if ticket_ids:
-                    db.query(KanbanTicketAuditEntry).filter(KanbanTicketAuditEntry.ticket_id.in_(ticket_ids)).delete(
-                        synchronize_session=False
-                    )
-                    db.query(OrchestratorCorrectionAttempt).filter(
-                        OrchestratorCorrectionAttempt.ticket_id.in_(ticket_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorValidationRecord).filter(
-                        OrchestratorValidationRecord.ticket_id.in_(ticket_ids)
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorEvent).filter(OrchestratorEvent.ticket_id.in_(ticket_ids)).delete(
-                        synchronize_session=False
-                    )
-                if workflow_id is not None:
-                    db.query(OrchestratorCorrectionAttempt).filter(
-                        OrchestratorCorrectionAttempt.workflow_id == workflow_id
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorValidationRecord).filter(
-                        OrchestratorValidationRecord.workflow_id == workflow_id
-                    ).delete(synchronize_session=False)
-                    db.query(OrchestratorEvent).filter(OrchestratorEvent.workflow_id == workflow_id).delete(
-                        synchronize_session=False
-                    )
-                db.commit()
-            if fixture.get("workflow_id"):
-                delete_workflow(int(fixture["workflow_id"]))
-            with get_session() as db:
-                for ticket in fixture.get("tickets") or []:
-                    row = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket["id"])).first()
-                    if row:
-                        db.delete(row)
-                if fixture.get("board_id"):
-                    board = db.query(KanbanBoard).filter(KanbanBoard.id == int(fixture["board_id"])).first()
-                    if board:
-                        db.delete(board)
-                if fixture.get("project_id"):
-                    project = db.query(Project).filter(Project.id == int(fixture["project_id"])).first()
-                    if project:
-                        db.delete(project)
-                db.commit()
-        except Exception:
-            for ticket in fixture.get("tickets") or []:
-                self._best_effort_api_delete(f"/tickets/tickets/{int(ticket['id'])}")
-            if fixture.get("board_id"):
-                self._best_effort_api_delete(f"/tickets/boards/{int(fixture['board_id'])}")
-            if fixture.get("workflow_id"):
-                self._best_effort_api_delete(f"/workflows/{int(fixture['workflow_id'])}")
-            if fixture.get("project_id"):
-                self._best_effort_api_delete(f"/projects/{int(fixture['project_id'])}")
+        # Keep live-test cleanup on the same API boundary as fixture creation.
+        # Direct sessions point at pytest's isolated database when this harness is
+        # launched by pytest, which previously left server-side projects behind.
+        for ticket in fixture.get("tickets") or []:
+            self._best_effort_api_delete(f"/tickets/tickets/{int(ticket['id'])}")
+        if fixture.get("board_id"):
+            self._best_effort_api_delete(f"/tickets/boards/{int(fixture['board_id'])}")
+        if fixture.get("workflow_id"):
+            self._best_effort_api_delete(f"/workflows/{int(fixture['workflow_id'])}")
+        if fixture.get("project_id"):
+            self._best_effort_api_delete(f"/projects/{int(fixture['project_id'])}")
         project_dir = fixture.get("project_dir")
         if project_dir:
             safe = assert_safe_disposable_spotify_project_dir(

@@ -31,6 +31,32 @@ class CliModelsCatalogTests(unittest.TestCase):
         self.assertEqual(normalize_backend_id("open-code"), "opencode")
         self.assertEqual(get_backend("opencode").id, "opencode")
 
+    def test_recommender_prefers_stable_kilo_free_alias_over_expiring_promotion(self):
+        selected = catalog.recommend_cli_model(
+            [
+                catalog.model_entry(
+                    "bytedance-seed/dola-seed-2.0-pro:free",
+                    "kilocode",
+                    free=True,
+                    tier="high",
+                    scope="scoped",
+                ),
+                catalog.model_entry(
+                    "openrouter/free",
+                    "kilocode",
+                    free=True,
+                    tier="standard",
+                    scope="scoped",
+                ),
+            ],
+            prefer_free=True,
+            prefer_local=False,
+            prefer_scoped=True,
+            complexity="high",
+        )
+        self.assertEqual(selected["id"], "openrouter/free")
+        self.assertEqual(selected["provider"], "kilocode")
+
 
 if __name__ == "__main__":
     unittest.main()

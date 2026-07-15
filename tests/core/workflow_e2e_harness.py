@@ -157,6 +157,7 @@ def workflow_patch_stack(factory, tmp_path):
         patch("distr.core.workflow.dispatcher.get_session", get_session),
         patch("distr.core.workflow.post_execution.get_session", get_session),
         patch("distr.core.workflow.router.get_session", get_session),
+        patch("distr.core.workflow.runtime_contract.get_session", get_session),
         patch("distr.core.workflow.service.get_session", get_session),
         patch("distr.core.workflow.step_executor.get_session", get_session),
         patch("distr.core.workflow.standards_memory.get_session", get_session),

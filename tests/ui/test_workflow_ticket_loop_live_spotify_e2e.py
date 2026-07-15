@@ -48,6 +48,7 @@ def test_live_spotify_backend_matrix_runs_selected_ready_backends() -> None:
 
     stamp = os.environ.get("DECISIONS_LIVE_SPOTIFY_STAMP") or time.strftime("%Y%m%d-%H%M%S")
     development_root = Path(os.environ.get("DECISIONS_LIVE_SPOTIFY_DEVELOPMENT_ROOT", str(Path.home() / "development")))
+    ticket_limit = int(os.environ.get("DECISIONS_LIVE_SPOTIFY_TICKET_LIMIT", "4"))
 
     reports = []
     for backend_id in matrix.selected:
@@ -56,9 +57,10 @@ def test_live_spotify_backend_matrix_runs_selected_ready_backends() -> None:
                 backend_id=backend_id,
                 stamp=stamp,
                 development_root=development_root,
+                ticket_limit=ticket_limit,
                 cleanup=True,
             )
         )
 
     assert [report["backend_id"] for report in reports] == matrix.selected
-    assert all(len(report["tickets"]) == 4 for report in reports)
+    assert all(len(report["tickets"]) == min(4, max(1, ticket_limit)) for report in reports)

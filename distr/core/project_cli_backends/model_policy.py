@@ -72,8 +72,32 @@ def apply_workflow_model_policy(
     auto_route = bool(policy.get("auto_route_models", True))
 
     current_model = str(merged.get("model") or "").strip()
+    route_source = str(merged.get("source") or "").strip().lower()
+    current_backend = str(merged.get("backend") or "").strip().lower()
     complexity = str(merged.get("complexity") or cfg.get("complexity") or policy.get("complexity") or "medium")
     if not auto_route and not free_only:
+        return merged
+    scoped_model_selected = bool(
+        current_model not in {"", "auto"}
+        and not bool(policy.get("force_reselect"))
+    )
+    if scoped_model_selected:
+        merged["policy_source"] = f"{route_source or 'selected_route'}_preserved"
+        return merged
+    # _free_eligible_model() selects from Pi's provider catalog. An explicit or
+    # board-scoped non-Pi backend must therefore keep its native `auto` model;
+    # pairing (for example) Codex with an OpenRouter model identifier produces a
+    # route that looks valid in the UI but is rejected by the real provider.
+    backend_is_scoped = explicit_backend or route_source in {
+        "board_override",
+        "step_execution_route",
+        "active_run_route",
+        "orchestrator_override",
+        "harness_preference",
+    }
+    if backend_is_scoped and current_backend and current_backend != "pi" and not free_only:
+        merged["model"] = current_model or "auto"
+        merged["policy_source"] = f"{route_source or 'explicit_backend'}_native_auto_preserved"
         return merged
     if free_only or prefer_local or current_model in {"", "auto"}:
         selected = _free_eligible_model(settings, complexity=complexity, prefer_local=prefer_local)

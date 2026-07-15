@@ -196,6 +196,7 @@ def test_ticket_workflow_uses_orchestrator_backbone(tmp_path):
         patch("distr.core.workflow.dispatcher.get_session", get_session),
         patch("distr.core.workflow.post_execution.get_session", get_session),
         patch("distr.core.workflow.router.get_session", get_session),
+        patch("distr.core.workflow.runtime_contract.get_session", get_session),
         patch("distr.core.workflow.service.get_session", get_session),
         patch("distr.core.workflow.step_executor.get_session", get_session),
         patch("distr.core.settings.load_settings_from_db", lambda: {
@@ -292,9 +293,10 @@ def test_ticket_workflow_uses_orchestrator_backbone(tmp_path):
             assert json.loads(run.run_data or "{}")["result_packet"]["status"] == "completed"
             run_data = json.loads(run.run_data or "{}")
             assert run_data.get("execution_route", {}).get("backend")
+            assert run_data.get("terminal_receipt", {}).get("status") == "completed"
 
             assert ticket.workflow_status == "completed"
-            assert f"[Workflow Run #{run_id}] Status: completed" in ticket.description
+            assert ticket.description == "This ticket should be executed, validated, audited, and written back."
             assert ticket_audit
             assert ticket_audit[-1].run_id == run_id
 

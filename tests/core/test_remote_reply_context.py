@@ -1,5 +1,6 @@
 from distr.core.human_engagement import (
     build_remote_reply_context_preamble,
+    mark_workflow_engagement_answered,
     record_remote_reply_context,
     reset_remote_reply_context,
 )
@@ -150,3 +151,24 @@ def test_remote_reply_context_without_thread_id_does_not_premap():
     routed = build_remote_reply_context_preamble("plain follow up")
 
     assert routed == "plain follow up"
+
+
+def test_answered_workflow_context_is_not_reused():
+    reset_remote_reply_context()
+    record_remote_reply_context(
+        platform="telegram",
+        channel="telegram",
+        thread_id="answered-thread",
+        workflow_id=7,
+        run_id=74,
+        outbound_text="Approve run 74",
+        metadata={"requires_response": True},
+    )
+
+    mark_workflow_engagement_answered(74)
+
+    assert build_remote_reply_context_preamble(
+        "A later unrelated message",
+        platform="telegram",
+        thread_id="answered-thread",
+    ) == "A later unrelated message"

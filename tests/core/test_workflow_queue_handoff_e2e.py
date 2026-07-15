@@ -100,7 +100,10 @@ def _set_sequential_run_settings(factory, workflow_id: int) -> None:
 def test_sequential_queue_auto_starts_next_ticket(tmp_path):
     from distr.core.workflow.dispatcher import _active_runs, _runs_lock, start_workflow_run
 
-    factory = make_factory(tmp_path)
+    # Queue handoff crosses worker threads.  A StaticPool in-memory SQLite
+    # connection cannot safely serve concurrent cursors and causes intermittent
+    # SQLAlchemy row-decoding failures unrelated to workflow behavior.
+    factory = make_factory(tmp_path, memory=False)
     applied = apply_preset_to_workflow(factory, "development-ticket-to-implementation")
     workflow_id = applied["workflow_id"]
     _set_sequential_run_settings(factory, workflow_id)

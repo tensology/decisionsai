@@ -182,13 +182,27 @@ def _reference_skill_paths(home: Path, harness_id: str) -> list[Path]:
 
 def _projection_rows(home: Path, harness_id: str, detected: dict[str, bool]) -> dict[str, dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
-    for projection_id, skill_name in (
-        ("ecc", "ecc-harness-pack"),
-        ("competition", "decisions-competition-harness"),
-        ("capabilities", "decisions-browser-content-harness"),
-    ):
-        paths = projection_paths(home, detected, skill_name)
-        required = [paths[harness_id]] if harness_id in paths else []
+    exact_paths = {
+        "ecc": {
+            "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "ecc-harness-pack" / "SKILL.md",
+            "claude": home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md",
+            "cursor": home / ".cursor" / "decisions-ecc-harness.md",
+            "pi": home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md",
+        },
+        "competition": {
+            "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "decisions-competition-harness" / "SKILL.md",
+            "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
+            "cursor": home / ".cursor" / "decisions-competition-harness.md",
+            "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
+        },
+    }
+    capabilities_paths = projection_paths(home, detected, "decisions-browser-content-harness")
+    for projection_id in ("ecc", "competition", "capabilities"):
+        if projection_id == "capabilities":
+            required = [capabilities_paths[harness_id]] if harness_id in capabilities_paths else []
+        else:
+            target = exact_paths[projection_id].get(harness_id)
+            required = [target] if target is not None and detected.get(harness_id) else []
         rows[projection_id] = _row(
             item_id=projection_id,
             name=f"{projection_id} projection",

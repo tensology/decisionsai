@@ -164,6 +164,30 @@ def reset_engagement_ledger() -> None:
         return
 
 
+def mark_workflow_engagement_answered(run_id: int) -> None:
+    """Mark outstanding response-required notifications for a run answered."""
+    try:
+        from sqlalchemy import text
+        from distr.core.db import engine
+
+        _ensure_ledger_table()
+        _ensure_remote_reply_context_table()
+        answered_at = time.time()
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE human_engagement_ledger
+                SET answered_at=:answered_at, status='answered'
+                WHERE answered_at IS NULL
+                  AND CAST(json_extract(metadata, '$.run_id') AS INTEGER)=:run_id
+            """), {"answered_at": answered_at, "run_id": int(run_id)})
+            conn.execute(text("""
+                UPDATE remote_reply_context SET answered_at=:answered_at
+                WHERE answered_at IS NULL AND run_id=:run_id
+            """), {"answered_at": answered_at, "run_id": int(run_id)})
+    except Exception:
+        return
+
+
 def _ensure_remote_reply_context_table() -> None:
     try:
         from sqlalchemy import text
@@ -189,6 +213,7 @@ def _ensure_remote_reply_context_table() -> None:
                     state_fingerprint VARCHAR,
                     outbound_text TEXT,
                     sent_at FLOAT NOT NULL,
+                    answered_at FLOAT,
                     metadata TEXT
                 )
             """))
@@ -196,6 +221,8 @@ def _ensure_remote_reply_context_table() -> None:
                 columns = {row[1] for row in conn.execute(text("PRAGMA table_info(remote_reply_context)")).fetchall()}
                 if "thread_id" not in columns:
                     conn.execute(text("ALTER TABLE remote_reply_context ADD COLUMN thread_id VARCHAR"))
+                if "answered_at" not in columns:
+                    conn.execute(text("ALTER TABLE remote_reply_context ADD COLUMN answered_at FLOAT"))
             except Exception:
                 pass
             conn.commit()
@@ -297,7 +324,7 @@ def latest_remote_reply_context(
 
         _ensure_remote_reply_context_table()
         params: dict[str, Any] = {"cutoff": time.time() - max(1, int(max_age_s))}
-        where = "sent_at >= :cutoff"
+        where = "sent_at >= :cutoff AND answered_at IS NULL"
         if platform:
             where += " AND platform = :platform"
             params["platform"] = platform

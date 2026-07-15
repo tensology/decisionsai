@@ -1,9 +1,26 @@
-"""TTS service implementations."""
-from .openai import OpenAITTSService
-from .kokoro import KokoroTTSService
-from .elevenlabs import ElevenLabsTTSService
+"""Lazy TTS service exports."""
 
-try:
-    from .supertonic import SupertonicTTSService
-except ImportError:
-    SupertonicTTSService = None
+from __future__ import annotations
+
+import importlib
+
+
+_EXPORTS = {
+    "OpenAITTSService": ".openai",
+    "KokoroTTSService": ".kokoro",
+    "ElevenLabsTTSService": ".elevenlabs",
+    "SupertonicTTSService": ".supertonic",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    try:
+        module_name = _EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
+    module = importlib.import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value

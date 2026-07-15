@@ -32,6 +32,8 @@ def harness_skill_bases(home: Path, detected: dict[str, bool]) -> dict[str, Path
         bases["cursor"] = home / ".cursor" / "skills"
     if detected.get("cline"):
         bases["cline"] = home / ".cline" / "skills"
+    if detected.get("gemini"):
+        bases["gemini"] = home / ".gemini" / "skills"
     return bases
 
 
@@ -46,6 +48,8 @@ def harness_command_bases(home: Path, detected: dict[str, bool]) -> dict[str, Pa
         bases["claude"] = home / ".claude" / "commands"
     if detected.get("pi"):
         bases["pi"] = home / ".pi" / "commands"
+    if detected.get("gemini"):
+        bases["gemini"] = home / ".gemini" / "commands"
     return bases
 
 

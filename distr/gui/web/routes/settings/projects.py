@@ -1754,7 +1754,10 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 session.delete(project)
                 session.commit()
-                return JSONResponse({"success": True})
+            from distr.core.workspace_memory.lifecycle import hook_remove_workspace
+
+            hook_remove_workspace("projects", project_id)
+            return JSONResponse({"success": True})
         except HTTPException:
             raise
         except Exception as e:

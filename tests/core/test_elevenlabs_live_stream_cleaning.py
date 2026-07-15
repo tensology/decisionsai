@@ -53,8 +53,7 @@ def test_elevenlabs_live_textframes_are_cleaned_before_sentence_synthesis():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame()
-    text.text = "The answer is <tool_call>{bad}</tool_call> ahhhhh stable."
+    text = TextFrame(text="The answer is <tool_call>{bad}</tool_call> ahhhhh stable.")
 
     async def run_stream():
         await service.process_frame(start, None)

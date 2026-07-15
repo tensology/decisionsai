@@ -125,6 +125,19 @@ class PostExecutionMixin:
                 result_text=result_text,
                 passed=passed,
             )
+            from distr.core.workspace_memory.delta import normalize_memory_delta
+
+            semantic_delta = normalize_memory_delta(
+                delta,
+                summary=str(delta.get("summary") or ""),
+                provenance={
+                    "run_id": delta.get("run_id"),
+                    "step_id": delta.get("step_id"),
+                    "workflow_id": delta.get("workflow_id"),
+                    "ticket_id": delta.get("ticket_id"),
+                    "project_id": delta.get("project_id"),
+                },
+            )
             lines = [
                 f"Step: {delta.get('step_name')} (id={delta.get('step_id')})",
                 f"Status: {delta.get('status')}",
@@ -142,7 +155,7 @@ class PostExecutionMixin:
                 value = (delta.get(key) or "").strip()
                 if value:
                     lines.append(f"{label}: {value}")
-            body = "\n".join(lines).strip()
+            body = semantic_delta.to_markdown() or "\n".join(lines).strip()
             ledger_extra = {
                 "run_id": delta.get("run_id"),
                 "step_id": delta.get("step_id"),
@@ -151,6 +164,7 @@ class PostExecutionMixin:
                 "project_id": delta.get("project_id"),
                 "board_id": delta.get("board_id"),
                 "passed": delta.get("passed"),
+                "memory_delta": semantic_delta.to_dict(),
             }
 
             perform_handoff(

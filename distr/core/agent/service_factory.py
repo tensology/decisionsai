@@ -5,45 +5,41 @@ Extracted from session.py to reduce duplication and keep service creation
 logic in one place.
 """
 
+import importlib
 import logging
 
 from .constants import DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
-# LLM service class imports
-from .services import OllamaLLMService
-try:
-    from .services import (
-        OpenAILLMService, OpenRouterLLMService,
-        AnthropicLLMService, GroqLLMService, KiloCodeLLMService,
-        GeminiLLMService, NvidiaLLMService,
-    )
-except ImportError:
-    OpenAILLMService = None
-    OpenRouterLLMService = None
-    AnthropicLLMService = None
-    GroqLLMService = None
-    KiloCodeLLMService = None
-    GeminiLLMService = None
-    NvidiaLLMService = None
-
-from .libs import ElevenLabs
-
 # TTS provider registry — replaces per-provider if/elif chains
 from distr.core.agent.services.tts.registry import tts_registry
 
-# Maps engine name -> (ServiceClass, required_import_label)
+# Maps engine name -> (module, class name)
 _LLM_ENGINE_MAP = {
-    'ollama':     (OllamaLLMService,     None),
-    'openai':     (OpenAILLMService,      "OpenAILLMService"),
-    'openrouter': (OpenRouterLLMService,  "OpenRouterLLMService"),
-    'anthropic':  (AnthropicLLMService,   "AnthropicLLMService"),
-    'groq':       (GroqLLMService,        "GroqLLMService"),
-    'kilocode':   (KiloCodeLLMService,    "KiloCodeLLMService"),
-    'gemini':     (GeminiLLMService,      "GeminiLLMService"),
-    'nvidia':     (NvidiaLLMService,      "NvidiaLLMService"),
+    'ollama':     ('.services.llm.providers.ollama', 'OllamaLLMService'),
+    'openai':     ('.services.llm.providers.openai', 'OpenAILLMService'),
+    'openrouter': ('.services.llm.providers.openrouter', 'OpenRouterLLMService'),
+    'anthropic':  ('.services.llm.providers.anthropic', 'AnthropicLLMService'),
+    'groq':       ('.services.llm.providers.groq', 'GroqLLMService'),
+    'kilocode':   ('.services.llm.providers.kilocode', 'KiloCodeLLMService'),
+    'gemini':     ('.services.llm.providers.gemini', 'GeminiLLMService'),
+    'nvidia':     ('.services.llm.providers.nvidia', 'NvidiaLLMService'),
 }
+
+
+def _load_llm_service_class(engine: str):
+    entry = _LLM_ENGINE_MAP.get(engine)
+    if not entry:
+        raise ValueError(f"Unsupported LLM engine: {engine}")
+    module_name, class_name = entry
+    try:
+        module = importlib.import_module(module_name, __package__)
+        return getattr(module, class_name), class_name
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            f"{class_name} is not available. Please ensure the required library is installed."
+        ) from exc
 
 
 def _normalize_api_key(raw_key: str) -> str:
@@ -95,13 +91,7 @@ def create_llm_service(llm_config, *, role, agent_name, event_queue, is_listenin
         confirmation_results_dict=confirmation_results_dict,
     )
 
-    entry = _LLM_ENGINE_MAP.get(engine)
-    if not entry:
-        raise ValueError(f"Unsupported LLM engine: {engine}")
-
-    cls, label = entry
-    if not cls:
-        raise ImportError(f"{label} is not available. Please ensure the required library is installed.")
+    cls, label = _load_llm_service_class(engine)
 
     if engine == 'ollama':
         model_name = llm_config.get('model_name', DEFAULT_MODELS['ollama'])
@@ -184,6 +174,10 @@ def resolve_elevenlabs_voice(api_key, voice_id_or_name):
 
     Tries: exact ID match, then case-insensitive name match, then first available voice.
     """
+    try:
+        from .libs import ElevenLabs
+    except ImportError:
+        ElevenLabs = None
     if not ElevenLabs:
         raise ImportError("ElevenLabs library not installed")
 

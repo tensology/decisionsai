@@ -12,7 +12,13 @@ from sqlalchemy import or_
 from distr.core.db import get_session
 from distr.core.db.time import utc_now_naive
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
-from distr.core.db.kanban import KanbanBoard, KanbanTicket, KanbanTicketAuditEntry
+from distr.core.db.kanban import (
+    KanbanBoard,
+    KanbanTicket,
+    KanbanTicketAuditEntry,
+    ProjectExecutionEvent,
+    ProjectExecutionSession,
+)
 from distr.core.db.projects import Project
 from distr.gui.web.workflow_events import increment_workflow_updated
 
@@ -184,6 +190,9 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "execution_route": run_data.get("execution_route") or {},
         "pending_route_approval": run_data.get("pending_route_approval") or {},
         "execution_session_id": run_data.get("execution_session_id"),
+        "ticket_group_id": run_data.get("ticket_group_id"),
+        "ticket_group_index": run_data.get("ticket_group_index"),
+        "ticket_group_size": run_data.get("ticket_group_size"),
         "ide_handoff_pending": bool(run_data.get("ide_handoff_pending")),
         "steerable": _run_is_steerable(run, run_data),
         "pending_harness_steers": (run_data.get("pending_harness_steers") or [])[-5:],
@@ -826,6 +835,11 @@ def delete_workflow(workflow_id: int) -> bool:
             )
         db.delete(wf)
         db.commit()
+        from distr.core.workspace_memory.lifecycle import hook_remove_workspace
+
+        for run_id in run_ids:
+            hook_remove_workspace("runs", run_id)
+        hook_remove_workspace("workflows", workflow_id)
         return True
 
 
@@ -894,22 +908,37 @@ def duplicate_workflow(workflow_id: int) -> Optional[int]:
         if not orig:
             return None
         new_wf = AutoWorkflow(
-            name=f"{orig.name} (copy)", description=orig.description,
+            name=f"{orig.name} (copy)",
+            description=orig.description,
+            status="draft",
+            workflow_type=orig.workflow_type,
+            context_rules=orig.context_rules,
+            workflow_input=orig.workflow_input,
+            run_settings=orig.run_settings,
+            safety_mode=orig.safety_mode,
+            safety_frozen_scope=orig.safety_frozen_scope,
+            pre_chain=orig.pre_chain,
+            post_chain=orig.post_chain,
+            verification_template=orig.verification_template,
             start_step_position=orig.start_step_position,
         )
         db.add(new_wf)
         db.flush()
+        step_id_map = {}
         for step in sorted(orig.steps, key=lambda s: s.position):
-            db.add(AutoWorkflowStep(
+            copied_step = AutoWorkflowStep(
                 workflow_id=new_wf.id, position=step.position,
                 name=step.name, description=step.description,
-                action_type=step.action_type, instruction=step.instruction,
+                action_type=step.action_type, step_type=step.step_type,
+                instruction=step.instruction, config=step.config,
+                verification=step.verification, tool_used=step.tool_used,
+                routing_path=step.routing_path,
                 validation_type=step.validation_type,
                 validation_prompt=step.validation_prompt,
                 screenshot_path=step.screenshot_path,
                 routing_mode=step.routing_mode,
                 routing_prompt=step.routing_prompt,
-                on_pass_goto=step.on_pass_goto, on_fail_goto=step.on_fail_goto,
+                on_pass_goto=None, on_fail_goto=None,
                 wait_before_next=step.wait_before_next,
                 max_retries=step.max_retries,
                 timeout_seconds=step.timeout_seconds,
@@ -918,6 +947,30 @@ def duplicate_workflow(workflow_id: int) -> Optional[int]:
                 validation_code=step.validation_code,
                 linked_project_id=step.linked_project_id,
                 wait_for_continue=step.wait_for_continue,
+                recording_filename=step.recording_filename,
+                action_id=step.action_id,
+            )
+            db.add(copied_step)
+            db.flush()
+            step_id_map[int(step.id)] = copied_step
+        for step in orig.steps:
+            copied_step = step_id_map[int(step.id)]
+            copied_step.on_pass_goto = (
+                step_id_map[int(step.on_pass_goto)].id
+                if step.on_pass_goto is not None and int(step.on_pass_goto) in step_id_map
+                else step.on_pass_goto
+            )
+            copied_step.on_fail_goto = (
+                step_id_map[int(step.on_fail_goto)].id
+                if step.on_fail_goto is not None and int(step.on_fail_goto) in step_id_map
+                else step.on_fail_goto
+            )
+        for variable in orig.variables:
+            db.add(AutoWorkflowVariable(
+                workflow_id=new_wf.id,
+                name=variable.name,
+                default_value=variable.default_value,
+                description=variable.description,
             ))
         db.commit()
         return new_wf.id
@@ -1423,6 +1476,9 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
         recent_steps_by_run: Dict[int, List[str]] = {}
         recent_tools_by_run: Dict[int, List[str]] = {}
         recent_context_by_run: Dict[int, List[str]] = {}
+        latest_activity_by_run: Dict[int, Dict[str, Any]] = {}
+        latest_heartbeat_by_run: Dict[int, Dict[str, Any]] = {}
+        latest_heartbeat_at_by_run: Dict[int, Any] = {}
         if run_ids:
             recent_rows = (
                 db.query(AutoWorkflowStepResult, AutoWorkflowStep)
@@ -1455,6 +1511,29 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                             value = str(context_name or "").strip()
                             if value and value not in context_bucket:
                                 context_bucket.append(value)
+            activity_rows = (
+                db.query(ProjectExecutionEvent, ProjectExecutionSession)
+                .join(ProjectExecutionSession, ProjectExecutionSession.id == ProjectExecutionEvent.session_id)
+                .filter(ProjectExecutionSession.run_id.in_(run_ids))
+                .order_by(ProjectExecutionEvent.created_at.desc(), ProjectExecutionEvent.id.desc())
+                .limit(max(100, len(run_ids) * 30))
+                .all()
+            )
+            for event_row, session_row in activity_rows:
+                rid = int(session_row.run_id or 0)
+                if not rid:
+                    continue
+                activity = {
+                    "event_type": event_row.event_type or "event",
+                    "message": event_row.message or "",
+                    "at": event_row.created_at.isoformat() if event_row.created_at else None,
+                    "backend": session_row.route_backend or "",
+                    "model": session_row.selected_model or "",
+                }
+                latest_activity_by_run.setdefault(rid, activity)
+                if event_row.event_type == "heartbeat":
+                    latest_heartbeat_by_run.setdefault(rid, activity)
+                    latest_heartbeat_at_by_run.setdefault(rid, event_row.created_at)
 
         now = utc_now_naive()
         results = []
@@ -1464,6 +1543,23 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             step = step_by_id.get(r.current_step_id)
             started_at_iso = r.started_at.isoformat() if r.started_at else None
             elapsed_seconds = int((now - r.started_at).total_seconds()) if r.started_at else 0
+            heartbeat = dict(latest_heartbeat_by_run.get(int(r.id), {}))
+            heartbeat_at = latest_heartbeat_at_by_run.get(int(r.id))
+            heartbeat_age_seconds = (
+                max(0, int((now - heartbeat_at).total_seconds())) if heartbeat_at else None
+            )
+            if heartbeat_age_seconds is not None:
+                heartbeat["age_seconds"] = heartbeat_age_seconds
+            if r.status == "waiting":
+                activity_state = "waiting_for_user"
+            elif heartbeat_age_seconds is None:
+                activity_state = "starting" if elapsed_seconds <= 30 else "no_heartbeat"
+            elif heartbeat_age_seconds <= 30:
+                activity_state = "active"
+            elif heartbeat_age_seconds <= 90:
+                activity_state = "delayed"
+            else:
+                activity_state = "stale"
             results.append({
                 "id": r.id,
                 "workflow_id": r.workflow_id,
@@ -1484,6 +1580,10 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "recent_step_names": recent_steps_by_run.get(int(r.id), []),
                 "recent_step_tools": recent_tools_by_run.get(int(r.id), []),
                 "recent_step_context": recent_context_by_run.get(int(r.id), []),
+                "last_activity": latest_activity_by_run.get(int(r.id), {}),
+                "last_heartbeat": heartbeat,
+                "heartbeat_age_seconds": heartbeat_age_seconds,
+                "activity_state": activity_state,
             })
         return results
 

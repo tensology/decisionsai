@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 import pytest
 
+pytestmark = pytest.mark.live_audio
+
 pytest.importorskip("pipecat.transports.local.audio")
 
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams

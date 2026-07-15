@@ -862,11 +862,37 @@ class EventHandlerMixin:
             logger.info("[EVENT QUEUE] ✅ Telegram voice transcription successful (request_id: %s): '%s'", request_id, transcript[:200])
             try:
                 threading.current_thread().telegram_request = True
+                if hasattr(self, 'telegram_manager') and self.telegram_manager:
+                    try:
+                        from distr.core.workflow.interactions import (
+                            handle_telegram_workflow_reply,
+                            workflow_reply_message,
+                        )
+
+                        telegram_chat_id = getattr(self.telegram_manager, "telegram_user_id", None)
+                        workflow_reply = handle_telegram_workflow_reply(
+                            str(transcript),
+                            chat_id=telegram_chat_id,
+                            resolver_id=str(telegram_chat_id or ""),
+                            source="telegram_voice",
+                        )
+                        if workflow_reply:
+                            self.telegram_manager._stop_typing_loop()
+                            self.telegram_manager.send_to_telegram(
+                                workflow_reply_message(workflow_reply, voice=True)
+                            )
+                            return
+                    except Exception:
+                        logger.exception("[Telegram] Voice workflow interaction routing failed")
                 # Route through the batch buffer so input_type="voice" is
                 # propagated to _flush_telegram_batch → _current_input_type,
                 # which downstream consumers read to decide text vs voice response.
                 if hasattr(self, 'telegram_manager') and self.telegram_manager:
-                    self.telegram_manager._enqueue_telegram_batch(str(transcript), input_type=input_type)
+                    self.telegram_manager._enqueue_telegram_batch(
+                        str(transcript),
+                        input_type=input_type,
+                        source_message_id=data.get('source_message_id'),
+                    )
                 else:
                     # Same agent path as batched Telegram; no thread id when manager absent (no mapping persist).
                     from distr.core.integrations.bus import get_integration_message_bus
@@ -1351,6 +1377,7 @@ class EventHandlerMixin:
                 text=text_to_send,
                 audio_file_path=str(audio_file) if audio_file and audio_file.exists() else None,
                 screenshot_path=str(screenshot_file) if screenshot_file and screenshot_file.exists() else None,
+                reply_markup=data.get("reply_markup"),
             )
             self._record_remote_reply_context(
                 data,

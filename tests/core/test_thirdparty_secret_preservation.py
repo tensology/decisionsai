@@ -56,7 +56,8 @@ def test_thirdparty_save_preserves_existing_keys_when_payload_keys_are_blank(
 ):
     from distr.core.services.settings_service import save_thirdparty_settings
 
-    save_thirdparty_settings(_thirdparty_payload(), resolve_secret_update)
+    with patch("distr.core.services.settings_service.signal_manager"):
+        save_thirdparty_settings(_thirdparty_payload(), resolve_secret_update)
 
     saved = save_settings.call_args.args[0]
     assert saved["openai_enabled"] is True
@@ -81,10 +82,11 @@ def test_thirdparty_save_replaces_existing_key_when_new_key_is_submitted(
 ):
     from distr.core.services.settings_service import save_thirdparty_settings
 
-    save_thirdparty_settings(
-        _thirdparty_payload(openai_key="sk-new-openai"),
-        resolve_secret_update,
-    )
+    with patch("distr.core.services.settings_service.signal_manager"):
+        save_thirdparty_settings(
+            _thirdparty_payload(openai_key="sk-new-openai"),
+            resolve_secret_update,
+        )
 
     saved = save_settings.call_args.args[0]
     assert saved["openai_key"] == "sk-new-openai"
@@ -106,10 +108,11 @@ def test_thirdparty_save_clears_key_when_provider_is_disabled_with_blank_key(
 ):
     from distr.core.services.settings_service import save_thirdparty_settings
 
-    save_thirdparty_settings(
-        _thirdparty_payload(openai_enabled=False, openai_key=""),
-        resolve_secret_update,
-    )
+    with patch("distr.core.services.settings_service.signal_manager"):
+        save_thirdparty_settings(
+            _thirdparty_payload(openai_enabled=False, openai_key=""),
+            resolve_secret_update,
+        )
 
     saved = save_settings.call_args.args[0]
     assert saved["openai_enabled"] is False
@@ -132,10 +135,11 @@ def test_thirdparty_save_keeps_submitted_key_even_when_provider_is_disabled(
 ):
     from distr.core.services.settings_service import save_thirdparty_settings
 
-    save_thirdparty_settings(
-        _thirdparty_payload(openai_enabled=False, openai_key="sk-replacement"),
-        resolve_secret_update,
-    )
+    with patch("distr.core.services.settings_service.signal_manager"):
+        save_thirdparty_settings(
+            _thirdparty_payload(openai_enabled=False, openai_key="sk-replacement"),
+            resolve_secret_update,
+        )
 
     saved = save_settings.call_args.args[0]
     assert saved["openai_enabled"] is False

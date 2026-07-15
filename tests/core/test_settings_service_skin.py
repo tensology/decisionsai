@@ -67,7 +67,8 @@ class TestSaveGeneralSettingsNoOracleSignals:
         data.vad_threshold = 50
         data.voice_provider = "kokoro"
 
-        save_general_settings(data)
+        with patch("distr.core.services.settings_service.signal_manager"):
+            save_general_settings(data)
 
         emitted_labels = [c.kwargs.get("label", "") for c in mock_emit.call_args_list]
         assert "direct_oracle_change" not in emitted_labels
@@ -85,15 +86,15 @@ class TestSaveShortcutSettings:
     @patch("distr.core.services.settings_service.load_settings_from_db", return_value={})
     def test_emits_shortcut_settings_changed(self, _load, _save, mock_emit, _run_qt):
         from distr.core.services.settings_service import save_shortcut_settings
-        from distr.core.signals import signal_manager
 
-        saved = save_shortcut_settings(SimpleNamespace(
-            global_ptt_hotkey_enabled=True,
-            global_ptt_hotkey_combo="option_command",
-            dictation_hotkey_enabled=True,
-            dictation_hotkey_modifier="control_command",
-            dictation_hotkey_key="m",
-        ))
+        with patch("distr.core.services.settings_service.signal_manager") as signal_manager:
+            saved = save_shortcut_settings(SimpleNamespace(
+                global_ptt_hotkey_enabled=True,
+                global_ptt_hotkey_combo="option_command",
+                dictation_hotkey_enabled=True,
+                dictation_hotkey_modifier="control_command",
+                dictation_hotkey_key="m",
+            ))
 
         assert saved["global_ptt_hotkey_combo"] == "option_command"
         assert saved["dictation_hotkey_enabled"] is True

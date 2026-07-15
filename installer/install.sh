@@ -1,104 +1,115 @@
-#!/bin/bash
-# DecisionsAI Installer
-# This script sets up DecisionsAI and adds it to the system PATH
+#!/usr/bin/env bash
+# Atomic single-user install, update, verification, and rollback for DecisionsAI.app.
 
-set -e
+set -euo pipefail
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+APP_NAME="DecisionsAI.app"
+INSTALL_DIR="${DECISIONSAI_INSTALL_DIR:-$HOME/Applications}"
+STATE_DIR="${DECISIONSAI_STATE_DIR:-$HOME/Library/Application Support/DecisionsAI}"
+TARGET="$INSTALL_DIR/$APP_NAME"
+PREVIOUS="$STATE_DIR/releases/previous/$APP_NAME"
+LOCK_DIR="$STATE_DIR/install.lock"
 
-# Get the project root directory
-INSTALLER_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$INSTALLER_DIR/.." && pwd)"
+usage() {
+    printf '%s\n' \
+        "Usage: installer/install.sh /path/to/DecisionsAI.app" \
+        "       installer/install.sh --verify" \
+        "       installer/install.sh --rollback"
+}
 
-echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     DecisionsAI Installation         ║${NC}"
-echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
-echo ""
+validate_app() {
+    local app="$1"
+    [ -d "$app" ] || { printf 'App bundle not found: %s\n' "$app" >&2; return 1; }
+    [ -f "$app/Contents/Info.plist" ] || { printf 'Invalid app bundle: missing Info.plist.\n' >&2; return 1; }
+    [ -x "$app/Contents/MacOS/DecisionsAI" ] || { printf 'Invalid app bundle: missing executable.\n' >&2; return 1; }
+    local identifier
+    identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null || true)"
+    [ "$identifier" = "com.tensology.decisionsai" ] || {
+        printf 'Invalid bundle identifier: %s\n' "${identifier:-missing}" >&2
+        return 1
+    }
+}
 
-# Detect shell
-if [ -n "$ZSH_VERSION" ]; then
-    SHELL_RC="$HOME/.zshrc"
-    SHELL_NAME="zsh"
-elif [ -n "$BASH_VERSION" ]; then
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        SHELL_RC="$HOME/.bash_profile"
-        if [ ! -f "$SHELL_RC" ] && [ -f "$HOME/.bashrc" ]; then
-            SHELL_RC="$HOME/.bashrc"
+acquire_lock() {
+    mkdir -p "$STATE_DIR"
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        local owner=""
+        [ -f "$LOCK_DIR/pid" ] && owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            rm -rf "$LOCK_DIR"
+            mkdir "$LOCK_DIR"
+        else
+            printf 'Another DecisionsAI install or rollback is active.\n' >&2
+            exit 1
         fi
-    else
-        SHELL_RC="$HOME/.bashrc"
     fi
-    SHELL_NAME="bash"
-else
-    SHELL_RC="$HOME/.profile"
-    SHELL_NAME="sh"
+    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+}
+
+verify_target() {
+    validate_app "$TARGET"
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$TARGET/Contents/Info.plist"
+}
+
+case "${1:-}" in
+    --verify)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        verify_target
+        exit 0
+        ;;
+    --rollback)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        acquire_lock
+        validate_app "$TARGET"
+        validate_app "$PREVIOUS"
+        SWAP="$INSTALL_DIR/.DecisionsAI.rollback.$$"
+        mv "$TARGET" "$SWAP"
+        if mv "$PREVIOUS" "$TARGET"; then
+            mkdir -p "$(dirname "$PREVIOUS")"
+            mv "$SWAP" "$PREVIOUS"
+        else
+            mv "$SWAP" "$TARGET"
+            printf 'Rollback failed; current installation was restored.\n' >&2
+            exit 1
+        fi
+        printf 'Rolled back DecisionsAI to version %s.\n' "$(verify_target)"
+        exit 0
+        ;;
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    "")
+        usage >&2
+        exit 2
+        ;;
+esac
+
+[ "$#" -eq 1 ] || { usage >&2; exit 2; }
+SOURCE="$1"
+validate_app "$SOURCE"
+acquire_lock
+mkdir -p "$INSTALL_DIR" "$(dirname "$PREVIOUS")"
+STAGE="$INSTALL_DIR/.DecisionsAI.stage.$$"
+BACKUP_STAGE="$STATE_DIR/releases/.previous.$$"
+rm -rf "$STAGE" "$BACKUP_STAGE"
+trap 'rm -rf "$LOCK_DIR" "$STAGE" "$BACKUP_STAGE"' EXIT INT TERM
+ditto "$SOURCE" "$STAGE"
+validate_app "$STAGE"
+
+if [ -e "$TARGET" ]; then
+    validate_app "$TARGET"
+    mv "$TARGET" "$BACKUP_STAGE"
+fi
+if ! mv "$STAGE" "$TARGET"; then
+    [ -e "$BACKUP_STAGE" ] && mv "$BACKUP_STAGE" "$TARGET"
+    printf 'Installation failed; previous installation was restored.\n' >&2
+    exit 1
+fi
+if [ -e "$BACKUP_STAGE" ]; then
+    rm -rf "$PREVIOUS"
+    mv "$BACKUP_STAGE" "$PREVIOUS"
 fi
 
-echo -e "${GREEN}Step 1: Setting up PATH...${NC}"
-
-# Check if PATH entry already exists
-FOUND_IN=""
-for rc_file in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
-    if [ -f "$rc_file" ] && grep -q "$PROJECT_ROOT" "$rc_file" 2>/dev/null; then
-        FOUND_IN="$rc_file"
-        break
-    fi
-done
-
-if [ -n "$FOUND_IN" ]; then
-    echo -e "${GREEN}✓${NC} PATH entry already exists in $FOUND_IN"
-else
-    echo -e "${YELLOW}Adding DecisionsAI to PATH in $SHELL_RC...${NC}"
-    
-    # Create the file if it doesn't exist
-    if [ ! -f "$SHELL_RC" ]; then
-        touch "$SHELL_RC"
-        echo -e "${GREEN}✓${NC} Created $SHELL_RC"
-    fi
-    
-    # Backup the file
-    if [ -f "$SHELL_RC" ]; then
-        BACKUP_FILE="$SHELL_RC.backup.$(date +%Y%m%d_%H%M%S)"
-        cp "$SHELL_RC" "$BACKUP_FILE" 2>/dev/null || true
-        echo -e "${GREEN}✓${NC} Created backup: $BACKUP_FILE"
-    fi
-    
-    # Add PATH entry
-    echo "" >> "$SHELL_RC"
-    echo "# DecisionsAI PATH - Added by installer" >> "$SHELL_RC"
-    echo "export PATH=\"\$PATH:$PROJECT_ROOT\"" >> "$SHELL_RC"
-    
-    echo -e "${GREEN}✓${NC} Added PATH entry to $SHELL_RC"
-fi
-
-# Add to current session PATH (for immediate use)
-export PATH="$PATH:$PROJECT_ROOT"
-
-echo ""
-echo -e "${GREEN}Step 2: Running DecisionsAI setup...${NC}"
-echo ""
-
-# Run the main setup script
-cd "$PROJECT_ROOT"
-bash bin/decisions.sh
-
-echo ""
-echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     Installation Complete!            ║${NC}"
-echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "${GREEN}✓${NC} DecisionsAI has been installed and added to your PATH"
-echo ""
-echo "You can now run DecisionsAI from anywhere using:"
-echo -e "  ${YELLOW}decisions${NC}"
-echo ""
-echo -e "${YELLOW}Important:${NC} To use the 'decisions' command in your current terminal, run:"
-echo -e "  ${BLUE}source $SHELL_RC${NC}"
-echo ""
-echo "Or simply open a new terminal window."
-echo ""
+printf 'Installed DecisionsAI version %s at %s.\n' "$(verify_target)" "$TARGET"

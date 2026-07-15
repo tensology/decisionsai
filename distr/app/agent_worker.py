@@ -45,8 +45,8 @@ def run_agent_session(settings, input_device=None, output_device=None,
     os.environ.setdefault("WHISPER_LOG_LEVEL", "3")
 
     # Set up logging (don't clear — main process already cleared at startup)
-    from distr.app.main import setup_logging
-    setup_logging(clear_logs=False)
+    from distr.app.worker_logging import setup_worker_logging
+    setup_worker_logging()
     logger = logging.getLogger(__name__)
 
     # Initialise screen cache

@@ -4,10 +4,54 @@ from __future__ import annotations
 
 import os
 import sys
+import json
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_maintenance_thread: threading.Thread | None = None
+_maintenance_lock = threading.Lock()
+
+
+def _project_reference_skills(base_home: Path) -> list[str]:
+    from distr.core.harness_bootstrap import (
+        detected_harnesses,
+        install_skills_to_harnesses,
+    )
+
+    detected = detected_harnesses()
+    for harness_id, config_dir in (
+        ("codex", ".codex"),
+        ("claude", ".claude"),
+        ("cursor", ".cursor"),
+        ("pi", ".pi"),
+        ("cline", ".cline"),
+        ("gemini", ".gemini"),
+    ):
+        if (base_home / config_dir).exists():
+            detected[harness_id] = True
+    reference_ids = (
+        "decisions-frontier-prep",
+        "decisions-harness-audit",
+        "decisions-harness-optimize",
+        "codebase-design",
+        "domain-modeling",
+        "architecture-deepening-review",
+    )
+    reference_sources = {
+        skill_id: PROJECT_ROOT / "skills" / skill_id
+        for skill_id in reference_ids
+        if (PROJECT_ROOT / "skills" / skill_id / "SKILL.md").is_file()
+    }
+    return install_skills_to_harnesses(
+        home=base_home,
+        detected=detected,
+        skill_sources=reference_sources,
+        also_commands=True,
+        overwrite=True,
+    )
 
 
 def ensure_harness_stack_setup(
@@ -147,6 +191,35 @@ def ensure_harness_stack_setup(
     except Exception:
         results["mcp"] = {"status": "skipped"}
 
+    # Some CLI hook/plugin commands reconcile their own source trees late in
+    # setup. Finish with a lightweight projection-only pass so setup cannot
+    # report success while leaving Codex or another harness partially reset.
+    results["ecc"] = ensure_harness_pack_setup(
+        home=base_home,
+        run_full=False,
+        install_codex_plugin=False,
+        install_editor_extension=False,
+    )
+    results["competition"] = ensure_competition_pack_setup(
+        home=base_home,
+        run_full=False,
+        install_codex_plugin=False,
+        install_fallow_cli=False,
+    )
+    results["capabilities"] = ensure_capabilities_pack_setup(
+        home=base_home,
+        run_full=False,
+        install_browser_use=False,
+    )
+    try:
+        results["community_skills"] = ensure_community_skills_pack_setup(
+            home=base_home,
+            run_full=False,
+        )
+        results["reference_skills"] = _project_reference_skills(base_home)
+    except Exception:
+        results["reference_skills"] = []
+
     return results
 
 
@@ -157,3 +230,72 @@ def ensure_harness_stack_setup_quiet() -> None:
         ensure_harness_stack_setup(run_full=False, install_editor_extension=False)
     except Exception:
         pass
+
+
+def _write_maintenance_state(home: Path, **state: Any) -> None:
+    """Persist small, neutral startup diagnostics without blocking the caller."""
+    try:
+        path = home / ".decisions" / "harness-maintenance.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f".tmp.{os.getpid()}")
+        temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        pass
+
+
+def schedule_harness_stack_setup(
+    *,
+    home: Path | None = None,
+    delay_seconds: float = 5.0,
+) -> threading.Thread | None:
+    """Run harness repair after the UI startup path has been released.
+
+    Setup used to run synchronously before ``distr.app.main.run`` and could
+    leave the packaged app alive but unavailable for more than a minute on a
+    clean home directory. A single daemon worker keeps repair automatic while
+    making its state inspectable and preventing duplicate work per process.
+    """
+    if (os.environ.get("DECISIONSAI_SKIP_HARNESS_STACK_SETUP") or "").strip() == "1":
+        return None
+    base_home = Path(home).expanduser() if home is not None else Path.home()
+    global _maintenance_thread
+    with _maintenance_lock:
+        if _maintenance_thread is not None and _maintenance_thread.is_alive():
+            return _maintenance_thread
+
+        def maintain() -> None:
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
+            started = time.monotonic()
+            _write_maintenance_state(
+                base_home,
+                status="running",
+                pid=os.getpid(),
+                started_at=time.time(),
+            )
+            try:
+                ensure_harness_stack_setup_quiet()
+            except BaseException as exc:
+                _write_maintenance_state(
+                    base_home,
+                    status="failed",
+                    elapsed_seconds=round(time.monotonic() - started, 3),
+                    error_type=type(exc).__name__,
+                    finished_at=time.time(),
+                )
+            else:
+                _write_maintenance_state(
+                    base_home,
+                    status="completed",
+                    elapsed_seconds=round(time.monotonic() - started, 3),
+                    finished_at=time.time(),
+                )
+
+        _maintenance_thread = threading.Thread(
+            target=maintain,
+            name="decisions-harness-maintenance",
+            daemon=True,
+        )
+        _maintenance_thread.start()
+        return _maintenance_thread

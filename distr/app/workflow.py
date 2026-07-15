@@ -230,25 +230,12 @@ class WorkflowOrchestrationMixin:
                 self._finish_workflow_orchestration(workflow_id=workflow_id, success=False)
 
 
-    # ── Feedback loop (step_waiting_for_feedback) ──────────────────
+    # ── Workflow waiting notification ─────────────────────────────
 
     def _on_step_waiting_for_feedback(
         self, step_id: int, workflow_id: int, run_id: int, result_text: str,
     ):
-        """Handle the ``step_waiting_for_feedback`` signal from StepRouter.
-
-        Stores the waiting state so that when the main agent (or user) later
-        provides feedback we can resume via ``StepRouter.resume_from_feedback``.
-        """
-        with _orch_lock:
-            if not hasattr(self, "_waiting_for_feedback"):
-                self._waiting_for_feedback: Dict[int, dict] = {}
-            self._waiting_for_feedback[run_id] = {
-                "step_id": step_id,
-                "workflow_id": workflow_id,
-                "run_id": run_id,
-                "result_text": result_text,
-            }
+        """Notify the user that the durable workflow run is waiting."""
         logger.info(
             "Workflow: step %d (workflow %d, run %d) is waiting for feedback",
             step_id, workflow_id, run_id,
@@ -340,102 +327,6 @@ class WorkflowOrchestrationMixin:
                 exc,
                 exc_info=True,
             )
-
-    def _send_workflow_waiting_to_telegram(
-        self,
-        *,
-        step_id: int,
-        workflow_id: int,
-        run_id: int,
-        result_text: str,
-    ) -> None:
-        """Backward-compatible alias for workflow waiting notifications."""
-        self._notify_workflow_waiting(
-            step_id=step_id,
-            workflow_id=workflow_id,
-            run_id=run_id,
-            result_text=result_text,
-        )
-
-    def _provide_workflow_feedback(
-        self, run_id: int, feedback: str,
-    ) -> Optional[dict]:
-        """Provide feedback for a waiting step and resume routing.
-
-        Called when the main agent or user supplies feedback for a step that
-        entered the ``waiting`` state.  Delegates to
-        ``StepRouter.resume_from_feedback`` and processes the routing decision.
-
-        Returns the routing decision dict, or ``None`` if no waiting state was
-        found for *run_id*.
-        """
-        with _orch_lock:
-            waiting_states: Dict[int, dict] = getattr(self, "_waiting_for_feedback", {})
-            info = waiting_states.pop(run_id, None)
-        if not info:
-            logger.warning(
-                "Workflow feedback: no waiting state for run %d", run_id,
-            )
-            return None
-
-        step_id = info["step_id"]
-        workflow_id = info["workflow_id"]
-
-        try:
-            from distr.core.workflow.router import StepRouter
-
-            router = StepRouter()
-            decision = router.resume_from_feedback(step_id, run_id, feedback)
-            logger.info(
-                "Workflow feedback: run %d resumed — decision: %s",
-                run_id, decision.get("action"),
-            )
-
-            # If the router says to dispatch the next step, kick off the
-            # dispatcher so the workflow continues automatically.
-            if decision.get("action") == "next_step":
-                next_step_id = decision["step_id"]
-                wait_before = decision.get("wait_before_next", 0)
-                self._dispatch_next_after_feedback(
-                    workflow_id, run_id, next_step_id, wait_before,
-                )
-
-            return decision
-        except Exception as e:
-            logger.error(
-                "Workflow feedback: resume failed for run %d: %s",
-                run_id, e, exc_info=True,
-            )
-            return {"action": "end_run", "status": "failed", "error": str(e)}
-
-    def _dispatch_next_after_feedback(
-        self,
-        workflow_id: int,
-        run_id: int,
-        next_step_id: int,
-        wait_before: int = 0,
-    ) -> None:
-        """Dispatch the next step after feedback resumes a waiting run."""
-        def _do_dispatch():
-            try:
-                from distr.core.workflow.dispatcher import StepDispatcher
-
-                dispatcher = StepDispatcher()
-                dispatcher.run_in_workflow(next_step_id, run_id)
-            except Exception as e:
-                logger.error(
-                    "Workflow feedback: dispatch next step %d failed: %s",
-                    next_step_id, e, exc_info=True,
-                )
-
-        if wait_before and wait_before > 0:
-            QTimer.singleShot(wait_before, _do_dispatch)
-        else:
-            # Run in a thread to avoid blocking the Qt event loop
-            threading.Thread(
-                target=_do_dispatch, daemon=True,
-                name=f"wf-feedback-dispatch-{run_id}",
-            ).start()
 
     # ── Chat / context helpers ──────────────────────────────────────
 

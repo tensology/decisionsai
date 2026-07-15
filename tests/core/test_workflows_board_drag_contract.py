@@ -19,7 +19,7 @@ def test_workflows_board_rows_use_kanban_list_with_workflow_mouse_drag():
     assert "disableListDrag: true" in render_block
     assert "ticketUi.createTicketListRow" in render_block
     assert "bindWorkflowBoardListRow(row, ticket, lane, selected, board)" in render_block
-    assert "if (canDrag && !listOpts.disableListDrag)" in kanban
+    assert "bindTicketListRowDrag(row, ticket.id, canDrag && !listOpts.disableListDrag)" in kanban
 
 
 def test_workflows_board_drag_ghost_clones_row_inside_ticket_surface_shell():
@@ -200,7 +200,9 @@ def test_workflow_queue_row_exposes_loop_then_play_with_visible_loop_ticket_cont
     assert "openWorkflowTicketLoop(ticketId, rowEl)" in js
     assert 'id="wf-loop-run-ticket-context"' in html
     assert "Ticket in run" in js
-    assert 'mainEl.innerHTML = loopRunTicketContextHtml(contextRun, "main");' in js
+    assert 'renderLoopTicketContextElement(mainEl, contextRun, "main")' in js
+    assert "wf-loop-start-ticket" in js
+    assert "wf-loop-continue-ticket" in js
 
 
 def test_workflow_lane_add_all_disables_when_nothing_left_to_add():

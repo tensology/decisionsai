@@ -4,7 +4,7 @@ Workflow tools for the agent — CRUD and execution for AutoWorkflow definitions
 
 import json
 import logging
-from typing import Any, Optional, Type
+from typing import Any, List, Optional, Type
 
 from distr.core.agent.tool_voice_format import voice_then_reference
 from langchain.tools import BaseTool
@@ -638,6 +638,35 @@ class GetProjectStatusTool(BaseTool):
 
 
 # --- Add step to a workflow ---
+def _merge_step_execution_config(base: Optional[dict] = None, **values: Any) -> dict:
+    """Merge the full per-step execution contract used by the workflow UI/runtime."""
+    config = dict(base or {})
+    for key in (
+        "backend_id", "model", "model_provider", "complexity", "skills", "tools",
+        "guardrail", "failure_checklist", "context", "required_context",
+        "expected_outputs", "other_tool", "model_policy", "execution_route",
+    ):
+        value = values.get(key)
+        if value is not None:
+            config[key] = value
+    return config
+
+
+def _read_step_execution_config(step_id: int) -> dict:
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflowStep
+
+    with get_session() as db:
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+        if not step or not step.config:
+            return {}
+        try:
+            parsed = json.loads(step.config)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+
 class AddWorkflowStepInput(BaseModel):
     workflow_id: int = Field(description="Workflow ID to add the step to")
     name: str = Field(description="Step name")
@@ -663,6 +692,24 @@ class AddWorkflowStepInput(BaseModel):
     on_pass_goto_position: Optional[int] = Field(default=None, description="Position of next step on pass (null = end workflow)")
     on_fail_goto_position: Optional[int] = Field(default=None, description="Position of next step on fail (null = end workflow)")
     wait_for_continue: bool = Field(default=False, description="If true, step pauses after execution and waits for user input")
+    config: Optional[dict] = Field(default=None, description="Complete advanced step config; merged with the explicit execution fields below")
+    backend_id: Optional[str] = Field(default=None, description="Executor backend/vendor adapter for this step, such as codex, claude_code, cursor, or pi")
+    model: Optional[str] = Field(default=None, description="Concrete model ID for this step, or auto")
+    model_provider: Optional[str] = Field(default=None, description="Provider/vendor identity for the selected model")
+    complexity: Optional[str] = Field(default=None, description="Step routing complexity: low, medium, or high")
+    skills: Optional[List[str]] = Field(default=None, description="Skill IDs provisioned and required for this step")
+    tools: Optional[List[str]] = Field(default=None, description="Required workflow tool capability IDs")
+    guardrail: Optional[str] = Field(default=None, description="Step-specific scope and safety guardrails")
+    failure_checklist: Optional[List[str]] = Field(default=None, description="Conditions that must prevent the step from passing")
+    context: Optional[List[str]] = Field(default=None, description="Context sources visible to this step")
+    required_context: Optional[List[str]] = Field(default=None, description="Context artifacts that must be loaded before execution")
+    expected_outputs: Optional[List[str]] = Field(default=None, description="Named artifacts/results the step must return")
+    other_tool: Optional[str] = Field(default=None, description="Human-readable additional tool requirement")
+    model_policy: Optional[dict] = Field(default=None, description="Auto-routing policy such as free_only, prefer_local, and auto_route_models")
+    execution_route: Optional[dict] = Field(default=None, description="Scoped route snapshot used to switch backend/provider/model at this step")
+    max_retries: Optional[int] = Field(default=None, ge=0, le=20)
+    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=86400)
+    require_approval: Optional[bool] = Field(default=None)
 
 
 class AddWorkflowStepTool(BaseTool):
@@ -683,26 +730,31 @@ class AddWorkflowStepTool(BaseTool):
              instruction: Optional[str] = None, code: Optional[str] = None,
              validation_type: Optional[str] = None, validation_prompt: Optional[str] = None,
              on_pass_goto_position: Optional[int] = None, on_fail_goto_position: Optional[int] = None,
-             wait_for_continue: bool = False, **kwargs) -> str:
+             wait_for_continue: bool = False, config: Optional[dict] = None, **kwargs) -> str:
         try:
             from distr.core.workflow.service import add_step, update_step, get_workflow
 
-            step_id = add_step(workflow_id, name=name, action_type=action_type)
+            step_config = _merge_step_execution_config(config, **kwargs)
+            step_id = add_step(
+                workflow_id,
+                name=name,
+                action_type=action_type,
+                instruction=instruction or "",
+                config=step_config,
+                validation_type=validation_type or "none",
+                validation_prompt=validation_prompt or "",
+                wait_for_continue=wait_for_continue,
+            )
             if not step_id:
                 return f"Workflow {workflow_id} not found."
 
             # Configure the step with additional fields
             updates = {}
-            if instruction:
-                updates["instruction"] = instruction
             if code:
                 updates["code"] = code
-            if validation_type:
-                updates["validation_type"] = validation_type
-            if validation_prompt:
-                updates["validation_prompt"] = validation_prompt
-            if wait_for_continue:
-                updates["wait_for_continue"] = True
+            for field in ("max_retries", "timeout_seconds", "require_approval"):
+                if kwargs.get(field) is not None:
+                    updates[field] = kwargs[field]
 
             # Resolve position-based goto to step IDs
             if on_pass_goto_position is not None or on_fail_goto_position is not None:
@@ -738,6 +790,24 @@ class UpdateWorkflowStepInput(BaseModel):
     validation_prompt: Optional[str] = Field(default=None, description="New validation prompt")
     status: Optional[str] = Field(default=None, description="New status: pending, running, passed, failed, cancelled, waiting")
     wait_for_continue: Optional[bool] = Field(default=None, description="Whether to pause after execution")
+    config: Optional[dict] = Field(default=None, description="Complete advanced step config merged into the existing config")
+    backend_id: Optional[str] = None
+    model: Optional[str] = None
+    model_provider: Optional[str] = None
+    complexity: Optional[str] = None
+    skills: Optional[List[str]] = None
+    tools: Optional[List[str]] = None
+    guardrail: Optional[str] = None
+    failure_checklist: Optional[List[str]] = None
+    context: Optional[List[str]] = None
+    required_context: Optional[List[str]] = None
+    expected_outputs: Optional[List[str]] = None
+    other_tool: Optional[str] = None
+    model_policy: Optional[dict] = None
+    execution_route: Optional[dict] = None
+    max_retries: Optional[int] = Field(default=None, ge=0, le=20)
+    timeout_seconds: Optional[int] = Field(default=None, ge=1, le=86400)
+    require_approval: Optional[bool] = None
 
 
 class UpdateWorkflowStepTool(BaseTool):
@@ -752,7 +822,19 @@ class UpdateWorkflowStepTool(BaseTool):
     def _run(self, step_id: int, **kwargs) -> str:
         try:
             from distr.core.workflow.service import update_step
+            config_keys = {
+                "config", "backend_id", "model", "model_provider", "complexity", "skills", "tools",
+                "guardrail", "failure_checklist", "context", "required_context", "expected_outputs",
+                "other_tool", "model_policy", "execution_route",
+            }
+            config_values = {key: kwargs.pop(key, None) for key in config_keys}
             updates = {k: v for k, v in kwargs.items() if v is not None}
+            if any(value is not None for value in config_values.values()):
+                supplied_config = config_values.pop("config", None)
+                merged = _read_step_execution_config(step_id)
+                if supplied_config is not None:
+                    merged.update(supplied_config)
+                updates["config"] = _merge_step_execution_config(merged, **config_values)
             if not updates:
                 return "No updates provided."
             if not update_step(step_id, **updates):
@@ -804,6 +886,20 @@ class GenerateWorkflowTool(BaseTool):
                 '      "instruction": "...",\n'
                 '      "validation_type": "none",\n'
                 '      "validation_prompt": "",\n'
+                '      "config": {\n'
+                '        "backend_id": "pi",\n'
+                '        "model": "auto",\n'
+                '        "model_provider": "",\n'
+                '        "skills": ["skill-id"],\n'
+                '        "tools": ["cli"],\n'
+                '        "guardrail": "Stay within the linked ticket scope",\n'
+                '        "required_context": ["ticket", "project"],\n'
+                '        "expected_outputs": ["implementation", "test_evidence"],\n'
+                '        "model_policy": {"auto_route_models": true, "free_only": false, "prefer_local": true}\n'
+                "      },\n"
+                '      "max_retries": 1,\n'
+                '      "timeout_seconds": 600,\n'
+                '      "require_approval": false,\n'
                 '      "routing_mode": "static",\n'
                 '      "on_pass_goto_position": 1,\n'
                 '      "on_fail_goto_position": null,\n'
@@ -816,6 +912,9 @@ class GenerateWorkflowTool(BaseTool):
                 "play_recording, set_variable.\n\n"
                 "For playwright steps, include complete browser automation code in a 'code' field "
                 "that uses page.screenshot() to capture visual results.\n\n"
+                "Give every executable step the smallest useful skills/tools set and an explicit model policy. "
+                "Use different step backends/models only when independence, capability, or validation quality benefits. "
+                "Keep provider/model values in config so the runtime can swap routes at step boundaries.\n\n"
                 "The last step's on_pass_goto_position should be null (end workflow).\n"
                 "Return ONLY valid JSON, no markdown fences or explanations.\n\n"
                 f"User description:\n{description}"

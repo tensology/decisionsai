@@ -1,117 +1,56 @@
+"""Lazy service exports for the voice-agent pipeline.
+
+Importing this package used to import every STT, TTS, and LLM provider. On a
+macOS spawn worker that delayed microphone readiness even when only Whisper
+and one LLM provider were selected.
 """
-Pipecat Services Package
-"""
-import logging
 
-logger = logging.getLogger(__name__)
+from __future__ import annotations
 
-# STT services
-from .stt.whisper import WhisperSTTService
+import importlib
+from typing import Any
 
-try:
-    from .stt.vosk import VoskSTTService
-except ImportError:
-    VoskSTTService = None
 
-try:
-    from .stt.openai import OpenAIWhisperSTTService
-except ImportError:
-    OpenAIWhisperSTTService = None
+_SERVICE_EXPORTS = {
+    "WhisperSTTService": (".stt.whisper", True),
+    "VoskSTTService": (".stt.vosk", False),
+    "OpenAIWhisperSTTService": (".stt.openai", False),
+    "AssemblyAISTTService": (".stt.assemblyai", False),
+    "KokoroTTSService": (".tts.kokoro", True),
+    "ElevenLabsTTSService": (".tts.elevenlabs", True),
+    "OpenAITTSService": (".tts.openai", False),
+    "CoquiTTSService": (".tts.coqui", False),
+    "SupertonicTTSService": (".tts.supertonic", False),
+    "OllamaLLMService": (".llm.providers.ollama", True),
+    "OpenAILLMService": (".llm.providers.openai", False),
+    "OpenRouterLLMService": (".llm.providers.openrouter", False),
+    "AnthropicLLMService": (".llm.providers.anthropic", False),
+    "GroqLLMService": (".llm.providers.groq", False),
+    "KiloCodeLLMService": (".llm.providers.kilocode", False),
+    "GeminiLLMService": (".llm.providers.gemini", False),
+    "NvidiaLLMService": (".llm.providers.nvidia", False),
+}
 
-try:
-    from .stt.assemblyai import AssemblyAISTTService
-except ImportError as e:
-    logger.warning(f"Error importing AssemblyAISTTService: {e}")
-    AssemblyAISTTService = None
+__all__ = list(_SERVICE_EXPORTS)
 
-# TTS services
-from .tts.kokoro import KokoroTTSService
-from .tts.elevenlabs import ElevenLabsTTSService
 
-try:
-    from .tts.openai import OpenAITTSService
-except ImportError:
-    OpenAITTSService = None
+def __getattr__(name: str) -> Any:
+    try:
+        module_name, required = _SERVICE_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
 
-try:
-    from .tts.coqui import CoquiTTSService
-except ImportError:
-    CoquiTTSService = None
+    try:
+        module = importlib.import_module(module_name, __name__)
+        value = getattr(module, name)
+    except ImportError:
+        if required:
+            raise
+        value = None
 
-try:
-    from .tts.supertonic import SupertonicTTSService
-except ImportError:
-    SupertonicTTSService = None
+    globals()[name] = value
+    return value
 
-# LLM services
-from .llm.providers.ollama import OllamaLLMService
 
-try:
-    from .llm.providers.openai import OpenAILLMService
-except ImportError as e:
-    logger.warning(f"Error importing OpenAILLMService: {e}")
-    OpenAILLMService = None
-
-try:
-    from .llm.providers.openrouter import OpenRouterLLMService
-except ImportError as e:
-    logger.warning(f"Error importing OpenRouterLLMService: {e}")
-    OpenRouterLLMService = None
-
-try:
-    from .llm.providers.anthropic import AnthropicLLMService
-except ImportError as e:
-    logger.warning(f"Error importing AnthropicLLMService: {e}")
-    AnthropicLLMService = None
-
-try:
-    from .llm.providers.groq import GroqLLMService
-except ImportError as e:
-    logger.warning(f"Error importing GroqLLMService: {e}")
-    GroqLLMService = None
-
-try:
-    from .llm.providers.kilocode import KiloCodeLLMService
-except ImportError as e:
-    logger.warning(f"Error importing KiloCodeLLMService: {e}")
-    KiloCodeLLMService = None
-
-try:
-    from .llm.providers.gemini import GeminiLLMService
-except ImportError as e:
-    logger.warning(f"Error importing GeminiLLMService: {e}")
-    GeminiLLMService = None
-
-try:
-    from .llm.providers.nvidia import NvidiaLLMService
-except ImportError as e:
-    logger.warning(f"Error importing NvidiaLLMService: {e}")
-    NvidiaLLMService = None
-
-__all__ = ["WhisperSTTService", "OllamaLLMService", "KokoroTTSService", "ElevenLabsTTSService"]
-if OpenAITTSService:
-    __all__.append("OpenAITTSService")
-if CoquiTTSService:
-    __all__.append("CoquiTTSService")
-if SupertonicTTSService:
-    __all__.append("SupertonicTTSService")
-if OpenAILLMService:
-    __all__.append("OpenAILLMService")
-if OpenRouterLLMService:
-    __all__.append("OpenRouterLLMService")
-if AnthropicLLMService:
-    __all__.append("AnthropicLLMService")
-if GroqLLMService:
-    __all__.append("GroqLLMService")
-if KiloCodeLLMService:
-    __all__.append("KiloCodeLLMService")
-if GeminiLLMService:
-    __all__.append("GeminiLLMService")
-if NvidiaLLMService:
-    __all__.append("NvidiaLLMService")
-if VoskSTTService:
-    __all__.append("VoskSTTService")
-if OpenAIWhisperSTTService:
-    __all__.append("OpenAIWhisperSTTService")
-if AssemblyAISTTService:
-    __all__.append("AssemblyAISTTService")
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

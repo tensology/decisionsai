@@ -11,6 +11,8 @@ class ProjectHandoffService:
     async def dispatch(self, context: Any) -> Any:
         from distr.core.project_cli_backends.registry import run_project_task
 
+        adapter_options = dict(getattr(context, "adapter_options", None) or {})
+
         result = await run_project_task(
             context.project,
             context.instruction,
@@ -22,8 +24,17 @@ class ProjectHandoffService:
             ticket_complexity=context.ticket_complexity,
             backend_id_override=context.backend_id,
             model_override=context.model or None,
-            codex_reasoning_effort_override=context.codex_reasoning_effort or None,
-            codex_service_tier_override=context.codex_service_tier or None,
+            codex_reasoning_effort_override=(
+                adapter_options.get("reasoning_effort")
+                or getattr(context, "codex_reasoning_effort", "")
+                or None
+            ),
+            codex_service_tier_override=(
+                adapter_options.get("service_tier")
+                or getattr(context, "codex_service_tier", "")
+                or None
+            ),
+            adapter_options=adapter_options,
             on_event=context.on_event,
         )
         self._emit_handoff_event(context, result)

@@ -3,9 +3,33 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def hook_remove_workspace(entity_type: str, entity_id: int | str) -> bool:
+    """Remove one deleted entity's companion memory without touching repo files."""
+    try:
+        from .paths import companion_root, workspaces_root
+
+        root = companion_root(entity_type, entity_id)  # type: ignore[arg-type]
+        boundary = workspaces_root().expanduser().resolve()
+        resolved = root.expanduser().resolve()
+        if resolved == boundary or boundary not in resolved.parents:
+            raise ValueError(f"Unsafe workspace removal path: {resolved}")
+        if resolved.exists():
+            shutil.rmtree(resolved)
+        return True
+    except Exception:
+        logger.warning(
+            "hook_remove_workspace failed %s/%s",
+            entity_type,
+            entity_id,
+            exc_info=True,
+        )
+        return False
 
 
 def hook_ensure_workspace(

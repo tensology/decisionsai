@@ -19,9 +19,6 @@ class PlayerWindow(QtWidgets.QWidget):
         
         self.logger = logging.getLogger(__name__)
 
-        # Initialize animation timer first
-        self.animation_timer = QTimer()
-        self.animation_timer.timeout.connect(self.update_animation)
         self.movie = None  # Initialize movie as None
         
         # Fade-out animation for hiding
@@ -219,33 +216,11 @@ class PlayerWindow(QtWidgets.QWidget):
         self.stop_button.clicked.connect(self.on_stop_clicked)
         self.stop_button.move(260, 14)
 
-    def update_animation(self):
-        """Update GIF animation frame"""
-        if not self.movie:
-            self.animation_timer.stop()
-            return
-        
-        movie_state = self.movie.state()
-        if movie_state == QtGui.QMovie.MovieState.Running:
-            self.movie.jumpToNextFrame()
-            self.update()
-        elif movie_state == QtGui.QMovie.MovieState.Paused:
-            # If paused, keep timer running but don't advance frames
-            # This prevents the timer from stopping unexpectedly
-            pass
-        else:
-            # Only stop timer if movie is truly stopped/not running
-            self.animation_timer.stop()
-
     def reset(self):
         if self.movie:
             self.movie.stop()
-            self.animation_timer.stop()
-            if self.movie.state() == QMovie.MovieState.Paused:
-                self.movie.jumpToFrame(0)
-                for _ in range(144):
-                    self.movie.jumpToNextFrame()
-                self.movie.setPaused(True)
+            self.movie.jumpToFrame(0)
+            self.movie.setPaused(True)
 
     def on_stop_clicked(self):
         self.logger.info("[ACTION] Stop button clicked - sending interrupt signal")
@@ -275,15 +250,14 @@ class PlayerWindow(QtWidgets.QWidget):
         # Set opacity to fully visible
         self.setWindowOpacity(1.0)
         
-        # CRITICAL: Reset GIF to frame 144 BEFORE showing to prevent flicker
+        # voice.gif is frame-rotated so frame 0 is the deliberately flat
+        # resting waveform. Reset there before mapping the window to avoid a
+        # visible pulse/jolt while QMovie seeks into the animation.
         if self.movie:
             self.movie.stop()
-            self.animation_timer.stop()
-            # QMovie supports direct seeking. Iterating through 144 decoded
-            # frames here blocked the Qt thread at the exact moment TTS began.
-            self.movie.jumpToFrame(144)
+            self.movie.jumpToFrame(0)
             self.movie.setPaused(True)
-            self.logger.debug("[PlayerWindow] GIF reset to frame 144 before showing")
+            self.logger.debug("[PlayerWindow] GIF reset to flat frame 0 before showing")
         
         # First load: position before showing so Qt never maps the window outside
         # known screen bounds, which creates noisy qpa.window warnings on macOS.
@@ -307,7 +281,7 @@ class PlayerWindow(QtWidgets.QWidget):
         # Force a repaint to ensure window is fully rendered
         self.update()
         
-        self.logger.info("[PlayerWindow] Window shown and positioned (GIF at frame 144)")
+        self.logger.info("[PlayerWindow] Window shown and positioned (GIF at flat frame 0)")
 
     def hide_window(self):
         """Hide the player window with fade-out animation"""
@@ -480,9 +454,6 @@ class PlayerWindow(QtWidgets.QWidget):
                 # Unknown state, restart
                 self.movie.start()
             
-            # Ensure animation timer is running
-            if not self.animation_timer.isActive():
-                self.animation_timer.start(33)
             self.logger.debug(f"[PlayerWindow] Animation started, movie state: {self.movie.state()}")
     
     def on_player_pause(self):
@@ -490,7 +461,6 @@ class PlayerWindow(QtWidgets.QWidget):
         self.logger.info("[PlayerWindow] on_player_pause: pausing GIF animation")
         if self.movie:
             self.movie.setPaused(True)
-            self.animation_timer.stop()
     
     def on_player_stop(self):
         """Handle player_stop signal - stop and reset GIF animation"""
@@ -498,11 +468,7 @@ class PlayerWindow(QtWidgets.QWidget):
         if self.movie:
             # Stop the animation first
             self.movie.stop()
-            self.animation_timer.stop()
-            # Reset to frame 144 (middle of animation) and pause
+            # The asset is rotated so its flat resting waveform is frame 0.
             self.movie.jumpToFrame(0)
-            for _ in range(144):
-                self.movie.jumpToNextFrame()
             self.movie.setPaused(True)
-            self.logger.info("[PlayerWindow] Animation stopped and reset to frame 144")
-
+            self.logger.info("[PlayerWindow] Animation stopped and reset to flat frame 0")

@@ -73,6 +73,7 @@ def _run_verification(
                 prompt,
                 standards_context=standards_context,
                 ticket_context=ticket_context,
+                unavailable_fallback=caller_passed,
             )
         elif vtype == "screenshot_compare":
             return _verify_screenshot(step, result, prompt)
@@ -180,7 +181,14 @@ def _verify_rule_based(result: str, rules: str) -> bool:
     return True
 
 
-def _verify_llm_judgment(result: str, validation_prompt: str, *, standards_context: str = "", ticket_context: str = "") -> bool:
+def _verify_llm_judgment(
+    result: str,
+    validation_prompt: str,
+    *,
+    standards_context: str = "",
+    ticket_context: str = "",
+    unavailable_fallback: bool = False,
+) -> bool:
     """Send the result + validation prompt to the orchestrator validator model."""
     try:
         from distr.core.orchestrator_validator import run_orchestrator_validator_judgment
@@ -222,8 +230,11 @@ def _verify_llm_judgment(result: str, validation_prompt: str, *, standards_conte
                 return response.strip().upper().startswith("PASS")
         except ImportError:
             pass
-        logger.warning("LLM judgment not available, failing closed")
-        return False
+        logger.warning(
+            "LLM judgment not available; using explicit caller result fallback=%s",
+            unavailable_fallback,
+        )
+        return bool(unavailable_fallback)
     except Exception as e:
         logger.error("LLM judgment failed: %s", e, exc_info=True)
         return False

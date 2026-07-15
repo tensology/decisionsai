@@ -743,6 +743,34 @@
                 "</svg></span>";
         }
 
+        function externalBoardSupportsListDrag(currentBoard) {
+            if (!currentBoard) return false;
+            return currentBoard.source === "trello" || currentBoard.source === "jira";
+        }
+
+        function ticketListDescriptionHtml(cleanDesc) {
+            if (!cleanDesc) return "";
+            return '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + deps.esc(cleanDesc) + "</span></div></div>";
+        }
+
+        function bindTicketListRowDrag(row, ticketId, enabled) {
+            if (!enabled) return;
+            var handle = row.querySelector(".kb-ticket-list-drag-handle");
+            if (!handle) return;
+            handle.draggable = true;
+            handle.addEventListener("dragstart", function(e) {
+                e.stopPropagation();
+                var section = row.closest(".kb-ticket-list-section");
+                e.dataTransfer.setData("text/plain", String(ticketId));
+                e.dataTransfer.setData("application/x-kanban-source-lane", section ? (section.dataset.laneId || "") : "");
+                e.dataTransfer.effectAllowed = "move";
+                row.classList.add("dragging");
+            });
+            handle.addEventListener("dragend", function() {
+                row.classList.remove("dragging");
+            });
+        }
+
         function createTicketListRow(ticket, isLocal, boardData, listOpts) {
             listOpts = listOpts || {};
             boardData = boardData || deps.getCurrentBoardData() || {};
@@ -750,15 +778,13 @@
             var row = document.createElement("div");
             row.className = "kb-ticket-list-row";
             row.dataset.ticketId = String(ticket.id);
-            var extDnD = !isLocal && currentBoard && (currentBoard.source === "trello" || currentBoard.source === "jira");
-            var canDrag = isLocal || extDnD;
+            var canDrag = isLocal || (!isLocal && externalBoardSupportsListDrag(currentBoard));
             var hasProject = !!(ticket.linked_project_id || boardData.default_project_id);
             var canDelete = isLocal;
             var canTransfer = !listOpts.hideTransfer && !isLocal;
+            var source = ticket.source_provider || (currentBoard && currentBoard.source ? currentBoard.source : "database");
             var cleanDesc = deps.stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
-            var descHtml = cleanDesc
-                ? '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + deps.esc(cleanDesc) + "</span></div></div>"
-                : "";
+            var descHtml = ticketListDescriptionHtml(cleanDesc);
             var contentClass = "kb-ticket-list-content" + (cleanDesc ? "" : " kb-ticket-list-content--no-desc");
             var actionRowHtml = buildActionRow({
                 layout: "list",
@@ -773,31 +799,14 @@
             row.innerHTML =
                 '<div class="kb-ticket-list-prefix">' +
                     buildListDragHandleHtml(canDrag) +
-                    '<span class="kb-ticket-list-badges">' + buildComplexityBadge(ticket.complexity) + buildPriorityBadge(ticket.priority) + "</span>" +
+                    '<span class="kb-ticket-list-badges">' + buildSourceBadge(source) + buildComplexityBadge(ticket.complexity) + buildPriorityBadge(ticket.priority) + "</span>" +
                 "</div>" +
                 '<div class="' + contentClass + '">' +
                     '<span class="kb-ticket-list-title">' + deps.esc(ticket.title || "") + "</span>" +
                     descHtml +
                 "</div>" +
                 '<div class="kb-ticket-list-actions">' + actionRowHtml + "</div>";
-            if (canDrag && !listOpts.disableListDrag) {
-                var handle = row.querySelector(".kb-ticket-list-drag-handle");
-                if (handle) {
-                    handle.draggable = true;
-                    handle.addEventListener("dragstart", function(e) {
-                        e.stopPropagation();
-                        var section = row.closest(".kb-ticket-list-section");
-                        var sourceLaneId = section ? (section.dataset.laneId || "") : "";
-                        e.dataTransfer.setData("text/plain", String(ticket.id));
-                        e.dataTransfer.setData("application/x-kanban-source-lane", sourceLaneId);
-                        e.dataTransfer.effectAllowed = "move";
-                        row.classList.add("dragging");
-                    });
-                    handle.addEventListener("dragend", function() {
-                        row.classList.remove("dragging");
-                    });
-                }
-            }
+            bindTicketListRowDrag(row, ticket.id, canDrag && !listOpts.disableListDrag);
             bindTicketActions(row, ticket, isLocal, hasProject);
             return row;
         }

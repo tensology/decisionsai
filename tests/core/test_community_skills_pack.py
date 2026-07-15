@@ -15,6 +15,7 @@ def test_community_skills_pack_projects(tmp_path, monkeypatch):
     assert result["skill_count"] >= 10
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "humanizer" / "SKILL.md").is_file()
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "last30days" / "SKILL.md").is_file()
+    assert (tmp_path / ".decisions" / "community-skills-pack-state.json").is_file()
 
 
 def test_merge_community_adds_humanizer_for_content():

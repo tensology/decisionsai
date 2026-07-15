@@ -1,0 +1,6 @@
+{
+  "entry": [
+    "examples/pizza-house/app.js",
+    "examples/pizza-house/styles.css"
+  ]
+}

@@ -447,6 +447,7 @@ def start_preset_run_for_ticket(
                     timeout=timeout,
                     board_id=board_id,
                     project_id=project_id,
+                    expected_completed=3,
                 )
 
             with _runs_lock:
@@ -546,8 +547,14 @@ def drain_active_workflow_runs(
     timeout: float = 120.0,
     board_id: int | None = None,
     project_id: int | None = None,
+    expected_completed: int | None = None,
 ) -> list[int]:
-    """Wait until no runs on this workflow remain in running/waiting."""
+    """Wait for the queue to drain and its expected runs to complete.
+
+    A completed run commits before sequential auto-advance creates the next run.
+    Checking only for an empty active set can therefore observe that short handoff
+    window and return while queued tickets still remain.
+    """
     from distr.core.workflow.dispatcher import continue_waiting_step
 
     deadline = time.time() + timeout
@@ -555,16 +562,21 @@ def drain_active_workflow_runs(
     while time.time() < deadline:
         session = factory()
         try:
-            active = (
+            runs = (
                 session.query(AutoWorkflowRun)
-                .filter(
-                    AutoWorkflowRun.workflow_id == int(workflow_id),
-                    AutoWorkflowRun.status.in_(["running", "waiting"]),
-                )
+                .filter(AutoWorkflowRun.workflow_id == int(workflow_id))
                 .order_by(AutoWorkflowRun.id.asc())
                 .all()
             )
-            if not active:
+            active = [run for run in runs if run.status in {"running", "waiting"}]
+            completed_run_ids = [
+                int(run.id) for run in runs if run.status == "completed"
+            ]
+            enough_completed = (
+                expected_completed is None
+                or len(completed_run_ids) >= expected_completed
+            )
+            if not active and enough_completed:
                 return completed_run_ids
             for run in active:
                 if run.status == "waiting":
@@ -579,8 +591,6 @@ def drain_active_workflow_runs(
                         continue_waiting_step(int(run.id), "looks good, continue")
                     else:
                         continue_waiting_step(int(run.id), "matrix auto-continue")
-                elif run.status == "completed" and int(run.id) not in completed_run_ids:
-                    completed_run_ids.append(int(run.id))
         finally:
             session.close()
         time.sleep(0.15)

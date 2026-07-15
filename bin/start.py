@@ -386,12 +386,6 @@ def kill_existing_decisions_processes():
 
 # Main execution block
 if __name__ == "__main__":
-    try:
-        from distr.core.harness_stack import ensure_harness_stack_setup_quiet
-
-        ensure_harness_stack_setup_quiet()
-    except Exception:
-        pass
     from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix
 
     apply_rubicon_arm64_fix()
@@ -413,4 +407,10 @@ if __name__ == "__main__":
     else:
         kill_existing_decisions_processes()
         print("Starting Decisions...")
+    try:
+        from distr.core.harness_stack import schedule_harness_stack_setup
+
+        schedule_harness_stack_setup()
+    except Exception:
+        pass
     run()

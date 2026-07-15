@@ -320,6 +320,10 @@ class WorkflowGenerateStepsRequest(BaseModel):
     instruction: str
 
 
+class WorkflowTicketGroupRunRequest(BaseModel):
+    ticket_ids: List[int]
+
+
 class WorkflowGenerateCodeRequest(BaseModel):
     instruction: str
     step_type: str
@@ -1823,6 +1827,47 @@ def register_routes(router, templates):
             return JSONResponse(_workflow_error_payload(str(e), "clear_executor"), status_code=500)
 
     # Execution
+    @router.post("/workflows/{workflow_id}/run-ticket-group")
+    async def workflow_run_ticket_group(workflow_id: int, data: WorkflowTicketGroupRunRequest):
+        """Start the explicit queued-ticket selection using sequential/parallel policy."""
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            ticket_ids = list(dict.fromkeys(int(ticket_id) for ticket_id in data.ticket_ids))
+            if not ticket_ids:
+                return JSONResponse({"detail": "Select at least one ticket"}, status_code=422)
+            if len(ticket_ids) > 100:
+                return JSONResponse({"detail": "A ticket group may contain at most 100 tickets"}, status_code=422)
+
+            from distr.core.workflow.dispatcher import start_workflow_ticket_group
+            from distr.core.workflow.ticket_dispatch import build_ticket_run_item
+
+            ticket_items = [build_ticket_run_item(ticket_id, workflow_id) for ticket_id in ticket_ids]
+            # WorkflowAgent construction may lazily import and warm many optional
+            # tools. Keep that cold-start work off uvicorn's event loop so status,
+            # heartbeat, and cancellation requests remain responsive.
+            result = await asyncio.to_thread(
+                start_workflow_ticket_group,
+                workflow_id,
+                ticket_items,
+                dispatch_async=True,
+            )
+            if result.get("error"):
+                return JSONResponse(_workflow_error_payload(result["error"], "run_group"), status_code=400)
+            result.update({
+                "message": (
+                    f"Started {len(result.get('started') or [])} ticket run(s); "
+                    f"{int(result.get('queued_count') or 0)} queued in the selected group."
+                ),
+                "next_action": "Watch the existing Runs or Loop view for step progress.",
+            })
+            return JSONResponse(result)
+        except ValueError as exc:
+            return JSONResponse(_workflow_error_payload(str(exc), "run_group"), status_code=422)
+        except Exception as exc:
+            logger.error("Workflow ticket-group run failed: %s", exc, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(exc), "run_group"), status_code=500)
+
     @router.post("/workflows/{workflow_id}/run")
     async def workflow_run(workflow_id: int, request: Request):
         """Start a workflow run. Accepts optional { "start_step_id": int }."""
@@ -1836,7 +1881,11 @@ def register_routes(router, templates):
             except Exception:
                 pass
             start_step_id = body.get("start_step_id") if isinstance(body, dict) else None
-            result = start_workflow_run(workflow_id, start_step_id=start_step_id)
+            result = await asyncio.to_thread(
+                start_workflow_run,
+                workflow_id,
+                start_step_id=start_step_id,
+            )
             if "error" in result:
                 return JSONResponse(_workflow_error_payload(result["error"], "run"), status_code=400)
             result.update(_workflow_feedback_message("run_started", result))

@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
+import time
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .base import BackendStatus, BackendTaskResult, EventCallback, ProjectCliBackend, ProjectTask
+from .contracts import BackendCapabilities
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BACKEND_ID = "pi"
 
@@ -83,6 +89,25 @@ async def abort_backend_process(project_id: int, backend_id: str, *, board_id: i
         except Exception:
             pass
     _clear_oneshot_process(project_id, backend_id, process, board_id=board_id)
+    return True
+
+
+def terminate_backend_process(project_id: int, backend_id: str, *, board_id: int | None = None) -> bool:
+    """Thread-safe best-effort termination used by synchronous run cancellation."""
+    key = _oneshot_key(project_id, backend_id, board_id)
+    with _ONE_SHOT_PROCESS_LOCK:
+        process = _ONE_SHOT_PROCESSES.pop(key, None)
+    if not process:
+        return False
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return False
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            return False
     return True
 
 
@@ -194,6 +219,80 @@ def _compact_cli_output(output: str, limit: int = 6000) -> str:
     return f"{head}\n\n[... omitted {omitted} chars of CLI output ...]\n\n{tail}"
 
 
+class _BoundedCliOutput:
+    """Retain useful CLI evidence without allowing chatty workers to exhaust RAM."""
+
+    def __init__(self, *, head_limit: int = 12_000, tail_limit: int = 120_000) -> None:
+        self.head_limit = max(0, int(head_limit))
+        self.tail_limit = max(0, int(tail_limit))
+        self._head = ""
+        self._tail = ""
+        self._seen = 0
+
+    def append(self, value: str) -> None:
+        text = str(value or "")
+        if not text:
+            return
+        self._seen += len(text)
+        if len(self._head) < self.head_limit:
+            missing = self.head_limit - len(self._head)
+            self._head += text[:missing]
+            text = text[missing:]
+        if text and self.tail_limit:
+            self._tail = (self._tail + text)[-self.tail_limit :]
+
+    def render(self) -> str:
+        retained = len(self._head) + len(self._tail)
+        omitted = max(0, self._seen - retained)
+        if not omitted:
+            return f"{self._head}{self._tail}"
+        return (
+            f"{self._head}\n\n"
+            f"[... omitted {omitted} chars while bounding live CLI output ...]\n\n"
+            f"{self._tail}"
+        )
+
+
+def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
+    """Build a terminal Pi invocation that honours the resolved workflow route."""
+    command = [pi_path, "-p"]
+    model = str(task.model or "").strip()
+    provider = str(task.adapter_options.get("model_provider") or "").strip()
+    if model and model != "auto":
+        # Pi's catalog has nested model ids (for example provider=kilocode,
+        # model=openrouter/free). A slash therefore does not mean the provider
+        # is encoded for the CLI; honour the resolved provider explicitly.
+        if provider:
+            command.extend(["--provider", provider])
+        command.extend(["--model", model])
+    command.extend([
+        "--append-system-prompt",
+        f"You are working on project: {task.project_name}",
+        task.instruction,
+    ])
+    return command
+
+
+def _pi_workflow_report_error(output: str) -> str:
+    """Require Pi workflow runs to honour the normalized completion contract."""
+    text = str(output or "").strip()
+    if not text:
+        return (
+            "Pi exited successfully but returned no completion report; "
+            "the workflow treats this as a no-op instead of completed work."
+        )
+    match = re.search(r"(?im)^\s*Status:\s*(completed|failed|needs_input)\b", text)
+    if not match:
+        return (
+            "Pi returned text without the required 'Status: completed' workflow report; "
+            "the result remains unverified."
+        )
+    status = match.group(1).lower()
+    if status != "completed":
+        return f"Pi reported workflow status {status}; the step was not completed."
+    return ""
+
+
 def _git_status_short(folder: str) -> list[str]:
     """Return a compact dirty-worktree snapshot for audit context."""
     if not folder or not os.path.isdir(folder):
@@ -220,6 +319,37 @@ class PiBackend(ProjectCliBackend):
     supports_rpc = True
     supports_install = False
     setup_instructions = "Install Pi with: npm install -g @mariozechner/pi-coding-agent"
+    capabilities = BackendCapabilities(
+        persistent_session=True,
+        steering=True,
+        resume=True,
+        tools=True,
+        files=True,
+        structured_output=True,
+        local_execution=True,
+    )
+
+    def steer(self, message: str, **context: Any) -> dict[str, Any]:
+        from distr.core.pi_rpc import get_rpc_session
+
+        project_id = context.get("project_id")
+        rpc = get_rpc_session(int(project_id)) if project_id else None
+        if rpc and rpc.is_alive:
+            delivered = bool(rpc.steer(message))
+            return {
+                "success": delivered,
+                "delivered": delivered,
+                "method": "pi_rpc",
+                "backend_id": self.id,
+                "error": "" if delivered else "Pi RPC steer was not accepted",
+            }
+        return {
+            "success": True,
+            "delivered": False,
+            "method": "queued",
+            "backend_id": self.id,
+            "error": "No live session; steering remains queued on the workflow run",
+        }
 
     def check_availability(self) -> BackendStatus:
         from distr.core.pi_rpc import PiRpcSession
@@ -248,38 +378,82 @@ class PiBackend(ProjectCliBackend):
         if not pi_path:
             return BackendTaskResult(False, self.id, "pi", error=self.setup_instructions, session_id=task.audit_id)
 
-        try:
-            rpc = await get_or_create_rpc_session(task.project_id, task.folder, board_id=task.board_id)
-            if rpc.send_prompt(task.instruction, origin=task.origin):
-                return BackendTaskResult(True, self.id, "pi_rpc", session_id=task.audit_id)
-        except Exception as exc:
-            # Fall through to one-shot print mode. The caller still gets a clear
-            # engine value so later routing/fallback can distinguish the path.
-            last_error = str(exc)
-        else:
-            last_error = "Pi RPC did not accept the prompt."
+        last_error = ""
+        # Workflow steps require a terminal result before validation/routing.
+        # Persistent Pi RPC is fire-and-forget here and has no workflow completion
+        # callback, so reserve it for interactive project sessions.
+        if task.origin != "workflow":
+            try:
+                rpc = await get_or_create_rpc_session(task.project_id, task.folder, board_id=task.board_id)
+                if rpc.send_prompt(task.instruction, origin=task.origin):
+                    return BackendTaskResult(True, self.id, "pi_rpc", session_id=task.audit_id)
+            except Exception as exc:
+                # Fall through to one-shot print mode. The caller still gets a clear
+                # engine value so later routing/fallback can distinguish the path.
+                last_error = str(exc)
+            else:
+                last_error = "Pi RPC did not accept the prompt."
 
         def _run_pi_print() -> tuple[bool, str, str]:
             try:
                 result = subprocess.run(
-                    [
-                        pi_path,
-                        "-p",
-                        "--append-system-prompt",
-                        f"You are working on project: {task.project_name}",
-                        task.instruction,
-                    ],
+                    _pi_print_command(pi_path, task),
                     capture_output=True,
                     text=True,
                     timeout=300,
                     cwd=task.folder,
                 )
                 output = ((result.stdout or "") + (result.stderr or "")).strip()
+                report_error = _pi_workflow_report_error(output) if task.origin == "workflow" else ""
+                if result.returncode == 0 and report_error:
+                    return (
+                        False,
+                        output,
+                        report_error,
+                    )
                 return result.returncode == 0, output, ""
+            except subprocess.TimeoutExpired as exc:
+                partial = ""
+                if exc.stdout:
+                    partial += exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else str(exc.stdout)
+                if exc.stderr:
+                    partial += exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else str(exc.stderr)
+                return False, partial.strip(), "Pi worker timed out after 300 seconds; the workflow was stopped cleanly."
             except Exception as exc:
                 return False, "", str(exc)
 
-        ok, output, error = await asyncio.to_thread(_run_pi_print)
+        started_at = time.monotonic()
+        _emit(on_event, {
+            "type": "backend_started",
+            "backend": self.id,
+            "model": task.model or "auto",
+            "message": "Pi worker started",
+        })
+        worker = asyncio.create_task(asyncio.to_thread(_run_pi_print))
+        while not worker.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(worker), timeout=10.0)
+            except asyncio.TimeoutError:
+                elapsed = round(time.monotonic() - started_at, 1)
+                logger.info(
+                    "Pi workflow heartbeat audit_id=%s elapsed=%.1fs model=%s",
+                    task.audit_id, elapsed, task.model or "auto",
+                )
+                _emit(on_event, {
+                    "type": "heartbeat",
+                    "backend": self.id,
+                    "model": task.model or "auto",
+                    "elapsed_seconds": elapsed,
+                    "message": f"Pi worker is still running ({int(elapsed)}s)",
+                })
+        ok, output, error = await worker
+        _emit(on_event, {
+            "type": "backend_finished",
+            "backend": self.id,
+            "model": task.model or "auto",
+            "elapsed_seconds": round(time.monotonic() - started_at, 1),
+            "success": ok,
+        })
         return BackendTaskResult(
             ok,
             self.id,
@@ -314,6 +488,20 @@ class PiBackend(ProjectCliBackend):
 class OneShotCliBackend(ProjectCliBackend):
     executable_candidates: list[str] = []
     command_args: list[str] = []
+    capabilities = BackendCapabilities(
+        steering=True,
+        tools=True,
+        files=True,
+        structured_output=True,
+    )
+
+    def steer(self, message: str, **context: Any) -> dict[str, Any]:
+        return {
+            "success": True,
+            "delivered": False,
+            "method": "queued",
+            "backend_id": self.id,
+        }
 
     def check_availability(self) -> BackendStatus:
         path = _first_executable(self.executable_candidates)
@@ -338,6 +526,9 @@ class OneShotCliBackend(ProjectCliBackend):
 
     def _subprocess_env(self) -> dict[str, str]:
         return {**os.environ, "TERM": "dumb"}
+
+    def _task_subprocess_env(self, task: ProjectTask) -> dict[str, str]:
+        return self._subprocess_env()
 
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
         status = self.setup_status()
@@ -364,7 +555,7 @@ class OneShotCliBackend(ProjectCliBackend):
                 cwd=task.folder,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=self._subprocess_env(),
+                env=self._task_subprocess_env(task),
             )
             _register_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
         except Exception as exc:
@@ -373,27 +564,48 @@ class OneShotCliBackend(ProjectCliBackend):
             _emit(on_event, {"type": "agent_end", "backend": self.id})
             return BackendTaskResult(False, self.id, self.id, error=msg, session_id=task.audit_id)
 
-        chunks: list[str] = []
+        output_buffer = _BoundedCliOutput()
+        started_at = time.monotonic()
         try:
             assert process.stdout is not None
             while True:
-                chunk = await process.stdout.read(4096)
+                try:
+                    chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=10.0)
+                except asyncio.TimeoutError:
+                    elapsed = round(time.monotonic() - started_at, 1)
+                    _emit(on_event, {
+                        "type": "heartbeat",
+                        "backend": self.id,
+                        "model": task.model or "auto",
+                        "elapsed_seconds": elapsed,
+                        "message": f"{self.name} is still running ({int(elapsed)}s)",
+                    })
+                    continue
                 if not chunk:
                     break
                 text = chunk.decode("utf-8", errors="replace")
-                chunks.append(text)
+                output_buffer.append(text)
                 _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}})
             rc = await process.wait()
+        except asyncio.CancelledError:
+            # Workflow timeouts and user cancellation must stop the underlying
+            # provider process too. Without this, the run can be marked failed
+            # while Codex/Pi/Claude continues consuming resources in the background.
+            await abort_backend_process(task.project_id, self.id, board_id=task.board_id)
+            _emit(on_event, {"type": "error", "message": f"{self.name} execution cancelled."})
+            _emit(on_event, {"type": "agent_end", "backend": self.id})
+            raise
         except Exception as exc:
             try:
                 process.kill()
             except Exception:
                 pass
             rc = -1
-            chunks.append(f"\n{exc}")
+            output_buffer.append(f"\n{exc}")
+        finally:
+            _clear_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
 
-        output = "".join(chunks).strip()
-        _clear_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
+        output = output_buffer.render().strip()
         _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "done"}})
         _emit(on_event, {"type": "message_end", "message": {"role": "assistant", "content": output}})
         _emit(on_event, {"type": "agent_end", "backend": self.id})
@@ -420,6 +632,15 @@ class CursorBackend(OneShotCliBackend):
             env["CURSOR_API_KEY"] = key
         return env
 
+    def _task_subprocess_env(self, task: ProjectTask) -> dict[str, str]:
+        env = super()._task_subprocess_env(task)
+        if task.workflow_id and task.run_id:
+            env["DECISIONS_CALLBACK_URL"] = _with_internal_token(
+                f"{_decisions_api_base()}/api/workflows/{int(task.workflow_id)}/runs/"
+                f"{int(task.run_id)}/codex-events"
+            )
+        return env
+
     def setup_status(self) -> BackendStatus:
         status = super().setup_status()
         status.can_receive_remote_handoff = bool(status.ready)
@@ -443,14 +664,13 @@ class CursorBackend(OneShotCliBackend):
         if not task.workflow_id or not task.run_id:
             return ""
         api_base = _decisions_api_base()
-        callback_url = _with_internal_token(f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events")
         reporter = os.environ.get(
             "DECISIONS_CURSOR_REPORTER",
             os.path.expanduser("~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py"),
         )
         meta = {
             "api_base": api_base,
-            "callback_url": callback_url,
+            "callback_url_env": "DECISIONS_CALLBACK_URL",
             "workflow_id": task.workflow_id,
             "run_id": task.run_id,
             "step_id": task.step_id,
@@ -465,7 +685,7 @@ class CursorBackend(OneShotCliBackend):
             "When this work is opened, prompted, steered, paused, interrupted, blocked, completed, "
             "or materially updated, report the event back to DecisionsAI if DecisionsAI is reachable. "
             "Prefer the reporter script when available:\n"
-            f"python3 {json.dumps(reporter)} --callback-url {json.dumps(callback_url)} "
+            f"python3 {json.dumps(reporter)} --callback-url \"$DECISIONS_CALLBACK_URL\" "
             "--event-type cursor_prompt_submitted --status observed --message \"<what the human asked or changed>\"\n"
             "Use event_type values: cursor_started, cursor_prompt_submitted, user_steer, cursor_waiting, "
             "cursor_interrupted, cursor_progress, cursor_completed, cursor_failed, cursor_needs_input.\n"
@@ -492,6 +712,22 @@ class IdeHandoffBackend(ProjectCliBackend):
     setup_instructions = (
         "Install Cursor or VS Code with the DecisionsAI plugin, then make sure the cursor or code command is on PATH."
     )
+    capabilities = BackendCapabilities(
+        persistent_session=True,
+        steering=True,
+        resume=True,
+        tools=True,
+        files=True,
+        images=True,
+    )
+
+    def steer(self, message: str, **context: Any) -> dict[str, Any]:
+        return {
+            "success": True,
+            "delivered": False,
+            "method": "queued",
+            "backend_id": self.id,
+        }
 
     def check_availability(self) -> BackendStatus:
         from .ide_handoff import _ide_open_command
@@ -665,14 +901,13 @@ class CodexBackend(OneShotCliBackend):
         if not task.workflow_id or not task.run_id:
             return ""
         api_base = _decisions_api_base()
-        callback_url = _with_internal_token(f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events")
         reporter = os.environ.get(
             "DECISIONS_CODEX_REPORTER",
             os.path.expanduser("~/plugins/decisions-codex/scripts/report_decisions_event.py"),
         )
         meta = {
             "api_base": api_base,
-            "callback_url": callback_url,
+            "callback_url_env": "DECISIONS_CALLBACK_URL",
             "workflow_id": task.workflow_id,
             "run_id": task.run_id,
             "step_id": task.step_id,
@@ -687,7 +922,7 @@ class CodexBackend(OneShotCliBackend):
             "When this work is opened, prompted, steered, paused, interrupted, blocked, completed, "
             "or materially updated, report the event back to DecisionsAI if DecisionsAI is reachable. "
             "Prefer the reporter script when available:\n"
-            f"python3 {json.dumps(reporter)} --callback-url {json.dumps(callback_url)} "
+            f"python3 {json.dumps(reporter)} --callback-url \"$DECISIONS_CALLBACK_URL\" "
             "--event-type codex_prompt_submitted --status observed --message \"<what the human asked or changed>\"\n"
             "Use event_type values: codex_started, codex_prompt_submitted, user_steer, codex_waiting, codex_interrupted, "
             "codex_progress, codex_completed, codex_failed, codex_needs_input.\n"
@@ -695,6 +930,15 @@ class CodexBackend(OneShotCliBackend):
             "or adds constraints mid-run.\n"
             "[/DECISIONS CODEX CALLBACK]\n\n"
         )
+
+    def _task_subprocess_env(self, task: ProjectTask) -> dict[str, str]:
+        env = super()._task_subprocess_env(task)
+        if task.workflow_id and task.run_id:
+            env["DECISIONS_CALLBACK_URL"] = _with_internal_token(
+                f"{_decisions_api_base()}/api/workflows/{int(task.workflow_id)}/runs/"
+                f"{int(task.run_id)}/codex-events"
+            )
+        return env
 
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         cmd = [executable] + self.command_args
@@ -878,6 +1122,26 @@ def get_backend(backend_id: str | None) -> ProjectCliBackend:
     return _BACKENDS[normalize_backend_id(backend_id)]
 
 
+def resolve_backend_for_capabilities(
+    required: set[str] | list[str] | tuple[str, ...],
+    *,
+    preferred_backend_id: str | None = None,
+    require_ready: bool = True,
+) -> ProjectCliBackend | None:
+    """Select the first capable adapter, preferring the requested backend."""
+    preferred = get_backend(preferred_backend_id) if preferred_backend_id else None
+    ordered = ([preferred] if preferred else []) + [
+        backend for backend in list_backends() if backend is not preferred
+    ]
+    for backend in ordered:
+        if not backend.supports(required):
+            continue
+        if require_ready and not backend.setup_status().ready:
+            continue
+        return backend
+    return None
+
+
 def list_backends() -> list[ProjectCliBackend]:
     return list(_BACKENDS.values())
 
@@ -910,7 +1174,22 @@ def _execution_event_message(event: dict[str, Any]) -> str:
     assistant_event = event.get("assistantMessageEvent")
     if isinstance(assistant_event, dict):
         if assistant_event.get("type") == "text_delta":
-            return str(assistant_event.get("delta") or "")[:1000]
+            delta = str(assistant_event.get("delta") or "").strip()
+            lines = delta.splitlines()
+            diff_lines = sum(
+                1 for line in lines
+                if line.startswith(("+", "-", "@@", "diff --git", "*** Begin Patch"))
+            )
+            lowered = delta.lower()
+            if diff_lines >= 3 or "*** begin patch" in lowered:
+                return "Worker is updating project files."
+            if delta.startswith("exec\n") or (" exited " in lowered and " in " in lowered):
+                return "Worker ran a project command."
+            if len(delta) > 1000 and ("# " in delta or "---\nname:" in lowered):
+                return "Worker loaded project guidance."
+            if len(delta) > 500:
+                return "Worker is processing project context."
+            return delta[:600]
         if assistant_event.get("type"):
             return str(assistant_event.get("type"))[:1000]
     message = event.get("message")
@@ -938,6 +1217,22 @@ def _compact_execution_event(event: dict[str, Any]) -> dict[str, Any]:
         message["content"] = str(message.get("content") or "")[:4000]
         compact["message"] = message
     return compact
+
+
+def _is_duplicate_progress_event(
+    event: dict[str, Any],
+    message: str,
+    *,
+    previous_message: str,
+    previous_at: float,
+    now: float,
+) -> bool:
+    """Coalesce bursty CLI deltas before they hit SQLite, WebSocket, and chat."""
+    if str((event or {}).get("type") or "") != "message_update":
+        return False
+    if not message or message != previous_message:
+        return False
+    return now - previous_at < 1.0
 
 
 def _handoff_callback_metadata(task: ProjectTask) -> dict[str, Any]:
@@ -1044,6 +1339,7 @@ async def run_project_task(
     codex_reasoning_effort_override: Optional[str] = None,
     codex_service_tier_override: Optional[str] = None,
     board_id_override: Optional[int] = None,
+    adapter_options: Optional[dict[str, Any]] = None,
 ) -> BackendTaskResult:
     from distr.core.kanban.project_execution import (
         append_execution_event,
@@ -1086,6 +1382,7 @@ async def run_project_task(
         ticket_complexity=ticket_complexity,
         codex_reasoning_effort=(codex_reasoning_effort_override or "").strip(),
         codex_service_tier=(codex_service_tier_override or "").strip(),
+        adapter_options=adapter_options or {},
     )
     selected_model = task.model or "auto"
     selection_reason = "explicit backend override" if backend_id_override else "project backend setting"
@@ -1348,7 +1645,21 @@ async def run_project_task(
     except Exception:
         pass
 
+    progress_state = {"message": "", "at": 0.0}
+
     def _tracked_event(event: dict[str, Any]) -> None:
+        message = _execution_event_message(event)
+        now = time.monotonic()
+        if _is_duplicate_progress_event(
+            event,
+            message,
+            previous_message=str(progress_state["message"]),
+            previous_at=float(progress_state["at"]),
+            now=now,
+        ):
+            return
+        progress_state["message"] = message
+        progress_state["at"] = now
         try:
             from distr.core.project_cli_backends.live_sessions import publish_live_session_event
 
@@ -1359,7 +1670,7 @@ async def run_project_task(
             execution_session_id,
             str((event or {}).get("type") or "event"),
             status="running",
-            message=_execution_event_message(event),
+            message=message,
             payload=_compact_execution_event(event),
         )
         _emit(on_event, event)

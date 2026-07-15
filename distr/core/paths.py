@@ -1,9 +1,31 @@
 import os
+import sys
+from pathlib import Path
 
 CORE_DIR = os.path.join(os.path.dirname(__file__), "..", "..")
 DISTR_DIR = os.path.join(os.path.dirname(__file__), "..")
 
-MODELS_DIR = os.path.join(CORE_DIR, "models")
+
+def user_data_root(*, platform: str | None = None, home: Path | None = None) -> Path:
+    """Return the writable per-user root used by installed application builds."""
+    current_platform = platform or sys.platform
+    base_home = home or Path.home()
+    explicit = (os.environ.get("DECISIONS_DATA_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    if current_platform == "darwin":
+        return base_home / "Library" / "Application Support" / "DecisionsAI"
+    if current_platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        return Path(local_app_data) / "DecisionsAI" if local_app_data else base_home / "AppData" / "Local" / "DecisionsAI"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    return Path(xdg_data_home) / "decisionsai" if xdg_data_home else base_home / ".local" / "share" / "decisionsai"
+
+
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+DATA_DIR = str(user_data_root()) if IS_FROZEN or os.environ.get("DECISIONS_DATA_DIR") else CORE_DIR
+
+MODELS_DIR = os.environ.get("DECISIONS_MODELS_DIR") or os.path.join(DATA_DIR, "models")
 
 # Cross-chat durable memory (AGENT.md, USER.md, MEMORY.md, EVENTS.md) — R8
 MEMORY_FILES_DIR = os.path.join(MODELS_DIR, "memory")
@@ -16,20 +38,20 @@ MESSAGE_BUS_MAPPING_PATH = os.path.join(MODELS_DIR, "integration_message_bus_map
 
 ASSETS_DIR = os.path.join(CORE_DIR, "assets")
 
-DB_DIR = os.environ.get("DECISIONS_DB_DIR") or os.path.join(CORE_DIR, "db")
+DB_DIR = os.environ.get("DECISIONS_DB_DIR") or os.path.join(DATA_DIR, "db")
 
-SECRETS_DIR = os.path.join(CORE_DIR, "secrets")
+SECRETS_DIR = os.environ.get("DECISIONS_SECRETS_DIR") or os.path.join(DATA_DIR, "secrets")
 GOOGLE_OAUTH_SECRET_PATH = os.path.join(SECRETS_DIR, "google_oauth_client_secret.json")
 
 IMAGES_DIR = os.path.join(ASSETS_DIR, "img")
 ICONS_DIR = os.path.join(IMAGES_DIR, "icons")
-TMP_DIR = os.path.join(ASSETS_DIR, "tmp")
+TMP_DIR = os.environ.get("DECISIONS_TMP_DIR") or os.path.join(DATA_DIR, "tmp")
 
 AVATARS_DIR = os.path.join(ASSETS_DIR, "avatars")
 
 ORACLE_DIR = os.path.join(AVATARS_DIR, "oracle")
 
-RECORDINGS_DIR = os.path.join(DISTR_DIR, "recordings")
+RECORDINGS_DIR = os.environ.get("DECISIONS_RECORDINGS_DIR") or os.path.join(DATA_DIR, "recordings")
 
 DEFAULT_SILENCE_TIMER = 2
 

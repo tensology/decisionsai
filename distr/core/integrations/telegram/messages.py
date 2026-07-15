@@ -38,12 +38,32 @@ def _is_remote_control_request(text: str) -> bool:
     ))
 
 
+def _canonical_batch_source_message_id(message_ids) -> Optional[str]:
+    """Return a stable Telegram source id for one message or a burst."""
+    unique_ids = []
+    for message_id in message_ids:
+        value = str(message_id or "").strip()
+        if value and value not in unique_ids:
+            unique_ids.append(value)
+    if not unique_ids:
+        return None
+    if len(unique_ids) == 1:
+        return unique_ids[0]
+    digest = hashlib.sha256("\n".join(unique_ids).encode("utf-8")).hexdigest()
+    return f"batch:{digest}"
+
+
 class TelegramMessagesMixin:
     """Handles incoming Telegram messages, voice notes, files, and group tracking."""
 
     def _handle_telegram_message(self, wrapper_data: Dict[str, Any]):
         """Logic extracted from old implementation to process inbound messages."""
         inner_data = wrapper_data.get("data", {})
+        if not inner_data.get("text") and inner_data.get("callback_data"):
+            # Relay callback queries use the same deterministic interaction
+            # resolver as typed replies.
+            inner_data = dict(inner_data)
+            inner_data["text"] = str(inner_data.get("callback_data"))
         msg_id = inner_data.get("message_id")
 
         # Log raw message data for debugging (especially chat_id)
@@ -58,8 +78,12 @@ class TelegramMessagesMixin:
             return
         if msg_id:
             self._processed_message_ids.add(msg_id)
+            order = getattr(self, "_processed_message_id_order", None)
+            if order is not None:
+                order.append(msg_id)
             if len(self._processed_message_ids) > self._max_processed_cache_size:
-                self._processed_message_ids.pop()
+                oldest = order.popleft() if order is not None and order else next(iter(self._processed_message_ids))
+                self._processed_message_ids.discard(oldest)
 
         # 2. Content Hash Deduplication
 
@@ -72,8 +96,12 @@ class TelegramMessagesMixin:
             logger.debug(f"Skipping duplicate message hash: {msg_hash}")
             return
         self._processed_message_hashes.add(msg_hash)
+        hash_order = getattr(self, "_processed_message_hash_order", None)
+        if hash_order is not None:
+            hash_order.append(msg_hash)
         if len(self._processed_message_hashes) > self._max_processed_cache_size:
-            self._processed_message_hashes.pop()
+            oldest_hash = hash_order.popleft() if hash_order is not None and hash_order else next(iter(self._processed_message_hashes))
+            self._processed_message_hashes.discard(oldest_hash)
 
         # 3. Update Chat ID knowledge and detect chat type
         chat_id = inner_data.get("chat_id")
@@ -191,6 +219,20 @@ class TelegramMessagesMixin:
                 self.current_chat_type = None
 
         if chat_id:
+            # Once paired, never let an unrelated private sender replace the
+            # controlling Telegram identity. The relay should enforce this too,
+            # but approvals require a local trust boundary.
+            if (
+                not str(chat_id).startswith("-")
+                and getattr(self, "telegram_user_id", None)
+                and int(chat_id) != int(self.telegram_user_id)
+            ):
+                logger.warning(
+                    "[Telegram] Rejected private message from unpaired chat_id=%s (paired=%s)",
+                    chat_id,
+                    self.telegram_user_id,
+                )
+                return
             self.chat_id = chat_id
 
             # CRITICAL: Set telegram_user_id ONLY for private chats (positive chat_id)
@@ -248,14 +290,18 @@ class TelegramMessagesMixin:
             logger.info("Received media message (type: %s)", media_type)
             if media_type == "voice":
                 input_type = "voice"
-                self._handle_voice_message(media.get("download_url"), "voice")
+                self._handle_voice_message(media.get("download_url"), "voice", message_id=msg_id)
                 media_handled = True
             elif media_type == "audio":
                 input_type = "voice"
-                self._handle_voice_message(media.get("download_url"), "audio")
+                self._handle_voice_message(media.get("download_url"), "audio", message_id=msg_id)
                 media_handled = True
             elif media_type in ("photo", "document", "video"):
-                self._handle_file_message(media, inner_data.get("caption") or inner_data.get("text"))
+                self._handle_file_message(
+                    media,
+                    inner_data.get("caption") or inner_data.get("text"),
+                    message_id=msg_id,
+                )
                 media_handled = True
             else:
                 # Unhandled media type (sticker, animation, contact, etc.)
@@ -286,6 +332,24 @@ class TelegramMessagesMixin:
         # Check for "remote control" command - send link instead of forwarding to agent
         if text:
             text_lower = text.lower().strip()
+
+            try:
+                from distr.core.workflow.interactions import (
+                    handle_telegram_workflow_reply,
+                    workflow_reply_message,
+                )
+
+                workflow_reply = handle_telegram_workflow_reply(
+                    text,
+                    chat_id=chat_id,
+                    resolver_id=str(inner_data.get("from", {}).get("id") or chat_id or ""),
+                    source="telegram_text",
+                )
+                if workflow_reply:
+                    self.send_to_telegram(workflow_reply_message(workflow_reply))
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] Workflow interaction routing failed: %s", exc, exc_info=True)
 
             if _is_remote_control_request(text_lower):
                 # Get chat_id for the remote control link
@@ -671,9 +735,14 @@ class TelegramMessagesMixin:
                 if age_s <= 120:
                     text = f"{pending_media.get('text')}\n{text}"
                     image_path = pending_media.get("image_path") or None
+                    msg_id = _canonical_batch_source_message_id(
+                        [pending_media.get("source_message_id"), msg_id]
+                    )
                     logger.info("[Telegram] Attached silent media context to follow-up text")
                 self._pending_telegram_media_context = None
-            self._enqueue_telegram_batch(str(text), image_path, input_type)
+            self._enqueue_telegram_batch(
+                str(text), image_path, input_type, source_message_id=msg_id
+            )
             logger.info(
                 "[Telegram] 📥 Buffered message (%d in batch): '%s' (chat_id: %s)",
                 len(self._telegram_batch_buffer), text[:50], chat_id,
@@ -980,25 +1049,73 @@ class TelegramMessagesMixin:
         texts = []
         image_path = None
         input_type = "text"  # default; last voice item wins
+        source_message_ids = []
         for item in items:
             text, is_media, img_path = item[0], item[1], item[2]
             # Extract input_type from 4-element tuples (new format)
             item_input_type = item[3] if len(item) > 3 else "text"
+            item_source_message_id = item[4] if len(item) > 4 else None
             if text:
                 texts.append(text)
             if img_path and not image_path:
                 image_path = img_path  # Use first image path for vision
             if item_input_type == "voice":
                 input_type = "voice"
+            if item_source_message_id:
+                source_message_ids.append(str(item_source_message_id))
 
         combined = "\n".join(texts) if texts else ""
         if not combined:
             return
+        source_message_id = _canonical_batch_source_message_id(source_message_ids)
 
         # Store input_type on the instance so downstream consumers
         # (event handlers, LLM service) can read it when building the
         # send_to_telegram event data dict.
         self._current_input_type = input_type
+
+        try:
+            # Text callbacks are handled before batching; voice notes only become
+            # actionable after transcription, so resolve their workflow decision here.
+            if input_type == "voice":
+                from distr.core.workflow.interactions import handle_telegram_workflow_reply, workflow_reply_message
+
+                workflow_reply = handle_telegram_workflow_reply(
+                    combined,
+                    chat_id=getattr(self, "_telegram_batch_thread_id", None),
+                    resolver_id=str(getattr(self, "telegram_user_id", "") or ""),
+                    source="telegram_voice",
+                )
+                if workflow_reply:
+                    self._stop_typing_loop()
+                    self.send_to_telegram(workflow_reply_message(workflow_reply, voice=True))
+                    return
+
+            # Explicit work commands become tickets or workflow actions; ordinary
+            # conversation continues to the agent below.
+            from distr.core.work_intake import WorkIntake, WorkIntakeAttachment, get_work_intake_service
+
+            decision = get_work_intake_service().ingest(
+                WorkIntake(
+                    source="telegram",
+                    user_text=combined if input_type != "voice" else "",
+                    transcript=combined if input_type == "voice" else "",
+                    source_user_id=str(getattr(self, "telegram_user_id", "") or ""),
+                    source_thread_id=str(getattr(self, "_telegram_batch_thread_id", "") or ""),
+                    source_message_id=source_message_id,
+                    attachments=([WorkIntakeAttachment(kind="image", path=image_path, name=image_path.rsplit("/", 1)[-1])] if image_path else []),
+                    metadata={
+                        "input_type": input_type,
+                        "source_message_ids": list(dict.fromkeys(source_message_ids)),
+                    },
+                )
+            )
+            if decision.handled:
+                self._stop_typing_loop()
+                self.send_to_telegram(decision.response_text or "Your request was routed.")
+                return
+        except Exception:
+            logger.exception("[Telegram] Request routing failed; falling back to conversational agent")
 
         try:
             from distr.core.integrations.bus import get_integration_message_bus
@@ -1020,7 +1137,13 @@ class TelegramMessagesMixin:
             # Stop typing on error — otherwise the loop runs forever
             self._stop_typing_loop()
 
-    def _enqueue_telegram_batch(self, text: str, image_path: str = None, input_type: str = "text"):
+    def _enqueue_telegram_batch(
+        self,
+        text: str,
+        image_path: str = None,
+        input_type: str = "text",
+        source_message_id=None,
+    ):
         """Add a message to the batch buffer and (re)start the flush timer."""
         uid = getattr(self, "telegram_user_id", None)
         if uid is not None:
@@ -1030,13 +1153,21 @@ class TelegramMessagesMixin:
                 pass
         action = "record_voice" if input_type == "voice" else "typing"
         self._start_typing_loop(action)  # Keep Telegram status alive while batching
-        self._telegram_batch_buffer.append((text, bool(image_path), image_path, input_type))
+        self._telegram_batch_buffer.append(
+            (text, bool(image_path), image_path, input_type, source_message_id)
+        )
         self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
 
-    @pyqtSlot(str, str)
-    def _enqueue_telegram_batch_slot(self, text: str, image_path: str):
+    @pyqtSlot(str, str, str)
+    def _enqueue_telegram_batch_slot(
+        self, text: str, image_path: str, source_message_id: str
+    ):
         """Qt slot wrapper so background threads can enqueue via QMetaObject.invokeMethod."""
-        self._enqueue_telegram_batch(text, image_path if image_path else None)
+        self._enqueue_telegram_batch(
+            text,
+            image_path if image_path else None,
+            source_message_id=source_message_id or None,
+        )
 
     def _handle_voice_message(self, url, media_type, message_id=None):
         """Trigger background thread used for transcription (requests/STT)."""
@@ -1047,10 +1178,12 @@ class TelegramMessagesMixin:
         # Show "recording" indicator so user knows we're processing a voice note, not typing text
         self._start_typing_loop("record_voice")
         threading.Thread(
-            target=self._transcribe_voice_task, args=(url, media_type), daemon=True
+            target=self._transcribe_voice_task,
+            args=(url, media_type, message_id),
+            daemon=True,
         ).start()
 
-    def _transcribe_voice_task(self, media_url, media_type):
+    def _transcribe_voice_task(self, media_url, media_type, source_message_id=None):
         """Background task to download, convert, and transcribe voice notes."""
         if not requests:
             logger.error("[Telegram] ❌ requests library not available — cannot download voice note")
@@ -1115,7 +1248,12 @@ class TelegramMessagesMixin:
                 app.agent_command_queue.put(
                     (
                         "transcribe_file",
-                        {"audio_file_path": str(fpath), "request_id": req_id, "input_type": "voice"},
+                        {
+                            "audio_file_path": str(fpath),
+                            "request_id": req_id,
+                            "input_type": "voice",
+                            "source_message_id": str(source_message_id or ""),
+                        },
                     ),
                     block=False,
                 )
@@ -1137,7 +1275,9 @@ class TelegramMessagesMixin:
     #  Incoming file handling (photos, documents, video from Telegram)
     # -------------------------------------------------------------------------
 
-    def _handle_file_message(self, media: dict, caption: Optional[str] = None):
+    def _handle_file_message(
+        self, media: dict, caption: Optional[str] = None, message_id=None
+    ):
         """Download a photo/document/video from Telegram and save to Downloads.
 
         After saving, the file path and any caption are forwarded to the agent
@@ -1146,11 +1286,13 @@ class TelegramMessagesMixin:
         """
         threading.Thread(
             target=self._download_and_forward_file,
-            args=(media, caption),
+            args=(media, caption, message_id),
             daemon=True,
         ).start()
 
-    def _download_and_forward_file(self, media: dict, caption: Optional[str]):
+    def _download_and_forward_file(
+        self, media: dict, caption: Optional[str], source_message_id=None
+    ):
         """Background thread: download file → save → forward to agent."""
         if not requests:
             logger.warning("[Telegram] requests library not available for file download")
@@ -1224,6 +1366,7 @@ class TelegramMessagesMixin:
                             Qt.ConnectionType.QueuedConnection,
                             Q_ARG(str, str(media_context)),
                             Q_ARG(str, image_path_for_vision or ""),
+                            Q_ARG(str, str(source_message_id or "")),
                         )
                         logger.info(
                             "[Telegram] Attached uncaptioned %s to pending text batch: %s",
@@ -1244,6 +1387,7 @@ class TelegramMessagesMixin:
                     "text": media_context,
                     "image_path": image_path_for_vision,
                     "created_at": time.time(),
+                    "source_message_id": source_message_id,
                 }
                 logger.info(
                     "[Telegram] Stored %s context silently for a possible follow-up: %s",
@@ -1270,6 +1414,7 @@ class TelegramMessagesMixin:
                     Qt.ConnectionType.QueuedConnection,
                     Q_ARG(str, str(agent_text)),
                     Q_ARG(str, image_path_for_vision or ""),
+                    Q_ARG(str, str(source_message_id or "")),
                 )
             except Exception as e:
                 logger.error("[Telegram] Failed to forward file to agent: %s", e, exc_info=True)

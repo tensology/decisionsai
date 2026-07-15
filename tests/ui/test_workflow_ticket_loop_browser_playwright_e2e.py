@@ -96,6 +96,11 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     _select_seeded_board(page, int(ids["board_id"]), str(ids["ticket_title"]))
 
     board_ticket = page.locator("#wf-board-ticket-list .wf-board-ticket-row", has_text=str(ids["ticket_title"])).first
+    badges_box = board_ticket.locator(".kb-ticket-list-badges").bounding_box()
+    title_box = board_ticket.locator(".kb-ticket-list-title").bounding_box()
+    assert badges_box and title_box
+    assert badges_box["x"] + badges_box["width"] <= title_box["x"], \
+        "Board ticket badges overlap and clip the start of the ticket title"
     board_ticket.locator(".kb-act-add-workflow").click()
     queued_ticket = page.locator("#wf-workflow-tickets-list .wf-workflow-ticket-row", has_text=str(ids["ticket_title"])).first
     expect(queued_ticket).to_be_visible(timeout=15000)

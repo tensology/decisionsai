@@ -26,14 +26,13 @@ def test_cancel_recorded_action_deletes_action_and_recording(tmp_path):
     session = MagicMock()
     session.query.return_value.get.return_value = action
 
-    host = ActionRecorderHost()
-    host.waiting_for_action_name_id = 42
-
-    with patch("distr.core.actions.recorder_host.get_session") as get_session_mock:
-        get_session_mock.return_value.__enter__.return_value = session
-        with patch("distr.core.actions.recorder_host.RECORDINGS_DIR", str(tmp_path)):
-            with patch("distr.core.actions.recorder_host.speak_text_directly_event_queue") as speak_mock:
-                with patch("distr.core.actions.recorder_host.signal_manager") as signal_mock:
+    with patch("distr.core.actions.recorder_host.signal_manager") as signal_mock:
+        host = ActionRecorderHost()
+        host.waiting_for_action_name_id = 42
+        with patch("distr.core.actions.recorder_host.get_session") as get_session_mock:
+            get_session_mock.return_value.__enter__.return_value = session
+            with patch("distr.core.actions.recorder_host.RECORDINGS_DIR", str(tmp_path)):
+                with patch("distr.core.actions.recorder_host.speak_text_directly_event_queue") as speak_mock:
                     ok = host.cancel_recorded_action(42)
 
     assert ok is True
@@ -63,12 +62,12 @@ def test_cancel_recorded_action_missing_action_returns_false():
     session = MagicMock()
     session.query.return_value.get.return_value = None
 
-    host = ActionRecorderHost()
-    host.waiting_for_action_name_id = 99
-
-    with patch("distr.core.actions.recorder_host.get_session") as get_session_mock:
-        get_session_mock.return_value.__enter__.return_value = session
-        ok = host.cancel_recorded_action(99)
+    with patch("distr.core.actions.recorder_host.signal_manager"):
+        host = ActionRecorderHost()
+        host.waiting_for_action_name_id = 99
+        with patch("distr.core.actions.recorder_host.get_session") as get_session_mock:
+            get_session_mock.return_value.__enter__.return_value = session
+            ok = host.cancel_recorded_action(99)
 
     assert ok is False
     assert host.waiting_for_action_name_id is None

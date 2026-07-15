@@ -10,6 +10,7 @@ import secrets
 import socket
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -26,13 +27,57 @@ ALLOWED_LOCAL_ORIGINS = [
     "http://[::1]:8765",
 ]
 
-_runtime_internal_token = secrets.token_urlsafe(32)
+_runtime_internal_token: Optional[str] = None
+_runtime_internal_token_lock = threading.Lock()
+
+
+def _internal_token_path() -> Path:
+    configured = (os.getenv("DECISIONSAI_INTERNAL_TOKEN_FILE") or "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".decisionsai" / "internal_api_token"
+
+
+def _load_or_create_persistent_token(path: Path) -> str:
+    """Keep local browser credentials valid across backend restarts."""
+    try:
+        existing = path.read_text(encoding="utf-8").strip()
+        if len(existing) >= 32:
+            return existing
+    except FileNotFoundError:
+        pass
+
+    token = secrets.token_urlsafe(32)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
+    path.write_text(token, encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return token
 
 
 def get_internal_api_token() -> str:
-    """Return the internal API token from env or runtime-generated value."""
+    """Return an env override or a stable, private local-runtime token."""
     env_token = (os.getenv("DECISIONSAI_INTERNAL_API_TOKEN") or "").strip()
-    return env_token or _runtime_internal_token
+    if env_token:
+        return env_token
+    global _runtime_internal_token
+    if _runtime_internal_token:
+        return _runtime_internal_token
+    with _runtime_internal_token_lock:
+        if not _runtime_internal_token:
+            try:
+                _runtime_internal_token = _load_or_create_persistent_token(
+                    _internal_token_path()
+                )
+            except OSError:
+                _runtime_internal_token = secrets.token_urlsafe(32)
+    return _runtime_internal_token
 
 
 def _extract_host(origin: str) -> Optional[str]:

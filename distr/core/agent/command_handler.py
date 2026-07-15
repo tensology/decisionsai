@@ -1267,6 +1267,7 @@ def _cmd_transcribe_file(session, params):
     audio_file_path = params.get('audio_file_path')
     request_id = params.get('request_id')
     input_type = params.get('input_type', 'voice')
+    source_message_id = params.get('source_message_id')
 
     def _send_result(success, error, transcript):
         if session.event_queue:
@@ -1276,6 +1277,7 @@ def _cmd_transcribe_file(session, params):
                 'error': error,
                 'transcript': transcript,
                 'input_type': input_type,
+                'source_message_id': source_message_id,
             }), block=False)
 
     if not audio_file_path:

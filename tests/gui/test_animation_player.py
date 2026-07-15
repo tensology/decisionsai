@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from distr.gui.oracle.webm_player import advance_pingpong
+from distr.gui.oracle.webm_player import advance_pingpong, elapsed_frame_steps
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,22 @@ class TestAdvancePingpongBoundary:
         index, forward = advance_pingpong(0, 5, False)
         assert index == 1
         assert forward is True
+
+
+class TestElapsedFrameSteps:
+    def test_normal_tick_advances_one_frame(self):
+        steps, clock = elapsed_frame_steps(10.0, 10.03, 30)
+        assert steps == 1
+        assert clock == pytest.approx(10.03)
+
+    def test_late_tick_skips_missed_frames_and_keeps_remainder(self):
+        steps, clock = elapsed_frame_steps(10.0, 10.105, 30)
+        assert steps == 3
+        assert clock == pytest.approx(10.09)
+
+    def test_first_tick_is_safe(self):
+        steps, clock = elapsed_frame_steps(None, 42.0, 30)
+        assert (steps, clock) == (1, 42.0)
 
 
 # ---------------------------------------------------------------------------

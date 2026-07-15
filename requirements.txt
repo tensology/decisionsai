@@ -97,6 +97,10 @@ regex>=2023.0.0
 # python -m spacy download en_core_web_lg
 # Pin pipecat-ai to specific version to reduce resolver backtracking
 pipecat-ai[silero]>=0.0.95,<0.0.101
+# Browser Use 0.12+ pins Pillow 12, which is incompatible with the supported
+# Pipecat line. Keep this tested pair together until Pipecat supports Pillow 12.
+browser-use==0.11.13
+Pillow>=11.2.1,<12
 # Document extraction dependencies
 pdfplumber>=0.10.0
 PyPDF2>=3.0.0
@@ -126,6 +130,7 @@ aiortc>=1.9.0
 pathspec>=0.11.0
 pytest>=8.0.0
 pytest-playwright>=0.5.0
+hypothesis>=6.100.0
 # OCR for text-based "where is X" locate — needs Tesseract system binary installed separately.
 # Used to cross-reference text labels with detected UI elements for accurate targeting.
 pytesseract>=0.3.10

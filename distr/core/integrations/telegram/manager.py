@@ -9,6 +9,7 @@ from typing import Optional
 from datetime import datetime
 import platform
 import subprocess
+from collections import deque
 from urllib.parse import quote
 
 # Qt Imports
@@ -248,6 +249,8 @@ class TelegramWebSocketManager(
         # Caches for inbound dedup
         self._processed_message_ids = set()
         self._processed_message_hashes = set()
+        self._processed_message_id_order = deque()
+        self._processed_message_hash_order = deque()
         self._max_processed_cache_size = 100
 
         # Health Check
@@ -547,37 +550,12 @@ class TelegramWebSocketManager(
         if params:
             url_str = f"{url_str}?{'&'.join(params)}"
 
-        logger.info(f"Connecting to Telegram WebSocket: {url_str}")
-        self._log_detailed(f"CONNECTING: {url_str}")
+        # Never persist the short-lived relay JWT embedded in the query string.
+        endpoint_label = self._relay_endpoint_label()
+        logger.info("Connecting to Telegram WebSocket: %s", endpoint_label)
+        self._log_detailed(f"CONNECTING: {endpoint_label}")
 
         self._active_disconnect = False
-
-        # Pre-configure SSL to skip peer verification during the wss:// handshake.
-        #
-        # Qt6 QWebSocket on macOS may reject valid Let's Encrypt E8 intermediates
-        # that the system trust store hasn't learned yet.  The sslErrors signal
-        # arrives too late — the handshake is already aborted.  Disabling peer
-        # verify lets TLS complete; auth is handled at websocket/session layer.
-        try:
-            from PyQt6.QtNetwork import QSslConfiguration
-
-            # Get current default config, set VerifyNone, apply to this socket
-            ssl_config = QSslConfiguration.defaultConfiguration()
-            # PyQt6 exposes PeerVerifyMode under QSslSocket (not QSsl)
-            try:
-                from PyQt6.QtNetwork import QSslSocket
-                ssl_config.setPeerVerifyMode(QSslSocket.PeerVerifyMode.VerifyNone)
-            except (ImportError, AttributeError):
-                try:
-                    from PyQt6.QtNetwork import QSsl
-                    ssl_config.setPeerVerifyMode(QSsl.PeerVerifyMode.VerifyNone)
-                except (ImportError, AttributeError):
-                    # Fallback: use the integer value directly
-                    ssl_config.setPeerVerifyMode(0)  # VerifyNone = 0
-            self.socket.setSslConfiguration(ssl_config)
-            logger.debug("[Telegram] SSL configured: peer verify disabled for wss:// handshake")
-        except Exception as e:
-            logger.debug("[Telegram] Could not pre-configure SSL (non-critical): %s", e)
 
         self.socket.open(QUrl(url_str))
 

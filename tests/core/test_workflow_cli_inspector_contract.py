@@ -45,6 +45,7 @@ def test_workflows_js_tracks_cli_inspector_and_board_pane_collapse_state():
     assert 'WF_CLI_BOARD_STATE_STORAGE_PREFIX' in js
     assert 'wf_board_panel_collapsed' in js
     assert "function renderWorkflowCliSessionThread" in js
+    assert 'session && session.input_packet && typeof session.input_packet === "object"' in js
     assert "function persistWorkflowCliBoardState" in js
     assert "function restoreWorkflowCliBoardState" in js
     assert "function fetchWorkflowCliTerminalState" in js
@@ -76,3 +77,15 @@ def test_board_ticket_rows_render_board_pane_toggle_affordance():
     assert "wf-board-pane-toggle" in js
     assert "Collapse board tickets" in js
     assert "Expand board tickets" in js
+
+
+def test_active_run_polling_does_not_recursively_duplicate_network_refreshes():
+    js = read(WORKFLOWS_JS)
+    soft_refresh = js.split("function softRefresh()", 1)[1].split("function formatElapsed", 1)[0]
+    active_runs = js.split("function loadActiveRuns()", 1)[1].split("function renderWorkflowExecutionSessions", 1)[0]
+    start_polling = js.split("function startPolling()", 1)[1].split("function stopPolling", 1)[0]
+
+    assert "checkActiveRun();" not in soft_refresh
+    assert "loadWorkflowExecutionSessions();" not in soft_refresh
+    assert "loadList();" not in active_runs
+    assert "if (pollTimer) return;" in start_polling

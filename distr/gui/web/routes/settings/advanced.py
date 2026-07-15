@@ -3,11 +3,13 @@ Advanced routes — /advanced, /advanced/directories/*, /advanced/files/*,
 /advanced/reindex, /advanced/connection-status, /advanced/validate/*,
 /advanced/google/*, /advanced/trello/*, /advanced/accounts, /advanced/telegram/*
 """
-from fastapi import Request, HTTPException, File, UploadFile, Form
-from fastapi.responses import JSONResponse
-from typing import Dict, Any
 import json
 import os
+from typing import Any, Dict
+from urllib.parse import urlsplit, urlunsplit
+
+from fastapi import File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 from distr.core.integrations.telegram.utils import relay_internal_token
 
@@ -84,6 +86,28 @@ def _telegram_relay_candidates() -> list[str]:
     if primary != hosted:
         candidates.append(hosted)
     return candidates
+
+
+def normalize_telegram_deep_link(link: Any) -> Any:
+    """Use Telegram's reachable long domain when the relay returns ``t.me``.
+
+    Some networks and public resolvers return no DNS record for the short
+    domain while ``telegram.me`` remains available. Both hosts support the
+    same bot ``?start=`` links.
+    """
+    if not isinstance(link, str) or not link.strip():
+        return link
+    value = link.strip()
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return value
+        if (parsed.hostname or "").lower() not in {"t.me", "www.t.me"}:
+            return value
+        port = f":{parsed.port}" if parsed.port else ""
+        return urlunsplit(("https", f"telegram.me{port}", parsed.path, parsed.query, parsed.fragment))
+    except (TypeError, ValueError):
+        return value
 
 
 def register_routes(router, templates):
@@ -1022,7 +1046,11 @@ def register_routes(router, templates):
                         last_error = f"HTTP {response.status_code}"
                         continue
                     data = response.json()
-                    return JSONResponse({"qr_code": data.get("qr_code"), "token": data.get("token"), "link": data.get("link"), "app_user_id": data.get("app_user_id")})
+                    relay_link = data.get("link")
+                    browser_link = normalize_telegram_deep_link(relay_link)
+                    if browser_link != relay_link:
+                        logger.info("Telegram setup link normalized from t.me to telegram.me")
+                    return JSONResponse({"qr_code": data.get("qr_code"), "token": data.get("token"), "link": browser_link, "app_user_id": data.get("app_user_id")})
                 except Exception as relay_error:
                     last_error = str(relay_error)
                     continue

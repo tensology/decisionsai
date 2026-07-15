@@ -1,187 +1,192 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Build a deterministic DecisionsAI macOS application artifact.
 
-# Build DecisionsAI as a self-contained macOS .app bundle and package it in a DMG
-# This script should be run from the installer/ directory
+set -euo pipefail
 
 APP_NAME="DecisionsAI"
-APP_BUNDLE="${APP_NAME}.app"
-DMG_NAME="${APP_NAME}.dmg"
+BUNDLE_ID="com.tensology.decisionsai"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VERSION_FILE="$PROJECT_ROOT/VERSION"
+OUTPUT_DIR="${DECISIONSAI_OUTPUT_DIR:-$SCRIPT_DIR/release}"
+BUILD_DIR="${DECISIONSAI_BUILD_DIR:-$SCRIPT_DIR/build}"
+DIST_DIR="$BUILD_DIR/dist"
+WORK_DIR="$BUILD_DIR/work"
+SPEC_DIR="$BUILD_DIR/spec"
+RELEASE=0
+CREATE_DMG=1
+PYTHON_BIN="${DECISIONSAI_PYTHON:-python3}"
 
-# Get the project root directory (parent of installer/)
-PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INSTALLER_DIR="$(cd "$(dirname "$0")" && pwd)"
+usage() {
+    printf '%s\n' \
+        "Usage: installer/build_app.sh [--release] [--app-only]" \
+        "" \
+        "  --release   Require Developer ID signing and Apple notarization." \
+        "  --app-only  Build the app and checksum without creating a DMG." \
+        "" \
+        "Environment:" \
+        "  DECISIONSAI_OUTPUT_DIR          Artifact output directory." \
+        "  DECISIONSAI_BUILD_DIR           Disposable build directory." \
+        "  DECISIONSAI_VERSION             Override VERSION for a build." \
+        "  DECISIONSAI_PYTHON              Supported Python 3.12 interpreter." \
+        "  DEVELOPER_ID_APPLICATION        Signing identity (release required)." \
+        "  NOTARYTOOL_PROFILE              notarytool keychain profile (release required)."
+}
 
-# Check for SwitchAudioSource (macOS only, for audio device management)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    if ! command -v SwitchAudioSource &> /dev/null; then
-        echo "⚠️  Warning: SwitchAudioSource not found."
-        echo "   Audio device management features will be limited."
-        echo "   Install with: brew install switchaudio-osx"
-        echo ""
-    else
-        echo "✓ SwitchAudioSource found"
-    fi
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --release) RELEASE=1 ;;
+        --app-only) CREATE_DMG=0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+[ "$(uname -s)" = "Darwin" ] || { printf 'macOS is required to build DecisionsAI.app.\n' >&2; exit 1; }
+[ -f "$VERSION_FILE" ] || { printf 'Missing canonical VERSION file.\n' >&2; exit 1; }
+VERSION="${DECISIONSAI_VERSION:-$(tr -d '[:space:]' < "$VERSION_FILE")}"
+printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$' || {
+    printf 'Invalid release version: %s\n' "$VERSION" >&2
+    exit 1
+}
+
+for command_name in "$PYTHON_BIN" /usr/libexec/PlistBuddy ditto rsync shasum; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+        printf 'Required build tool is missing: %s\n' "$command_name" >&2
+        exit 1
+    }
+done
+"$PYTHON_BIN" "$PROJECT_ROOT/scripts/verify_runtime.py"
+"$PYTHON_BIN" -c 'import PyInstaller' >/dev/null 2>&1 || {
+    printf 'PyInstaller is not installed for %s. Install the pinned release tool explicitly.\n' "$PYTHON_BIN" >&2
+    exit 1
+}
+
+IDENTITY="${DEVELOPER_ID_APPLICATION:-}"
+NOTARY_PROFILE="${NOTARYTOOL_PROFILE:-}"
+if [ "$RELEASE" -eq 1 ]; then
+    [ -n "$IDENTITY" ] || { printf 'DEVELOPER_ID_APPLICATION is required for --release.\n' >&2; exit 1; }
+    [ -n "$NOTARY_PROFILE" ] || { printf 'NOTARYTOOL_PROFILE is required for --release.\n' >&2; exit 1; }
+    security find-identity -v -p codesigning | grep -Fq "\"$IDENTITY\"" || {
+        printf 'Signing identity is not installed: %s\n' "$IDENTITY" >&2
+        exit 1
+    }
+    command -v xcrun >/dev/null 2>&1 || { printf 'xcrun is required for release builds.\n' >&2; exit 1; }
 fi
 
-# Clean up previous builds
-echo "Cleaning up previous builds..."
-rm -rf "${INSTALLER_DIR}/${APP_BUNDLE}"
-rm -rf "${INSTALLER_DIR}/build"
-rm -rf "${INSTALLER_DIR}/dist"
-rm -f "${INSTALLER_DIR}/${DMG_NAME}"
-rm -f "${INSTALLER_DIR}/${APP_NAME}.spec"
+rm -rf "$BUILD_DIR"
+mkdir -p "$DIST_DIR" "$WORK_DIR" "$SPEC_DIR" "$OUTPUT_DIR"
+rm -rf "$OUTPUT_DIR/$APP_NAME.app"
+rm -f "$OUTPUT_DIR/$APP_NAME-$VERSION.dmg" "$OUTPUT_DIR/SHA256SUMS"
 
-# Install PyInstaller if not already installed
-if ! command -v pyinstaller &> /dev/null; then
-    echo "Installing PyInstaller..."
-    pip install pyinstaller
-fi
+# Bundle application resources, but never copy mutable user data, downloaded
+# models, caches, logs, or scratch files into a release artifact.
+DATA_DIR="$BUILD_DIR/data"
+mkdir -p "$DATA_DIR/assets" "$DATA_DIR/distr"
+rsync -a \
+    --exclude '__pycache__/' \
+    --exclude '*.pyc' \
+    --exclude 'tmp/' \
+    "$PROJECT_ROOT/assets/" "$DATA_DIR/assets/"
+rsync -a \
+    --exclude '__pycache__/' \
+    --exclude '*.pyc' \
+    --exclude 'core/agent/models/' \
+    --exclude 'core/db/tool_embeddings_cache.json' \
+    --exclude 'db/' \
+    --exclude 'recordings/' \
+    "$PROJECT_ROOT/distr/" "$DATA_DIR/distr/"
 
-# Build with PyInstaller (output to installer directory)
-echo "Building ${APP_NAME}.app with PyInstaller..."
 cd "$PROJECT_ROOT"
-pyinstaller --name="${APP_NAME}" \
+"$PYTHON_BIN" -m PyInstaller \
+    --noconfirm \
+    --clean \
+    --name "$APP_NAME" \
     --windowed \
     --onedir \
-    --workpath "${INSTALLER_DIR}/build" \
-    --distpath "${INSTALLER_DIR}/dist" \
-    --specpath "${INSTALLER_DIR}" \
-    --add-data "assets:assets" \
-    --add-data "distr:distr" \
-    --add-data "db:db" \
-    --add-data "README.md:." \
-    --add-data "LICENSE.md:." \
-    --add-data "requirements.txt:." \
-    --add-data "info.plist:." \
-    --add-data "bin/setup.py:bin" \
-    --add-data "bin/start.py:bin" \
-    --hidden-import=PyQt6.QtCore \
-    --hidden-import=PyQt6.QtGui \
-    --hidden-import=PyQt6.QtWidgets \
-    --hidden-import=AppKit \
-    --hidden-import=distr \
-    --hidden-import=vosk \
-    --hidden-import=ollama \
-    --hidden-import=pipecat \
-    --hidden-import=langchain \
-    --hidden-import=langchain_community \
-    --hidden-import=litellm \
-    --hidden-import=torch \
-    --hidden-import=torchaudio \
-    --hidden-import=transformers \
-    --hidden-import=numpy \
-    --hidden-import=scipy \
-    --hidden-import=sounddevice \
-    --hidden-import=soundfile \
-    --hidden-import=kokoro_onnx \
-    --hidden-import=pywhispercpp \
-    --hidden-import=pynput \
-    --hidden-import=pyautogui \
-    --hidden-import=sqlalchemy \
-    --hidden-import=beautifulsoup4 \
-    --hidden-import=lxml \
-    --hidden-import=elevenlabs \
-    --hidden-import=resampy \
-    --hidden-import=syntok \
-    --hidden-import=colorama \
-    --exclude-module=tkinter \
-    --exclude-module=matplotlib \
-    --exclude-module=pandas \
-    --icon "${PROJECT_ROOT}/decisions.app/Contents/Resources/icon.icns" \
-    --osx-bundle-identifier=com.tensology.decisionsai \
-    bin/start.py
+    --workpath "$WORK_DIR" \
+    --distpath "$DIST_DIR" \
+    --specpath "$SPEC_DIR" \
+    --add-data "$DATA_DIR/assets:assets" \
+    --add-data "$DATA_DIR/distr:distr" \
+    --add-data "$PROJECT_ROOT/VERSION:." \
+    --add-data "$PROJECT_ROOT/CHANGELOG.md:." \
+    --add-data "$PROJECT_ROOT/README.md:." \
+    --add-data "$PROJECT_ROOT/LICENSE.md:." \
+    --add-data "$PROJECT_ROOT/requirements.txt:." \
+    --hidden-import PyQt6.QtCore \
+    --hidden-import PyQt6.QtGui \
+    --hidden-import PyQt6.QtWidgets \
+    --hidden-import AppKit \
+    --hidden-import distr \
+    --hidden-import sqlalchemy \
+    --hidden-import litellm \
+    --hidden-import ollama \
+    --hidden-import pipecat \
+    --collect-all vosk \
+    --collect-data kokoro_onnx \
+    --collect-data language_tags \
+    --collect-submodules scipy._external.array_api_compat \
+    --copy-metadata pipecat-ai \
+    --copy-metadata browser-use \
+    --copy-metadata Pillow \
+    --exclude-module tkinter \
+    --exclude-module matplotlib \
+    --exclude-module pandas \
+    --icon "$PROJECT_ROOT/decisions.app/Contents/Resources/icon.icns" \
+    --osx-bundle-identifier "$BUNDLE_ID" \
+    "$PROJECT_ROOT/bin/start.py"
 
-# Check if build was successful
-if [ ! -d "${INSTALLER_DIR}/dist/${APP_BUNDLE}" ]; then
-    echo "❌ Error: App bundle not created. Trying alternative method..."
-    
-    # Alternative: Create app bundle manually
-    echo "Creating app bundle manually..."
-    mkdir -p "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/MacOS"
-    mkdir -p "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/Resources"
-    
-    # Create Info.plist
-    cat > "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/Info.plist" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>DecisionsAI</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.tensology.decisionsai</string>
-    <key>CFBundleName</key>
-    <string>DecisionsAI</string>
-    <key>CFBundleDisplayName</key>
-    <string>DecisionsAI</string>
-    <key>CFBundleVersion</key>
-    <string>1.0.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>LSUIElement</key>
-    <string>1</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2024 Tensology (Pty) Ltd</string>
-</dict>
-</plist>
-EOF
-    
-    # Create launcher
-    cat > "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/MacOS/DecisionsAI" << 'LAUNCHER'
-#!/bin/bash
-APP_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
-cd "$APP_DIR"
-exec python3 bin/start.py
-LAUNCHER
-    
-    chmod +x "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/MacOS/DecisionsAI"
-    
-    # Copy files (from project root)
-    rsync -av --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
-          --exclude='*.log' --exclude='recordings' --exclude='assets/tmp' --exclude='db/logs' \
-          --exclude='playground' --exclude='tests' --exclude='distr/assets' --exclude='node_modules' \
-          --exclude='.venv' --exclude='venv' --exclude='env' --exclude='*.app' --exclude='build' \
-          --exclude='dist' --exclude='installer/build_app.sh' --exclude='installer/create_dmg.sh' \
-          --exclude='installer/setup_app.py' "$PROJECT_ROOT/" "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/Resources/"
-    
-    # Ensure bin directory exists and copy setup.py and start.py
-    mkdir -p "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/Resources/bin"
-    cp "$PROJECT_ROOT/bin/setup.py" "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/Resources/bin/"
-    cp "$PROJECT_ROOT/bin/start.py" "${INSTALLER_DIR}/${APP_BUNDLE}/Contents/Resources/bin/"
-else
-    # Use PyInstaller's app bundle (already in installer/dist/)
-    cp -R "${INSTALLER_DIR}/dist/${APP_BUNDLE}" "${INSTALLER_DIR}/"
+BUILT_APP="$DIST_DIR/$APP_NAME.app"
+[ -d "$BUILT_APP" ] || { printf 'PyInstaller did not produce %s.\n' "$BUILT_APP" >&2; exit 1; }
+PLIST="$BUILT_APP/Contents/Info.plist"
+[ -f "$PLIST" ] || { printf 'Built app has no Info.plist.\n' >&2; exit 1; }
+
+set_plist() {
+    /usr/libexec/PlistBuddy -c "Set :$1 $2" "$PLIST" 2>/dev/null || \
+        /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$PLIST"
+}
+set_plist CFBundleIdentifier "$BUNDLE_ID"
+set_plist CFBundleShortVersionString "$VERSION"
+set_plist CFBundleVersion "$VERSION"
+set_plist NSHumanReadableCopyright "Copyright © $(date +%Y) Tensology (Pty) Ltd"
+
+if [ "$RELEASE" -eq 1 ]; then
+    codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$BUILT_APP"
+    codesign --verify --deep --strict --verbose=2 "$BUILT_APP"
 fi
 
-# Create DMG
-echo "Creating DMG..."
-cd "$INSTALLER_DIR"
-hdiutil create -volname "${APP_NAME}" -srcfolder "${APP_BUNDLE}" -ov -format UDZO "${DMG_NAME}"
+ditto "$BUILT_APP" "$OUTPUT_DIR/$APP_NAME.app"
+if [ "$RELEASE" -eq 1 ]; then
+    "$PYTHON_BIN" "$SCRIPT_DIR/verify_release.py" "$OUTPUT_DIR/$APP_NAME.app" \
+        --version "$VERSION" --require-signature
+else
+    "$PYTHON_BIN" "$SCRIPT_DIR/verify_release.py" "$OUTPUT_DIR/$APP_NAME.app" --version "$VERSION"
+fi
 
-# Clean up build artifacts (keep only final outputs)
-echo "Cleaning up build artifacts..."
-rm -rf "${INSTALLER_DIR}/build"
-rm -rf "${INSTALLER_DIR}/dist"
-rm -f "${INSTALLER_DIR}/${APP_NAME}.spec"
-
-echo ""
-echo "✅ Success! App bundle created at: ${INSTALLER_DIR}/${APP_BUNDLE}"
-echo "✅ DMG created at: ${INSTALLER_DIR}/${DMG_NAME}"
-echo ""
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    if ! command -v SwitchAudioSource &> /dev/null; then
-        echo "⚠️  Note: For full audio device management features, users should install:"
-        echo "   brew install switchaudio-osx"
-        echo ""
+if [ "$CREATE_DMG" -eq 1 ]; then
+    DMG="$OUTPUT_DIR/$APP_NAME-$VERSION.dmg"
+    "$SCRIPT_DIR/create_dmg.sh" "$OUTPUT_DIR/$APP_NAME.app" "$DMG"
+    if [ "$RELEASE" -eq 1 ]; then
+        codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+        xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+        xcrun stapler staple "$OUTPUT_DIR/$APP_NAME.app"
+        xcrun stapler staple "$DMG"
+        spctl --assess --type execute --verbose=2 "$OUTPUT_DIR/$APP_NAME.app"
+        spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
     fi
 fi
-echo "You can now:"
-echo "1. Open ${INSTALLER_DIR}/${DMG_NAME}"
-echo "2. Drag ${APP_BUNDLE} to your Applications folder"
-echo "3. Double-click to run"
+
+(
+    cd "$OUTPUT_DIR"
+    shasum -a 256 "$APP_NAME.app/Contents/Info.plist" > SHA256SUMS
+    if [ -f "$APP_NAME-$VERSION.dmg" ]; then
+        shasum -a 256 "$APP_NAME-$VERSION.dmg" >> SHA256SUMS
+    fi
+)
+
+printf 'Built DecisionsAI %s at %s\n' "$VERSION" "$OUTPUT_DIR"
+if [ "$RELEASE" -eq 0 ]; then
+    printf 'Artifact is unsigned. Re-run with --release for distribution.\n'
+fi

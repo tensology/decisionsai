@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from distr.core.db import get_session
+from distr.core import db as db_module
 from distr.core.db.workflow import AutoWorkflowRun
 
 
@@ -19,6 +19,11 @@ ACTIVITY_NOISE_TYPES = {
     "run_started",
     "user_notified",
 }
+
+
+def get_session():
+    """Resolve the active session provider at call time, while remaining patchable."""
+    return db_module.get_session()
 
 
 def _json_dict(raw: str | None) -> dict[str, Any]:

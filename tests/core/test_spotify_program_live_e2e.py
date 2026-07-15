@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from scripts.workflow_ticket_loop_e2e import (
@@ -10,9 +14,110 @@ from scripts.workflow_ticket_loop_e2e import (
     SPOTIFY_POLISH_PRESET,
     WorkflowTicketLoopHarness,
     build_spotify_ticket_specs,
+    select_spotify_ticket_specs,
 )
 
 BASE_URL = "http://127.0.0.1:8765"
+
+
+def test_live_ticket_limit_scopes_fixture_before_queue_creation() -> None:
+    assert [row.sequence for row in select_spotify_ticket_specs(1)] == [1]
+    assert [row.sequence for row in select_spotify_ticket_specs(99)] == [1, 2, 3, 4]
+    assert [row.sequence for row in select_spotify_ticket_specs(0)] == [1]
+
+
+def test_live_lane_mapping_uses_server_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    harness = WorkflowTicketLoopHarness(BASE_URL)
+    calls: list[str] = []
+
+    def request(path: str, **_kwargs: object) -> dict[str, object]:
+        calls.append(path)
+        return {
+            "id": 41,
+            "lanes": [
+                {"id": 101, "name": "Backlog"},
+                {"id": 102, "name": "Current"},
+                {"id": 103, "name": "QA / Assess"},
+                {"id": 104, "name": "Done"},
+            ],
+        }
+
+    monkeypatch.setattr(harness, "api_request", request)
+
+    lanes = harness._set_spotify_lanes(41)
+
+    assert calls == ["/tickets/boards/41"]
+    assert lanes == {
+        "Backlog": 101,
+        "Ready": 102,
+        "In Progress": 102,
+        "Validation": 103,
+        "Improve": 103,
+        "Complete": 104,
+    }
+
+
+def test_live_fixture_cleanup_uses_server_api_and_removes_disposable_folder(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = WorkflowTicketLoopHarness(BASE_URL)
+    project_dir = tmp_path / "spotify-remake-e2e-codex-cleanup"
+    project_dir.mkdir()
+    calls: list[str] = []
+    monkeypatch.setattr(harness, "_best_effort_api_delete", calls.append)
+
+    harness.cleanup_live_spotify_fixture(
+        {
+            "tickets": [{"id": 7}, {"id": 8}],
+            "board_id": 9,
+            "workflow_id": 10,
+            "project_id": 11,
+            "project_dir": str(project_dir),
+        },
+        development_root=tmp_path,
+    )
+
+    assert calls == [
+        "/tickets/tickets/7",
+        "/tickets/tickets/8",
+        "/tickets/boards/9",
+        "/workflows/10",
+        "/projects/11",
+    ]
+    assert not project_dir.exists()
+
+
+@pytest.mark.only_browser
+def test_spotify_fixture_ui_proof_captures_real_browser_evidence(tmp_path) -> None:
+    harness = WorkflowTicketLoopHarness(BASE_URL)
+    harness.scaffold_spotify_project(tmp_path)
+    (tmp_path / "index.html").write_text(
+        """<!doctype html><html><body>
+        <a href="#/search">Search</a>
+        <button type="button" aria-label="Play track">Start</button>
+        </body></html>""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[2] / "scripts" / "spotify_ui_proof.py"),
+            "--project-root",
+            str(tmp_path),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=90,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (tmp_path / "artifacts" / "ui-after.png").is_file()
+    assert "After screenshot:" in completed.stdout
+    assert "1. [click] Open Search navigation" in completed.stdout
+    assert "2. [click] Start playback" in completed.stdout
 
 
 @pytest.mark.e2e

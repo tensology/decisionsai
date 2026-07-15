@@ -76,6 +76,7 @@ class TelegramSenderMixin:
         screenshot_path: Optional[str] = None,
         document_path: Optional[str] = None,
         video_path: Optional[str] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
     ):
         """Enqueue message for sending."""
         # Stop the persistent typing loop — we're about to send the actual response
@@ -222,6 +223,8 @@ class TelegramSenderMixin:
 
         if text:
             msg["text"] = text
+        if reply_markup:
+            msg["reply_markup"] = reply_markup
 
         # CRITICAL: ALWAYS send to private chat (telegram_user_id), NEVER to groups
         # Helper to get valid chat id - ALWAYS prioritize telegram_user_id (private chat)

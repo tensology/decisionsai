@@ -58,6 +58,8 @@ distr/core/db/tool_embeddings_cache.json
 
 # --- Custom voice audio uploads (user data, not source) ---
 distr/db/custom_voices/
+distr/db/*.db-shm
+distr/db/*.db-wal
 
 # --- Optional upstream clone (legacy path; default install uses ~/.cache/decisionsai/) ---
 third_party/VibeVoice/
@@ -83,6 +85,7 @@ scripts/*
 !scripts/setup_project_clis.sh
 !scripts/setup_workflow_loop_smoke.py
 !scripts/verify_agent_harness_setup.py
+!scripts/verify_runtime.py
 
 # --- Databases ---
 db/*
@@ -115,6 +118,7 @@ installer/dist/
 installer/*.app
 installer/*.dmg
 installer/.requirements_installed*
+installer/release/
 *.spec
 *.app
 *.dmg

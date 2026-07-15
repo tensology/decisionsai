@@ -40,8 +40,7 @@ def test_openai_live_textframes_are_cleaned_before_sentence_synthesis():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame()
-    text.text = "OpenAI should ignore <tool_call>{bad}</tool_call> ahhhhh artifacts."
+    text = TextFrame(text="OpenAI should ignore <tool_call>{bad}</tool_call> ahhhhh artifacts.")
 
     async def consume():
         await service.process_frame(start, None)

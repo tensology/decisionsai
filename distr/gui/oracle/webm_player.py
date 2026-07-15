@@ -9,6 +9,7 @@ Requirements: 4.3, 4.4, 4.5
 
 from __future__ import annotations
 
+import time
 from typing import List, Tuple
 
 from PyQt6.QtCore import QObject, QSize, QTimer, Qt, pyqtSignal
@@ -55,6 +56,20 @@ def advance_pingpong(
 # ---------------------------------------------------------------------------
 
 _DEFAULT_FPS = 24
+
+
+def elapsed_frame_steps(
+    last_advance_at: float | None,
+    now: float,
+    interval_ms: int,
+) -> tuple[int, float]:
+    """Return frames due and a clock base that preserves late-tick remainder."""
+    if last_advance_at is None:
+        return 1, now
+    interval_s = max(0.001, interval_ms / 1000.0)
+    elapsed_s = max(0.0, now - last_advance_at)
+    steps = max(1, int(elapsed_s / interval_s))
+    return steps, min(now, last_advance_at + (steps * interval_s))
 
 
 def _sample_background_color(qimg: QImage) -> tuple:
@@ -181,8 +196,10 @@ class WebMPlayer(QObject):
         self._forward: bool = True
         self._pingpong: bool = True
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._advance)
         self._interval_ms: int = _DEFAULT_INTERVAL_MS
+        self._last_advance_at: float | None = None
         self._size: QSize | None = None
         self._device_pixel_ratio: float = 1.0
 
@@ -242,11 +259,13 @@ class WebMPlayer(QObject):
             return
         # Emit the first frame immediately
         self.frame_ready.emit(self._frames[self._current_index])
+        self._last_advance_at = time.monotonic()
         self._timer.start(self._interval_ms)
 
     def stop(self) -> None:
         """Stop playback."""
         self._timer.stop()
+        self._last_advance_at = None
 
     def set_size(self, width: int, height: int) -> None:
         """Set the display size. Rescales existing frames if loaded."""
@@ -271,12 +290,18 @@ class WebMPlayer(QObject):
         """Advance to the next frame using pingpong or loop logic."""
         if not self._frames:
             return
+        now = time.monotonic()
+        steps, self._last_advance_at = elapsed_frame_steps(
+            self._last_advance_at, now, self._interval_ms
+        )
         if self._pingpong:
-            self._current_index, self._forward = advance_pingpong(
-                self._current_index, len(self._frames), self._forward
-            )
+            steps %= max(1, 2 * (len(self._frames) - 1))
+            for _ in range(steps):
+                self._current_index, self._forward = advance_pingpong(
+                    self._current_index, len(self._frames), self._forward
+                )
         else:
-            self._current_index = (self._current_index + 1) % len(self._frames)
+            self._current_index = (self._current_index + steps) % len(self._frames)
         self.frame_ready.emit(self._frames[self._current_index])
 
     def _rebuild_frames(self) -> None:

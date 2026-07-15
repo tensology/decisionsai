@@ -32,7 +32,9 @@ def _isolate_chain_runs():
 
 @pytest.fixture()
 def chain_factory(tmp_path):
-    return make_factory(tmp_path)
+    # Sequential queue auto-advance crosses worker threads. A StaticPool-backed
+    # in-memory SQLite connection cannot safely serve those concurrent cursors.
+    return make_factory(tmp_path, memory=False)
 
 
 def test_ideation_preset_has_no_cursor_steps(chain_factory, tmp_path):

@@ -125,6 +125,11 @@ def recommend_cli_model(
             value += 15
         if tier == "high" and wanted_tier == "low":
             value -= 15
+        # Kilo's moving aliases are deliberately stable as individual free
+        # promotions expire. Prefer the free alias over a dated model that may
+        # still linger in the provider catalog after its free period ends.
+        if model_id == "openrouter/free" and str(model.get("provider") or "").lower() == "kilocode":
+            value += 120
         return value
 
     selected = sorted(usable, key=score, reverse=True)[0]
@@ -214,6 +219,20 @@ def settings_backed_cloud_models(settings: dict) -> list[dict]:
         if not thirdparty_llm_provider_ready(settings, enabled_key, key_key):
             continue
         api_key = (settings.get(key_key) or "").strip()
+        if provider == "kilocode":
+            rows.extend(
+                [
+                    model_entry(
+                        "openrouter/free",
+                        "kilocode",
+                        "Kilo Auto Free",
+                        free=True,
+                        tier="standard",
+                        scope="scoped",
+                        reason="Stable Kilo free router exposed by Pi's live catalog.",
+                    ),
+                ]
+            )
         try:
             fetched = fetcher(api_key) or []
         except Exception as exc:

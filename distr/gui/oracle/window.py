@@ -637,20 +637,24 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         content_phys = int(self.content_size * dpr)
 
         if scale <= 1.0:
-            fitted = pixmap.scaled(
-                content_phys, content_phys,
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
+            fitted = pixmap
+            if fitted.width() != content_phys or fitted.height() != content_phys:
+                fitted = pixmap.scaled(
+                    content_phys, content_phys,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
             fitted.setDevicePixelRatio(dpr)
             self.gif_label.setPixmap(fitted)
         else:
             scaled_size = int(content_phys + (content_phys * (scale - 1.0)))
-            scaled = pixmap.scaled(
-                scaled_size, scaled_size,
-                QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
+            scaled = pixmap
+            if scaled.width() != scaled_size or scaled.height() != scaled_size:
+                scaled = pixmap.scaled(
+                    scaled_size, scaled_size,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
             center = scaled.rect().center()
             center += QtCore.QPoint(int(offset_x * dpr), int(offset_y * dpr))
             target_rect = QtCore.QRect(0, 0, content_phys, content_phys)
@@ -2095,7 +2099,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             else:
                 self.player_window.setGeometry(x, y, player_width, player_height)
 
-            logger.info(f"[Oracle] Positioned player at ({x}, {y}), oracle at ({oracle_x}, {oracle_y}) size {oracle_width}x{oracle_height}, center_y={oracle_center_y}, player_size={player_width}x{player_height}")
+            logger.debug(f"[Oracle] Positioned player at ({x}, {y}), oracle at ({oracle_x}, {oracle_y}) size {oracle_width}x{oracle_height}, center_y={oracle_center_y}, player_size={player_width}x{player_height}")
 
         except Exception as e:
             logger.error(f"[Oracle] Error in position_player_window: {e}")

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Optional
+
+from distr.core.project_cli_backends.contracts import BackendCapabilities
 
 
 EventCallback = Callable[[dict[str, Any]], None]
@@ -66,6 +68,18 @@ class ProjectTask:
     codex_reasoning_effort: str = ""
     codex_service_tier: str = ""
     execution_session_id: Optional[int] = None
+    required_capabilities: list[str] = field(default_factory=list)
+    adapter_options: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.required_capabilities = list(self.required_capabilities or [])
+        self.adapter_options = dict(self.adapter_options or {})
+        # Compatibility bridge: provider-specific values live in the opaque
+        # adapter options while older callers migrate off shared fields.
+        if self.codex_reasoning_effort:
+            self.adapter_options.setdefault("reasoning_effort", self.codex_reasoning_effort)
+        if self.codex_service_tier:
+            self.adapter_options.setdefault("service_tier", self.codex_service_tier)
 
 
 class ProjectCliBackend:
@@ -81,6 +95,21 @@ class ProjectCliBackend:
     supports_rpc = False
     supports_install = False
     setup_instructions = ""
+    capabilities = BackendCapabilities()
+
+    def get_capabilities(self) -> BackendCapabilities:
+        return self.capabilities
+
+    def supports(self, required: set[str] | list[str] | tuple[str, ...]) -> bool:
+        return self.get_capabilities().supports(required)
+
+    def steer(self, message: str, **context: Any) -> dict[str, Any]:
+        return {
+            "success": False,
+            "delivered": False,
+            "backend_id": self.id,
+            "error": f"{self.name or self.id} does not support steering",
+        }
 
     def check_availability(self) -> BackendStatus:
         raise NotImplementedError

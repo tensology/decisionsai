@@ -59,6 +59,8 @@ def _agent_result_passed(result_text: str) -> bool:
     failure_markers = (
         "model quota or billing failed",
         "you exceeded your current quota",
+        "credit balance is too low",
+        "insufficient credits",
         "unsupported parameter",
         "model does not support this request",
         "llm call failed",
@@ -354,7 +356,10 @@ class StepExecutorMixin:
         if backend_id:
             merged["backend"] = normalize_backend_id(backend_id)
         model = str(config.get("model") or "").strip()
-        if model:
+        # "auto" means inherit the resolved board/run route. Treating it as a
+        # literal override discards an explicit board model and causes a second,
+        # potentially unrelated catalog selection.
+        if model and (model != "auto" or str(merged.get("model") or "").strip() in {"", "auto"}):
             merged["model"] = model
         complexity = str(config.get("complexity") or "").strip().lower()
         if complexity in {"low", "medium", "high"}:
@@ -707,7 +712,15 @@ class StepExecutorMixin:
                                                 backend_id=backend_for_skills,
                                             )
                         except Exception:
-                            route = {}
+                            # Route resolution and optional skill provisioning share
+                            # this guarded block. Never discard a route that was
+                            # already resolved just because enrichment failed; doing
+                            # so silently reselects a different model downstream.
+                            logger.warning(
+                                "send_to_project_cli: route enrichment failed; preserving resolved route=%s",
+                                route,
+                                exc_info=True,
+                            )
                     route = self._apply_step_harness_overrides(route, config)
                     try:
                         from distr.core.project_cli_backends.model_policy import apply_workflow_model_policy
@@ -722,7 +735,31 @@ class StepExecutorMixin:
                             )
                     except Exception:
                         logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
+                    required_capabilities = [
+                        str(item).strip()
+                        for item in (config.get("required_capabilities") or [])
+                        if str(item).strip()
+                    ]
                     backend_id = route.get("backend") or "pi"
+                    if required_capabilities:
+                        from distr.core.project_cli_backends import resolve_backend_for_capabilities
+
+                        capable_backend = resolve_backend_for_capabilities(
+                            required_capabilities,
+                            preferred_backend_id=backend_id,
+                        )
+                        if capable_backend is None:
+                            return {
+                                "output": (
+                                    "No ready execution backend provides required capabilities: "
+                                    + ", ".join(required_capabilities)
+                                ),
+                                "passed": False,
+                            }
+                        backend_id = capable_backend.id
+                        route["backend"] = backend_id
+                        route["required_capabilities"] = required_capabilities
+                        route["capability_routed"] = True
                     from distr.core.project_cli_backends.ide_handoff import is_ide_backend
                     from distr.core.workflow.step_iteration import build_ide_step_instruction
 
@@ -740,12 +777,25 @@ class StepExecutorMixin:
                             final_instruction = instruction
                     else:
                         final_instruction = instruction
-                    handle = await dispatch_harness_async(
-                        HarnessContext(
+                    if backend_id == "pi":
+                        # Pi also loads project skills and repo guidance into its
+                        # own context window. Keep the workflow packet compact so
+                        # free/local routes do not silently exhaust their usable
+                        # generation budget before reaching the current task.
+                        final_instruction = self._bound_project_cli_prompt(
+                            final_instruction,
+                            max_chars=12000,
+                        )
+                    def _harness_context(
+                        selected_backend: str,
+                        selected_model: str,
+                        selected_provider: str = "",
+                    ) -> HarnessContext:
+                        return HarnessContext(
                             project=project,
                             instruction=final_instruction,
-                            backend_id=backend_id,
-                            model=route.get("model") or "",
+                            backend_id=selected_backend,
+                            model=selected_model,
                             ticket_id=int(ticket_id) if ticket_id is not None else None,
                             board_id=getattr(board, "id", None) if board else None,
                             run_id=run_id,
@@ -755,8 +805,86 @@ class StepExecutorMixin:
                             codex_reasoning_effort=route.get("codex_reasoning_effort") or "",
                             codex_service_tier=route.get("codex_service_tier") or "",
                             origin="workflow",
+                            required_capabilities=required_capabilities,
+                            adapter_options={
+                                key: value for key, value in {
+                                    "reasoning_effort": route.get("codex_reasoning_effort"),
+                                    "service_tier": route.get("codex_service_tier"),
+                                    "model_provider": selected_provider,
+                                    "quality_tier": config.get("quality_tier"),
+                                    "latency_tier": config.get("latency_tier"),
+                                }.items() if value not in (None, "")
+                            },
+                        )
+
+                    handle = await dispatch_harness_async(
+                        _harness_context(
+                            backend_id,
+                            str(route.get("model") or ""),
+                            str(route.get("model_provider") or ""),
                         )
                     )
+                    if handle.result is not None and not bool(handle.result.success):
+                        fallback = self._runtime_provider_fallback_route(route, config)
+                        fallback_backend = str(fallback.get("backend") or "")
+                        if fallback_backend:
+                            from distr.core.project_cli_backends import get_backend
+                            from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+
+                            fallback_adapter = get_backend(fallback_backend)
+                            if (
+                                fallback_backend != backend_id
+                                and not is_ide_backend(fallback_backend)
+                                and fallback_adapter.setup_status().ready
+                                and fallback_adapter.supports(required_capabilities)
+                            ):
+                                try:
+                                    from distr.core.orchestration_events import emit_orchestration_event
+
+                                    emit_orchestration_event(
+                                        source="orchestrator",
+                                        event_type="provider_failover",
+                                        status="running",
+                                        workflow_id=workflow_id,
+                                        run_id=run_id,
+                                        step_id=step_data.get("id"),
+                                        ticket_id=int(ticket_id) if ticket_id is not None else None,
+                                        board_id=getattr(board, "id", None) if board else None,
+                                        project_id=int(project_id),
+                                        summary=(
+                                            f"{backend_id} failed; retrying this step with "
+                                            f"{fallback_backend}."
+                                        ),
+                                        payload={
+                                            "failed_backend": backend_id,
+                                            "fallback_backend": fallback_backend,
+                                            "fallback_model": fallback.get("model") or "auto",
+                                            "reason": str(handle.result.error or "")[:1000],
+                                        },
+                                    )
+                                except Exception:
+                                    logger.debug("Could not emit provider failover event", exc_info=True)
+                                route.update(fallback)
+                                if not fallback.get("model_provider"):
+                                    route.pop("model_provider", None)
+                                route["source"] = "runtime_provider_failover"
+                                route["policy_source"] = "runtime_provider_failover"
+                                route["policy_reason"] = (
+                                    f"The {backend_id} execution failed its completion contract."
+                                )
+                                route["fallback_from"] = backend_id
+                                if run_row:
+                                    run_data_local = json.loads(run_row.run_data or "{}") or {}
+                                    run_data_local["execution_route"] = route
+                                    run_row.run_data = json.dumps(run_data_local)
+                                    db.commit()
+                                handle = await dispatch_harness_async(
+                                    _harness_context(
+                                        fallback_backend,
+                                        str(fallback.get("model") or "auto"),
+                                        str(fallback.get("model_provider") or ""),
+                                    )
+                                )
                     if run_id and handle.execution_session_id:
                         if run_row:
                             run_data_local = json.loads(run_row.run_data or "{}") or {}
@@ -772,8 +900,16 @@ class StepExecutorMixin:
 
             async def dispatch_harness_async(context):
                 from distr.core.project_cli_backends.harness import dispatch_harness
-                handle = await dispatch_harness(context)
-                return handle
+                timeout_seconds = int(config.get("timeout_seconds", 900) or 900)
+                try:
+                    return await asyncio.wait_for(
+                        dispatch_harness(context),
+                        timeout=timeout_seconds,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise TimeoutError(
+                        f"Project CLI timed out after {timeout_seconds}s"
+                    ) from exc
 
             def _threaded_run_task():
                 def _thread_runner():
@@ -1210,6 +1346,40 @@ class StepExecutorMixin:
                                           result_text=f"Agent dispatch failed: {e}", passed=False)
             return {"output": f"Agent dispatch error: {e}", "passed": False}
 
+    @staticmethod
+    def _runtime_provider_fallback_route(
+        route: dict[str, Any],
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return one explicit provider failover route for a failed CLI step."""
+        if config.get("allow_provider_failover", True) is False:
+            return {}
+        current_backend = str(route.get("backend") or "pi").strip()
+        fallback_backend = str(
+            config.get("fallback_backend")
+            or route.get("fallback_backend")
+            or ("pi" if current_backend == "codex" else "codex")
+        ).strip()
+        if not fallback_backend or fallback_backend == current_backend:
+            return {}
+        fallback_model = str(
+            config.get("fallback_model")
+            or route.get("fallback_model")
+            or "auto"
+        ).strip() or "auto"
+        fallback: dict[str, Any] = {
+            "backend": fallback_backend,
+            "model": fallback_model,
+        }
+        fallback_provider = str(
+            config.get("fallback_model_provider")
+            or route.get("fallback_model_provider")
+            or ""
+        ).strip()
+        if fallback_provider:
+            fallback["model_provider"] = fallback_provider
+        return fallback
+
     # ── Helpers ──────────────────────────────────────────────────────
 
     def _build_workflow_execution_packet_context(
@@ -1221,6 +1391,7 @@ class StepExecutorMixin:
         """Build the durable DecisionsAI execution packet for project CLI steps."""
         if run_id is None:
             return ""
+
         try:
             from distr.core.workspace_memory.paths import (
                 AGENTS_FILE,
@@ -1416,6 +1587,22 @@ class StepExecutorMixin:
         except Exception:
             logger.debug("_build_workflow_execution_packet_context failed", exc_info=True)
             return ""
+
+    @staticmethod
+    def _bound_project_cli_prompt(prompt: str, *, max_chars: int = 24000) -> str:
+        """Bound local-worker context while preserving identity and current task.
+
+        Execution identity and memory paths live at the start; the current step,
+        guardrails, and return contract live at the end. Historical run reports
+        accumulate in the middle and are the safest material to compact.
+        """
+        value = str(prompt or "")
+        if len(value) <= max_chars:
+            return value
+        marker = "\n\n[Historical context compacted for worker latency]\n\n"
+        head_chars = int(max_chars * 0.55)
+        tail_chars = max_chars - head_chars - len(marker)
+        return value[:head_chars].rstrip() + marker + value[-tail_chars:].lstrip()
 
     def _build_agent_prompt(self, step_data: Dict[str, Any], run_id: Optional[int]) -> str:
         """Build the prompt for the WorkflowAgent, enriched with full context.
@@ -1742,7 +1929,7 @@ class StepExecutorMixin:
             len(continuation_input or ""),
         )
 
-        return prompt
+        return self._bound_project_cli_prompt(prompt)
 
     def _resolve_recording_name(self, step_data: Dict[str, Any], config: dict) -> Optional[str]:
         """Resolve the recording filename from config, step data, or linked action."""

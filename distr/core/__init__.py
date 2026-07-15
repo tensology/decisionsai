@@ -11,6 +11,9 @@ def __getattr__(name):
         # Avoid importing PyQt-bound signal module during headless/unit tests.
         module = types.ModuleType("distr.core.signals")
         module.signal_manager = types.SimpleNamespace()
+        module._agent_event_queue = None
+        module.set_agent_event_queue = lambda queue: setattr(module, "_agent_event_queue", queue)
+        module.get_agent_event_queue = lambda: module._agent_event_queue
         module.speak_text_directly_event_queue = lambda *_args, **_kwargs: None
         sys.modules["distr.core.signals"] = module
         globals()[name] = module

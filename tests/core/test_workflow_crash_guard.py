@@ -1,0 +1,175 @@
+from contextlib import contextmanager
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+import distr.core.db.kanban  # noqa: F401 - register tables with shared metadata
+from distr.core.db import Base
+from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+from distr.core.db.workflow import AutoWorkflow
+from distr.core.db.workflow import AutoWorkflowRun
+from distr.core.workflow.dispatcher import StepDispatcher, _cleanup_orphaned_runs_on_startup
+
+
+class _Query:
+    def __init__(self, model):
+        self.model = model
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        if self.model is AutoWorkflowRun:
+            return SimpleNamespace(status="running", current_step_id=None)
+        return None
+
+
+class _Session:
+    def query(self, *args, **kwargs):
+        return _Query(args[0] if args else None)
+
+    def commit(self):
+        return None
+
+
+@contextmanager
+def _session():
+    yield _Session()
+
+
+def _factory():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@contextmanager
+def _real_session(factory):
+    session = factory()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monkeypatch):
+    factory = _factory()
+    with _real_session(factory) as session:
+        workflow = AutoWorkflow(name="Crash recovery")
+        session.add(workflow)
+        session.flush()
+        orphan = AutoWorkflowRun(workflow_id=workflow.id, status="running")
+        completed = AutoWorkflowRun(
+            workflow_id=workflow.id,
+            status="completed",
+            completed_at=datetime(2026, 1, 1),
+        )
+        session.add_all([orphan, completed])
+        session.flush()
+        active = ProjectExecutionSession(
+            project_id=7,
+            workflow_id=workflow.id,
+            run_id=orphan.id,
+            status="running",
+        )
+        historical = ProjectExecutionSession(
+            project_id=7,
+            workflow_id=workflow.id,
+            run_id=completed.id,
+            status="completed",
+            completed_at=datetime(2026, 1, 1),
+        )
+        session.add_all([active, historical])
+        session.flush()
+        orphan_id, active_id, historical_id = orphan.id, active.id, historical.id
+
+    monkeypatch.setattr(
+        "distr.core.workflow.dispatcher.get_session",
+        lambda: _real_session(factory),
+    )
+    _cleanup_orphaned_runs_on_startup()
+
+    with _real_session(factory) as session:
+        recovered_run = session.get(AutoWorkflowRun, orphan_id)
+        recovered_execution = session.get(ProjectExecutionSession, active_id)
+        untouched_execution = session.get(ProjectExecutionSession, historical_id)
+        events = (
+            session.query(ProjectExecutionEvent)
+            .filter(ProjectExecutionEvent.session_id == active_id)
+            .all()
+        )
+
+        assert recovered_run.status == "cancelled"
+        assert recovered_run.completed_at is not None
+        assert recovered_execution.status == "cancelled"
+        assert recovered_execution.completed_at is not None
+        assert recovered_execution.error == "App restarted before provider completion."
+        assert [(event.event_type, event.status) for event in events] == [
+            ("recovered_after_restart", "cancelled")
+        ]
+        assert untouched_execution.status == "completed"
+
+
+def test_unexpected_backend_exception_becomes_failed_step_result(monkeypatch):
+    monkeypatch.setattr("distr.core.workflow.dispatcher.get_session", _session)
+    monkeypatch.setattr("distr.core.workflow.dispatcher.build_step_preflight", lambda *_args, **_kwargs: {"ok": True, "summary": "ready"})
+    monkeypatch.setattr("distr.core.workflow.dispatcher.record_workflow_chat_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("distr.core.workflow.dispatcher.emit_step_activity", lambda *_args, **_kwargs: None)
+
+    dispatcher = StepDispatcher()
+    dispatcher._load_step = Mock(return_value={"id": 7, "name": "Worker", "workflow_id": 3, "position": 0})
+    dispatcher._set_run_phase = Mock()
+    dispatcher._validate_before_dispatch = Mock(return_value=[])
+    dispatcher._set_status = Mock()
+    dispatcher._execute = Mock(side_effect=RuntimeError("adapter exploded"))
+    dispatcher._record_result_and_route = Mock()
+
+    result = dispatcher.run_in_workflow(7, 11)
+
+    assert result["status"] == "failed"
+    assert "adapter exploded" in result["error"]
+    dispatcher._record_result_and_route.assert_called_once_with(
+        7,
+        run_id=11,
+        result_text="Step execution failed unexpectedly: adapter exploded",
+        passed=False,
+        skip_wait=True,
+    )
+
+
+def test_cancelled_run_cannot_dispatch_a_late_provider_step(monkeypatch):
+    class CancelledQuery(_Query):
+        def first(self):
+            if self.model is AutoWorkflowRun:
+                return SimpleNamespace(status="cancelled", current_step_id=7)
+            return None
+
+    class CancelledSession(_Session):
+        def query(self, *args, **kwargs):
+            return CancelledQuery(args[0] if args else None)
+
+    @contextmanager
+    def cancelled_session():
+        yield CancelledSession()
+
+    monkeypatch.setattr("distr.core.workflow.dispatcher.get_session", cancelled_session)
+    dispatcher = StepDispatcher()
+    dispatcher._execute = Mock()
+
+    result = dispatcher.run_in_workflow(7, 11)
+
+    assert result["cancelled"] is True
+    assert result["status"] == "cancelled"
+    dispatcher._execute.assert_not_called()

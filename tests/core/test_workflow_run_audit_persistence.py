@@ -159,9 +159,9 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
         assert f"workflow_run:{ids['run_id']}" in packet["artifacts"]["logs"]
 
         assert ticket.workflow_status == "completed"
-        assert f"[Workflow Run #{ids['run_id']}] Status: completed" in ticket.description
-        assert "Update note: passed" in ticket.description
-        assert "Evidence:" in ticket.description
+        # The ticket brief stays stable. Terminal evidence belongs to the
+        # durable run receipt and audit ledger, not duplicated description text.
+        assert ticket.description == "Original ticket body."
 
         assert audit_entries
         terminal = audit_entries[-1]

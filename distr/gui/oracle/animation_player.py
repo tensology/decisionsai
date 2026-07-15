@@ -8,7 +8,9 @@ Requirements: 3.5, 4.3, 5.2
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QObject, QSize, QTimer, pyqtSignal
+import time
+
+from PyQt6.QtCore import QObject, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QMovie
 
 
@@ -34,8 +36,10 @@ class GifPlayer(QObject):
         self._forward: bool = True
         self._pingpong: bool = True  # default to pingpong, can be set to False for loop
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._advance)
         self._interval_ms: int = 42  # ~24 fps default
+        self._last_advance_at: float | None = None
         self._size: QSize | None = None
 
     def load(self, file_path: str, playback: str = "pingpong") -> None:
@@ -89,10 +93,12 @@ class GifPlayer(QObject):
         if not self._frames:
             return
         self.frame_ready.emit(self._frames[self._current_index])
+        self._last_advance_at = time.monotonic()
         self._timer.start(self._interval_ms)
 
     def stop(self) -> None:
         self._timer.stop()
+        self._last_advance_at = None
 
     def set_size(self, width: int, height: int) -> None:
         self._size = QSize(width, height)
@@ -101,14 +107,22 @@ class GifPlayer(QObject):
         """Advance to the next frame using pingpong or loop logic."""
         if not self._frames:
             return
+        now = time.monotonic()
+        from distr.gui.oracle.webm_player import elapsed_frame_steps
+        steps, self._last_advance_at = elapsed_frame_steps(
+            self._last_advance_at, now, self._interval_ms
+        )
         if self._pingpong:
             from distr.gui.oracle.webm_player import advance_pingpong
-            self._current_index, self._forward = advance_pingpong(
-                self._current_index, len(self._frames), self._forward
-            )
+            # Skip frames after an event-loop stall instead of playing the
+            # animation in slow motion while it catches up.
+            steps %= max(1, 2 * (len(self._frames) - 1))
+            for _ in range(steps):
+                self._current_index, self._forward = advance_pingpong(
+                    self._current_index, len(self._frames), self._forward
+                )
         else:
-            # Loop: forward only, restart from 0
-            self._current_index = (self._current_index + 1) % len(self._frames)
+            self._current_index = (self._current_index + steps) % len(self._frames)
         self.frame_ready.emit(self._frames[self._current_index])
 
 

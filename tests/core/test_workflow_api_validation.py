@@ -128,6 +128,39 @@ class TestWorkflowTypeValidation422:
         resp = tc.patch(f"/api/workflows/{wf_id}", json={"workflow_type": "scheduled"})
         assert resp.status_code == 200
 
+    def test_run_ticket_group_preserves_order_and_returns_group_status(self, client):
+        tc, _ = client
+        create_resp = tc.post("/api/workflows", json={"name": "group-run"})
+        workflow_id = create_resp.json()["id"]
+
+        def build_item(ticket_id, received_workflow_id):
+            assert received_workflow_id == workflow_id
+            return {"ticket_id": ticket_id, "context": f"Ticket {ticket_id}"}
+
+        result = {
+            "success": True,
+            "group_id": "group-1",
+            "mode": "sequential",
+            "ticket_count": 2,
+            "started": [{"ticket_id": 7, "run_id": 70}],
+            "errors": [],
+            "queued_count": 1,
+        }
+        with patch("distr.core.workflow.ticket_dispatch.build_ticket_run_item", side_effect=build_item), \
+            patch("distr.core.workflow.dispatcher.start_workflow_ticket_group", return_value=result) as start_group:
+            resp = tc.post(
+                f"/api/workflows/{workflow_id}/run-ticket-group",
+                json={"ticket_ids": [7, 8, 7]},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["group_id"] == "group-1"
+        assert body["queued_count"] == 1
+        assert "Runs or Loop" in body["next_action"]
+        assert [item["ticket_id"] for item in start_group.call_args.args[1]] == [7, 8]
+        assert start_group.call_args.kwargs["dispatch_async"] is True
+
     def test_post_ui_feedback_label_records_harness_feedback(self, client):
         tc, _ = client
         with patch("distr.core.orchestrator.record_ui_feedback_label", return_value=123) as record:

@@ -41,6 +41,25 @@ def test_workflow_js_preserves_structured_error_context():
     assert 'workflowFeedbackText(resp, "Run continued")' in js
 
 
+def test_workflow_run_all_dispatches_an_explicit_ticket_group():
+    js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
+
+    assert "function startWorkflowTicketGroup" in js
+    assert 'openWorkflowRunPreview(first.id, queue.map(function (ticket)' in js
+    assert '"/workflows/" + encodeURIComponent(currentWorkflowId) + "/run-ticket-group"' in js
+    assert "Group ' + esc(groupPosition) + '/' + esc(groupSize)" in js
+    assert "workflowRunPreviewCountSuffix(additionalTickets)" in js
+    assert "startedTicketIds.indexOf(String(ticketId)) === -1" in js
+    assert "function activeWorkflowDetailTab" in js
+    assert 'activeWorkflowDetailTab() === "tickets"' in js
+
+
+def test_workflow_state_reads_bypass_browser_cache():
+    js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
+
+    assert 'cache: method === "GET" ? "no-store" : "default"' in js
+
+
 def test_workflow_js_exposes_ui_taste_feedback_controls():
     js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
 
@@ -57,7 +76,7 @@ def test_workflow_js_exposes_ui_taste_feedback_controls():
     assert 'data-ui-feedback-label="inconsistent_styling"' in js
     assert 'data-ui-feedback-label="too_many_clicks"' in js
     assert 'data-testid="wf-ui-taste-controls"' in js
-    assert '"/workflows/" + workflowId + "/runs/" + runId + "/ui-feedback"' in js
+    assert '"/workflows/" + pending.workflowId + "/runs/" + pending.runId + "/ui-feedback"' in js
 
 
 def test_workflow_step_editor_exposes_visual_baseline_config():

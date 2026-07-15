@@ -124,14 +124,14 @@ class TTSProviderRegistry:
         package_dir = os.path.dirname(__file__)
         package_name = "distr.core.agent.services.tts"
 
-        _skip_discovery = frozenset({
-            "__init__",
-            "registry",
-            "provider_descriptor",
-        })
         for module_info in pkgutil.iter_modules([package_dir]):
             module_name = module_info.name
-            if module_name in _skip_discovery:
+            # Provider metadata lives in *_descriptor modules. Importing every
+            # module here also initialized all TTS engines (including Coqui's
+            # multi-second model stack) while STT constants were importing.
+            if not module_name.endswith("_descriptor"):
+                continue
+            if module_name in {"provider_descriptor", "retired_tts_descriptor"}:
                 continue
 
             fqn = f"{package_name}.{module_name}"

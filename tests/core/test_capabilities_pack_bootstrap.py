@@ -102,3 +102,4 @@ def test_harness_stack_runs_all_packs(tmp_path, monkeypatch):
 
     assert "ecc" in stack and "competition" in stack and "capabilities" in stack
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "ecc-harness-pack" / "SKILL.md").is_file()
+    assert (tmp_path / ".codex" / "commands" / "decisions-harness-audit.md").is_file()

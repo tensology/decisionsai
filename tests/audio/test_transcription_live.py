@@ -11,6 +11,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.live_audio
+
 pytest.importorskip("sounddevice")
 pytest.importorskip("pipecat.frames.frames")
 
@@ -351,4 +353,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n\nTest interrupted by user")
         sys.exit(1)
-

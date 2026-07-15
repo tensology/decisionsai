@@ -3,6 +3,41 @@ import hmac
 from datetime import datetime, timezone
 
 
+def test_websocket_connect_keeps_tls_verification_and_does_not_log_jwt() -> None:
+    import distr.core.integrations.telegram.manager as manager_mod
+
+    class Socket:
+        opened_url = None
+
+        def isValid(self):
+            return False
+
+        def open(self, url):
+            self.opened_url = url.toString()
+
+        def setSslConfiguration(self, _config):
+            raise AssertionError("connect must not weaken the platform TLS configuration")
+
+    manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
+    manager.socket = Socket()
+    manager.server_url = "wss://www.decisionsai.net/ws/telegram"
+    manager.app_user_id = "local-ui"
+    manager.telegram_user_id = 12345
+    manager.short_code = None
+    manager._active_disconnect = False
+    manager._connect_failure_reason = None
+    manager._fetch_ws_token = lambda: "secret-relay-jwt"
+    manager._relay_endpoint_label = lambda: "www.decisionsai.net"
+    detailed: list[str] = []
+    manager._log_detailed = detailed.append
+
+    manager_mod.TelegramWebSocketManager.connect(manager)
+
+    assert "secret-relay-jwt" in manager.socket.opened_url
+    assert detailed == ["CONNECTING: www.decisionsai.net"]
+    assert all("secret-relay-jwt" not in row for row in detailed)
+
+
 def test_ws_token_request_uses_env_file_relay_token_when_process_env_is_missing(monkeypatch):
     import distr.core.integrations.telegram.manager as manager_mod
 

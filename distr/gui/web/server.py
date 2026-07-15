@@ -51,8 +51,11 @@ def _app_version_label(project_root: Path) -> str:
         return _APP_VERSION_CACHE
     try:
         version = ""
+        version_file = project_root / "VERSION"
+        if version_file.exists():
+            version = version_file.read_text(encoding="utf-8").strip()
         changelog = project_root / "CHANGELOG.md"
-        if changelog.exists():
+        if not version and changelog.exists():
             match = re.search(r"^## \[([0-9][^\]]*)\]", changelog.read_text(encoding="utf-8"), re.M)
             version = match.group(1).strip() if match else ""
         _APP_VERSION_CACHE = version or "dev"
@@ -375,6 +378,14 @@ def create_app() -> FastAPI:
         logger.info("Orchestrator memory routes mounted at /api/orchestrator")
     except Exception as e:
         logger.error("Failed to load Orchestrator memory routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.observability import create_routes as create_observability_routes
+
+        app.include_router(create_observability_routes(), prefix="/api", tags=["diagnostics"])
+        logger.info("UI responsiveness diagnostics mounted at /api/diagnostics/ui-stall")
+    except Exception as e:
+        logger.error("Failed to load UI responsiveness diagnostics: %s", e, exc_info=True)
 
     try:
         from distr.gui.web.routes.docs import create_routes as create_docs_routes
@@ -826,6 +837,14 @@ def create_app() -> FastAPI:
     async def workflows_redirect():
         return RedirectResponse(url="/workflows/", status_code=302)
 
+    @app.get("/intake/", response_class=HTMLResponse)
+    async def intake_legacy_redirect():
+        return RedirectResponse(url="/tickets/", status_code=302)
+
+    @app.get("/intake", response_class=HTMLResponse)
+    async def intake_redirect():
+        return RedirectResponse(url="/tickets/", status_code=302)
+
     # Ticket Board
     @app.get("/tickets/", response_class=HTMLResponse)
     async def tickets_page(request: Request):
@@ -891,7 +910,11 @@ def create_app() -> FastAPI:
     # Health check endpoint
     @app.get("/health")
     async def health_check():
-        return {"status": "ok", "services": ["flow", "board", "settings", "chat"]}
+        return {
+            "status": "ok",
+            "services": ["flow", "board", "settings", "chat"],
+            "pid": os.getpid(),
+        }
     
     # Cancel any workflow runs left open from a previous session (crash/restart).
     # Must run before any workflow operations so orphaned runs don't block new pushes.
@@ -967,9 +990,16 @@ class UnifiedGuiServer:
     Manages the unified FastAPI server lifecycle in a separate thread.
     Started once when the app loads, stopped when the app shuts down.
     """
-    def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
+    def __init__(self, host: str = DEFAULT_HOST, port: Optional[int] = None):
         self.host = host
-        self.port = port
+        configured_port = (os.environ.get("DECISIONS_WEB_PORT") or "").strip()
+        if port is None and configured_port:
+            try:
+                candidate = int(configured_port)
+                port = candidate if 1 <= candidate <= 65535 else None
+            except ValueError:
+                logger.warning("Ignoring invalid DECISIONS_WEB_PORT=%r", configured_port)
+        self.port = int(port if port is not None else DEFAULT_PORT)
         self.app: Optional[FastAPI] = None
         self.server: Optional[uvicorn.Server] = None
         self.server_thread: Optional[threading.Thread] = None

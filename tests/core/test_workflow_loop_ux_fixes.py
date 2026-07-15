@@ -34,6 +34,7 @@ def test_run_verification_passes_ticket_context_to_llm_judgment():
         "Ticket brief is explicit.",
         standards_context="Keep diffs small.",
         ticket_context="Fix login bug",
+        unavailable_fallback=True,
     )
 
 

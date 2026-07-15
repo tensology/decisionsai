@@ -1,10 +1,15 @@
 from pathlib import Path
 import logging
 import queue
+import time
+from types import SimpleNamespace
 
 from distr.app.events import EventHandlerMixin
 from distr.core.integrations.bus import IntegrationMessageBus
-from distr.core.integrations.telegram.messages import TelegramMessagesMixin
+from distr.core.integrations.telegram.messages import (
+    TelegramMessagesMixin,
+    _canonical_batch_source_message_id,
+)
 from distr.core.integrations.telegram.sender import TelegramSenderMixin, _audit_outbound_telegram_text
 
 
@@ -409,6 +414,16 @@ def test_duplicate_outbound_message_drop_is_not_warning_noise(caplog):
     assert "Duplicate message dropped" not in caplog.text
 
 
+def test_sender_preserves_inline_workflow_keyboard():
+    sender = DummyTelegramSender()
+    markup = {"inline_keyboard": [[{"text": "Approve", "callback_data": "wf:opaque:approve"}]]}
+
+    assert sender.send_to_telegram("Needs approval", reply_markup=markup) is True
+
+    payload = sender._message_queue.get_nowait()
+    assert payload["reply_markup"] == markup
+
+
 def test_direct_outbound_low_value_status_is_suppressed():
     sender = DummyTelegramSender()
 
@@ -436,6 +451,41 @@ def test_voice_transcription_failure_notifies_telegram():
     assert kwargs == {}
 
 
+def test_voice_transcription_resolves_single_workflow_interaction(monkeypatch):
+    from sqlalchemy import text
+
+    from distr.core.db import engine
+    from distr.core.workflow.interactions import create_workflow_interaction, pending_interactions
+
+    pending_interactions()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM workflow_interactions"))
+    create_workflow_interaction(
+        workflow_id=10, run_id=20, step_id=30, kind="approval", telegram_chat_id=123
+    )
+    resumed = []
+    monkeypatch.setattr(
+        "distr.core.workflow.dispatcher.continue_waiting_step",
+        lambda run_id, feedback: resumed.append((run_id, feedback)) or {"success": True},
+    )
+    manager = DummyTelegramManager(connected=True)
+    manager.telegram_user_id = 123
+    app = DummyApp(manager)
+
+    app._evt_telegram_transcription({
+        "request_id": "voice-workflow-1",
+        "success": True,
+        "transcript": "yes, approve it",
+        "input_type": "voice",
+    })
+
+    assert resumed == [(20, "yes, approve it")]
+    assert any(
+        "accepted: approve" in (kwargs.get("text") or (args[0] if args else ""))
+        for args, kwargs in manager.sent
+    )
+    assert pending_interactions(chat_id=123) == []
+
 def test_telegram_bus_preserves_input_type_metadata(tmp_path):
     seen = []
     bus = IntegrationMessageBus(mapping_path=Path(tmp_path) / "bus.json")
@@ -449,8 +499,6 @@ def test_telegram_bus_preserves_input_type_metadata(tmp_path):
 
 
 def test_sender_rate_limit_defers_message_instead_of_dropping(monkeypatch):
-    import time
-
     sender = DummyTelegramSender()
     sender._min_send_interval = 10
     sender._last_send_time = time.time()
@@ -473,6 +521,7 @@ class DummyTelegramMessages(TelegramMessagesMixin):
         self.telegram_user_id = None
         self.marked_read = []
         self.enqueued = []
+        self.source_message_ids = []
         self.files = []
         self.sent = []
         self._pending_telegram_media_context = None
@@ -486,6 +535,9 @@ class DummyTelegramMessages(TelegramMessagesMixin):
         self.sent.append(text)
         return True
 
+    def _stop_typing_loop(self):
+        pass
+
     def _update_stored_connection_data(self, **kwargs):
         pass
 
@@ -495,15 +547,22 @@ class DummyTelegramMessages(TelegramMessagesMixin):
     def _mark_message_as_read(self, message_id, *, chat_id=None):
         self.marked_read.append(message_id)
 
-    def _enqueue_telegram_batch(self, text, image_path=None, input_type="text"):
-        self._telegram_batch_buffer.append((text, bool(image_path), image_path, input_type))
+    def _enqueue_telegram_batch(
+        self, text, image_path=None, input_type="text", source_message_id=None
+    ):
+        self._telegram_batch_buffer.append(
+            (text, bool(image_path), image_path, input_type, source_message_id)
+        )
         self.enqueued.append((text, image_path, input_type))
+        self.source_message_ids.append(source_message_id)
 
     def _handle_voice_message(self, url, media_type, message_id=None):
         self.enqueued.append((url, None, media_type))
+        self.source_message_ids.append(message_id)
 
-    def _handle_file_message(self, media, caption=None):
+    def _handle_file_message(self, media, caption=None, message_id=None):
         self.files.append((media, caption))
+        self.source_message_ids.append(message_id)
 
 
 def test_private_text_is_marked_read_on_receipt():
@@ -518,6 +577,7 @@ def test_private_text_is_marked_read_on_receipt():
 
     assert manager.marked_read == [101]
     assert manager.enqueued == [("hello", None, "text")]
+    assert manager.source_message_ids == [101]
 
 
 def test_remote_command_uses_telegram_user_id_when_chat_id_not_ready():
@@ -550,6 +610,7 @@ def test_remote_word_inside_normal_sentence_is_not_hijacked():
 
     assert manager.sent == []
     assert manager.enqueued == [("can we talk about remote work tomorrow", None, "text")]
+    assert manager.source_message_ids == [106]
 
 
 def test_private_voice_is_marked_read_on_receipt_once():
@@ -564,6 +625,7 @@ def test_private_voice_is_marked_read_on_receipt_once():
 
     assert manager.marked_read == [102]
     assert manager.enqueued == [("https://example.test/voice.ogg", None, "voice")]
+    assert manager.source_message_ids == [102]
 
 
 def test_private_document_is_marked_read_even_when_media_path_returns_early():
@@ -583,6 +645,7 @@ def test_private_document_is_marked_read_even_when_media_path_returns_early():
 
     assert manager.marked_read == [103]
     assert manager.files == [(media, None)]
+    assert manager.source_message_ids == [103]
 
 
 def test_private_text_attaches_recent_silent_media_context():
@@ -613,3 +676,42 @@ def test_private_text_attaches_recent_silent_media_context():
         "text",
     )]
     assert manager._pending_telegram_media_context is None
+    assert manager.source_message_ids == [
+        _canonical_batch_source_message_id([None, 104])
+    ]
+
+
+def test_batch_source_message_id_is_stable_for_single_and_multi_message_bursts():
+    assert _canonical_batch_source_message_id([101]) == "101"
+    first = _canonical_batch_source_message_id([101, 102, 101])
+    second = _canonical_batch_source_message_id([101, 102])
+    assert first == second
+    assert first.startswith("batch:")
+
+
+def test_flushed_ticket_request_preserves_durable_telegram_source_identity(monkeypatch):
+    manager = DummyTelegramMessages()
+    manager.telegram_user_id = 12345
+    manager._telegram_batch_thread_id = 12345
+    manager._telegram_batch_buffer = [
+        ("Create a ticket: fix checkout", False, None, "text", 201),
+        ("It fails on mobile", False, None, "text", 202),
+    ]
+    captured = {}
+
+    class _Service:
+        def ingest(self, intake):
+            captured["intake"] = intake
+            return SimpleNamespace(handled=True, response_text="Ticket created")
+
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service", lambda: _Service()
+    )
+
+    manager._flush_telegram_batch()
+
+    intake = captured["intake"]
+    assert intake.source_message_id == _canonical_batch_source_message_id([201, 202])
+    assert intake.metadata["source_message_ids"] == ["201", "202"]
+    assert intake.source_thread_id == "12345"
+    assert manager.sent == ["Ticket created"]

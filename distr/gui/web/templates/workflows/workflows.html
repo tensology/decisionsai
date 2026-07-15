@@ -501,6 +501,12 @@ body.wf-board-pointer-dragging * {
     align-items: center;
     gap: 6px;
 }
+/* Board rows include source + complexity + priority.  The old 108px prefix
+   let those badges overflow over the first characters of the ticket title. */
+.wf-ticket-list-surface .wf-board-ticket-row .kb-ticket-list-prefix {
+    flex-basis: 148px;
+    width: 148px;
+}
 .wf-ticket-list-surface .kb-ticket-list-drag-handle {
     flex: 0 0 14px;
     display: inline-flex;
@@ -1027,6 +1033,12 @@ body.wf-board-pointer-dragging * {
     padding: 0.12rem 0.35rem;
     border-radius: 0.25rem;
     background: rgba(255, 255, 255, 0.07);
+}
+.wf-loop-ticket-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.65rem;
 }
 .wf-loop-ticket-banner {
     display: flex;

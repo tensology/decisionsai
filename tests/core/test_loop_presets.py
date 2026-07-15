@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable
 from distr.core.workflow.loop_catalog import ELORM_LOOP_KICKOFFS
 from distr.core.workflow.loop_preset_loader import (
     load_bundle_by_name,
@@ -79,6 +79,56 @@ def db_factory(tmp_path, monkeypatch):
     monkeypatch.setattr("distr.core.workflow.loop_presets.get_session", _get_session)
     monkeypatch.setattr("distr.core.workflow.service.get_session", _get_session)
     return factory
+
+
+def test_duplicate_workflow_preserves_execution_contract_and_remaps_routes(db_factory):
+    from distr.core.workflow.service import duplicate_workflow
+
+    with db_factory() as db:
+        workflow = AutoWorkflow(
+            name="Configured development",
+            status="active",
+            run_settings=json.dumps({"execution_mode": "sequential", "chosen_models": [{"id": "model-a"}]}),
+            pre_chain=json.dumps(["scope-review"]),
+        )
+        db.add(workflow)
+        db.flush()
+        first = AutoWorkflowStep(
+            workflow_id=workflow.id,
+            position=0,
+            name="Implement",
+            action_type="send_to_project_cli",
+            step_type="send_to_project_cli",
+            instruction="Implement",
+            config=json.dumps({"backend_id": "codex", "model": "model-a", "skills": ["tdd-workflow"], "tools": ["cli"]}),
+        )
+        second = AutoWorkflowStep(
+            workflow_id=workflow.id,
+            position=1,
+            name="Validate",
+            action_type="send_to_project_cli",
+            step_type="send_to_project_cli",
+            instruction="Validate independently",
+            config=json.dumps({"backend_id": "claude_code", "model": "model-b", "skills": ["verification-loop"]}),
+        )
+        db.add_all([first, second])
+        db.flush()
+        first.on_pass_goto = second.id
+        db.add(AutoWorkflowVariable(workflow_id=workflow.id, name="Acceptance", default_value="All tests pass"))
+        db.commit()
+        original_id = workflow.id
+        original_second_id = second.id
+
+    copied_id = duplicate_workflow(original_id)
+    with db_factory() as db:
+        copied = db.query(AutoWorkflow).filter(AutoWorkflow.id == copied_id).one()
+        copied_steps = sorted(copied.steps, key=lambda step: step.position)
+        assert copied.status == "draft"
+        assert json.loads(copied.run_settings)["chosen_models"] == [{"id": "model-a"}]
+        assert json.loads(copied_steps[0].config)["skills"] == ["tdd-workflow"]
+        assert copied_steps[0].on_pass_goto == copied_steps[1].id
+        assert copied_steps[0].on_pass_goto != original_second_id
+        assert copied.variables[0].default_value == "All tests pass"
 
 
 def test_loop_preset_bundles_exist():

@@ -13,6 +13,7 @@ import os
 import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from distr.core.db import get_session
 from distr.core.db.time import utc_now_naive
@@ -23,11 +24,8 @@ from distr.core.db.workflow import (
 )
 from distr.core.workflow.context_limits import truncate_step_summary
 from distr.core.kanban.result_packet import (
-    build_result_packet,
-    format_result_packet_note,
     create_initial_result_packet_for_run,
 )
-from distr.core.kanban.evidence import format_evidence_block
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 from distr.core.workflow.risk_and_audit import (
     infer_risk_profile,
@@ -77,6 +75,76 @@ def _workflow_run_settings(wf: AutoWorkflow) -> Dict[str, Any]:
     return settings
 
 
+def _scope_developer_context_to_run(
+    context: Dict[str, Any],
+    run_metadata: Dict[str, Any],
+    *,
+    board_id: Optional[int],
+    ticket_id: Optional[int],
+) -> Dict[str, Any]:
+    """Remove ambient project state that can misroute a ticket-scoped worker."""
+    scoped = dict(context or {})
+    metadata = dict(run_metadata or {})
+    project_id = metadata.get("project_id")
+    project_name = str(metadata.get("project_name") or "").strip()
+    project_folder = str(metadata.get("project_folder") or "").strip()
+
+    runtime = dict(scoped.get("runtime") or {})
+    if project_folder:
+        runtime["cwd"] = project_folder
+    scoped["runtime"] = runtime
+    if project_id not in (None, "") or project_name or project_folder:
+        scoped["active_project"] = {
+            "id": int(project_id) if str(project_id or "").isdigit() else project_id,
+            "name": project_name,
+            "folder_location": project_folder,
+            "description": str(metadata.get("project_description") or ""),
+        }
+    if board_id is not None or metadata.get("board_name"):
+        scoped["active_board"] = {
+            "id": int(board_id) if board_id is not None else metadata.get("board_id"),
+            "name": str(metadata.get("board_name") or ""),
+            "source": str(metadata.get("board_source") or "database"),
+            "lanes": [],
+            "default_project_id": project_id,
+            "default_workflow_id": metadata.get("workflow_id"),
+            "send_to_cli": False,
+        }
+    if ticket_id is not None:
+        scoped["active_tickets"] = [{
+            "id": int(ticket_id),
+            "title": str(metadata.get("ticket_title") or ""),
+            "lane": str(metadata.get("lane_name") or ""),
+            "priority": str(metadata.get("priority") or ""),
+            "workflow_status": "running",
+            "linked_project_id": (
+                int(project_id) if str(project_id or "").isdigit() else project_id
+            ),
+            "linked_workflow_id": metadata.get("workflow_id"),
+            "send_to_cli": False,
+        }]
+
+    # Ambient runs and editor threads belong to whatever the desktop currently
+    # has selected. They are useful in chat, but unsafe in an explicitly scoped
+    # project worker packet.
+    scoped["active_workflows"] = []
+    scoped["active_executions"] = []
+    if not metadata.get("include_external_agent_context"):
+        scoped["external_agent_context"] = {}
+    if not metadata.get("include_ambient_memory_context"):
+        # These values are assembled from whichever project/board the desktop
+        # currently has selected.  A ticket run already carries its explicit
+        # project, board and ticket; leaking an ambient workspace handoff or
+        # global board notes into it can send the worker toward another repo.
+        # Project-neutral memory remains available to chat, while workflow
+        # workers receive durable facts through their ticket/run contract.
+        scoped["user_memory_context"] = ""
+        scoped["workspace"] = {}
+        scoped["board_notes"] = []
+        scoped["ecosystem"] = {}
+    return scoped
+
+
 def _run_project_id(run: AutoWorkflowRun) -> Optional[str]:
     try:
         data = json.loads(run.run_data or "{}")
@@ -111,6 +179,7 @@ class _RunContext:
 
 
 _active_runs: Dict[int, _RunContext] = {}
+_initializing_runs: set[int] = set()
 _runs_lock = threading.Lock()
 
 
@@ -161,82 +230,6 @@ def build_workflow_run_receipt(
         "validation_records": list(validation_records or []),
         "result_packet": dict(result_packet or {}),
     }
-
-
-def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_summary: List[dict]) -> None:
-    """Append a bounded workflow completion note to a ticket description.
-
-    Keeps user-visible ticket history without storing unbounded step output.
-    """
-    try:
-        status_label = (status or "unknown").strip().lower()
-        step_lines: List[str] = []
-        for s in steps_summary[-5:]:
-            title = (s.get("title") or "Step").strip()
-            st = (s.get("status") or "").strip()
-            result = (s.get("result") or "").strip()
-            snippet = result[:180]
-            if len(result) > 180:
-                snippet += "..."
-            line = f"{title}: {st}"
-            if snippet:
-                line += f" ({snippet})"
-            step_lines.append(line)
-
-        run_text = " ".join(
-            [str(getattr(ticket, "title", "") or ""), str(getattr(ticket, "description", "") or "")]
-            + [str((s.get("result") or "")) for s in steps_summary[-5:]]
-        )
-        risk = infer_risk_profile(run_text)
-        audits_run = build_audit_gates(
-            status=status_label,
-            risk_level=risk.get("level", "low"),
-            tests_passed=(status_label == "completed"),
-        )
-        validation_rules = validation_rules_for_risk(
-            risk.get("level", "low"),
-            risk.get("signals", []),
-        )
-        packet = build_result_packet(
-            ticket_id=str(getattr(ticket, "id", "") or ""),
-            board_id=str(getattr(ticket, "board_id", "") or "") if getattr(ticket, "board_id", None) is not None else None,
-            project_id=str(getattr(ticket, "linked_project_id", "") or "")
-            if getattr(ticket, "linked_project_id", None) is not None
-            else None,
-            execution_lane="workflow",
-            status=status_label,
-            summary=f"Workflow run {run_id} finished with {len(steps_summary)} recorded step result(s).",
-            files_changed=[],
-            change_summary=step_lines,
-            commands_suggested=["Run deterministic validation checks in CLI for high-risk changes."],
-            tests_run=[],
-            test_results=[],
-            limitations=["Workflow note contains compact per-step summary only."],
-            next_recommended=(
-                ["Inspect step outputs and move ticket based on risk policy."]
-                + validation_rules[:4]
-            ),
-            logs=[f"workflow_run:{run_id}"],
-            assumptions=[
-                f"risk_level={risk.get('level', 'low')}",
-                f"risk_type={risk.get('risk_type', 'standard')}",
-            ],
-            audits_run=audits_run,
-            final_verdict="pass" if status_label == "completed" else "needs_changes",
-            audit_rationale="Workflow terminal status mapped to canonical verdict.",
-        )
-        note = format_result_packet_note(packet, title=f"Workflow Run #{run_id}")
-        note = f"{note}\n\n{format_evidence_block()}"
-        existing = (getattr(ticket, "description", "") or "").strip()
-        if existing:
-            ticket.description = f"{existing}\n\n{note}"
-        else:
-            ticket.description = note
-        # Cap growth to keep ticket text responsive in UI.
-        if len(ticket.description) > 12000:
-            ticket.description = ticket.description[-12000:]
-    except Exception:
-        logger.debug("Could not append workflow summary note to ticket", exc_info=True)
 
 
 _E2E_SMOKE_SLUGS = frozenset({
@@ -486,6 +479,7 @@ def get_current_workflow_env() -> Dict[str, Optional[str]]:
 def _cleanup_run(run_id: int) -> None:
     """Clean up a workflow run's WorkflowAgent and event loop."""
     with _runs_lock:
+        _initializing_runs.discard(run_id)
         ctx = _active_runs.pop(run_id, None)
     if ctx is None:
         return
@@ -497,6 +491,52 @@ def _cleanup_run(run_id: int) -> None:
         ctx.event_loop.call_soon_threadsafe(ctx.event_loop.stop)
     except Exception:
         pass
+
+
+def _cancel_linked_execution_sessions(
+    db: Any,
+    run_ids: List[int],
+    *,
+    reason: str,
+    event_type: str,
+) -> List[int]:
+    """Terminalize every queued/running project execution linked to workflow runs.
+
+    This deliberately shares the caller's transaction.  A workflow run must never
+    become terminal while its provider session remains visible as active.
+    """
+    if not run_ids:
+        return []
+
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+    completed_at = utc_now_naive()
+    sessions = (
+        db.query(ProjectExecutionSession)
+        .filter(ProjectExecutionSession.run_id.in_(run_ids))
+        .filter(ProjectExecutionSession.status.in_(["queued", "running"]))
+        .all()
+    )
+    for execution in sessions:
+        execution.status = "cancelled"
+        execution.error = reason
+        execution.updated_at = completed_at
+        execution.completed_at = completed_at
+        db.add(
+            ProjectExecutionEvent(
+                session_id=execution.id,
+                event_type=event_type,
+                status="cancelled",
+                message=reason,
+                payload=json.dumps(
+                    {
+                        "run_id": execution.run_id,
+                        "recovered": event_type == "recovered_after_restart",
+                    }
+                ),
+            )
+        )
+    return [int(execution.id) for execution in sessions]
 
 
 def _cleanup_orphaned_runs_on_startup() -> None:
@@ -514,14 +554,25 @@ def _cleanup_orphaned_runs_on_startup() -> None:
         )
         if not orphans:
             return
+        orphan_ids = [int(run.id) for run in orphans]
+        completed_at = utc_now_naive()
         for run in orphans:
             run.status = "cancelled"
-            run.completed_at = utc_now_naive()
+            run.completed_at = completed_at
+        execution_ids = _cancel_linked_execution_sessions(
+            db,
+            orphan_ids,
+            reason="App restarted before provider completion.",
+            event_type="recovered_after_restart",
+        )
         db.commit()
         logger.info(
-            "Cancelled %d orphaned workflow run(s) from previous session: %s",
+            "Cancelled %d orphaned workflow run(s) and %d linked execution "
+            "session(s) from previous session: runs=%s sessions=%s",
             len(orphans),
-            [r.id for r in orphans],
+            len(execution_ids),
+            orphan_ids,
+            execution_ids,
         )
 
 
@@ -610,6 +661,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                     KanbanTicket.id == run_rec.ticket_id
                 ).first()
                 if ticket:
+                    terminal_status = (status or "completed").strip().lower()
                     append_ticket_audit_entry(
                         db,
                         ticket_id=int(run_rec.ticket_id),
@@ -617,13 +669,12 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                         step_id=run_rec.current_step_id,
                         step_result_id=None,
                         execution_lane="workflow",
-                        status=(status or "completed").strip().lower(),
-                        final_verdict="pass" if (status or "").strip().lower() == "completed" else "needs_changes",
-                        summary=f"Run finished: {(status or 'completed').strip().lower()}",
-                        details=f"Workflow run {run_id} finished with status {(status or 'completed').strip().lower()}.",
+                        status=terminal_status,
+                        final_verdict="pass" if terminal_status == "completed" else "needs_changes",
+                        summary=f"Run finished: {terminal_status}",
+                        details=f"Workflow run {run_id} finished with status {terminal_status}.",
                     )
                     ticket.workflow_status = status
-                    _append_workflow_summary_to_ticket(ticket, run_id, status, steps_summary)
                     try:
                         from distr.core.kanban.ticket_workflow_engagement import (
                             record_ticket_workflow_elapsed,
@@ -675,38 +726,80 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             ).first()
             if not current_ticket:
                 return
-            current_pos = int(current_ticket.workflow_queue_position or 0)
-            next_ticket = (
-                db.query(KanbanTicket)
-                .filter(
-                    KanbanTicket.linked_workflow_id == workflow_id,
-                    KanbanTicket.workflow_queue_position > current_pos,
-                )
-                .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.id.asc())
-                .first()
-            )
-            if not next_ticket:
-                return
-            next_ticket_id = int(next_ticket.id)
-            board_id = run_rec.board_id
             try:
                 run_data = json.loads(run_rec.run_data or "{}")
             except Exception:
                 run_data = {}
-            run_metadata = {
-                "project_id": run_data.get("project_id"),
-                "project_name": run_data.get("project_name"),
-                "project_folder": run_data.get("project_folder"),
-                "ticket_title": next_ticket.title,
-                "auto_queued_from_run_id": run_id,
-            }
-            run_metadata = {k: v for k, v in run_metadata.items() if v not in (None, "")}
+            group_items = (
+                run_data.get("ticket_group_items")
+                if isinstance(run_data.get("ticket_group_items"), list)
+                else []
+            )
+            group_index = int(run_data.get("ticket_group_index") or 0)
+            if group_items and group_index + 1 >= len(group_items):
+                return
+            if group_items and group_index + 1 < len(group_items):
+                next_item = group_items[group_index + 1]
+                if not isinstance(next_item, dict) or next_item.get("ticket_id") is None:
+                    return
+                next_ticket_id = int(next_item["ticket_id"])
+                board_id = next_item.get("board_id")
+                run_metadata = dict(next_item.get("run_metadata") or {})
+                run_metadata.update({
+                    "ticket_group_id": run_data.get("ticket_group_id"),
+                    "ticket_group_index": group_index + 1,
+                    "ticket_group_size": len(group_items),
+                    "ticket_group_items": group_items,
+                    "auto_queued_from_run_id": run_id,
+                })
+                group_context = str(next_item.get("context") or "").strip() or None
+                next_group_item = {
+                    "ticket_id": next_ticket_id,
+                    "board_id": int(board_id) if board_id is not None else None,
+                    "context": group_context,
+                    "run_metadata": run_metadata,
+                }
+            else:
+                next_group_item = None
+            current_pos = int(current_ticket.workflow_queue_position or 0)
+            next_ticket = None
+            if next_group_item is None:
+                next_ticket = (
+                    db.query(KanbanTicket)
+                    .filter(
+                        KanbanTicket.linked_workflow_id == workflow_id,
+                        KanbanTicket.workflow_queue_position > current_pos,
+                    )
+                    .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.id.asc())
+                    .first()
+                )
+            if next_group_item is None and not next_ticket:
+                return
+            if next_group_item is not None:
+                next_ticket_id = next_group_item["ticket_id"]
+                board_id = next_group_item["board_id"]
+                group_context = next_group_item["context"]
+                run_metadata = next_group_item["run_metadata"]
+            else:
+                next_ticket_id = int(next_ticket.id)
+                board_id = run_rec.board_id
+                group_context = None
+                run_metadata = {
+                    "project_id": run_data.get("project_id"),
+                    "project_name": run_data.get("project_name"),
+                    "project_folder": run_data.get("project_folder"),
+                    "ticket_title": next_ticket.title,
+                    "auto_queued_from_run_id": run_id,
+                }
+                run_metadata = {k: v for k, v in run_metadata.items() if v not in (None, "")}
 
         result = start_workflow_run(
             workflow_id,
+            context=group_context,
             board_id=board_id,
             ticket_id=next_ticket_id,
             run_metadata=run_metadata or None,
+            dispatch_async=True,
         )
         if result.get("error"):
             logger.info(
@@ -733,6 +826,74 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             logger.debug("Could not emit queue_auto_advance kanban event", exc_info=True)
     except Exception:
         logger.debug("Queue auto-advance failed for run %s", run_id, exc_info=True)
+
+
+def start_workflow_ticket_group(
+    workflow_id: int,
+    ticket_items: List[Dict[str, Any]],
+    *,
+    dispatch_async: bool = True,
+) -> Dict[str, Any]:
+    """Start an explicit group of ticket runs using the workflow queue policy."""
+    normalized: List[Dict[str, Any]] = []
+    seen: set[int] = set()
+    for raw in ticket_items or []:
+        if not isinstance(raw, dict) or raw.get("ticket_id") is None:
+            continue
+        ticket_id = int(raw["ticket_id"])
+        if ticket_id in seen:
+            continue
+        seen.add(ticket_id)
+        normalized.append({
+            "ticket_id": ticket_id,
+            "board_id": int(raw["board_id"]) if raw.get("board_id") is not None else None,
+            "context": str(raw.get("context") or ""),
+            "run_metadata": dict(raw.get("run_metadata") or {}),
+        })
+    if not normalized:
+        return {"error": "No valid tickets were supplied"}
+
+    with get_session() as db:
+        workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+        if not workflow:
+            return {"error": "Workflow not found"}
+        run_settings = _workflow_run_settings(workflow)
+
+    group_id = uuid4().hex
+    mode = run_settings["execution_mode"]
+    to_start = normalized if mode == "parallel" else normalized[:1]
+    started: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+    for index, item in enumerate(to_start):
+        metadata = dict(item["run_metadata"])
+        metadata.update({
+            "ticket_group_id": group_id,
+            "ticket_group_index": index,
+            "ticket_group_size": len(normalized),
+            "ticket_group_items": normalized if mode == "sequential" else [],
+        })
+        result = start_workflow_run(
+            int(workflow_id),
+            context=item["context"] or None,
+            board_id=item["board_id"],
+            ticket_id=item["ticket_id"],
+            run_metadata=metadata,
+            dispatch_async=dispatch_async,
+        )
+        if result.get("error"):
+            errors.append({"ticket_id": item["ticket_id"], "error": str(result["error"])})
+        else:
+            started.append({"ticket_id": item["ticket_id"], "run_id": result.get("run_id")})
+
+    return {
+        "success": bool(started),
+        "group_id": group_id,
+        "mode": mode,
+        "ticket_count": len(normalized),
+        "started": started,
+        "errors": errors,
+        "queued_count": (len(normalized) - len(started)) if mode == "sequential" and started else 0,
+    }
 
 
 def _clear_workflow_env() -> None:
@@ -819,7 +980,10 @@ def start_workflow_run(
             # previous server session that crashed). Auto-cancel it so the ticket can
             # be pushed again — otherwise it would be blocked forever.
             with _runs_lock:
-                is_truly_active = active_run.id in _active_runs
+                is_truly_active = (
+                    active_run.id in _active_runs
+                    or active_run.id in _initializing_runs
+                )
             if is_truly_active:
                 return {"error": "A run is already in progress for this board/ticket"}
             logger.info(
@@ -861,13 +1025,20 @@ def start_workflow_run(
                 step.result = None
 
         normalized_metadata.setdefault("run_settings", run_settings)
+        normalized_metadata.setdefault("workflow_id", workflow_id)
         if ticket_id is not None:
             normalized_metadata.setdefault("ticket_id", ticket_id)
         if (board_id is not None or ticket_id is not None) and not normalized_metadata.get("developer_context"):
             try:
                 from distr.core.developer_context import build_developer_context
 
-                normalized_metadata["developer_context"] = build_developer_context().to_dict()
+                developer_context = build_developer_context().to_dict()
+                normalized_metadata["developer_context"] = _scope_developer_context_to_run(
+                    developer_context,
+                    normalized_metadata,
+                    board_id=board_id,
+                    ticket_id=ticket_id,
+                )
             except Exception:
                 logger.debug("start_workflow_run: developer context assembly failed", exc_info=True)
         risk_profile = infer_risk_profile((context or ""))
@@ -910,6 +1081,10 @@ def start_workflow_run(
         )
         packet["audit"] = packet_audit
         normalized_metadata["result_packet"] = packet
+        # A run is visible before its worker/model/tool stack is ready.  Keep
+        # that cold-start state explicit so Mission Control and chat never show
+        # an unexplained generic "working" spinner.
+        normalized_metadata["phase"] = "initializing"
 
         run = AutoWorkflowRun(
             workflow_id=workflow_id,
@@ -939,29 +1114,8 @@ def start_workflow_run(
             )
         except Exception:
             logger.debug("start_workflow_run: workspace bootstrap failed", exc_info=True)
-        if normalized_metadata.get("loop_contract"):
-            try:
-                from distr.core.orchestrator import emit_event
-
-                lc = normalized_metadata["loop_contract"]
-                emit_event(
-                    source="workflow",
-                    event_type="loop_started",
-                    status="running",
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                    ticket_id=ticket_id,
-                    board_id=board_id,
-                    summary=f'Loop started: {lc.get("goal") or wf.name}',
-                    payload={
-                        "goal": lc.get("goal"),
-                        "max_iterations": lc.get("max_iterations"),
-                        "check_command": lc.get("check_command"),
-                        "exit_when": lc.get("exit_when"),
-                    },
-                )
-            except Exception:
-                logger.debug("start_workflow_run: loop_started event failed", exc_info=True)
+        loop_contract = dict(normalized_metadata.get("loop_contract") or {})
+        workflow_name = str(wf.name or f"Workflow {workflow_id}")
         if ticket_id:
             append_ticket_audit_entry(
                 db,
@@ -974,26 +1128,6 @@ def start_workflow_run(
                 final_verdict="cannot_determine",
                 summary=f"Run started (workflow {workflow_id})",
                 details=f"Workflow run {run_id} started.",
-            )
-
-        workflow_agent = WorkflowAgent(event_queue=event_queue)
-        agent_loop = asyncio.new_event_loop()
-
-        def _run_loop():
-            asyncio.set_event_loop(agent_loop)
-            agent_loop.run_forever()
-
-        agent_thread = threading.Thread(target=_run_loop, daemon=True)
-        agent_thread.start()
-
-        with _runs_lock:
-            _active_runs[run_id] = _RunContext(
-                run_id=run_id,
-                workflow_agent=workflow_agent,
-                event_loop=agent_loop,
-                thread=agent_thread,
-                context_prefix=context or "",
-                run_ctx=run_ctx,
             )
 
         run.current_step_id = first_step.id
@@ -1010,14 +1144,40 @@ def start_workflow_run(
                 _ticket.workflow_status = "running"
         db.commit()
 
+    # emit_event uses its own database session. Emit only after the run creation
+    # transaction commits; otherwise file-backed SQLite can reject this second
+    # writer and silently lose the Mission Control/chat trace event.
+    if loop_contract:
+        try:
+            from distr.core.orchestrator import emit_event
+
+            emit_event(
+                source="workflow",
+                event_type="loop_started",
+                status="running",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                ticket_id=ticket_id,
+                board_id=board_id,
+                summary=f'Loop started: {loop_contract.get("goal") or workflow_name}',
+                payload={
+                    "goal": loop_contract.get("goal"),
+                    "max_iterations": loop_contract.get("max_iterations"),
+                    "check_command": loop_contract.get("check_command"),
+                    "exit_when": loop_contract.get("exit_when"),
+                },
+            )
+        except Exception:
+            logger.debug("start_workflow_run: loop_started event failed", exc_info=True)
+
     record_workflow_chat_event(
         run_id,
         "started",
         status="running",
         step_id=first_step_id,
         step_name=first_step_name,
-        summary=f"Started workflow {workflow_id}.",
-        phase="planning",
+        summary=f"Initializing workflow {workflow_id} worker and tools.",
+        phase="initializing",
     )
     try:
         from distr.core.orchestration_events import emit_orchestration_event
@@ -1043,6 +1203,63 @@ def start_workflow_run(
         )
     except Exception:
         logger.debug("Could not emit orchestrator workflow_run_started event", exc_info=True)
+
+    def _initialize_run_context() -> Optional[Dict[str, Any]]:
+        """Create heavyweight worker resources outside the caller/UI thread."""
+        agent_loop = None
+        workflow_agent = None
+        try:
+            workflow_agent = WorkflowAgent(event_queue=event_queue)
+            agent_loop = asyncio.new_event_loop()
+
+            def _run_loop():
+                asyncio.set_event_loop(agent_loop)
+                agent_loop.run_forever()
+
+            agent_thread = threading.Thread(
+                target=_run_loop,
+                name=f"workflow-agent-loop-{run_id}",
+                daemon=True,
+            )
+            agent_thread.start()
+            with _runs_lock:
+                # cancel_run() removes this marker.  Do not resurrect a run that
+                # the user cancelled while the model/tool stack was warming up.
+                if run_id not in _initializing_runs:
+                    cancelled = True
+                else:
+                    cancelled = False
+                    _active_runs[run_id] = _RunContext(
+                        run_id=run_id,
+                        workflow_agent=workflow_agent,
+                        event_loop=agent_loop,
+                        thread=agent_thread,
+                        context_prefix=context or "",
+                        run_ctx=run_ctx,
+                    )
+                    _initializing_runs.discard(run_id)
+            if cancelled:
+                workflow_agent.shutdown()
+                agent_loop.call_soon_threadsafe(agent_loop.stop)
+                return {"error": "Workflow run was cancelled during initialization"}
+            return None
+        except Exception as exc:
+            with _runs_lock:
+                _initializing_runs.discard(run_id)
+            if workflow_agent is not None:
+                try:
+                    workflow_agent.shutdown()
+                except Exception:
+                    pass
+            if agent_loop is not None:
+                try:
+                    agent_loop.call_soon_threadsafe(agent_loop.stop)
+                except Exception:
+                    pass
+            logger.exception("Workflow run %d failed during worker initialization", run_id)
+            complete_run(run_id, "failed")
+            return {"error": f"Workflow worker initialization failed: {exc}"}
+
     def _dispatch_first_step() -> Dict[str, Any]:
         _tid = threading.get_ident()
         _set_workflow_thread_env(_tid, run_id, first_step_id, workflow_id)
@@ -1074,35 +1291,54 @@ def start_workflow_run(
         result["run_id"] = run_id
         return result
 
-    briefing_data = dict(normalized_metadata)
-    if ticket_id is not None:
-        briefing_data["ticket_id"] = ticket_id
-    if ticket_id and not normalized_metadata.get("skip_run_briefing"):
-        try:
-            from distr.core.workflow.run_briefing import enter_run_briefing_wait, human_checkpoint_enabled
+    def _enter_briefing_wait() -> Optional[Dict[str, Any]]:
+        briefing_data = dict(normalized_metadata)
+        if ticket_id is not None:
+            briefing_data["ticket_id"] = ticket_id
+        if ticket_id and not normalized_metadata.get("skip_run_briefing"):
+            try:
+                from distr.core.workflow.run_briefing import enter_run_briefing_wait, human_checkpoint_enabled
 
-            if human_checkpoint_enabled(briefing_data):
-                briefing_message = enter_run_briefing_wait(run_id, first_step_id)
-                if briefing_message:
-                    return {
-                        "run_id": run_id,
-                        "status": "waiting",
-                        "waiting_kind": "run_briefing",
-                        "async": bool(dispatch_async),
-                    }
-        except Exception:
-            logger.debug("start_workflow_run: run briefing gate failed", exc_info=True)
+                if human_checkpoint_enabled(briefing_data):
+                    briefing_message = enter_run_briefing_wait(run_id, first_step_id)
+                    if briefing_message:
+                        return {
+                            "run_id": run_id,
+                            "status": "waiting",
+                            "waiting_kind": "run_briefing",
+                            "async": bool(dispatch_async),
+                        }
+            except Exception:
+                logger.debug("start_workflow_run: run briefing gate failed", exc_info=True)
+        return None
+
+    def _initialize_then_continue() -> Dict[str, Any]:
+        init_error = _initialize_run_context()
+        if init_error:
+            return init_error
+        waiting = _enter_briefing_wait()
+        if waiting:
+            return waiting
+        return _dispatch_first_step()
+
+    with _runs_lock:
+        _initializing_runs.add(run_id)
 
     if dispatch_async:
         dispatch_thread = threading.Thread(
-            target=_dispatch_first_step,
-            name=f"workflow-dispatch-{run_id}",
+            target=_initialize_then_continue,
+            name=f"workflow-initialize-{run_id}",
             daemon=True,
         )
         dispatch_thread.start()
-        return {"run_id": run_id, "status": "started", "async": True}
+        return {
+            "run_id": run_id,
+            "status": "started",
+            "phase": "initializing",
+            "async": True,
+        }
 
-    return _dispatch_first_step()
+    return _initialize_then_continue()
 
 
 def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
@@ -1113,6 +1349,7 @@ def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
 
 def cancel_run(run_id: int) -> bool:
     """Cancel an active workflow run."""
+    active_execution_info = None
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         if not run:
@@ -1127,7 +1364,42 @@ def cancel_run(run_id: int) -> bool:
                 step.status = "cancelled"
                 step.result = "Cancelled by user."
         _run_id, _wf_id = run.id, run.workflow_id
+        try:
+            from distr.core.db.kanban import ProjectExecutionSession
+
+            active_execution = (
+                db.query(ProjectExecutionSession)
+                .filter(ProjectExecutionSession.run_id == run_id)
+                .filter(ProjectExecutionSession.status.in_(["queued", "running"]))
+                .order_by(ProjectExecutionSession.id.desc())
+                .first()
+            )
+            if active_execution:
+                active_execution_info = {
+                    "project_id": int(active_execution.project_id),
+                    "backend_id": str(active_execution.route_backend or ""),
+                    "board_id": int(run.board_id) if run.board_id is not None else None,
+                }
+            _cancel_linked_execution_sessions(
+                db,
+                [int(run_id)],
+                reason="Cancelled by user.",
+                event_type="session_cancelled",
+            )
+        except Exception:
+            logger.debug("Could not locate active provider process for run cancellation", exc_info=True)
         db.commit()
+    if active_execution_info:
+        try:
+            from distr.core.project_cli_backends.registry import terminate_backend_process
+
+            terminate_backend_process(
+                active_execution_info["project_id"],
+                active_execution_info["backend_id"],
+                board_id=active_execution_info["board_id"],
+            )
+        except Exception:
+            logger.debug("Could not terminate provider process for cancelled run", exc_info=True)
     increment_workflow_updated()
     record_workflow_chat_event(
         _run_id,
@@ -1822,6 +2094,19 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
             with get_session() as db:
                 step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if not run or run.status not in ("running", "waiting"):
+                    logger.info(
+                        "run_in_workflow blocked terminal run dispatch: run_id=%s step_id=%s status=%s",
+                        run_id,
+                        step_id,
+                        getattr(run, "status", "missing"),
+                    )
+                    return {
+                        "success": False,
+                        "status": getattr(run, "status", "missing"),
+                        "cancelled": getattr(run, "status", "") == "cancelled",
+                        "message": "Run is terminal; step dispatch was suppressed.",
+                    }
                 if step and run and run.current_step_id == step_id and step.status == "running":
                     logger.warning(
                         "run_in_workflow deduped: run_id=%s step_id=%s already running",
@@ -1931,7 +2216,38 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
             notify_ticket_workflow_step_started(run_id, step_id)
         except Exception:
             logger.debug("Could not send ticket workflow step-start engagement", exc_info=True)
-        result = self._execute(step_data, run_id=run_id)
+        try:
+            result = self._execute(step_data, run_id=run_id)
+        except Exception as exc:
+            # A backend adapter bug must become a terminal step result. Letting it
+            # escape leaves the run and ticket marked "running" until restart,
+            # which presents as a forever spinner in mission control.
+            error_text = f"Step execution failed unexpectedly: {exc}"
+            logger.exception("Workflow step crashed run_id=%s step_id=%s", run_id, step_id)
+            record_workflow_chat_event(
+                run_id,
+                "step_failed",
+                status="failed",
+                step_id=step_id,
+                step_name=step_data.get("name"),
+                summary=error_text,
+            )
+            emit_step_activity(
+                run_id=run_id,
+                step_id=step_id,
+                event_type="workflow_step_crashed",
+                status="failed",
+                summary=error_text,
+                payload={"error": str(exc), "phase": "execution"},
+            )
+            self._record_result_and_route(
+                step_id,
+                run_id=run_id,
+                result_text=error_text,
+                passed=False,
+                skip_wait=True,
+            )
+            return {"error": error_text, "status": "failed", "passed": False}
         if result.get("async"):
             return {"success": True, "message": result.get("message", "Step dispatched.")}
         record_workflow_chat_event(

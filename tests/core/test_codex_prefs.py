@@ -91,8 +91,9 @@ def test_codex_build_command_embeds_decisions_callback(monkeypatch):
     instruction = cmd[-1]
 
     assert "[DECISIONS CODEX CALLBACK]" in instruction
-    assert "/api/workflows/2/runs/9/codex-events" in instruction
-    assert "internal_token=test-internal-token" in instruction
+    assert '"callback_url_env":"DECISIONS_CALLBACK_URL"' in instruction
+    assert "/api/workflows/2/runs/9/codex-events" not in instruction
+    assert "test-internal-token" not in instruction
     assert '"execution_session_id":31' in instruction
     assert "report_decisions_event.py" in instruction
     assert "codex_prompt_submitted" in instruction
@@ -120,8 +121,9 @@ def test_cursor_build_command_embeds_decisions_callback(monkeypatch):
 
     assert cmd[:3] == ["cursor-agent", "--trust", "-p"]
     assert "[DECISIONS CURSOR CALLBACK]" in instruction
-    assert "/api/workflows/2/runs/9/codex-events" in instruction
-    assert "internal_token=test-internal-token" in instruction
+    assert '"callback_url_env":"DECISIONS_CALLBACK_URL"' in instruction
+    assert "/api/workflows/2/runs/9/codex-events" not in instruction
+    assert "test-internal-token" not in instruction
     assert '"execution_session_id":31' in instruction
     assert "report_decisions_event.py" in instruction
     assert "cursor_progress" in instruction

@@ -287,6 +287,28 @@ def notify_ticket_workflow_progress(
     spoken = (voice_body or text).strip()
 
     ctx = _run_context(run_id)
+    interaction = None
+    reply_markup = None
+    if requires_response and ctx.get("workflow_id"):
+        try:
+            from distr.core.workflow.interactions import (
+                create_workflow_interaction,
+                telegram_reply_markup,
+            )
+
+            waiting_kind = str((ctx.get("run_data") or {}).get("waiting_kind") or "feedback")
+            manager = _telegram_manager_from_app()
+            telegram_chat_id = getattr(manager, "telegram_user_id", None) if manager else None
+            interaction = create_workflow_interaction(
+                workflow_id=int(ctx["workflow_id"]),
+                run_id=run_id,
+                step_id=step_id,
+                kind=waiting_kind,
+                telegram_chat_id=telegram_chat_id,
+            )
+            reply_markup = telegram_reply_markup(interaction)
+        except Exception:
+            logger.warning("Could not create durable workflow interaction for run %s", run_id, exc_info=True)
     service = HumanEngagementService(
         allow_telegram=True,
         telegram_manager=_telegram_manager_from_app(),
@@ -342,6 +364,8 @@ def notify_ticket_workflow_progress(
                     "board_id": ctx.get("board_id"),
                     "ticket_title": ctx.get("ticket_title"),
                     "explicit_notification_intent": True,
+                    "requires_response": requires_response,
+                    "interaction_token": interaction.get("token") if interaction else None,
                 },
             ):
                 from distr.core.signals import speak_text_directly_event_queue
@@ -369,6 +393,9 @@ def notify_ticket_workflow_progress(
                             "ticket_id": ctx.get("ticket_id"),
                             "board_id": ctx.get("board_id"),
                             "ticket_title": ctx.get("ticket_title"),
+                            "requires_response": requires_response,
+                            "interaction_token": interaction.get("token") if interaction else None,
+                            "reply_markup": reply_markup,
                             "allow_voice": decision.format in {"voice", "desktop_tts", "remote_audio"},
                         },
                     ),

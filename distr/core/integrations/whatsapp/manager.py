@@ -62,6 +62,27 @@ def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) ->
         return
     sender = data.get("sender") or {}
     sender_phone = sender.get("phone") or ""
+    try:
+        from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+        intake_text = str(data.get("text") or data.get("caption") or full_text)
+        decision = get_work_intake_service().ingest(WorkIntake(
+            source="whatsapp",
+            user_text=intake_text,
+            source_user_id=str(sender_phone or ""),
+            source_thread_id=tid,
+            source_message_id=str(data.get("message_id") or data.get("id") or ""),
+            metadata={"jid": jid, "raw_type": data.get("type")},
+        ))
+        if decision.handled:
+            logger.info(
+                "WhatsApp request routed action=%s ticket=%s run=%s",
+                decision.action.value, decision.ticket_id, decision.workflow_run_id,
+            )
+            return
+    except Exception:
+        logger.exception("WhatsApp request routing failed; falling back to MessageBus")
+
     msg = IncomingMessage(
         platform="whatsapp",
         thread_id=tid,

@@ -100,7 +100,7 @@ def valid_config_for(draw, step_type: str):
                 "code": draw(non_empty_text),
             }
 
-    if step_type == StepType.PLAYWRIGHT.value:
+    if step_type in (StepType.PLAYWRIGHT.value, StepType.BROWSER_USE.value):
         choice = draw(st.integers(min_value=0, max_value=2))
         if choice == 0:
             return {"instruction": draw(non_empty_text)}
@@ -151,7 +151,7 @@ def invalid_config_for(draw, step_type: str):
             "code": draw(empty_or_whitespace),
         }
 
-    if step_type == StepType.PLAYWRIGHT.value:
+    if step_type in (StepType.PLAYWRIGHT.value, StepType.BROWSER_USE.value):
         return {
             "instruction": draw(empty_or_whitespace),
             "code": draw(empty_or_whitespace),

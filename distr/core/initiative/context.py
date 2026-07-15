@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -29,6 +30,10 @@ class ContextBundle:
 
 
 class ContextAssembler:
+    def __init__(self) -> None:
+        self._available_tools_cache: list | None = None
+        self._available_tools_cached_at = 0.0
+
     def build(self, settings: dict) -> ContextBundle:
         now = datetime.utcnow()
 
@@ -390,6 +395,9 @@ class ContextAssembler:
 
     def _fetch_available_tools(self) -> list:
         """Fetch a summary of available agent tools."""
+        now = time.monotonic()
+        if self._available_tools_cache is not None and now - self._available_tools_cached_at < 600:
+            return list(self._available_tools_cache)
         try:
             from distr.core.agent.tools import load_tools
             tools = load_tools(
@@ -398,10 +406,13 @@ class ContextAssembler:
                 llm_model=None, event_queue=None,
                 command_queue=None, confirmation_results_dict=None,
             )
-            return [
+            result = [
                 {"name": t.name, "description": (t.description or "")[:100]}
                 for t in tools[:30]
             ]
+            self._available_tools_cache = result
+            self._available_tools_cached_at = now
+            return list(result)
         except Exception as e:
             logger.debug("_fetch_available_tools failed: %s", e)
             return []

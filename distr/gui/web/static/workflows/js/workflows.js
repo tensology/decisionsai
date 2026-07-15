@@ -95,6 +95,7 @@
         { id: "ytdlp", label: "yt-dlp", emoji: "↓" }
     ];
     var pendingWorkflowRunTicketId = null;
+    var pendingWorkflowRunTicketIds = [];
     var WHATSAPP_ICON_SVG = '<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.27-1.38a9.9 9.9 0 0 0 4.77 1.21h.01c5.46 0 9.91-4.45 9.91-9.91C21.96 6.45 17.51 2 12.04 2Zm0 18.16h-.01a8.2 8.2 0 0 1-4.18-1.14l-.3-.18-3.12.82.83-3.04-.2-.31a8.2 8.2 0 0 1-1.26-4.39c0-4.54 3.7-8.24 8.25-8.24 2.2 0 4.27.86 5.82 2.42a8.2 8.2 0 0 1 2.42 5.83c0 4.54-3.7 8.23-8.25 8.23Zm4.52-6.17c-.25-.12-1.47-.72-1.7-.81-.23-.08-.39-.12-.56.13-.16.24-.64.8-.78.96-.14.16-.29.18-.54.06-.25-.13-1.04-.38-1.99-1.22-.74-.66-1.23-1.47-1.38-1.72-.14-.25-.02-.38.11-.5.11-.11.25-.29.37-.43.12-.15.16-.25.25-.41.08-.17.04-.31-.02-.43-.06-.13-.56-1.35-.77-1.85-.2-.49-.41-.42-.56-.43h-.48c-.16 0-.43.06-.65.31-.23.25-.86.84-.86 2.04 0 1.2.88 2.37 1 2.53.12.17 1.73 2.64 4.18 3.7.58.25 1.04.4 1.39.51.58.18 1.11.16 1.53.1.47-.07 1.47-.6 1.68-1.18.21-.58.21-1.08.14-1.18-.06-.1-.22-.16-.47-.28Z"/></svg>';
     var DEFAULT_RUN_SETTINGS = {
         execution_mode: "sequential",
@@ -5029,7 +5030,11 @@
     }
 
     function api(method, path, body) {
-        var opts = { method: method, headers: { "Content-Type": "application/json" } };
+        var opts = {
+            method: method,
+            headers: { "Content-Type": "application/json" },
+            cache: method === "GET" ? "no-store" : "default"
+        };
         if (body !== undefined) opts.body = JSON.stringify(body);
         return fetch(API + path, opts).then(function (r) {
             return r.text().then(function (text) {
@@ -6230,8 +6235,6 @@
                 // Refresh history tab if it's currently visible
             });
             loadActiveRuns();
-            loadWorkflowExecutionSessions();
-            checkActiveRun();
             if (workflowRunsSubtab === "timeline") {
                 loadOrchestratorTimeline({ quiet: true });
             }
@@ -6548,7 +6551,7 @@
             return;
         }
         list.innerHTML = sessions.map(function (session) {
-            var packet = session && typeof session.input_packet === "object" ? session.input_packet : {};
+            var packet = session && session.input_packet && typeof session.input_packet === "object" ? session.input_packet : {};
             var started = session.started_at ? new Date(session.started_at).toLocaleString() : "";
             var backend = session.backend_id || session.route_backend || packet.backend_id || "backend";
             var model = session.model || session.selected_model || packet.model || "auto";
@@ -6707,19 +6710,74 @@
         return status === "running" || status === "waiting";
     }
 
+    function loopTicketMetricBit(ticket, key, label) {
+        var value = ticket && ticket[key];
+        return value ? (label + value) : "";
+    }
+
+    function loopRunBoardBit(run, mode) {
+        var meta = runMetaText(run, currentWorkflow && currentWorkflow.name);
+        if (mode === "feed") return "";
+        if (meta.boardText === "No board") return "";
+        return meta.boardText;
+    }
+
+    function loopRunIdBit(run) {
+        return run.id ? ("Run #" + run.id) : "";
+    }
+
+    function loopRunStepBit(run) {
+        if (run.current_step_name) return run.current_step_name;
+        return run.current_step_id ? ("Step #" + run.current_step_id) : "";
+    }
+
+    function loopRunTicketMetaBits(run, ticket, mode) {
+        return [
+            loopRunIdBit(run),
+            run.status || "",
+            loopTicketMetricBit(ticket, "priority", "Priority "),
+            loopTicketMetricBit(ticket, "complexity", "Complexity "),
+            loopRunStepBit(run),
+            loopRunBoardBit(run, mode)
+        ].filter(Boolean);
+    }
+
+    function loopQueuedActionHtml(run) {
+        if (!run.ticket_id) return "";
+        return '<button type="button" class="wf-loop-start-ticket px-3 py-1.5 rounded bg-[#f97316] text-white text-xs font-semibold hover:bg-[#ea580c]" data-ticket-id="' + esc(run.ticket_id) + '">Start workflow</button>';
+    }
+
+    function loopWaitingActionHtml(run) {
+        if (!run.id) return "";
+        return '<button type="button" class="wf-loop-continue-ticket px-3 py-1.5 rounded bg-amber-500 text-[#15182d] text-xs font-semibold hover:bg-amber-400" data-workflow-id="' + esc(run.workflow_id || currentWorkflowId) + '" data-run-id="' + esc(run.id) + '">Review &amp; continue</button>';
+    }
+
+    function loopFinishedActionHtml(run) {
+        if (!run.id) return "";
+        return '<button type="button" class="wf-loop-run-again px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs hover:bg-[#f97316]/10" data-ticket-id="' + esc(run.ticket_id || "") + '">Run again</button>';
+    }
+
+    function loopRunningActionHtml() {
+        return '<span class="wf-loop-running-label text-xs text-sky-300">Executing now</span>';
+    }
+
+    function loopRunTicketActionHtml(run, mode) {
+        if (mode !== "main") return "";
+        var status = String(run.status || "queued").toLowerCase();
+        var builders = {
+            queued: loopQueuedActionHtml,
+            waiting: loopWaitingActionHtml,
+            running: loopRunningActionHtml
+        };
+        return (builders[status] || loopFinishedActionHtml)(run);
+    }
+
     function loopRunTicketContextHtml(run, mode) {
         if (!run || !(run.ticket_id || run.ticket_title)) return "";
         var ticket = workflowQueueTicketById(run.ticket_id);
         var title = workflowTicketLabel(run.ticket_id, run.ticket_title);
-        var meta = runMetaText(run, currentWorkflow && currentWorkflow.name);
-        var stepText = run.current_step_name || (run.current_step_id ? ("Step #" + run.current_step_id) : "");
-        var bits = [];
-        if (run.id) bits.push("Run #" + run.id);
-        if (run.status) bits.push(run.status);
-        if (ticket && ticket.priority) bits.push("Priority " + ticket.priority);
-        if (ticket && ticket.complexity) bits.push("Complexity " + ticket.complexity);
-        if (stepText) bits.push(stepText);
-        if (mode !== "feed" && meta.boardText && meta.boardText !== "No board") bits.push(meta.boardText);
+        var bits = loopRunTicketMetaBits(run, ticket, mode);
+        var actions = loopRunTicketActionHtml(run, mode);
         return '' +
             '<div class="wf-loop-ticket-kicker"><span>Ticket in run</span></div>' +
             '<div class="wf-loop-ticket-title-wrap" title="' + esc(title) + '">' +
@@ -6727,20 +6785,52 @@
             "</div>" +
             '<div class="wf-loop-ticket-meta">' + bits.slice(0, mode === "feed" ? 4 : 6).map(function (bit) {
                 return '<span>' + esc(bit) + '</span>';
-            }).join("") + '</div>';
+            }).join("") + '</div>' +
+            (actions ? '<div class="wf-loop-ticket-actions">' + actions + '</div>' : '');
+    }
+
+    function selectedLoopRunContext() {
+        var selectedId = selectedWorkflowQueueTicketId;
+        var contextRun = loopFeedContextRun() || (selectedId ? activeRunByTicketId(selectedId) : null);
+        if (contextRun) return contextRun;
+        return queuedLoopRunContext(workflowQueueTicketById(selectedId));
+    }
+
+    function queuedLoopRunContext(ticket) {
+        if (!ticket) return null;
+        return {
+            ticket_id: ticket.id,
+            ticket_title: ticket.title,
+            status: "queued",
+            project_id: ticket.linked_project_id,
+            project_name: ticket.project_name,
+            board_id: ticket.board_id,
+            board_name: ticket.board_name,
+            workflow_id: currentWorkflowId
+        };
+    }
+
+    function renderLoopTicketContextElement(element, contextRun, mode) {
+        if (!element) return;
+        element.classList.toggle("hidden", !contextRun);
+        element.innerHTML = contextRun ? loopRunTicketContextHtml(contextRun, mode) : "";
+    }
+
+    function bindLoopTicketContextActions(mainEl) {
+        var startBtn = mainEl.querySelector(".wf-loop-start-ticket, .wf-loop-run-again");
+        if (startBtn) startBtn.onclick = function () { openWorkflowRunPreview(startBtn.dataset.ticketId); };
+        var continueBtn = mainEl.querySelector(".wf-loop-continue-ticket");
+        if (continueBtn) continueBtn.onclick = function () {
+            continueWorkflowRun(continueBtn.dataset.workflowId, continueBtn.dataset.runId, { input: "yes, go ahead" });
+        };
     }
 
     function renderLoopRunTicketContext() {
         var mainEl = document.getElementById("wf-loop-run-ticket-context");
-        var feedEl = document.getElementById("wf-loop-feed-ticket-context");
-        if (mainEl) {
-            mainEl.classList.add("hidden");
-            mainEl.innerHTML = "";
-        }
-        if (feedEl) {
-            feedEl.classList.add("hidden");
-            feedEl.innerHTML = "";
-        }
+        var contextRun = selectedLoopRunContext();
+        renderLoopTicketContextElement(mainEl, contextRun, "main");
+        renderLoopTicketContextElement(document.getElementById("wf-loop-feed-ticket-context"), contextRun, "feed");
+        if (contextRun && mainEl) bindLoopTicketContextActions(mainEl);
     }
 
     function workflowHasActiveRuns() {
@@ -6920,7 +7010,6 @@
                 acc[k] = { status: stateByWorkflow[k] };
                 return acc;
             }, {});
-            loadList();
             renderRunSettings(currentWorkflow);
             renderBoardConsumers(latestActiveRuns);
             renderRunCommandCenter(latestActiveRuns);
@@ -6962,6 +7051,12 @@
             syncWorkflowRunsTabVisibility();
             renderWorkflowRunBar(latestActiveRuns);
             updateWorkflowTabRunControls(latestActiveRuns);
+            var hasActiveCurrentWorkflowRun = latestActiveRuns.some(function (r) {
+                return currentWorkflowId && String(r.workflow_id) === String(currentWorkflowId) &&
+                    (r.status === "running" || r.status === "waiting");
+            });
+            if (hasActiveCurrentWorkflowRun) startPolling();
+            else stopPolling();
             if (!latestActiveRuns.length) {
                 listEl.innerHTML = "";
                 emptyEl.classList.remove("hidden");
@@ -6998,6 +7093,11 @@
                 var loopBadge = r.loop_label
                     ? '<span class="text-xs px-1.5 py-0.5 rounded bg-purple-600/20 text-purple-200">' + esc(r.loop_label) + '</span>'
                     : '';
+                var groupSize = parseInt(r.ticket_group_size, 10) || 0;
+                var groupPosition = (parseInt(r.ticket_group_index, 10) || 0) + 1;
+                var groupBadge = r.ticket_group_id && groupSize > 1
+                    ? '<span class="text-xs px-1.5 py-0.5 rounded bg-cyan-600/20 text-cyan-200">Group ' + esc(groupPosition) + '/' + esc(groupSize) + '</span>'
+                    : '';
                 var rowCls = "rounded px-3 py-2 border border-white/10 " + (isCurrentWorkflow ? "wf-live-run" : "bg-[#152054]/50");
                 var waitingKind = r.waiting_kind || "";
                 var hasDecision = r.approval_decision && r.approval_decision.title;
@@ -7011,6 +7111,22 @@
                         runId: r.id
                     }) + '</div>'
                     : '';
+                var lastActivity = r.last_activity || {};
+                var heartbeat = r.last_heartbeat || {};
+                var heartbeatAge = r.heartbeat_age_seconds == null ? null : Math.max(0, parseInt(r.heartbeat_age_seconds, 10) || 0);
+                var activityState = r.activity_state || "starting";
+                var activityText = lastActivity.message || (lastActivity.event_type ? lastActivity.event_type.replace(/_/g, " ") : "");
+                var activityHtml = activityText
+                    ? '<div class="md:col-span-2"><span class="text-gray-500">Last activity:</span> <span class="text-gray-300">' + esc(activityText) + '</span>' +
+                        (heartbeat.at ? ' <span class="text-emerald-300">· heartbeat ' + esc(new Date(heartbeat.at).toLocaleTimeString()) + '</span>' : '') + '</div>'
+                    : '<div class="md:col-span-2 text-amber-300">Waiting for the first worker heartbeat…</div>';
+                if (activityState === "stale") {
+                    activityHtml += '<div class="md:col-span-2 text-red-300">Worker heartbeat overdue by ' + esc(formatElapsed(heartbeatAge)) + '. You can stop the run or wait for provider recovery.</div>';
+                } else if (activityState === "delayed") {
+                    activityHtml += '<div class="md:col-span-2 text-amber-300">Worker heartbeat delayed (' + esc(formatElapsed(heartbeatAge)) + ' ago); reconnect/recovery is still in progress.</div>';
+                } else if (activityState === "no_heartbeat") {
+                    activityHtml += '<div class="md:col-span-2 text-amber-300">No worker heartbeat has arrived after ' + esc(formatElapsed(r.elapsed_seconds)) + '.</div>';
+                }
                 var actions = '<div class="flex items-center gap-2 ml-auto">' +
                     (r.status === "waiting" ? '<button type="button" class="wf-active-continue px-2 py-1 rounded border border-amber-500/50 text-amber-300 text-xs hover:bg-amber-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '" data-waiting-kind="' + esc(waitingKind) + '">' + esc(continueLabel) + '</button>' : '') +
                     '<button type="button" class="wf-active-stop inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '">' + SVG_STOP + '<span>Stop</span></button>' +
@@ -7021,6 +7137,7 @@
                         '<span class="text-xs px-1.5 py-0.5 rounded ' + statusColor + '">' + esc(r.status) + '</span>' +
                         '<span class="text-xs px-1.5 py-0.5 rounded bg-green-600/20 text-green-300">' + esc(phase) + '</span>' +
                         loopBadge +
+                        groupBadge +
                         '<span class="text-xs text-gray-500">Elapsed ' + esc(formatElapsed(r.elapsed_seconds)) + '</span>' +
                         actions +
                     '</div>' +
@@ -7031,6 +7148,7 @@
                         '<div><span class="text-gray-500">Source:</span> <span class="text-gray-200">' + esc(sourceText) + '</span></div>' +
                         '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
                         '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
+                        activityHtml +
                         recentStepsHtml +
                     '</div>' +
                     '<div class="mt-2">' + routeCard + '</div>' +
@@ -7784,7 +7902,7 @@
         }
         var first = queue[0];
         snack("Running queue (" + queue.length + " tickets). First: " + (first.title || ("#" + first.id)), "info");
-        openWorkflowRunPreview(first.id);
+        openWorkflowRunPreview(first.id, queue.map(function (ticket) { return String(ticket.id); }));
     }
 
     function filterRunsForSelectedTicket(runs) {
@@ -8439,68 +8557,196 @@
 
     function closeWorkflowRunPreview() {
         pendingWorkflowRunTicketId = null;
+        pendingWorkflowRunTicketIds = [];
         var modal = document.getElementById("wf-run-preview-modal");
         if (modal) modal.classList.add("hidden");
     }
 
-    function openWorkflowRunPreview(ticketId) {
-        if (!currentWorkflowId || !ticketId) return;
-        var ticket = workflowCliTicketById(ticketId) || workflowQueueTickets.filter(function (item) {
+    function workflowRunPreviewElements() {
+        return {
+            modal: document.getElementById("wf-run-preview-modal"),
+            subtitle: document.getElementById("wf-run-preview-subtitle"),
+            body: document.getElementById("wf-run-preview-body"),
+            warning: document.getElementById("wf-run-preview-warning"),
+            confirmBtn: document.getElementById("wf-run-preview-confirm")
+        };
+    }
+
+    function workflowRunPreviewFallback(ticketId) {
+        if (pendingWorkflowRunTicketIds.length > 1) startWorkflowTicketGroup(pendingWorkflowRunTicketIds);
+        else startWorkflowTicketRun(ticketId);
+    }
+
+    function setWorkflowRunPreviewWarning(elements, message) {
+        if (!elements.warning) return;
+        elements.warning.textContent = message || "";
+        elements.warning.classList.toggle("hidden", !message);
+    }
+
+    function renderWorkflowRunPreviewContext(elements, ticket, ctx) {
+        elements.body.innerHTML = workflowRunPreviewRouteHtml(ticket, ctx);
+        bindWorkflowRunPreviewTabs(elements.body);
+        setWorkflowRunPreviewWarning(elements, "");
+        elements.confirmBtn.disabled = !workflowRunPreviewCanStart(ticket, ctx);
+    }
+
+    function renderWorkflowRunPreviewError(elements, ticket, localCtx, error) {
+        if (workflowRunPreviewCanStart(ticket, localCtx)) {
+            setWorkflowRunPreviewWarning(elements, "");
+            elements.confirmBtn.disabled = false;
+            return;
+        }
+        renderWorkflowRunPreviewContext(elements, ticket, localCtx);
+        setWorkflowRunPreviewWarning(
+            elements,
+            error.message || "This ticket does not have a complete project/executor route yet. Link the board or ticket to a project before running."
+        );
+        elements.confirmBtn.disabled = true;
+    }
+
+    function loadWorkflowRunPreviewContext(ticketId, ticket, localCtx, elements) {
+        api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/cli-context?preview=1")
+            .then(function (ctx) {
+                if (pendingWorkflowRunTicketId === String(ticketId)) renderWorkflowRunPreviewContext(elements, ticket, ctx);
+            })
+            .catch(function (error) {
+                if (pendingWorkflowRunTicketId === String(ticketId)) renderWorkflowRunPreviewError(elements, ticket, localCtx, error);
+            });
+    }
+
+    function workflowRunPreviewTicket(ticketId) {
+        return workflowCliTicketById(ticketId) || workflowQueueTickets.filter(function (item) {
             return String(item.id) === String(ticketId);
         })[0];
+    }
+
+    function workflowCanBeginRunPreview(ticketId) {
+        return Boolean(currentWorkflowId && ticketId);
+    }
+
+    function workflowRunPreviewTicketIds(ticketId, ticketIds) {
+        return Array.isArray(ticketIds) ? ticketIds.map(String) : [String(ticketId)];
+    }
+
+    function beginWorkflowRunPreview(ticketId, ticketIds) {
+        if (!workflowCanBeginRunPreview(ticketId)) return;
+        var ticket = workflowRunPreviewTicket(ticketId);
         if (activeRunByTicketId(ticketId)) {
             snack("This ticket already has an active workflow run", "error");
             return;
         }
         pendingWorkflowRunTicketId = String(ticketId);
-        var modal = document.getElementById("wf-run-preview-modal");
-        var subtitle = document.getElementById("wf-run-preview-subtitle");
-        var body = document.getElementById("wf-run-preview-body");
-        var warning = document.getElementById("wf-run-preview-warning");
-        var confirmBtn = document.getElementById("wf-run-preview-confirm");
-        if (!modal || !body || !confirmBtn) {
-            startWorkflowTicketRun(ticketId);
+        pendingWorkflowRunTicketIds = workflowRunPreviewTicketIds(ticketId, ticketIds);
+        return { ticket: ticket };
+    }
+
+    function workflowRunPreviewElementsReady(elements) {
+        return Boolean(elements.modal && elements.body && elements.confirmBtn);
+    }
+
+    function workflowRunPreviewTicketTitle(ticket, ticketId) {
+        if (ticket && ticket.title) return ticket.title;
+        return "Ticket #" + ticketId;
+    }
+
+    function workflowRunPreviewCountSuffix(count) {
+        if (!count) return "";
+        return " + " + count + " more ticket" + (count === 1 ? "" : "s");
+    }
+
+    function setWorkflowRunPreviewSubtitle(element, ticket, ticketId) {
+        if (!element) return;
+        var additionalTickets = Math.max(0, pendingWorkflowRunTicketIds.length - 1);
+        element.textContent = workflowRunPreviewTicketTitle(ticket, ticketId) + workflowRunPreviewCountSuffix(additionalTickets);
+    }
+
+    function openWorkflowRunPreview(ticketId, ticketIds) {
+        var state = beginWorkflowRunPreview(ticketId, ticketIds);
+        if (!state) return;
+        var ticket = state.ticket;
+        var elements = workflowRunPreviewElements();
+        if (!workflowRunPreviewElementsReady(elements)) {
+            workflowRunPreviewFallback(ticketId);
             return;
         }
-        if (subtitle) subtitle.textContent = ticket ? (ticket.title || ("Ticket #" + ticketId)) : ("Ticket #" + ticketId);
+        setWorkflowRunPreviewSubtitle(elements.subtitle, ticket, ticketId);
         var localCtx = workflowRunPreviewCtxFromTicket(ticket);
-        body.innerHTML = workflowRunPreviewRouteHtml(ticket, localCtx);
-        bindWorkflowRunPreviewTabs(body);
-        if (warning) {
-            warning.textContent = "";
-            warning.classList.add("hidden");
-        }
-        confirmBtn.disabled = !workflowRunPreviewCanStart(ticket, localCtx);
-        modal.classList.remove("hidden");
-        api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId) + "/cli-context?preview=1")
-            .then(function (ctx) {
-                if (pendingWorkflowRunTicketId !== String(ticketId)) return;
-                body.innerHTML = workflowRunPreviewRouteHtml(ticket, ctx);
-                bindWorkflowRunPreviewTabs(body);
-                if (warning) warning.classList.add("hidden");
-                confirmBtn.disabled = !workflowRunPreviewCanStart(ticket, ctx);
-            })
-            .catch(function (e) {
-                if (pendingWorkflowRunTicketId !== String(ticketId)) return;
-                if (workflowRunPreviewCanStart(ticket, localCtx)) {
-                    if (warning) warning.classList.add("hidden");
-                    confirmBtn.disabled = false;
-                    return;
-                }
-                body.innerHTML = workflowRunPreviewRouteHtml(ticket, localCtx);
-                bindWorkflowRunPreviewTabs(body);
-                if (warning) {
-                    warning.textContent = e.message || "This ticket does not have a complete project/executor route yet. Link the board or ticket to a project before running.";
-                    warning.classList.remove("hidden");
-                }
-                confirmBtn.disabled = true;
-            });
+        renderWorkflowRunPreviewContext(elements, ticket, localCtx);
+        elements.modal.classList.remove("hidden");
+        loadWorkflowRunPreviewContext(ticketId, ticket, localCtx, elements);
     }
 
     function confirmWorkflowRunPreview() {
         var ticketId = pendingWorkflowRunTicketId;
+        var ticketIds = pendingWorkflowRunTicketIds.slice();
         closeWorkflowRunPreview();
-        if (ticketId) startWorkflowTicketRun(ticketId);
+        if (ticketIds.length > 1) startWorkflowTicketGroup(ticketIds);
+        else if (ticketId) startWorkflowTicketRun(ticketId);
+    }
+
+    function activeWorkflowDetailTab() {
+        var active = document.querySelector(".wf-tab.active[data-tab]");
+        return active ? (active.dataset.tab || "") : "";
+    }
+
+    function markWorkflowTicketGroupPending(ticketIds, pending) {
+        ticketIds.forEach(function (ticketId) {
+            var key = String(ticketId);
+            if (pending) workflowTicketPendingRunStartedAt[key] = Date.now();
+            else delete workflowTicketPendingRunStartedAt[key];
+        });
+    }
+
+    function refreshWorkflowTicketGroupSurfaces() {
+        loadWorkflowExecutionSessions();
+        loadLoopActivityFeed({ quiet: true });
+        loadOrchestratorTimeline({ quiet: true });
+    }
+
+    function handleWorkflowTicketGroupStarted(ticketIds, data) {
+        var startedTicketIds = (data.started || []).map(function (item) { return String(item.ticket_id); });
+        markWorkflowTicketGroupPending(ticketIds.filter(function (ticketId) {
+            return startedTicketIds.indexOf(String(ticketId)) === -1;
+        }), false);
+        tickWorkflowTicketTimers();
+        snack(workflowFeedbackText(data, "Ticket group started"));
+        var activeTab = activeWorkflowDetailTab();
+        if (!activeTab || activeTab === "tickets") switchTab("loop", { persist: false });
+        return Promise.all([loadDetail(currentWorkflowId), loadWorkflowTicketQueue(), loadActiveRuns()]);
+    }
+
+    function handleWorkflowTicketGroupFailed(ticketIds, error) {
+        markWorkflowTicketGroupPending(ticketIds, false);
+        tickWorkflowTicketTimers();
+        snack(workflowErrorText(error, "Failed to start ticket group"), "error");
+    }
+
+    function showWorkflowRunsTab() {
+        workflowRunsSeenByWorkflowId[String(currentWorkflowId)] = true;
+        var runsTabBtn = document.getElementById("wf-runs-tab-btn");
+        if (runsTabBtn) runsTabBtn.classList.remove("hidden");
+    }
+
+    function workflowTicketGroupCanStart(ticketIds) {
+        return Boolean(currentWorkflowId && ticketIds.length);
+    }
+
+    function startWorkflowTicketGroup(ticketIds) {
+        ticketIds = (ticketIds || []).map(function (id) { return parseInt(id, 10); }).filter(Boolean);
+        if (!workflowTicketGroupCanStart(ticketIds)) return;
+        markWorkflowTicketGroupPending(ticketIds, true);
+        ensureWorkflowTicketTimerTick();
+        showWorkflowRunsTab();
+        startPolling();
+        api("POST", "/workflows/" + encodeURIComponent(currentWorkflowId) + "/run-ticket-group", {
+            ticket_ids: ticketIds
+        }).then(function (data) {
+            return handleWorkflowTicketGroupStarted(ticketIds, data);
+        }).then(function () {
+            refreshWorkflowTicketGroupSurfaces();
+        }).catch(function (e) {
+            handleWorkflowTicketGroupFailed(ticketIds, e);
+        });
     }
 
     function startWorkflowTicketRun(ticketId) {
@@ -8531,10 +8777,21 @@
             workflow_id: parseInt(currentWorkflowId, 10)
         }).then(function (data) {
             snack(workflowFeedbackText(data, "Ticket run started"));
-            switchTab("loop", { persist: false });
+            if (!activeWorkflowDetailTab() || activeWorkflowDetailTab() === "tickets") {
+                switchTab("loop", { persist: false });
+            }
             loadDetail(currentWorkflowId);
             loadWorkflowTicketQueue();
-            loadActiveRuns();
+            loadActiveRuns().then(function () {
+                if (data && data.run_id) {
+                    focusWorkflowRun(data.run_id, {
+                        ticketId: ticketId,
+                        switchTab: activeWorkflowDetailTab() === "loop" ? "loop" : null
+                    });
+                } else {
+                    renderLoopRunTicketContext();
+                }
+            });
             loadWorkflowExecutionSessions();
             loadLoopActivityFeed({ quiet: true });
         }).catch(function (e) {
@@ -10265,7 +10522,7 @@
     }
 
     function startPolling() {
-        stopPolling();
+        if (pollTimer) return;
         pollTimer = setInterval(softRefresh, 3000);
     }
     function stopPolling() {

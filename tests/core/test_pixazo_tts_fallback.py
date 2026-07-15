@@ -41,8 +41,7 @@ def test_build_pixazo_fallback_text_says_it_will_retry_and_continues_response():
 
 def test_pixazo_run_tts_falls_back_for_failed_primary_generation(monkeypatch):
     async def primary_run_tts(_self, _text):
-        err = ErrorFrame()
-        err.error = "Pixazo request failed (500): Internal Server Error"
+        err = ErrorFrame(error="Pixazo request failed (500): Internal Server Error")
         yield err
         yield TTSStoppedFrame()
 
