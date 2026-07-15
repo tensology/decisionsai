@@ -76,7 +76,8 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
             status="completed",
             completed_at=datetime(2026, 1, 1),
         )
-        session.add_all([orphan, completed])
+        waiting = AutoWorkflowRun(workflow_id=workflow.id, status="waiting")
+        session.add_all([orphan, completed, waiting])
         session.flush()
         active = ProjectExecutionSession(
             project_id=7,
@@ -91,9 +92,37 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
             status="completed",
             completed_at=datetime(2026, 1, 1),
         )
-        session.add_all([active, historical])
+        stale_terminal = ProjectExecutionSession(
+            project_id=7,
+            workflow_id=workflow.id,
+            run_id=completed.id,
+            status="running",
+        )
+        missing_run = ProjectExecutionSession(
+            project_id=7,
+            workflow_id=workflow.id,
+            run_id=999999,
+            status="waiting",
+        )
+        durable_waiting = ProjectExecutionSession(
+            project_id=7,
+            workflow_id=workflow.id,
+            run_id=waiting.id,
+            status="waiting",
+        )
+        session.add_all(
+            [active, historical, stale_terminal, missing_run, durable_waiting]
+        )
         session.flush()
-        orphan_id, active_id, historical_id = orphan.id, active.id, historical.id
+        ids = {
+            "orphan": orphan.id,
+            "waiting": waiting.id,
+            "active": active.id,
+            "historical": historical.id,
+            "stale_terminal": stale_terminal.id,
+            "missing_run": missing_run.id,
+            "durable_waiting": durable_waiting.id,
+        }
 
     monkeypatch.setattr(
         "distr.core.workflow.dispatcher.get_session",
@@ -102,17 +131,22 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
     _cleanup_orphaned_runs_on_startup()
 
     with _real_session(factory) as session:
-        recovered_run = session.get(AutoWorkflowRun, orphan_id)
-        recovered_execution = session.get(ProjectExecutionSession, active_id)
-        untouched_execution = session.get(ProjectExecutionSession, historical_id)
+        recovered_run = session.get(AutoWorkflowRun, ids["orphan"])
+        waiting_run = session.get(AutoWorkflowRun, ids["waiting"])
+        recovered_execution = session.get(ProjectExecutionSession, ids["active"])
+        untouched_execution = session.get(ProjectExecutionSession, ids["historical"])
+        stale_terminal = session.get(ProjectExecutionSession, ids["stale_terminal"])
+        missing_run = session.get(ProjectExecutionSession, ids["missing_run"])
+        durable_waiting = session.get(ProjectExecutionSession, ids["durable_waiting"])
         events = (
             session.query(ProjectExecutionEvent)
-            .filter(ProjectExecutionEvent.session_id == active_id)
+            .filter(ProjectExecutionEvent.session_id == ids["active"])
             .all()
         )
 
         assert recovered_run.status == "cancelled"
         assert recovered_run.completed_at is not None
+        assert waiting_run.status == "waiting"
         assert recovered_execution.status == "cancelled"
         assert recovered_execution.completed_at is not None
         assert recovered_execution.error == "App restarted before provider completion."
@@ -120,6 +154,12 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
             ("recovered_after_restart", "cancelled")
         ]
         assert untouched_execution.status == "completed"
+        assert stale_terminal.status == "cancelled"
+        assert stale_terminal.completed_at is not None
+        assert missing_run.status == "cancelled"
+        assert missing_run.completed_at is not None
+        assert durable_waiting.status == "waiting"
+        assert durable_waiting.completed_at is None
 
 
 def test_unexpected_backend_exception_becomes_failed_step_result(monkeypatch):

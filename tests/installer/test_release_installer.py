@@ -108,3 +108,12 @@ def test_smoke_probe_uses_isolated_port_and_child_process_identity():
     assert '"DECISIONS_WEB_PORT": str(web_port)' in source
     assert 'payload.get("pid") == process.pid' in source
     assert "127.0.0.1:8765" not in source
+
+
+def test_bundled_executable_exposes_verified_database_maintenance():
+    source = (PROJECT_ROOT / "bin" / "start.py").read_text(encoding="utf-8")
+    assert "--backup-database" in source
+    assert "--verify-database-backup" in source
+    assert "--restore-database" in source
+    assert "restore_database_backup(path)" in source
+    assert "--restore-database requires --yes" in source

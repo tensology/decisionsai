@@ -514,7 +514,7 @@ def _cancel_linked_execution_sessions(
     sessions = (
         db.query(ProjectExecutionSession)
         .filter(ProjectExecutionSession.run_id.in_(run_ids))
-        .filter(ProjectExecutionSession.status.in_(["queued", "running"]))
+        .filter(ProjectExecutionSession.status.in_(["queued", "running", "waiting"]))
         .all()
     )
     for execution in sessions:
@@ -539,21 +539,70 @@ def _cancel_linked_execution_sessions(
     return [int(execution.id) for execution in sessions]
 
 
-def _cleanup_orphaned_runs_on_startup() -> None:
-    """Mark any 'running'/'waiting' runs as 'cancelled' on app startup.
+def _reconcile_terminal_execution_sessions(db: Any) -> List[int]:
+    """Cancel active provider rows whose owning workflow is terminal or missing."""
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
 
-    Runs that were left open from a previous session (crash, force-quit) would
-    otherwise block every subsequent "Send to Workflow" for the same ticket.
-    Safe to call before any WorkflowAgent or RunContext is created.
+    terminal_run_statuses = {"completed", "failed", "cancelled"}
+    completed_at = utc_now_naive()
+    reconciled: List[int] = []
+    active = (
+        db.query(ProjectExecutionSession)
+        .filter(ProjectExecutionSession.status.in_(["queued", "running", "waiting"]))
+        .all()
+    )
+    for execution in active:
+        run = db.get(AutoWorkflowRun, int(execution.run_id)) if execution.run_id else None
+        missing_owner = execution.run_id is not None and run is None
+        terminal_owner = run is not None and run.status in terminal_run_statuses
+        standalone_worker = execution.run_id is None and execution.status in {"queued", "running"}
+        if not (missing_owner or terminal_owner or standalone_worker):
+            continue
+        previous_status = execution.status
+        reason = (
+            "Provider session had no workflow run after restart."
+            if missing_owner
+            else "Provider session outlived its terminal workflow run."
+            if terminal_owner
+            else "Standalone provider session was interrupted by app restart."
+        )
+        execution.status = "cancelled"
+        execution.error = reason
+        execution.updated_at = completed_at
+        execution.completed_at = completed_at
+        db.add(
+            ProjectExecutionEvent(
+                session_id=execution.id,
+                event_type="recovered_after_restart",
+                status="cancelled",
+                message=reason,
+                payload=json.dumps(
+                    {
+                        "run_id": execution.run_id,
+                        "previous_status": previous_status,
+                        "recovered": True,
+                    }
+                ),
+            )
+        )
+        reconciled.append(int(execution.id))
+    return reconciled
+
+
+def _cleanup_orphaned_runs_on_startup() -> None:
+    """Reconcile interrupted runs and provider sessions on app startup.
+
+    Running work has lost its in-memory worker and must become terminal. Waiting
+    checkpoints remain durable so a Telegram/web approval can resume after a
+    restart. Provider rows whose run is terminal or missing must never remain
+    visible as queued/running/waiting forever.
     """
     with get_session() as db:
         orphans = (
             db.query(AutoWorkflowRun)
-            .filter(AutoWorkflowRun.status.in_(["running", "waiting"]))
+            .filter(AutoWorkflowRun.status == "running")
             .all()
         )
-        if not orphans:
-            return
         orphan_ids = [int(run.id) for run in orphans]
         completed_at = utc_now_naive()
         for run in orphans:
@@ -565,15 +614,18 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             reason="App restarted before provider completion.",
             event_type="recovered_after_restart",
         )
+        reconciled_ids = _reconcile_terminal_execution_sessions(db)
         db.commit()
-        logger.info(
-            "Cancelled %d orphaned workflow run(s) and %d linked execution "
-            "session(s) from previous session: runs=%s sessions=%s",
-            len(orphans),
-            len(execution_ids),
-            orphan_ids,
-            execution_ids,
-        )
+        all_execution_ids = sorted(set(execution_ids + reconciled_ids))
+        if orphan_ids or all_execution_ids:
+            logger.info(
+                "Reconciled %d interrupted workflow run(s) and %d execution "
+                "session(s) from previous session: runs=%s sessions=%s",
+                len(orphans),
+                len(all_execution_ids),
+                orphan_ids,
+                all_execution_ids,
+            )
 
 
 def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:

@@ -1363,13 +1363,11 @@ class EventHandlerMixin:
                 logger.debug("[Telegram] No audio_file or screenshot_file; sending text-only response")
 
             if text_to_send and self._try_route_integration_text_reply(text_to_send, data):
-                time.sleep(2)
                 self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
                 return
 
             if not text_to_send and not audio_file and not screenshot_file:
                 logger.info("[Telegram] Nothing to send after response preparation; skipping empty Telegram payload")
-                time.sleep(2)
                 self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
                 return
 
@@ -1386,7 +1384,6 @@ class EventHandlerMixin:
             )
 
         # Cleanup temp files
-        time.sleep(2)
         self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
 
     @staticmethod

@@ -518,6 +518,8 @@ if not os.path.exists(DB_DIR):
     os.makedirs(DB_DIR)
 
 db_path = os.path.join(DB_DIR, 'settings.db')
+from distr.core.database_runtime_lock import acquire_runtime_database_lock
+_database_runtime_lock = acquire_runtime_database_lock(db_path)
 # Add connection pooling limits to prevent connection leaks
 # pool_size=5: max 5 connections in pool
 # max_overflow=10: allow up to 10 additional connections beyond pool_size

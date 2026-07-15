@@ -41,6 +41,11 @@ jobs:
         run: python -m pytest --collect-only -q
       - name: Run default test suite
         run: python -m pytest -q --junitxml=artifacts/pytest-default.xml
+      - name: Summarize default-suite failures
+        if: failure() && hashFiles('artifacts/pytest-default.xml') != ''
+        run: >-
+          python scripts/summarize_pytest_junit.py
+          artifacts/pytest-default.xml --github-annotations
       - name: Run multi-ticket workflow acceptance chain
         run: >-
           python -m pytest -q
@@ -81,7 +86,7 @@ jobs:
         run: test ! -f artifacts/web-server.pid || kill "$(cat artifacts/web-server.pid)" || true
       - name: Upload release evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-gate-evidence
           path: artifacts/

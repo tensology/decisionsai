@@ -1,4 +1,5 @@
 from pathlib import Path
+import inspect
 import logging
 import queue
 import time
@@ -78,6 +79,12 @@ class DummyTelegramSender(TelegramSenderMixin):
 
     def _stop_typing_loop(self):
         pass
+
+
+def test_telegram_delivery_worker_has_no_artificial_post_send_delay():
+    source = inspect.getsource(EventHandlerMixin._send_to_telegram_worker)
+
+    assert "time.sleep(2)" not in source
 
 
 def test_send_to_telegram_event_reaches_worker_when_socket_disconnected(monkeypatch):

@@ -206,3 +206,39 @@ def test_retried_channel_message_is_idempotent_and_keeps_original_board(intake_d
         KanbanTicket.source_external_id == "tg-retry-1",
     ).count() == 1
     session.close()
+
+
+@pytest.mark.parametrize("source", ["whatsapp", "gmail"])
+def test_shared_channel_request_creates_one_project_ticket_with_source_trace(intake_db, source):
+    from distr.core.db.kanban import KanbanTicket
+
+    factory, ids = intake_db
+    session_provider = lambda: _session_ctx(factory)
+    external_id = f"{source}-pizza-1"
+    intake = WorkIntake(
+        source=source,
+        user_text="Create a ticket: prepare the Ember & Crust Pizza House launch checklist",
+        project_hint="Ember & Crust Pizza House",
+        source_message_id=external_id,
+    )
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
+         patch("distr.core.orchestrator.emit_channel_intake_event"):
+        first = OrchestratorIntakeService().ingest(intake)
+        duplicate = OrchestratorIntakeService().ingest(intake)
+
+    assert first.status == "ticket_created"
+    assert first.board_id == ids["pizza_board"]
+    assert first.project_id == ids["pizza_project"]
+    assert duplicate.status == "duplicate"
+    assert duplicate.ticket_id == first.ticket_id
+
+    session = factory()
+    tickets = session.query(KanbanTicket).filter(
+        KanbanTicket.source_provider == source,
+        KanbanTicket.source_external_id == external_id,
+    ).all()
+    assert len(tickets) == 1
+    assert tickets[0].lane.board_id == ids["pizza_board"]
+    assert tickets[0].linked_project_id == ids["pizza_project"]
+    session.close()

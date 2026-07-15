@@ -118,6 +118,43 @@ import multiprocessing
 # to handle the multiprocessing spawn bootstrap correctly.
 multiprocessing.freeze_support()
 
+
+def _run_database_maintenance_if_requested():
+    """Expose verified database maintenance through the bundled executable."""
+    operations = {
+        "--backup-database": "backup",
+        "--verify-database-backup": "verify",
+        "--restore-database": "restore",
+    }
+    selected = [(flag, action) for flag, action in operations.items() if flag in sys.argv]
+    if not selected:
+        return False
+    if len(selected) != 1:
+        raise SystemExit("Choose exactly one database maintenance operation")
+    flag, action = selected[0]
+    try:
+        path = sys.argv[sys.argv.index(flag) + 1]
+    except IndexError as exc:
+        raise SystemExit(f"{flag} requires a file path") from exc
+    if action == "restore" and "--yes" not in sys.argv:
+        raise SystemExit("--restore-database requires --yes")
+
+    import json
+    from distr.core.database_backup import (
+        create_database_backup,
+        restore_database_backup,
+        validate_database_backup,
+    )
+
+    if action == "backup":
+        result = create_database_backup(path)
+    elif action == "verify":
+        result = validate_database_backup(path)
+    else:
+        result = restore_database_backup(path)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return True
+
 # On Windows, force child processes to use pythonw.exe too so they don't flash
 # a console window when spawned.
 if sys.platform == 'win32':
@@ -386,6 +423,8 @@ def kill_existing_decisions_processes():
 
 # Main execution block
 if __name__ == "__main__":
+    if _run_database_maintenance_if_requested():
+        raise SystemExit(0)
     from distr.core.rubicon_arm64_fix import apply_rubicon_arm64_fix
 
     apply_rubicon_arm64_fix()
