@@ -97,6 +97,7 @@ docs/*
 !docs/orchestrator.md
 !docs/local-harness-preflight.md
 !docs/nous-hermes-agent.md
+!docs/RELEASE_CHECKLIST.md
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/plans/
