@@ -33,6 +33,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
+# The SSE endpoint emits a keepalive every 30 seconds. Keep this read timeout
+# above that interval so a legitimately quiet workflow step does not look like
+# a disconnected stream on slower hosted runners.
+SSE_READ_TIMEOUT_SECONDS = 45
 # Events guaranteed by this internal command/browser fixture. Native worker and
 # skill-provision events are provider/environment dependent and are validated by
 # their focused integration tests; terminal completion is checked via the ledger.
@@ -1321,7 +1325,7 @@ class WorkflowTicketLoopHarness:
             )
             current_event = ""
             try:
-                with urllib.request.urlopen(req, timeout=20) as resp:
+                with urllib.request.urlopen(req, timeout=SSE_READ_TIMEOUT_SECONDS) as resp:
                     state["response"] = resp
                     for raw in resp:
                         if stop.is_set():
