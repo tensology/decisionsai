@@ -21,6 +21,55 @@ def _available_local_port() -> int:
         return int(probe.getsockname()[1])
 
 
+def _pids_using_executable(executable: Path) -> set[int]:
+    """Return processes launched from *executable*, including re-parented helpers."""
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    prefix = str(executable)
+    matches: set[int] = set()
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(None, 1)
+        if len(fields) != 2:
+            continue
+        pid_text, command = fields
+        if command == prefix or command.startswith(f"{prefix} "):
+            matches.add(int(pid_text))
+    return matches
+
+
+def _terminate_spawned_helpers(executable: Path, baseline: set[int]) -> set[int]:
+    """Stop helper processes that escaped the app's original process group."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        remaining = _pids_using_executable(executable) - baseline
+        if not remaining:
+            return set()
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.1)
+
+    remaining = _pids_using_executable(executable) - baseline
+    for pid in remaining:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        remaining = _pids_using_executable(executable) - baseline
+        if not remaining:
+            return set()
+        time.sleep(0.05)
+    return _pids_using_executable(executable) - baseline
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("app", type=Path)
@@ -48,6 +97,7 @@ def main() -> int:
             env["DECISIONSAI_SKIP_HARNESS_STACK_SETUP"] = "1"
         started = time.monotonic()
         maintenance_status: str | None = None
+        baseline_pids = _pids_using_executable(executable)
         process = subprocess.Popen(
             [str(executable), "--skip-kill-existing"],
             env=env,
@@ -94,11 +144,12 @@ def main() -> int:
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
+            residual_helpers = _terminate_spawned_helpers(executable, baseline_pids)
         output = process.stdout.read() if process.stdout is not None else ""
         elapsed = round(time.monotonic() - started, 3)
         database = data_root / "db" / "settings.db"
         bundled_database = args.app.resolve() / "Contents" / "Resources" / "db" / "settings.db"
-        if not healthy or not database.is_file() or bundled_database.exists():
+        if not healthy or not database.is_file() or bundled_database.exists() or residual_helpers:
             print(output[-12000:])
             print(
                 json.dumps(
@@ -111,6 +162,7 @@ def main() -> int:
                         "database_created": database.is_file(),
                         "bundle_was_mutated": bundled_database.exists(),
                         "harness_maintenance": maintenance_status,
+                        "residual_helper_pids": sorted(residual_helpers),
                     },
                     indent=2,
                 )
@@ -126,6 +178,7 @@ def main() -> int:
                     "web_port": web_port,
                     "bundle_was_mutated": False,
                     "harness_maintenance": maintenance_status,
+                    "residual_helper_pids": [],
                 },
                 indent=2,
             )

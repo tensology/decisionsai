@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import plistlib
 import stat
@@ -108,6 +109,27 @@ def test_smoke_probe_uses_isolated_port_and_child_process_identity():
     assert '"DECISIONS_WEB_PORT": str(web_port)' in source
     assert 'payload.get("pid") == process.pid' in source
     assert "127.0.0.1:8765" not in source
+
+
+def test_smoke_probe_matches_reparented_helpers_by_exact_executable(monkeypatch: pytest.MonkeyPatch):
+    spec = importlib.util.spec_from_file_location("decisionsai_smoke_app", SMOKE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    executable = Path("/tmp/Release Build/DecisionsAI.app/Contents/MacOS/DecisionsAI")
+    process_table = """\
+  101 /tmp/Release Build/DecisionsAI.app/Contents/MacOS/DecisionsAI --multiprocessing-fork
+  102 /tmp/Release Build/DecisionsAI.app/Contents/MacOS/DecisionsAI-helper
+  103 /tmp/other/DecisionsAI
+"""
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, process_table, ""),
+    )
+
+    assert module._pids_using_executable(executable) == {101}
 
 
 def test_bundled_executable_exposes_verified_database_maintenance():
