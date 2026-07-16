@@ -635,6 +635,22 @@ def test_private_voice_is_marked_read_on_receipt_once():
     assert manager.source_message_ids == [102]
 
 
+def test_relay_transcribed_voice_does_not_start_duplicate_local_transcription():
+    manager = DummyTelegramMessages()
+
+    manager._handle_telegram_message({"data": {
+        "message_id": 107,
+        "chat_id": 12345,
+        "chat": {"type": "private"},
+        "text": "Continue .",
+        "media": {"type": "voice", "download_url": "https://example.test/voice.ogg"},
+    }})
+
+    assert manager.marked_read == [107]
+    assert manager.enqueued == [("Continue .", None, "voice")]
+    assert manager.source_message_ids == [107]
+
+
 def test_private_document_is_marked_read_even_when_media_path_returns_early():
     manager = DummyTelegramMessages()
     media = {

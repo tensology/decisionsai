@@ -290,11 +290,32 @@ class TelegramMessagesMixin:
             logger.info("Received media message (type: %s)", media_type)
             if media_type == "voice":
                 input_type = "voice"
-                self._handle_voice_message(media.get("download_url"), "voice", message_id=msg_id)
+                # The relay may already provide a transcript in ``text``. In
+                # that case, use it directly and do not start a second local
+                # transcription request. Starting both paths can resolve a
+                # workflow successfully and then emit a contradictory "agent
+                # not ready" warning when the conversational agent is offline.
+                if not str(inner_data.get("text") or "").strip():
+                    self._handle_voice_message(
+                        media.get("download_url"), "voice", message_id=msg_id
+                    )
+                else:
+                    logger.info(
+                        "[Telegram] Using relay-provided voice transcript for message %s",
+                        msg_id,
+                    )
                 media_handled = True
             elif media_type == "audio":
                 input_type = "voice"
-                self._handle_voice_message(media.get("download_url"), "audio", message_id=msg_id)
+                if not str(inner_data.get("text") or "").strip():
+                    self._handle_voice_message(
+                        media.get("download_url"), "audio", message_id=msg_id
+                    )
+                else:
+                    logger.info(
+                        "[Telegram] Using relay-provided audio transcript for message %s",
+                        msg_id,
+                    )
                 media_handled = True
             elif media_type in ("photo", "document", "video"):
                 self._handle_file_message(
