@@ -33,13 +33,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8765"
+# Events guaranteed by this internal command/browser fixture. Native worker and
+# skill-provision events are provider/environment dependent and are validated by
+# their focused integration tests; terminal completion is checked via the ledger.
 EXPECTED_SSE_EVENT_TYPES = {
     "route_decided",
     "workflow_step_completed",
     "validation_recorded",
     "loop_iteration",
-    "skill_provisioned",
-    "worker_completed",
 }
 REGISTERED_BACKEND_IDS = (
     "pi",
