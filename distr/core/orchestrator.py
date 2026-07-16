@@ -32,6 +32,7 @@ from distr.core.db.orchestrator import (
     OrchestratorVisualBaselineSet,
     ProjectRuntimeSession,
 )
+from distr.core.db.time import utc_now_naive
 
 
 def _json_dumps(value: Any) -> str:
@@ -515,7 +516,7 @@ def mark_correction_dispatched(
 ) -> None:
     """Mark a correction attempt dispatched (reserved for future correction E2E)."""
     ensure_orchestrator_tables()
-    now = datetime.utcnow()
+    now = utc_now_naive()
     with get_session() as session:
         row = (
             session.query(OrchestratorCorrectionAttempt)
@@ -586,7 +587,7 @@ def format_correction_instruction(packet: dict[str, Any] | None) -> str:
 
 
 def serialize_event(row: OrchestratorEvent) -> dict[str, Any]:
-    created_at = row.created_at or datetime.utcnow()
+    created_at = row.created_at or utc_now_naive()
     return {
         "id": row.id,
         "event_uid": row.event_uid,
@@ -623,7 +624,7 @@ def upsert_project_runtime_session(
     created_at_epoch: float | None = None,
 ) -> None:
     ensure_orchestrator_tables()
-    now = datetime.utcnow()
+    now = utc_now_naive()
     with get_session() as session:
         row = (
             session.query(ProjectRuntimeSession)
@@ -667,8 +668,8 @@ def mark_project_runtime_session_stopped(terminal_id: str, *, status: str = "sto
         if not row:
             return
         row.status = status or "stopped"
-        row.ended_at = datetime.utcnow()
-        row.last_seen_at = datetime.utcnow()
+        row.ended_at = utc_now_naive()
+        row.last_seen_at = utc_now_naive()
         session.add(row)
         session.commit()
 
@@ -1088,7 +1089,7 @@ def record_learning_signal(
         elif scope_id is not None:
             query = query.filter(OrchestratorLearnedRule.scope_id == int(scope_id))
         row = query.first()
-        now = datetime.utcnow()
+        now = utc_now_naive()
         if row:
             row.evidence_count = int(row.evidence_count or 0) + 1
             row.confidence = min(0.95, float(row.confidence or 0.5) + 0.05)
@@ -2006,6 +2007,6 @@ def set_learned_rule_enabled(rule_id: int, enabled: bool) -> bool:
         if not row:
             return False
         row.enabled = 1 if enabled else 0
-        row.updated_at = datetime.utcnow()
+        row.updated_at = utc_now_naive()
         session.commit()
         return True

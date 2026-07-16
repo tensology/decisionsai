@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import re
 import secrets
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from distr.core.paths import DB_DIR
+from distr.core.db.time import utc_now_naive
 
 # Legacy settings key kept only for one-time import from old broken storage attempts.
 KANBAN_BOARD_NOTES_SETTINGS_KEY = "kanban_sidebar_documents"
@@ -101,7 +101,7 @@ def _notes_from_active_md(text: str) -> list[dict[str, Any]]:
                 "id": secrets.token_hex(8),
                 "title": title,
                 "content": body,
-                "modified_at": datetime.utcnow().isoformat() + "Z",
+                "modified_at": utc_now_naive().isoformat() + "Z",
             }
         )
     return notes
@@ -115,7 +115,7 @@ def _active_md_from_notes(notes: list[dict[str, Any]]) -> str:
         lines.append(f"## {title}")
         lines.append(body or "(empty)")
         lines.append("")
-    lines.append(f"_updated: {datetime.utcnow().isoformat()}Z_")
+    lines.append(f"_updated: {utc_now_naive().isoformat()}Z_")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -162,7 +162,7 @@ def create_board_note(*, title: str = "Untitled", content: str = "", board_id: i
         "id": secrets.token_hex(8),
         "title": (title or "Untitled").strip() or "Untitled",
         "content": content or "",
-        "modified_at": datetime.utcnow().isoformat() + "Z",
+        "modified_at": utc_now_naive().isoformat() + "Z",
     }
     notes = load_board_notes(board_id=board_id)
     notes.append(note)
@@ -186,7 +186,7 @@ def update_board_note(
         note["title"] = title.strip() or "Untitled"
     if content is not None:
         note["content"] = content
-    note["modified_at"] = datetime.utcnow().isoformat() + "Z"
+    note["modified_at"] = utc_now_naive().isoformat() + "Z"
     notes[idx] = note
     save_board_notes(notes, board_id=board_id)
     return note

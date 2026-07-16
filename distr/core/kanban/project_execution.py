@@ -13,6 +13,7 @@ from typing import Any
 
 from distr.core.db import Base, engine, get_session
 from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+from distr.core.db.time import utc_now_naive
 
 
 def _json_dumps(value: Any) -> str:
@@ -129,7 +130,7 @@ def append_execution_event(
             return
         if row and status:
             row.status = status
-            row.updated_at = datetime.utcnow()
+            row.updated_at = utc_now_naive()
         session.add(ProjectExecutionEvent(
             session_id=int(session_id),
             event_type=event_type,
@@ -182,8 +183,8 @@ def complete_execution_session(
         row.status = status
         row.output_packet = _json_dumps(output_packet or {})
         row.error = error or ""
-        row.completed_at = datetime.utcnow()
-        row.updated_at = datetime.utcnow()
+        row.completed_at = utc_now_naive()
+        row.updated_at = utc_now_naive()
         session.add(ProjectExecutionEvent(
             session_id=row.id,
             event_type="session_completed",
@@ -317,7 +318,7 @@ def _loads(value: str | None) -> Any:
 def _seconds_between(start: datetime | None, end: datetime | None = None) -> int:
     if not start:
         return 0
-    finish = end or datetime.utcnow()
+    finish = end or utc_now_naive()
     try:
         return max(0, int((finish - start).total_seconds()))
     except Exception:
@@ -367,7 +368,7 @@ def _enrich_execution_session_for_ui(
 def serialize_execution_session(row: ProjectExecutionSession, *, include_events: bool = False) -> dict[str, Any]:
     elapsed_seconds = None
     if row.started_at:
-        end = row.completed_at or row.updated_at or datetime.utcnow()
+        end = row.completed_at or row.updated_at or utc_now_naive()
         elapsed_seconds = max(0, int((end - row.started_at).total_seconds()))
     data = {
         "id": row.id,
