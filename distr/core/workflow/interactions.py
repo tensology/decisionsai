@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import secrets
+import threading
 import time
 from typing import Any
 
@@ -52,6 +53,8 @@ def allowed_actions_for_kind(kind: str) -> list[str]:
     normalized = (kind or "").strip().lower()
     if normalized == "route_approval":
         return ["approve", "reject"]
+    if normalized == "pre_execution_approval":
+        return ["approve", "stop"]
     if normalized in {"approval", "run_briefing"}:
         return ["approve", "stop", "feedback"]
     return ["continue", "stop", "feedback"]
@@ -117,7 +120,7 @@ def classify_reply(value: str, allowed_actions: list[str]) -> tuple[str | None, 
     low = clean.lower()
     if re.search(r"\b(reject|decline|deny|no|nope|do not|don't)\b", low) and "reject" in allowed_actions:
         return "reject", clean
-    if re.search(r"\b(stop|cancel|abort|hold off|not now)\b", low) and "stop" in allowed_actions:
+    if re.search(r"\b(stop|cancel|abort|hold off|not now|no|nope|do not|don't)\b", low) and "stop" in allowed_actions:
         return "stop", clean
     if re.search(r"\b(approve|approved|yes|yep|go ahead|proceed)\b", low) and "approve" in allowed_actions:
         return "approve", clean
@@ -144,6 +147,7 @@ def pending_interactions(*, chat_id: int | str | None = None) -> list[dict[str, 
 def resolve_interaction(
     *, token: str, action: str, response_text: str = "", source: str = "telegram",
     resolver_id: str = "", chat_id: int | str | None = None,
+    background: bool = False,
 ) -> dict[str, Any]:
     """Atomically claim an interaction, then apply its workflow transition."""
     _ensure_table()
@@ -196,10 +200,59 @@ def resolve_interaction(
                 }
             return {"error": "Interaction was resolved concurrently", "status_code": 409, "idempotent": True}
 
+    if background:
+        threading.Thread(
+            target=_apply_claimed_interaction,
+            kwargs={
+                "item": item,
+                "token": token,
+                "action": action,
+                "response_text": response_text,
+                "source": source,
+                "resolved_at": now,
+            },
+            name=f"workflow-interaction-{item['run_id']}-{action}",
+            daemon=True,
+        ).start()
+        return {
+            "success": True,
+            "run_id": item["run_id"],
+            "action": action,
+            "queued": True,
+        }
+
+    return _apply_claimed_interaction(
+        item=item,
+        token=token,
+        action=action,
+        response_text=response_text,
+        source=source,
+        resolved_at=now,
+    )
+
+
+def _apply_claimed_interaction(
+    *,
+    item: dict[str, Any],
+    token: str,
+    action: str,
+    response_text: str,
+    source: str,
+    resolved_at: float,
+) -> dict[str, Any]:
+    """Apply a previously claimed interaction, optionally on a worker thread."""
     try:
         if item["kind"] == "route_approval":
             from distr.core.workflow.service import apply_run_route_approval
             result = apply_run_route_approval(int(item["run_id"]), approved=action == "approve")
+        elif item["kind"] == "pre_execution_approval" and action == "approve":
+            from distr.core.workflow.dispatcher import approve_pre_execution_step
+
+            result = approve_pre_execution_step(
+                int(item["run_id"]),
+                int(item["step_id"]),
+                response_text=response_text,
+            )
         elif action == "stop":
             from distr.core.workflow.dispatcher import cancel_run
             result = {"success": bool(cancel_run(int(item["run_id"]))), "action": "stop"}
@@ -216,7 +269,7 @@ def resolve_interaction(
         return {"error": str(exc), "status_code": 500}
 
     with engine.begin() as conn:
-        conn.execute(text("UPDATE workflow_interactions SET status='resolved', resolved_at=:now, error=NULL WHERE token=:token AND status='resolving'"), {"now": now, "token": token})
+        conn.execute(text("UPDATE workflow_interactions SET status='resolved', resolved_at=:now, error=NULL WHERE token=:token AND status='resolving'"), {"now": resolved_at, "token": token})
     try:
         from distr.core.human_engagement import mark_workflow_engagement_answered
 
@@ -229,12 +282,13 @@ def resolve_interaction(
 
 def handle_telegram_workflow_reply(
     text_value: str, *, chat_id: int | str | None, resolver_id: str = "", source: str = "telegram_text",
+    background: bool = False,
 ) -> dict[str, Any] | None:
     """Resolve an explicit callback or an unambiguous pending workflow reply."""
     clean = str(text_value or "").strip()
     callback = re.fullmatch(r"wf:([A-Za-z0-9_-]+):(approve|reject|continue|stop)", clean)
     if callback:
-        return resolve_interaction(token=callback.group(1), action=callback.group(2), response_text=callback.group(2), source=source, resolver_id=resolver_id, chat_id=chat_id)
+        return resolve_interaction(token=callback.group(1), action=callback.group(2), response_text=callback.group(2), source=source, resolver_id=resolver_id, chat_id=chat_id, background=background)
     pending = pending_interactions(chat_id=chat_id)
     if not pending:
         return None
@@ -252,6 +306,7 @@ def handle_telegram_workflow_reply(
                     return resolve_interaction(
                         token=item["token"], action=action, response_text=response,
                         source=source, resolver_id=resolver_id, chat_id=chat_id,
+                        background=background,
                     )
         # Never guess which run a short response controls.
         short_decision = re.fullmatch(r"(?i)\s*(yes|no|approve|reject|continue|stop|go ahead|resume)\s*[.!]?\s*", clean)
@@ -263,7 +318,7 @@ def handle_telegram_workflow_reply(
     action, response = classify_reply(clean, allowed)
     if not action:
         return None
-    return resolve_interaction(token=item["token"], action=action, response_text=response, source=source, resolver_id=resolver_id, chat_id=chat_id)
+    return resolve_interaction(token=item["token"], action=action, response_text=response, source=source, resolver_id=resolver_id, chat_id=chat_id, background=background)
 
 
 def workflow_reply_message(result: dict[str, Any], *, voice: bool = False) -> str:

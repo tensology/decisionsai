@@ -77,6 +77,50 @@ def test_multiple_pending_can_target_explicit_run(monkeypatch):
     assert captured == [(21, "approve")]
 
 
+def test_telegram_resolution_queues_slow_work_off_ui_thread(monkeypatch):
+    interaction = _create()
+    captured = []
+    workers = []
+
+    class DeferredThread:
+        def __init__(self, *, target, kwargs, name, daemon):
+            self.target = target
+            self.kwargs = kwargs
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            workers.append(self)
+
+    monkeypatch.setattr(
+        "distr.core.workflow.interactions.threading.Thread",
+        DeferredThread,
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.dispatcher.continue_waiting_step",
+        lambda run_id, feedback: captured.append((run_id, feedback)) or {"success": True},
+    )
+
+    result = handle_telegram_workflow_reply(
+        f"wf:{interaction['token']}:approve",
+        chat_id=123,
+        background=True,
+    )
+
+    assert result == {
+        "success": True,
+        "run_id": 20,
+        "action": "approve",
+        "queued": True,
+    }
+    assert captured == []
+    assert len(workers) == 1
+
+    workers[0].target(**workers[0].kwargs)
+    assert captured == [(20, "approve")]
+    assert pending_interactions(chat_id=123) == []
+
+
 def test_route_reject_is_deterministic(monkeypatch):
     interaction = _create(kind="route_approval")
     captured = []

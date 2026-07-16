@@ -28,6 +28,9 @@ class RouteDecision:
     policy_route: dict[str, Any] = field(default_factory=dict)
     override_route: dict[str, Any] | None = None
     skills: list[str] = field(default_factory=list)
+    task_intent: str = "general"
+    risk_flags: list[str] = field(default_factory=list)
+    ui_heavy: bool = False
 
     def to_route_dict(self) -> dict[str, Any]:
         """Dict consumed by run_project_task and API responses."""
@@ -39,6 +42,11 @@ class RouteDecision:
             "rationale": self.rationale,
             "requires_approval": self.requires_approval,
             "skills": list(self.skills or []),
+            "task_profile": {
+                "intent": self.task_intent,
+                "risk_flags": list(self.risk_flags or []),
+                "ui_heavy": bool(self.ui_heavy),
+            },
         }
         if self.codex_reasoning_effort:
             out["codex_reasoning_effort"] = self.codex_reasoning_effort
@@ -79,6 +87,22 @@ def _infer_harness_category(text: str) -> str | None:
     if any(term in lowered for term in ("auth", "migration", "architecture", "refactor", "integration")):
         return "fullstack"
     return None
+
+
+def _task_intent(text: str, intake_profile: dict[str, Any]) -> str:
+    """Return a vendor-neutral task intent used by per-step Auto routing."""
+    lowered = (text or "").lower()
+    if any(term in lowered for term in ("deploy", "release", "publish", "ship")):
+        return "deployment"
+    if any(term in lowered for term in ("review", "audit", "validate", "verify", "qa")):
+        return "review"
+    if any(term in lowered for term in ("plan", "scope", "requirements", "architecture", "design")):
+        return "planning"
+    if intake_profile.get("ui_heavy"):
+        return "ui_implementation"
+    if any(term in lowered for term in ("fix", "implement", "build", "refactor", "code")):
+        return "implementation"
+    return "general"
 
 
 def _apply_harness_preferences(
@@ -436,6 +460,9 @@ def resolve_execution_route(
         policy_route=dict(baseline),
         override_route=override_payload,
         skills=filter_known_skill_ids(skills),
+        task_intent=_task_intent(ticket_text, intake_profile),
+        risk_flags=list(intake_profile.get("risk_flags") or []),
+        ui_heavy=bool(intake_profile.get("ui_heavy")),
     )
 
     if override_requested_backend:
@@ -469,7 +496,11 @@ def resolve_execution_route(
                 ticket_id=getattr(ticket, "id", None) if ticket else None,
                 board_id=board_id,
                 project_id=getattr(project, "id", None) if project else None,
-                summary=f"Route {backend_id} ({source}) for {level} complexity",
+                summary=(
+                    f"Selected {backend_id}"
+                    + (f" / {model}" if model else " / auto")
+                    + f" for {level}-complexity work. {rationale}"
+                ),
                 payload={
                     "decision": decision.to_route_dict(),
                     "policy_route": baseline,

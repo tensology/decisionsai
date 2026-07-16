@@ -9,7 +9,11 @@ from distr.core.project_cli_backends.contracts import (
     normalize_execution_result,
 )
 from distr.core.workspace_memory.delta import normalize_memory_delta
-from distr.core.project_cli_backends.model_policy import apply_workflow_model_policy
+from distr.core.project_cli_backends.model_policy import (
+    apply_auto_step_role_policy,
+    apply_workflow_model_policy,
+    build_auto_fallback_chain,
+)
 from distr.core.project_cli_backends.registry import (
     _BoundedCliOutput,
     OneShotCliBackend,
@@ -23,6 +27,7 @@ from distr.core.project_cli_backends.registry import (
 )
 from distr.core.workflow.step_executor import StepExecutorMixin
 from distr.core.workflow.verification import _run_verification
+from distr.core.kanban.ticket_workflow_engagement import build_route_selection_message
 
 
 def test_cli_output_buffer_bounds_chatty_workers_and_preserves_completion_tail():
@@ -258,6 +263,207 @@ def test_auto_policy_preserves_board_scoped_non_pi_backend_without_step_override
     assert resolved["policy_source"] == "board_override_native_auto_preserved"
 
 
+def test_auto_policy_preserves_resolved_codex_complexity_route():
+    resolved = apply_workflow_model_policy(
+        {"backend": "codex", "model": "auto", "source": "policy", "complexity": "medium"},
+        workflow=type("Workflow", (), {"run_settings": '{}'})(),
+        config={},
+        settings={},
+    )
+
+    assert resolved["backend"] == "codex"
+    assert resolved["model"] == "auto"
+    assert resolved["policy_source"] == "policy_native_auto_preserved"
+    assert "model_provider" not in resolved
+
+
+def test_explicit_prefer_local_policy_can_reselect_resolved_codex_route(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [
+            {"id": "ornith:9b", "provider": "ollama", "local": True, "free": True},
+        ],
+    )
+    resolved = apply_workflow_model_policy(
+        {"backend": "codex", "model": "auto", "source": "policy", "complexity": "medium"},
+        workflow=type("Workflow", (), {"run_settings": '{"prefer_local": true}'})(),
+        config={},
+        settings={},
+    )
+
+    assert resolved["backend"] == "pi"
+    assert resolved["model"] == "ornith:9b"
+
+
+def test_explicit_codex_step_is_not_given_an_ollama_model_by_workflow_preference(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [
+            {"id": "ornith:9b", "provider": "ollama", "local": True, "free": True},
+        ],
+    )
+    resolved = apply_workflow_model_policy(
+        {"backend": "codex", "model": "auto", "complexity": "medium"},
+        workflow=type("Workflow", (), {"run_settings": '{"prefer_local": true}'})(),
+        config={"backend_id": "codex", "model": "auto"},
+        settings={},
+    )
+
+    assert resolved["backend"] == "codex"
+    assert resolved["model"] == "auto"
+    assert resolved["policy_source"] == "step_backend_native_auto_preserved"
+
+
+def test_auto_step_policy_routes_medium_implementation_to_configured_ornith(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [
+            {"id": "ornith:35b", "provider": "ollama", "local": True, "free": True},
+        ],
+    )
+    resolved = apply_auto_step_role_policy(
+        {"backend": "codex", "model": "auto", "complexity": "medium"},
+        workflow=type("Workflow", (), {"run_settings": '{"auto_route_models": true}'})(),
+        config={"model": "auto"},
+        settings={"coding_llm_provider": "ollama", "coding_llm_model": "ornith:35b"},
+        step_role="implementation",
+    )
+
+    assert resolved["backend"] == "pi"
+    assert resolved["model"] == "ornith:35b"
+    assert resolved["model_provider"] == "ollama"
+    assert resolved["auto_detected"] is True
+    assert resolved["step_role"] == "implementation"
+    assert resolved["fallback_chain"][0]["backend"] == "codex"
+
+
+def test_auto_step_policy_can_plan_with_codex_then_implement_with_ornith(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [
+            {"id": "ornith:35b", "provider": "ollama", "local": True, "free": True},
+        ],
+    )
+    workflow = type("Workflow", (), {"run_settings": '{"auto_route_models": true}'})()
+    settings = {"coding_llm_provider": "ollama", "coding_llm_model": "ornith:35b"}
+
+    planning = apply_auto_step_role_policy(
+        {"backend": "pi", "model": "auto", "complexity": "medium"},
+        workflow=workflow,
+        config={"model": "auto"},
+        settings=settings,
+        step_role="planning",
+    )
+    implementation = apply_auto_step_role_policy(
+        {"backend": "pi", "model": "auto", "complexity": "medium"},
+        workflow=workflow,
+        config={"model": "auto"},
+        settings=settings,
+        step_role="implementation",
+        prior_role_routes={"planning": planning},
+    )
+
+    assert planning["backend"] == "codex"
+    assert implementation["backend"] == "pi"
+    assert implementation["model"] == "ornith:35b"
+    assert implementation["model_provider"] == "ollama"
+
+
+def test_auto_step_policy_promotes_high_consequence_implementation_to_codex():
+    resolved = apply_auto_step_role_policy(
+        {
+            "backend": "pi",
+            "model": "auto",
+            "complexity": "medium",
+            "task_profile": {"intent": "implementation", "risk_flags": ["payments"]},
+        },
+        workflow=type("Workflow", (), {"run_settings": '{"auto_route_models": true}'})(),
+        config={"model": "auto"},
+        settings={},
+        step_role="implementation",
+    )
+
+    assert resolved["backend"] == "codex"
+    assert "high-consequence" in resolved["policy_reason"]
+
+
+def test_auto_step_policy_uses_independent_hy3_review_after_codex():
+    resolved = apply_auto_step_role_policy(
+        {"backend": "codex", "model": "auto", "complexity": "high"},
+        workflow=type("Workflow", (), {"run_settings": '{"auto_route_models": true}'})(),
+        config={"model": "auto"},
+        settings={"openrouter_enabled": True, "openrouter_key": "configured"},
+        step_role="review",
+        prior_role_routes={"implementation": {"backend": "codex", "model": "auto"}},
+    )
+
+    assert resolved["backend"] == "pi"
+    assert resolved["model"] == "tencent/hy3-preview"
+    assert resolved["model_provider"] == "openrouter"
+
+
+def test_auto_step_policy_does_nothing_when_auto_detection_is_off(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [{"id": "ornith:35b", "provider": "ollama", "local": True}],
+    )
+    resolved = apply_auto_step_role_policy(
+        {"backend": "codex", "model": "auto", "complexity": "medium"},
+        workflow=type("Workflow", (), {"run_settings": '{"auto_route_models": false}'})(),
+        config={"model": "auto"},
+        settings={},
+        step_role="implementation",
+    )
+    assert resolved == {"backend": "codex", "model": "auto", "complexity": "medium"}
+
+
+def test_auto_step_policy_preserves_evidence_backed_failover_on_loop_retry():
+    resolved = apply_auto_step_role_policy(
+        {
+            "backend": "codex",
+            "model": "auto",
+            "complexity": "medium",
+            "source": "runtime_provider_failover",
+            "fallback_from": "pi",
+        },
+        workflow=type("Workflow", (), {"run_settings": '{"auto_route_models": true}'})(),
+        config={"model": "auto"},
+        settings={"coding_llm_provider": "ollama", "coding_llm_model": "ornith:9b"},
+        step_role="implementation",
+    )
+
+    assert resolved["backend"] == "codex"
+    assert resolved["source"] == "runtime_provider_failover"
+    assert resolved["fallback_from"] == "pi"
+
+
+def test_auto_fallback_ladder_keeps_claude_last():
+    chain = build_auto_fallback_chain(
+        {"backend": "pi", "model": "ornith:35b", "model_provider": "ollama"},
+        settings={"openrouter_enabled": True, "openrouter_key": "configured"},
+    )
+    assert [item["backend"] for item in chain] == ["codex", "cursor", "pi", "claude_code"]
+    assert chain[2]["model"] == "tencent/hy3-preview"
+    assert chain[-1]["backend"] == "claude_code"
+
+
+def test_route_selection_message_names_model_role_and_reason_plainly():
+    message = build_route_selection_message(
+        ticket_title="Pizza House menu integrity",
+        step_name="Implement menu validation",
+        step_role="implementation",
+        backend="pi",
+        model="ornith:35b",
+        provider="ollama",
+        reason="Auto selected the configured local model for medium complexity.",
+    )
+
+    assert "Ornith 35B, running locally" in message
+    assert "for the implementation" in message
+    assert "medium complexity" in message
+    assert "route" not in message.lower()
+
+
 def test_prefer_local_policy_honors_configured_ollama_coding_model(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.models_catalog.pi_cli_models",
@@ -387,6 +593,9 @@ def test_pi_workflow_command_honours_selected_local_provider_and_model():
     assert command[:6] == [
         "/usr/local/bin/pi", "-p", "--provider", "ollama", "--model", "ornith:35b"
     ]
+    system_prompt = command[command.index("--append-system-prompt") + 1]
+    assert "Status: completed | failed | needs_input" in system_prompt
+    assert "Do not omit Status" in system_prompt
     assert command[-1] == "Scope the landing page."
 
 
@@ -510,7 +719,29 @@ def test_runtime_provider_failover_defaults_between_pi_and_codex():
     assert StepExecutorMixin._runtime_provider_fallback_route(
         {"backend": "codex", "model": "auto"},
         {},
-    ) == {"backend": "pi", "model": "auto"}
+    ) == {"backend": "claude_code", "model": "auto"}
+
+
+def test_runtime_provider_failover_uses_auto_chain_and_skips_interactive_cursor():
+    route = {
+        "backend": "codex",
+        "model": "auto",
+        "fallback_chain": [
+            {"backend": "cursor", "model": "auto", "automatic": False},
+            {
+                "backend": "pi",
+                "model": "tencent/hy3-preview",
+                "model_provider": "openrouter",
+                "automatic": True,
+            },
+            {"backend": "claude_code", "model": "auto", "automatic": True},
+        ],
+    }
+    assert StepExecutorMixin._runtime_provider_fallback_route(route, {}) == {
+        "backend": "pi",
+        "model": "tencent/hy3-preview",
+        "model_provider": "openrouter",
+    }
 
 
 @pytest.mark.parametrize("message", ["Credit balance is too low", "Insufficient credits"])
@@ -537,6 +768,20 @@ def test_runtime_provider_failover_can_be_disabled_or_scoped():
         "model": "sonnet",
         "model_provider": "anthropic",
     }
+
+
+def test_step_override_preserves_specific_provider_and_model():
+    route = StepExecutorMixin._apply_step_harness_overrides(
+        {"backend": "codex", "model": "auto"},
+        {
+            "backend_id": "pi",
+            "model": "tencent/hy3-preview",
+            "model_provider": "openrouter",
+        },
+    )
+    assert route["backend"] == "pi"
+    assert route["model"] == "tencent/hy3-preview"
+    assert route["model_provider"] == "openrouter"
 
 
 def test_opencode_translates_kilocode_route_and_scopes_project_folder(tmp_path):

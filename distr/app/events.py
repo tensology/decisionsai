@@ -7,6 +7,7 @@ handler stays readable.
 
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -875,6 +876,7 @@ class EventHandlerMixin:
                             chat_id=telegram_chat_id,
                             resolver_id=str(telegram_chat_id or ""),
                             source="telegram_voice",
+                            background=True,
                         )
                         if workflow_reply:
                             self.telegram_manager._stop_typing_loop()
@@ -960,6 +962,9 @@ class EventHandlerMixin:
             )
 
         force_telegram = bool(data.get("force_telegram_delivery"))
+        explicit_text_notification = bool(
+            data.get("explicit_notification_intent") and str(text or "").strip()
+        )
         telegram_chat_voice_reply = str(data.get("input_type") or "").strip().lower() == "voice"
         if (
             remote_ctx
@@ -979,7 +984,11 @@ class EventHandlerMixin:
 
             threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
         elif (
-            (is_voice_delivery_provider(provider) or data.get('input_type') == 'text')
+            (
+                is_voice_delivery_provider(provider)
+                or data.get('input_type') == 'text'
+                or explicit_text_notification
+            )
             and has_telegram_manager
         ):
             # Capture self reference for thread
@@ -997,7 +1006,11 @@ class EventHandlerMixin:
         else:
             if data.get('input_type') == 'text' and not has_telegram_manager:
                 logger.warning("[EVENT QUEUE] ⚠️ Ignoring plain-text send_to_telegram (Telegram manager not available)")
-            elif not is_voice_delivery_provider(provider) and data.get('input_type') != 'text':
+            elif (
+                not is_voice_delivery_provider(provider)
+                and data.get('input_type') != 'text'
+                and not explicit_text_notification
+            ):
                 logger.warning(f"[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (provider={provider}, not a voice provider)")
             elif not has_telegram_manager:
                 logger.warning("[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (Telegram manager not available)")
@@ -1734,6 +1747,12 @@ class EventHandlerMixin:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
             provider_id = normalize_voice_provider(tts_provider)
+            # espeak/phonemizer can raise a line-count mismatch for multi-line
+            # notification text even though spoken audio has no line semantics.
+            # Normalising whitespace also keeps remote workflow updates compact.
+            spoken_text = re.sub(r"\s+", " ", str(text or "")).strip()
+            if not spoken_text:
+                return None
 
             try:
                 descriptor = tts_registry.get(provider_id)
@@ -1743,7 +1762,7 @@ class EventHandlerMixin:
 
             audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
             try:
-                descriptor.generate_audio(text, voice_id or descriptor.default_voice, 1.0, str(audio_file))
+                descriptor.generate_audio(spoken_text, voice_id or descriptor.default_voice, 1.0, str(audio_file))
                 logger.info(f"Generated {provider_id} TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
                 return audio_file
             except ImportError:

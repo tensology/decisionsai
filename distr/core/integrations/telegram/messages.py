@@ -369,6 +369,7 @@ class TelegramMessagesMixin:
                         if inner_data.get("callback_data")
                         else "telegram_text"
                     ),
+                    background=True,
                 )
                 if workflow_reply:
                     if not workflow_reply.get("idempotent"):
@@ -1111,6 +1112,7 @@ class TelegramMessagesMixin:
                     chat_id=getattr(self, "_telegram_batch_thread_id", None),
                     resolver_id=str(getattr(self, "telegram_user_id", "") or ""),
                     source="telegram_voice",
+                    background=True,
                 )
                 if workflow_reply:
                     self._stop_typing_loop()

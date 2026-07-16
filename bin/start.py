@@ -3,6 +3,30 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
+
+STARTUP_HELP = """\
+Usage:
+  bin/start.py [--skip-kill-existing]
+  bin/start.py --backup-database PATH
+  bin/start.py --verify-database-backup PATH
+  bin/start.py --restore-database PATH --yes
+
+Options:
+  -h, --help                    Show this help and exit without starting DecisionsAI.
+  --skip-kill-existing          Start without stopping another DecisionsAI process.
+  --backup-database PATH        Create and verify a database backup.
+  --verify-database-backup PATH Verify an existing database backup.
+  --restore-database PATH --yes Restore a verified backup after explicit confirmation.
+"""
+
+
+# Help must be handled before any environment bootstrap, native-library import,
+# duplicate-process cleanup, or GUI initialization.  Operator inspection must
+# never have the side effect of stopping or starting the application.
+if __name__ == "__main__" and any(flag in sys.argv[1:] for flag in ("-h", "--help")):
+    print(STARTUP_HELP, end="")
+    raise SystemExit(0)
+
 # On Windows, prevent ALL child processes from flashing a console window.
 # This patches subprocess.Popen to always use CREATE_NO_WINDOW.
 if sys.platform == 'win32':

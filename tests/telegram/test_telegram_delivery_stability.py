@@ -104,6 +104,23 @@ def test_send_to_telegram_event_reaches_worker_when_socket_disconnected(monkeypa
     }]
 
 
+def test_explicit_workflow_progress_reaches_telegram_without_voice_provider(monkeypatch):
+    app = DummyApp(DummyTelegramManager(connected=True))
+    monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)
+
+    event = {
+        "text": "Pizza House: Step 2 has started.",
+        "provider": "",
+        "explicit_notification_intent": True,
+        "engagement_kind": "workflow_progress",
+        "run_id": 96,
+        "step_id": 1926,
+    }
+    app._evt_send_to_telegram(event)
+
+    assert app.worker_calls == [event]
+
+
 def test_automation_send_to_telegram_bypasses_remote_delivery(monkeypatch):
     app = DummyApp(DummyTelegramManager(connected=True))
     remote_calls = []

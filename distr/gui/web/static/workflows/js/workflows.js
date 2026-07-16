@@ -7416,7 +7416,18 @@
 
     function formatRouteSource(source) {
         if (!source) return "policy";
-        return String(source).replace(/_/g, " ");
+        var key = String(source).trim().toLowerCase();
+        var labels = {
+            auto_role_route: "Auto choice",
+            workflow_policy_free_local: "Auto · local/free",
+            workflow_policy_free_eligible: "Auto · free eligible",
+            runtime_provider_failover: "Automatic failover",
+            step_execution_route: "Pinned for this step",
+            explicit_request_policy: "Requested in this job",
+            orchestrator_override: "Orchestrator choice",
+            board_override: "Board policy"
+        };
+        return labels[key] || String(source).replace(/_/g, " ");
     }
 
     function workflowCleanStringList(value) {
@@ -7969,7 +7980,14 @@
             return String(ticket.id) === String(selectedWorkflowQueueTicketId);
         });
         if (!stillVisible) {
-            selectWorkflowQueueTicket(String(visibleTickets[0].id));
+            // On refresh/reconnect, recover the ticket that is actually running
+            // before falling back to the first queue row. Otherwise Mission
+            // Control can label one ticket while showing another ticket's run.
+            var activeRun = currentWorkflowActiveRun();
+            var activeTicket = activeRun && activeRun.ticket_id && visibleTickets.filter(function (ticket) {
+                return String(ticket.id) === String(activeRun.ticket_id);
+            })[0];
+            selectWorkflowQueueTicket(String(activeTicket ? activeTicket.id : visibleTickets[0].id));
             return;
         }
         syncWorkflowQueueSelectionUi();
@@ -12138,11 +12156,22 @@
 
     function loopFeedFormatEventSummary(event) {
         var type = String((event && event.event_type) || "").toLowerCase();
+        var subtype = String((event && (event.legacy_event_type || event.subtype)) || "").toLowerCase();
         var summary = String((event && event.summary) || "").trim();
         var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
         var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
         var validation = evidence.validation && typeof evidence.validation === "object" ? evidence.validation : {};
         var status = String((event && event.status) || payload.decision || "").toLowerCase();
+        if (subtype === "provider_failover") {
+            var failedBackend = String(payload.failed_backend || "the first worker").toLowerCase();
+            var fallbackBackend = String(payload.fallback_backend || "another worker").toLowerCase();
+            var failedLabel = (failedBackend === "pi" || failedBackend === "ollama") ? "The local model" : failedBackend;
+            var fallbackLabel = fallbackBackend === "codex" ? "Codex" :
+                (fallbackBackend === "claude_code" ? "Claude Code" : fallbackBackend);
+            return failedLabel.charAt(0).toUpperCase() + failedLabel.slice(1) +
+                " couldn't complete this step, so the orchestrator switched to " +
+                fallbackLabel + " and continued automatically.";
+        }
         if (type === "workflow_step_completed") {
             var stepName = payload.step_name || "Step";
             if (status === "failed" || status === "fail" || validation.verdict === "fail") {
@@ -12154,7 +12183,11 @@
             }
             return stepName + " passed.";
         }
-        if (summary) return summary;
+        if (summary) {
+            // Worker commentary is useful, but backend prefixes are not part of
+            // the human update shown in Mission Control.
+            return summary.replace(/^(?:codex|claude|pi)\s+/i, "");
+        }
         if (type === "workflow_run_started") return "Run started.";
         if (type === "workflow_run_completed") return "Run finished.";
         if (type === "workflow_run_cancelled") return "Run cancelled.";
@@ -12172,13 +12205,16 @@
         var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
         var validation = evidence.validation && typeof evidence.validation === "object" ? evidence.validation : {};
         var lines = [];
-        var ticketId = event && (event.ticket_id || payload.ticket_id);
-        var ticketTitle = payload.ticket_title || payload.title || "";
-        if (ticketId || ticketTitle) {
-            lines.push("Ticket: " + workflowTicketLabel(ticketId, ticketTitle));
-        }
         if (payload.step_name) lines.push("Step: " + payload.step_name);
-        if (payload.action_type) lines.push("Executor: " + payload.action_type);
+        if (payload.action_type) {
+            var executorLabels = {
+                send_to_project_cli: "Project coding agent",
+                agent_instruction: "Orchestrator agent",
+                playwright: "Browser validation",
+                run_command: "Project command"
+            };
+            lines.push("Worker: " + (executorLabels[payload.action_type] || String(payload.action_type).replace(/_/g, " ")));
+        }
         if (validation.validation_type) lines.push("Check: " + validation.validation_type);
         if (validation.verdict === "fail" && validation.expected) {
             lines.push("Expected: " + validation.expected);
@@ -12337,8 +12373,37 @@
     function loopFeedItemIsNoise(item) {
         var type = String((item && item.event_type) || "").toLowerCase();
         var title = String((item && item.title) || "").toLowerCase();
+        var body = String((item && item.body) || "").toLowerCase();
         if (type === "workflow_run_started" || type === "user_notified") return true;
         if (title === "workflow run started" || title === "user notified") return true;
+        if ([
+            "workflow step preflight",
+            "skill provisioned",
+            "execution session created",
+            "execution preflight",
+            "backend handoff created",
+            "backend handoff updated",
+            "project runtime snapshot",
+            "execution executor start",
+            "execution backend started",
+            "execution agent start",
+            "execution agent end",
+            "execution backend finished",
+            "execution session completed",
+            "project handoff dispatched",
+            "execution dispatched"
+        ].indexOf(title) >= 0) return true;
+        // Keep the durable event ledger complete, while the primary activity
+        // feed shows decisions and outcomes instead of transport plumbing.
+        if (title === "execution message start" || title === "execution message end" ||
+            title === "execution command start" || title === "execution heartbeat") return true;
+        if (title === "execution message update") {
+            if (!body || body === "start" || body === "text_start" || body === "apply patch") return true;
+            if (/^(worker is (processing|updating)|worker ran|worker loaded)/.test(body)) return true;
+            if (/openai codex v|authrequired|rmcp::|codex_rmcp|codex_otel|codex_core_skills|interface\.icon|callback_url|execution packet|skill descriptions were shortened/.test(body)) return true;
+            if (body === "work continues." || body === "backend_finished" || body === "agent_end") return true;
+            if (/^\{['\"]role['\"]:\s*['\"]user/.test(body)) return true;
+        }
         return false;
     }
 

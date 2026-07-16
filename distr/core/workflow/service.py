@@ -28,7 +28,14 @@ logger = logging.getLogger(__name__)
 # ── Workflow type validation ──
 
 VALID_WORKFLOW_TYPES = {"manual", "instruction", "scheduled", "audit"}
-USER_VISIBLE_WORKFLOW_TYPES = {"manual", "instruction", "scheduled"}
+USER_VISIBLE_WORKFLOW_TYPES = {
+    "manual",
+    "instruction",
+    "scheduled",
+    "retro",
+    "review",
+    "deploy",
+}
 WORKFLOW_LIFECYCLE_ORDER = {
     "ideation": 0,
     "development": 1,
@@ -357,6 +364,11 @@ from distr.core.workflow.verification import (  # noqa: F401, E402
 
 # Import/Export (moved to distr.core.workflow.import_export)
 from distr.core.workflow import import_export as _import_export_module  # noqa: E402
+
+# Preserve the module's production session provider so the wrapper can honor
+# either service-level or import/export-level dependency injection. This keeps
+# imports atomic in production and deterministic in isolated databases.
+_DEFAULT_IMPORT_EXPORT_GET_SESSION = _import_export_module.get_session
 from distr.core.workflow.import_export import (  # noqa: F401, E402
     export_workflow,
     export_workflow_bundle,
@@ -430,7 +442,10 @@ def import_workflow(data: Dict[str, Any]) -> Optional[int]:
     """Portable JSON import (unified or legacy). Delegates to ``import_export``."""
     if not isinstance(data, dict):
         return None
-    return _import_export_module.import_workflow(data)
+    session_factory = get_session
+    if _import_export_module.get_session is not _DEFAULT_IMPORT_EXPORT_GET_SESSION:
+        session_factory = _import_export_module.get_session
+    return _import_export_module.import_workflow(data, session_factory=session_factory)
 
 
 # ── Step config validation ──

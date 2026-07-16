@@ -45,6 +45,8 @@ from distr.core.integrations.base import IntegrationReconnectMixin
 # How often to repeat the same "not connected" summary in the main log.
 _CONNECT_FAILURE_LOG_INTERVAL_S = 300.0
 _IMMEDIATE_CLOSE_WINDOW_S = 3.0
+_TELEGRAM_ONLINE_NOTICE_COOLDOWN_S = 6 * 60 * 60
+_TELEGRAM_ONLINE_NOTICE_STATE_KEY = "telegram_online_notice"
 
 
 def relay_endpoint_label(server_url: str) -> str:
@@ -126,9 +128,50 @@ def telegram_online_notice_enabled() -> bool:
         from distr.core.settings import load_settings_from_db
 
         settings = load_settings_from_db()
-        return bool(settings.get("telegram_send_online_notice", True))
+        return bool(settings.get("telegram_send_online_notice", False))
     except Exception:
+        # Lifecycle chatter should fail closed. A missing settings database must
+        # never turn repeated reconnects/restarts into outbound Telegram spam.
+        return False
+
+
+def claim_telegram_online_notice(*, now: float | None = None) -> bool:
+    """Durably rate-limit the optional startup notice across app processes."""
+    if not telegram_online_notice_enabled():
+        return False
+    timestamp = float(time.time() if now is None else now)
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.orchestrator import OrchestratorMaintenanceState
+
+        with get_session() as db:
+            state = (
+                db.query(OrchestratorMaintenanceState)
+                .filter(OrchestratorMaintenanceState.key == _TELEGRAM_ONLINE_NOTICE_STATE_KEY)
+                .first()
+            )
+            try:
+                payload = json.loads(state.value_json or "{}") if state else {}
+            except Exception:
+                payload = {}
+            last_sent_at = float(payload.get("last_sent_at") or 0.0)
+            if last_sent_at and timestamp - last_sent_at < _TELEGRAM_ONLINE_NOTICE_COOLDOWN_S:
+                return False
+            value_json = json.dumps({"last_sent_at": timestamp})
+            if state:
+                state.value_json = value_json
+            else:
+                db.add(
+                    OrchestratorMaintenanceState(
+                        key=_TELEGRAM_ONLINE_NOTICE_STATE_KEY,
+                        value_json=value_json,
+                    )
+                )
+            db.commit()
         return True
+    except Exception:
+        logger.warning("Could not persist Telegram online-notice cooldown; skipping notice", exc_info=True)
+        return False
 
 
 class TelegramWebSocketManager(
@@ -164,6 +207,7 @@ class TelegramWebSocketManager(
     _request_screen_update_signal = (
         pyqtSignal()
     )  # Signal to request screen info update on main thread
+    _ws_token_ready_signal = pyqtSignal(int, object)
 
     def __init__(self, server_url: str = "wss://www.decisionsai.net/ws/telegram"):
         super().__init__()
@@ -221,6 +265,7 @@ class TelegramWebSocketManager(
 
         # Connect screen update signal
         self._request_screen_update_signal.connect(self._refresh_qt_screens)
+        self._ws_token_ready_signal.connect(self._finish_ws_token_request)
 
         # Identity / State
         self.short_code: Optional[str] = None
@@ -255,6 +300,8 @@ class TelegramWebSocketManager(
         self._dns_fallback_applied: bool = False
         self._connected_at: float = 0.0
         self._immediate_close_count: int = 0
+        self._ws_token_request_id: int = 0
+        self._ws_token_fetch_in_progress: bool = False
 
         # Rate Limiting & Dedup
         self._last_send_time = 0
@@ -556,9 +603,40 @@ class TelegramWebSocketManager(
             )
             return
 
-        # Prepare URL
-        url_str = self.server_url
-        ws_token = self._fetch_ws_token()
+        # Relay authentication performs DNS + HTTPS and can take up to ten
+        # seconds during an outage.  Never perform it on Qt's event-loop thread:
+        # that used to freeze the entire UI on idle reconnects.  The completion
+        # signal is queued back to this QObject's thread before touching QWebSocket.
+        if self._ws_token_fetch_in_progress:
+            logger.debug("[Telegram] Relay token request already in progress")
+            return
+        self._ws_token_request_id += 1
+        request_id = self._ws_token_request_id
+        self._ws_token_fetch_in_progress = True
+
+        def fetch_token() -> None:
+            token = self._fetch_ws_token()
+            try:
+                self._ws_token_ready_signal.emit(request_id, token)
+            except RuntimeError:
+                logger.debug("[Telegram] Manager deleted before relay token completed")
+
+        threading.Thread(
+            target=fetch_token,
+            daemon=True,
+            name="TelegramRelayToken",
+        ).start()
+
+    def _finish_ws_token_request(self, request_id: int, ws_token: object) -> None:
+        """Finish relay authentication on the Qt thread."""
+        if request_id != self._ws_token_request_id:
+            logger.debug("[Telegram] Ignoring stale relay token response id=%s", request_id)
+            return
+        self._ws_token_fetch_in_progress = False
+        self._open_websocket_with_token(str(ws_token or ""))
+
+    def _open_websocket_with_token(self, ws_token: Optional[str]) -> None:
+        """Open QWebSocket after the blocking token request has completed."""
         if not ws_token:
             reason = (
                 self._connect_failure_reason
@@ -568,6 +646,7 @@ class TelegramWebSocketManager(
             if not self._active_disconnect:
                 self._schedule_reconnect("Telegram")
             return
+        url_str = self.server_url
         params = []
         params.append(f"token={quote(ws_token, safe='')}")
 
@@ -654,6 +733,10 @@ class TelegramWebSocketManager(
                 )
 
         self._is_disconnecting = True
+        # Invalidate any relay-token worker so a late HTTPS response cannot
+        # reopen the socket after an intentional disconnect.
+        self._ws_token_request_id += 1
+        self._ws_token_fetch_in_progress = False
 
         logger.info("Disconnecting Telegram WebSocket...")
 
@@ -662,43 +745,9 @@ class TelegramWebSocketManager(
             self._reconnect_timer.stop()
         self._stop_socket_heartbeat()
 
-        # Send shutdown message BEFORE closing the socket
-        # CRITICAL: Only send shutdown message if NOT checking staleness (manual app exit)
-        if not check_staleness and self.is_connected():
-            try:
-                logger.info("Sending shutdown message to Telegram...")
-                # Bypass rate limiting and deduplication for shutdown message
-                # Build message directly to ensure it's sent
-                msg = {"type": "send_message", "text": "Goodbye."}
-
-                # Get valid chat id
-                effective_chat_id = self.chat_id
-                if not effective_chat_id and self.telegram_user_id:
-                    effective_chat_id = self.telegram_user_id
-
-                if effective_chat_id:
-                    msg["chat_id"] = effective_chat_id
-                elif self.app_user_id:
-                    msg["app_user_id"] = self.app_user_id
-                else:
-                    logger.warning(
-                        "No destination (chat_id/user_id) for shutdown message"
-                    )
-
-                # Send message directly via WebSocket
-                if self.socket and self.socket.isValid():
-                    self._send_websocket_message(msg)
-                    logger.info("Shutdown message sent to Telegram")
-
-                    # Process events and wait a bit to ensure message is sent
-                    from PyQt6.QtCore import QCoreApplication
-
-                    QCoreApplication.processEvents()
-                    time.sleep(0.3)  # Give time for message to be sent
-                    self.socket.flush()
-                    QCoreApplication.processEvents()
-            except Exception as e:
-                logger.error(f"Error sending shutdown message: {e}", exc_info=True)
+        # Process lifecycle is an implementation detail. Do not bypass engagement
+        # policy to send "Goodbye" on shutdown, and do not block the Qt/UI thread
+        # while flushing a low-value message.
 
         self._active_disconnect = True
         if self.socket:
@@ -871,7 +920,7 @@ class TelegramWebSocketManager(
             )
             # Don't reset _online_message_sent on auto-reconnect - keep it True to prevent sending again
         elif not self._online_message_sent:
-            if telegram_online_notice_enabled():
+            if claim_telegram_online_notice():
                 logger.info(
                     "[Telegram] 📤 Sending online message (enabled in settings)"
                 )

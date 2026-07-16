@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from distr.core.db import get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
@@ -21,6 +21,12 @@ _EXECUTE_RE = re.compile(r"\b(run|execute|start|push|send)\b.{0,30}\b(workflow|l
 _TICKET_RE = re.compile(r"\b(create|make|add|open|log|raise)\b.{0,24}\b(ticket|task|work item)\b|\b(ticket|task)\s*:\s*", re.I | re.S)
 _UPDATE_RE = re.compile(r"\b(update|edit|change|append|add to)\b.{0,20}\b(ticket|task)\s*#?(\d+)\b", re.I | re.S)
 _STEER_RE = re.compile(r"\b(continue|resume|stop|cancel|steer|change)\b.{0,30}\b(run|workflow)\s*#?(\d+)\b", re.I | re.S)
+_BATCH_TICKETS_RE = re.compile(
+    r"\b(?:create|make|open|add)?\s*(?:separate|individual|multiple)\s+"
+    r"(?:tickets|tasks|work items)\s+(?:for|:)\s+(?P<items>.+?)"
+    r"(?=(?:\.\s+|\n+)(?:run|execute|start|push|send|put|use|prefer|ask|report|update|then)\b|$)",
+    re.I | re.S,
+)
 _SCOPE_STOPWORDS = {"board", "delivery", "house", "project", "ticket", "workflow"}
 
 
@@ -37,6 +43,24 @@ def _scope_tokens(value: str) -> set[str]:
         for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
         if len(token) >= 4 and token not in _SCOPE_STOPWORDS
     }
+
+
+def _explicit_batch_ticket_items(value: str) -> list[str]:
+    """Extract a short, explicitly requested ticket list without guessing."""
+    match = _BATCH_TICKETS_RE.search(str(value or ""))
+    if not match:
+        return []
+    raw = match.group("items").strip().strip('"“”')
+    parts = re.split(r"\s*(?:,|;)\s*|\s+\band\b\s+", raw, flags=re.I)
+    items: list[str] = []
+    for part in parts:
+        clean = re.sub(r"^and\s+", "", part.strip(), flags=re.I)
+        clean = re.sub(r"^(?:the|a|an)\s+", "", clean, flags=re.I)
+        clean = clean.strip(" .:'\"“”")
+        if not clean or len(clean.split()) > 18:
+            return []
+        items.append(clean)
+    return items if 2 <= len(items) <= 20 else []
 
 
 class OrchestratorIntakeService:
@@ -65,7 +89,14 @@ class OrchestratorIntakeService:
             return decision
         started = time.monotonic()
         try:
-            if decision.action == WorkIntakeAction.CREATE_TICKET:
+            batch_items = (
+                _explicit_batch_ticket_items(intake.text)
+                if decision.action in {WorkIntakeAction.CREATE_TICKET, WorkIntakeAction.RUN_WORKFLOW}
+                else []
+            )
+            if batch_items:
+                self._ingest_ticket_batch(intake, decision, batch_items)
+            elif decision.action == WorkIntakeAction.CREATE_TICKET:
                 self._create_ticket(intake, decision)
             elif decision.action == WorkIntakeAction.RUN_WORKFLOW:
                 self._create_ticket(intake, decision)
@@ -87,6 +118,80 @@ class OrchestratorIntakeService:
             decision.diagnostics["error"] = str(exc)
         self._log_decision(intake, decision)
         return decision
+
+    def _ingest_ticket_batch(
+        self,
+        intake: WorkIntake,
+        decision: WorkIntakeDecision,
+        items: list[str],
+    ) -> None:
+        """Create and optionally run each explicitly named work item independently."""
+        ticket_ids: list[int] = []
+        workflow_run_ids: list[int] = []
+        duplicate_ticket_ids: list[int] = []
+        first: WorkIntakeDecision | None = None
+        original_text = intake.text
+
+        for index, item in enumerate(items, start=1):
+            child_metadata = dict(intake.metadata or {})
+            child_metadata.update({
+                "batch_index": index,
+                "batch_count": len(items),
+                "ticket_title": item,
+                "ticket_description": f"{item}\n\nOriginal request:\n{original_text}",
+            })
+            child = replace(
+                intake,
+                source_message_id=(
+                    f"{intake.source_message_id}::item:{index}"
+                    if intake.source_message_id
+                    else ""
+                ),
+                metadata=child_metadata,
+                intake_uid=f"{intake.intake_uid}:{index}",
+            )
+            item_decision = WorkIntakeDecision(decision.action, decision.reason)
+            self._create_ticket(child, item_decision)
+            if first is None:
+                first = item_decision
+            if item_decision.ticket_id is not None:
+                ticket_ids.append(int(item_decision.ticket_id))
+            if item_decision.status == "duplicate":
+                if item_decision.ticket_id is not None:
+                    duplicate_ticket_ids.append(int(item_decision.ticket_id))
+                continue
+            if decision.action == WorkIntakeAction.RUN_WORKFLOW:
+                self._start_workflow(child, item_decision)
+                if item_decision.workflow_run_id is not None:
+                    workflow_run_ids.append(int(item_decision.workflow_run_id))
+
+        if first is None:
+            raise ValueError("No ticket items were supplied")
+        decision.ticket_id = first.ticket_id
+        decision.board_id = first.board_id
+        decision.project_id = first.project_id
+        decision.workflow_id = first.workflow_id
+        decision.workflow_run_id = workflow_run_ids[0] if workflow_run_ids else None
+        decision.handled = True
+        decision.diagnostics.update({
+            "batch_count": len(items),
+            "ticket_ids": ticket_ids,
+            "workflow_run_ids": workflow_run_ids,
+            "duplicate_ticket_ids": duplicate_ticket_ids,
+        })
+        ticket_refs = ", ".join(f"#{ticket_id}" for ticket_id in ticket_ids)
+        if workflow_run_ids:
+            run_refs = ", ".join(f"#{run_id}" for run_id in workflow_run_ids)
+            decision.status = "workflow_started"
+            decision.response_text = (
+                f"Created tickets {ticket_refs} and started workflow runs {run_refs}."
+            )
+        elif len(duplicate_ticket_ids) == len(items):
+            decision.status = "duplicate"
+            decision.response_text = f"Tickets {ticket_refs} were already created from this message."
+        else:
+            decision.status = "ticket_created"
+            decision.response_text = f"Created tickets {ticket_refs}."
 
     def _resolve_scope(
         self,
@@ -208,7 +313,11 @@ class OrchestratorIntakeService:
                     decision.response_text = f"Ticket #{existing.id} was already created from this message."
                     return
             maximum = session.query(KanbanTicket).filter(KanbanTicket.lane_id == lane.id).order_by(KanbanTicket.position.desc()).first()
-            value = intake.text or intake.requested_outcome
+            value = str(
+                intake.metadata.get("ticket_title")
+                or intake.text
+                or intake.requested_outcome
+            )
             attachment_lines = []
             for attachment in intake.attachments:
                 location = attachment.path or attachment.url or attachment.name
@@ -216,7 +325,7 @@ class OrchestratorIntakeService:
                     label = attachment.kind or "file"
                     mime = f" ({attachment.mime_type})" if attachment.mime_type else ""
                     attachment_lines.append(f"- {label}: {location}{mime}")
-            description = value
+            description = str(intake.metadata.get("ticket_description") or value)
             if attachment_lines:
                 description = f"{description}\n\nAttachments:\n" + "\n".join(attachment_lines)
             ticket = KanbanTicket(
@@ -256,7 +365,7 @@ class OrchestratorIntakeService:
             logger.debug("Could not record channel intake event", exc_info=True)
         decision.handled = True
         decision.status = "ticket_created"
-        decision.response_text = f"Created ticket #{decision.ticket_id}: {_clean_title(intake.text)}"
+        decision.response_text = f"Created ticket #{decision.ticket_id}: {_clean_title(value)}"
 
     def _start_workflow(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
         if not decision.ticket_id or not decision.workflow_id:
@@ -267,6 +376,9 @@ class OrchestratorIntakeService:
 
         item = build_ticket_run_item(decision.ticket_id, decision.workflow_id)
         metadata = dict(item.get("run_metadata") or {})
+        from .execution_policy import compile_requested_execution_policy
+
+        requested_execution_policy = compile_requested_execution_policy(intake.text)
         metadata.update({
             "source_type": intake.source.value,
             "request_uid": intake.intake_uid,
@@ -275,6 +387,8 @@ class OrchestratorIntakeService:
             "source_user_id": intake.source_user_id or None,
             "attachments": [asdict(attachment) for attachment in intake.attachments],
         })
+        if requested_execution_policy:
+            metadata["requested_execution_policy"] = requested_execution_policy
         result = start_workflow_run(
             decision.workflow_id,
             context=str(item.get("context") or f"Ticket: {_clean_title(intake.text)}"),

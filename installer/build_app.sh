@@ -61,7 +61,7 @@ for command_name in "$PYTHON_BIN" /usr/libexec/PlistBuddy ditto rsync shasum; do
 done
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/verify_runtime.py"
 "$PYTHON_BIN" -c 'import PyInstaller' >/dev/null 2>&1 || {
-    printf 'PyInstaller is not installed for %s. Install the pinned release tool explicitly.\n' "$PYTHON_BIN" >&2
+    printf 'PyInstaller is not installed for %s. Run: %s -m pip install -r requirements-release.txt\n' "$PYTHON_BIN" "$PYTHON_BIN" >&2
     exit 1
 }
 

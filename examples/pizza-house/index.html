@@ -3,17 +3,103 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ember & Crust Pizza House</title>
+  <title>Ember &amp; Crust Pizza House</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23d64b2a'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='30' fill='white'%3EEC%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header><a class="brand" href="#">Ember & Crust</a><nav><a href="#menu">Menu</a><a href="#story">Our story</a><a href="#order">Order</a></nav></header>
-  <main>
-    <section class="hero"><p class="eyebrow">WOOD-FIRED · JOHANNESBURG</p><h1>Good dough.<br>Bold fire.</h1><p>Slow-fermented pizza with local produce, blistered to order.</p><a class="button" href="#menu">See tonight's menu</a></section>
-    <section id="menu"><p class="eyebrow">THE FAVOURITES</p><h2>Built for the table</h2><div class="grid" id="pizza-grid"></div></section>
-    <section id="story" class="story"><div><p class="eyebrow">OUR KITCHEN</p><h2>Forty-eight hours in the making.</h2></div><p>Every base begins with stone-ground flour and a patient fermentation. Our menu follows the market and our oven does the rest.</p></section>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="site-header">
+    <a class="brand" href="#main-content" aria-label="Ember and Crust home">Ember &amp; Crust</a>
+    <button class="nav-toggle" type="button" aria-controls="primary-nav" aria-expanded="false">
+      <span class="nav-toggle-bars" aria-hidden="true"></span>
+      <span class="sr-only">Menu</span>
+    </button>
+    <nav id="primary-nav" class="primary-nav" aria-label="Primary">
+      <a href="#menu">Menu</a>
+      <a href="#story">Our story</a>
+      <a href="#order">Order</a>
+    </nav>
+  </header>
+
+  <main id="main-content">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">WOOD-FIRED / JOHANNESBURG</p>
+        <h1>Good dough.<br>Bold fire.</h1>
+        <p>Slow-fermented pizza with local produce, blistered to order.</p>
+        <a class="button" href="#menu">See the menu</a>
+      </div>
+    </section>
+
+    <section id="menu" class="menu-section" aria-labelledby="menu-title">
+      <p class="eyebrow">THIS WEEK</p>
+      <h2 id="menu-title">Built for the table</h2>
+      <div class="grid pizza-grid" id="pizza-grid" role="list"></div>
+    </section>
+
+    <section id="story" class="story" aria-labelledby="story-title">
+      <div>
+        <p class="eyebrow">OUR KITCHEN</p>
+        <h2 id="story-title">48 hours in the making</h2>
+      </div>
+      <div>
+        <p>Every base rests for two days before it hits the oven. We work with local growers, keep the menu tight, and finish every pizza over a live flame.</p>
+        <p>Come by for collection or place a delivery order below. We will confirm the kitchen window before firing your pies.</p>
+      </div>
+    </section>
   </main>
-  <footer id="order"><strong>Ember & Crust</strong><span>Tue–Sun · 17:00–22:00</span><a href="mailto:hello@example.com">Book a table</a></footer>
-  <script src="app.js"></script>
+
+  <footer id="order" class="checkout-section" aria-labelledby="order-title">
+    <div class="checkout-heading">
+      <p class="eyebrow">ORDER</p>
+      <h2 id="order-title">Build your order</h2>
+      <p>Choose delivery or collection, set quantities, and send the kitchen a ready-to-confirm order email.</p>
+    </div>
+
+    <form id="checkout-form" class="checkout-form">
+      <fieldset class="order-type">
+        <legend>Order type</legend>
+        <label>
+          <input type="radio" name="orderType" value="Delivery" checked>
+          Delivery
+        </label>
+        <label>
+          <input type="radio" name="orderType" value="Collection">
+          Collection
+        </label>
+      </fieldset>
+
+      <div class="cart-table" aria-labelledby="cart-title">
+        <h3 id="cart-title">Pizza quantities</h3>
+        <div id="cart-lines"></div>
+      </div>
+
+      <div class="contact-grid">
+        <label for="customer-name">Name</label>
+        <input id="customer-name" name="customerName" type="text" autocomplete="name" required>
+
+        <label for="customer-email">Email</label>
+        <input id="customer-email" name="customerEmail" type="email" autocomplete="email" required>
+        <label class="wide-field">
+          Delivery address or collection notes
+          <textarea id="customer-notes" name="customerNotes" rows="3"></textarea>
+        </label>
+      </div>
+
+      <div class="checkout-total" aria-live="polite">
+        <span>Subtotal</span>
+        <strong id="subtotal">R0</strong>
+      </div>
+
+      <button class="button submit-order" type="submit">Send order email</button>
+      <p id="order-feedback" class="order-feedback" role="status"></p>
+    </form>
+
+    <p class="fallback-contact">Questions before ordering? Email <a href="mailto:hello@emberandcrust.co.za">hello@emberandcrust.co.za</a>.</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>

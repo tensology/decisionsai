@@ -15,6 +15,38 @@ _maintenance_thread: threading.Thread | None = None
 _maintenance_lock = threading.Lock()
 
 
+def _app_version() -> str:
+    try:
+        return (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def _maintenance_is_current(home: Path) -> bool:
+    """Avoid reinstalling harnesses on every desktop restart.
+
+    Startup maintenance copies large skill trees and can invoke external plugin
+    installers.  It is needed once for each DecisionsAI release, not once for
+    every process. Failed or interrupted maintenance is deliberately retried.
+    """
+    path = home / ".decisions" / "harness-maintenance.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if state.get("status") != "completed":
+        return False
+    recorded_version = state.get("app_version")
+    if recorded_version:
+        return recorded_version == _app_version()
+    # Upgrade legacy state without forcing one more expensive pass after a
+    # maintenance run that already completed against this source tree.
+    try:
+        return path.stat().st_mtime >= (PROJECT_ROOT / "VERSION").stat().st_mtime
+    except OSError:
+        return False
+
+
 def _project_reference_skills(base_home: Path) -> list[str]:
     from distr.core.harness_bootstrap import (
         detected_harnesses,
@@ -259,6 +291,8 @@ def schedule_harness_stack_setup(
     if (os.environ.get("DECISIONSAI_SKIP_HARNESS_STACK_SETUP") or "").strip() == "1":
         return None
     base_home = Path(home).expanduser() if home is not None else Path.home()
+    if _maintenance_is_current(base_home):
+        return None
     global _maintenance_thread
     with _maintenance_lock:
         if _maintenance_thread is not None and _maintenance_thread.is_alive():
@@ -272,6 +306,7 @@ def schedule_harness_stack_setup(
                 base_home,
                 status="running",
                 pid=os.getpid(),
+                app_version=_app_version(),
                 started_at=time.time(),
             )
             try:
@@ -280,6 +315,7 @@ def schedule_harness_stack_setup(
                 _write_maintenance_state(
                     base_home,
                     status="failed",
+                    app_version=_app_version(),
                     elapsed_seconds=round(time.monotonic() - started, 3),
                     error_type=type(exc).__name__,
                     finished_at=time.time(),
@@ -288,6 +324,7 @@ def schedule_harness_stack_setup(
                 _write_maintenance_state(
                     base_home,
                     status="completed",
+                    app_version=_app_version(),
                     elapsed_seconds=round(time.monotonic() - started, 3),
                     finished_at=time.time(),
                 )

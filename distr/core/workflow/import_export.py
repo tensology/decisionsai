@@ -337,7 +337,8 @@ def _is_legacy_format(data: Dict[str, Any]) -> bool:
 # ── Import ──
 
 def import_workflow(data: Dict[str, Any], recordings: Optional[Dict[str, bytes]] = None,
-                    screenshots: Optional[Dict[str, bytes]] = None) -> int:
+                    screenshots: Optional[Dict[str, bytes]] = None,
+                    session_factory=None) -> int:
     """
     Import a workflow from a portable JSON dict. Optionally restores recording
     and screenshot files from provided binary data.
@@ -362,7 +363,8 @@ def import_workflow(data: Dict[str, Any], recordings: Optional[Dict[str, bytes]]
     if wf_type not in _VALID_WORKFLOW_TYPES:
         wf_type = "manual"
 
-    with get_session() as db:
+    session_factory = session_factory or get_session
+    with session_factory() as db:
         wf = AutoWorkflow(
             name=data.get("name", "Imported Workflow"),
             description=data.get("description", ""),

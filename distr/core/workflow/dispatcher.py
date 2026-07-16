@@ -608,6 +608,28 @@ def _cleanup_orphaned_runs_on_startup() -> None:
         for run in orphans:
             run.status = "cancelled"
             run.completed_at = completed_at
+        from distr.core.db.kanban import KanbanTicket
+
+        stale_tickets = (
+            db.query(KanbanTicket)
+            .filter(KanbanTicket.workflow_status.in_(["running", "waiting"]))
+            .all()
+        )
+        for ticket in stale_tickets:
+            latest_run = (
+                db.query(AutoWorkflowRun)
+                .filter(AutoWorkflowRun.ticket_id == int(ticket.id))
+                .order_by(AutoWorkflowRun.id.desc())
+                .first()
+            )
+            if latest_run and latest_run.status in {
+                "running",
+                "waiting",
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                ticket.workflow_status = str(latest_run.status)
         execution_ids = _cancel_linked_execution_sessions(
             db,
             orphan_ids,
@@ -1499,6 +1521,55 @@ def _dispatch_workflow_step(run_id: int, step_id: int) -> Dict[str, Any]:
     return dispatcher.run_in_workflow(int(step_id), int(run_id))
 
 
+def approve_pre_execution_step(
+    run_id: int,
+    step_id: int,
+    *,
+    response_text: str = "",
+) -> Dict[str, Any]:
+    """Approve a request-scoped gate and dispatch the held step exactly once."""
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+        if not run or not step:
+            return {"error": "Run or step not found", "status_code": 404}
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        if (
+            run.status != "waiting"
+            or str(run_data.get("waiting_kind") or "") != "pre_execution_approval"
+            or int(run.current_step_id or 0) != int(step_id)
+        ):
+            return {"error": "Pre-execution approval is no longer pending", "status_code": 409}
+        approved = {int(value) for value in (run_data.get("approved_pre_execution_steps") or [])}
+        approved.add(int(step_id))
+        run_data["approved_pre_execution_steps"] = sorted(approved)
+        run_data.pop("waiting_kind", None)
+        run_data.pop("waiting_prompt", None)
+        if response_text.strip():
+            run_data["approval_response"] = response_text.strip()
+        run.status = "running"
+        step.status = "pending"
+        run.run_data = json.dumps(run_data)
+        db.commit()
+    thread = threading.Thread(
+        target=_dispatch_workflow_step,
+        args=(int(run_id), int(step_id)),
+        name=f"workflow-approval-{run_id}-{step_id}",
+        daemon=True,
+    )
+    thread.start()
+    return {
+        "success": True,
+        "action": "dispatch_step",
+        "queued": True,
+        "run_id": int(run_id),
+        "step_id": int(step_id),
+    }
+
+
 def _handle_run_briefing_response(run_id: int, optional_input: str) -> Dict[str, Any]:
     from distr.core.workflow.run_briefing import (
         build_run_briefing_message,
@@ -2172,6 +2243,14 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         step_data = self._load_step(step_id)
         if "error" in step_data:
             return step_data
+        if self._enter_requested_pre_execution_gate(step_data, run_id):
+            return {
+                "success": True,
+                "status": "waiting",
+                "waiting_kind": "pre_execution_approval",
+                "run_id": run_id,
+                "step_id": step_id,
+            }
         self._set_run_phase(run_id, step_data)
         emit_step_activity(
             run_id=run_id,
@@ -2413,6 +2492,95 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                 "on_fail_goto": step.on_fail_goto,
                 "wait_before_next": step.wait_before_next or 0,
             }
+
+    def _enter_requested_pre_execution_gate(
+        self,
+        step_data: Dict[str, Any],
+        run_id: int,
+    ) -> bool:
+        """Hold an explicitly protected role before any side effect executes."""
+        from distr.core.work_intake.execution_policy import infer_step_role
+
+        role = infer_step_role(step_data)
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if not run:
+                return False
+            try:
+                run_data = json.loads(getattr(run, "run_data", None) or "{}") or {}
+            except Exception:
+                run_data = {}
+            policy = run_data.get("requested_execution_policy")
+            policy = policy if isinstance(policy, dict) else {}
+            protected = {
+                str(value).strip().lower()
+                for value in (policy.get("approval_before_roles") or [])
+            }
+            approved = {int(value) for value in (run_data.get("approved_pre_execution_steps") or [])}
+            if role not in protected or int(step_data["id"]) in approved:
+                return False
+            if (
+                run.status == "waiting"
+                and str(run_data.get("waiting_kind") or "") == "pre_execution_approval"
+                and int(getattr(run, "current_step_id", None) or 0) == int(step_data["id"])
+            ):
+                return True
+            step = db.query(AutoWorkflowStep).filter(
+                AutoWorkflowStep.id == int(step_data["id"])
+            ).first()
+            if not step:
+                return False
+            run.status = "waiting"
+            run.current_step_id = int(step.id)
+            step.status = "waiting"
+            run_data["waiting_kind"] = "pre_execution_approval"
+            run_data["waiting_prompt"] = (
+                f"Approve before {step.name or role}. No {role} action has run yet."
+            )
+            run.run_data = json.dumps(run_data)
+            db.commit()
+            workflow_id = int(run.workflow_id)
+            ticket_id = run.ticket_id
+
+        record_workflow_chat_event(
+            run_id,
+            "waiting",
+            status="waiting",
+            step_id=int(step_data["id"]),
+            step_name=step_data.get("name"),
+            summary=f"Waiting for approval before {step_data.get('name') or role}.",
+        )
+        try:
+            from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+
+            notify_ticket_workflow_progress(
+                run_id=run_id,
+                step_id=int(step_data["id"]),
+                body=(
+                    f"Run #{run_id} is ready for {step_data.get('name') or role}. "
+                    f"Approve to proceed or Stop to cancel. No {role} action has run yet."
+                ),
+                state_fingerprint=f"pre-execution-approval:{run_id}:{step_data['id']}",
+                priority="high",
+                requires_response=True,
+            )
+        except Exception:
+            logger.warning("Could not notify pre-execution approval run=%s", run_id, exc_info=True)
+        try:
+            from distr.core.orchestrator import emit_approval_event
+
+            emit_approval_event(
+                event_type="approval_requested",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=int(step_data["id"]),
+                ticket_id=ticket_id,
+                summary=f"Approval required before {step_data.get('name') or role}.",
+                payload={"step_role": role, "pre_execution": True},
+            )
+        except Exception:
+            logger.debug("Could not emit pre-execution approval event", exc_info=True)
+        return True
 
     # ── Validation ──────────────────────────────────────────────────
 

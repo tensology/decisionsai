@@ -597,7 +597,18 @@ class StepRouter:
             return self._end_run(run, status="completed" if verified_passed else "failed")
 
         # Self-routing guard
-        if next_step.id == step.id:
+        bounded_self_retry = False
+        if next_step.id == step.id and not verified_passed:
+            try:
+                retry_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                retry_data = {}
+            retry_contract = retry_data.get("loop_contract") or {}
+            bounded_self_retry = bool(
+                retry_contract.get("max_iterations")
+                and int(retry_data.get("loop_iteration") or 0) > 0
+            )
+        if next_step.id == step.id and not bounded_self_retry:
             logger.warning(
                 "Step %d routes to itself — ending run to prevent infinite loop.",
                 step.id,
@@ -634,7 +645,9 @@ class StepRouter:
         if max_iterations is None:
             return next_step_id
         target = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == next_step_id).first()
-        if not target or target.position >= step.position:
+        # A failed step may intentionally route to itself for a bounded
+        # correction attempt. Only forward routes are outside the loop counter.
+        if not target or target.position > step.position:
             return next_step_id
         iteration = int(run_data.get("loop_iteration") or 0) + 1
         run_data["loop_iteration"] = iteration

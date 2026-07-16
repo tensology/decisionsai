@@ -26,16 +26,76 @@ def test_websocket_connect_keeps_tls_verification_and_does_not_log_jwt() -> None
     manager.short_code = None
     manager._active_disconnect = False
     manager._connect_failure_reason = None
-    manager._fetch_ws_token = lambda: "secret-relay-jwt"
     manager._relay_endpoint_label = lambda: "www.decisionsai.net"
     detailed: list[str] = []
     manager._log_detailed = detailed.append
 
-    manager_mod.TelegramWebSocketManager.connect(manager)
+    manager_mod.TelegramWebSocketManager._open_websocket_with_token(
+        manager,
+        "secret-relay-jwt",
+    )
 
     assert "secret-relay-jwt" in manager.socket.opened_url
     assert detailed == ["CONNECTING: www.decisionsai.net"]
     assert all("secret-relay-jwt" not in row for row in detailed)
+
+
+def test_runtime_connect_fetches_relay_token_off_qt_thread(monkeypatch) -> None:
+    import distr.core.integrations.telegram.manager as manager_mod
+
+    class Socket:
+        def isValid(self):
+            return False
+
+    started = []
+    fetch_calls = []
+
+    class DeferredThread:
+        def __init__(self, *, target, daemon, name):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            started.append(self)
+
+    monkeypatch.setattr(manager_mod.threading, "Thread", DeferredThread)
+    manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
+    manager.socket = Socket()
+    manager.server_url = "wss://www.decisionsai.net/ws/telegram"
+    manager.app_user_id = "local-ui"
+    manager.telegram_user_id = 12345
+    manager.short_code = None
+    manager._active_disconnect = False
+    manager._ws_token_request_id = 0
+    manager._ws_token_fetch_in_progress = False
+    manager._fetch_ws_token = lambda: fetch_calls.append(True) or "relay-jwt"
+
+    manager_mod.TelegramWebSocketManager.connect(manager)
+
+    assert fetch_calls == []
+    assert manager._ws_token_fetch_in_progress is True
+    assert manager._ws_token_request_id == 1
+    assert len(started) == 1
+    assert started[0].name == "TelegramRelayToken"
+
+
+def test_stale_relay_token_completion_cannot_open_socket() -> None:
+    import distr.core.integrations.telegram.manager as manager_mod
+
+    opened = []
+    manager = manager_mod.TelegramWebSocketManager.__new__(manager_mod.TelegramWebSocketManager)
+    manager._ws_token_request_id = 3
+    manager._ws_token_fetch_in_progress = True
+    manager._open_websocket_with_token = opened.append
+
+    manager_mod.TelegramWebSocketManager._finish_ws_token_request(manager, 2, "stale")
+    assert opened == []
+    assert manager._ws_token_fetch_in_progress is True
+
+    manager_mod.TelegramWebSocketManager._finish_ws_token_request(manager, 3, "fresh")
+    assert opened == ["fresh"]
+    assert manager._ws_token_fetch_in_progress is False
 
 
 def test_ws_token_request_uses_env_file_relay_token_when_process_env_is_missing(monkeypatch):

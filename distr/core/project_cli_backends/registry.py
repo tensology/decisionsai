@@ -265,9 +265,21 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         if provider:
             command.extend(["--provider", provider])
         command.extend(["--model", model])
+    system_prompt = f"You are working on project: {task.project_name}"
+    if task.origin == "workflow":
+        system_prompt += (
+            "\nComplete only the current workflow step. Your final response must end with this "
+            "plain-text contract on separate lines:\n"
+            "Status: completed | failed | needs_input\n"
+            "Summary: <specific outcome>\n"
+            "Files changed: <paths or none>\n"
+            "Commands run: <commands or none>\n"
+            "Blockers: <details or none>\n"
+            "Do not omit Status, even when no files changed."
+        )
     command.extend([
         "--append-system-prompt",
-        f"You are working on project: {task.project_name}",
+        system_prompt,
         task.instruction,
     ])
     return command
@@ -578,26 +590,40 @@ class OneShotCliBackend(ProjectCliBackend):
 
         output_buffer = _BoundedCliOutput()
         started_at = time.monotonic()
+        last_heartbeat_at = started_at
+
+        def _emit_liveness_heartbeat() -> None:
+            nonlocal last_heartbeat_at
+            now = time.monotonic()
+            elapsed = round(now - started_at, 1)
+            _emit(on_event, {
+                "type": "heartbeat",
+                "backend": self.id,
+                "model": task.model or "auto",
+                "elapsed_seconds": elapsed,
+                "message": f"{self.name} is still running ({int(elapsed)}s)",
+            })
+            last_heartbeat_at = now
+
         try:
             assert process.stdout is not None
             while True:
                 try:
                     chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=10.0)
                 except asyncio.TimeoutError:
-                    elapsed = round(time.monotonic() - started_at, 1)
-                    _emit(on_event, {
-                        "type": "heartbeat",
-                        "backend": self.id,
-                        "model": task.model or "auto",
-                        "elapsed_seconds": elapsed,
-                        "message": f"{self.name} is still running ({int(elapsed)}s)",
-                    })
+                    _emit_liveness_heartbeat()
                     continue
                 if not chunk:
                     break
                 text = chunk.decode("utf-8", errors="replace")
                 output_buffer.append(text)
                 _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}})
+                # A chatty CLI can continuously produce output, so the read
+                # timeout above never fires. Emit a real heartbeat on elapsed
+                # time as well; otherwise Mission Control falsely reports a
+                # dead worker while it is actively streaming commands.
+                if time.monotonic() - last_heartbeat_at >= 10.0:
+                    _emit_liveness_heartbeat()
             rc = await process.wait()
         except asyncio.CancelledError:
             # Workflow timeouts and user cancellation must stop the underlying
@@ -1712,6 +1738,20 @@ async def run_project_task(
 
     try:
         result = await backend.send_task(task, on_event=_tracked_event)
+    except asyncio.CancelledError:
+        message = f"{backend.name or backend_id} execution cancelled."
+        complete_execution_session(
+            execution_session_id,
+            success=False,
+            output_packet=_normalized_output_packet({
+                "success": False,
+                "backend_id": backend_id,
+                "engine": backend_id,
+                "error": message,
+            }),
+            error=message,
+        )
+        raise
     except Exception as exc:
         complete_execution_session(
             execution_session_id,

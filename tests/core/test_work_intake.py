@@ -208,6 +208,61 @@ def test_retried_channel_message_is_idempotent_and_keeps_original_board(intake_d
     session.close()
 
 
+def test_explicit_multi_ticket_workflow_request_creates_and_runs_each_item(intake_db):
+    from distr.core.db.kanban import KanbanTicket
+
+    factory, ids = intake_db
+    session_provider = lambda: _session_ctx(factory)
+    run_ids = iter((201, 202, 203))
+    start = Mock(
+        side_effect=lambda *_args, **_kwargs: {
+            "run_id": next(run_ids),
+            "status": "started",
+        }
+    )
+    intake = WorkIntake(
+        source="telegram",
+        user_text=(
+            "For Pizza House, create separate tickets for the menu redesign, "
+            "checkout bug, and mobile performance. Run them through the development "
+            "workflow. Prefer local/free models for planning and update me here."
+        ),
+        source_message_id="tg-pizza-batch-1",
+    )
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
+         patch("distr.core.workflow.ticket_dispatch.get_session", side_effect=session_provider), \
+         patch("distr.core.workflow.service.start_workflow_run", start), \
+         patch("distr.core.orchestrator.emit_channel_intake_event"):
+        first = OrchestratorIntakeService().ingest(intake)
+        duplicate = OrchestratorIntakeService().ingest(intake)
+
+    assert first.status == "workflow_started"
+    assert first.diagnostics["ticket_ids"] and len(first.diagnostics["ticket_ids"]) == 3
+    assert first.diagnostics["workflow_run_ids"] == [201, 202, 203]
+    assert first.board_id == ids["pizza_board"]
+    assert first.project_id == ids["pizza_project"]
+    assert duplicate.status == "duplicate"
+    assert duplicate.diagnostics["duplicate_ticket_ids"] == first.diagnostics["ticket_ids"]
+    assert start.call_count == 3
+
+    session = factory()
+    tickets = session.query(KanbanTicket).filter(
+        KanbanTicket.source_external_id.like("tg-pizza-batch-1::item:%")
+    ).order_by(KanbanTicket.id).all()
+    assert [ticket.title for ticket in tickets] == [
+        "menu redesign",
+        "checkout bug",
+        "mobile performance",
+    ]
+    assert all(ticket.linked_project_id == ids["pizza_project"] for ticket in tickets)
+    assert all("Original request:" in ticket.description for ticket in tickets)
+    for call in start.call_args_list:
+        policy = call.kwargs["run_metadata"]["requested_execution_policy"]
+        assert policy["roles"]["planning"]["free_only"] is True
+    session.close()
+
+
 @pytest.mark.parametrize("source", ["whatsapp", "gmail"])
 def test_shared_channel_request_creates_one_project_ticket_with_source_trace(intake_db, source):
     from distr.core.db.kanban import KanbanTicket

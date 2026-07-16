@@ -1,0 +1,5 @@
+# Release-only tooling. Runtime dependencies remain in requirements.txt.
+PyInstaller==6.16.0
+pyinstaller-hooks-contrib==2026.6
+altgraph==0.17.5
+macholib==1.16.4

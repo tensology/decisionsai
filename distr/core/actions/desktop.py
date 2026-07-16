@@ -176,17 +176,11 @@ def is_own_app_name(app_name: str | None) -> bool:
     cleaned = (app_name or "").strip().lower()
     if not cleaned:
         return False
-    if any(part in cleaned for part in _OWN_APP_NAME_PARTS):
-        return True
-    if platform.system() == "Darwin" and APPKIT_AVAILABLE:
-        try:
-            app = NSWorkspace.sharedWorkspace().frontmostApplication()
-            bundle_id = (app.bundleIdentifier() or "").strip().lower() if app else ""
-            if bundle_id and ("decisions" in bundle_id or bundle_id.startswith("org.python")):
-                return True
-        except Exception:
-            pass
-    return False
+    # This predicate must classify the supplied app, not the app that happens
+    # to be frontmost a few milliseconds later. Consulting NSWorkspace here
+    # made every name look like Decisions whenever Decisions had focus, which
+    # prevented snippet paste from restoring Chrome, Slack, and other targets.
+    return any(part in cleaned for part in _OWN_APP_NAME_PARTS)
 
 
 def remember_frontmost_app_if_external() -> str | None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from datetime import datetime
 
 import distr.core.db.orchestrator  # noqa: F401
 import distr.core.db.kanban  # noqa: F401
@@ -75,6 +76,19 @@ def test_orchestration_event_normalizes_legacy_names_and_keeps_voice_clean(monke
     assert notification["should_notify"] is True
     assert "Codex needs input" in notification["text"]
     assert "Hermes" not in notification["text"]
+
+
+def test_serialized_orchestrator_timestamp_is_explicit_utc():
+    from distr.core.orchestrator import serialize_event
+
+    row = OrchestratorEvent(
+        event_uid="utc-proof",
+        source="workflow",
+        event_type="worker_progress",
+        created_at=datetime(2026, 7, 16, 18, 30, 0),
+    )
+
+    assert serialize_event(row)["created_at"] == "2026-07-16T18:30:00Z"
 
 
 def test_project_execution_lifecycle_events_share_the_same_timeline(monkeypatch, tmp_path):

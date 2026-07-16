@@ -150,6 +150,41 @@ class TestSelfRoutingGuard:
         assert decision["action"] == "end_run"
         assert "warning" in decision
 
+    def test_failed_self_route_retries_when_loop_contract_is_bounded(self):
+        step = _make_step(id=5, position=2, on_fail_goto=5)
+        run = _make_run(run_data=json.dumps({
+            "loop_contract": {"max_iterations": 3},
+            "loop_iteration": 0,
+        }))
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = step
+
+        target = StepRouter()._apply_loop_iteration_routing(
+            db,
+            run,
+            step,
+            next_step_id=5,
+            verified_passed=False,
+        )
+
+        assert target == 5
+        assert json.loads(run.run_data)["loop_iteration"] == 1
+
+    def test_determine_next_allows_a_counted_bounded_self_retry(self):
+        step = _make_step(id=5, position=2, on_fail_goto=5)
+        run = _make_run(run_data=json.dumps({
+            "loop_contract": {"max_iterations": 3},
+            "loop_iteration": 1,
+        }))
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = step
+
+        with patch.object(StepRouter, "_apply_loop_iteration_routing", return_value=5):
+            decision = StepRouter()._determine_next(db, step, run, False, "timed out")
+
+        assert decision["action"] == "next_step"
+        assert decision["step_id"] == 5
+
 
 # ── Wait state tests ───────────────────────────────────────────────
 

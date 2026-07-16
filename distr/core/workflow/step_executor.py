@@ -371,6 +371,9 @@ class StepExecutorMixin:
         # potentially unrelated catalog selection.
         if model and (model != "auto" or str(merged.get("model") or "").strip() in {"", "auto"}):
             merged["model"] = model
+        provider = str(config.get("model_provider") or config.get("provider") or "").strip()
+        if provider:
+            merged["model_provider"] = provider
         complexity = str(config.get("complexity") or "").strip().lower()
         if complexity in {"low", "medium", "high"}:
             merged["complexity"] = complexity
@@ -611,7 +614,23 @@ class StepExecutorMixin:
                         else None
                     )
                     run_data_local = json.loads(run_row.run_data or "{}") or {} if run_row else {}
+                    from distr.core.work_intake.execution_policy import apply_requested_step_policy
+
+                    config_local, requested_step_role, requested_step_route = apply_requested_step_policy(
+                        config,
+                        step=step_data,
+                        run_data=run_data_local,
+                    )
                     wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
+                    from distr.core.project_cli_backends.model_policy import _workflow_run_settings
+
+                    workflow_model_policy = _workflow_run_settings(wf)
+                    workflow_model_policy.update(config_local.get("model_policy") or {})
+                    auto_step_routing = bool(workflow_model_policy.get("auto_route_models", False))
+                    stored_step_routes = run_data_local.get("step_routes")
+                    stored_step_routes = stored_step_routes if isinstance(stored_step_routes, dict) else {}
+                    stored_step_route = stored_step_routes.get(str(step_data.get("id")))
+                    stored_step_route = stored_step_route if isinstance(stored_step_route, dict) else {}
                     if ticket_id is not None:
                         try:
                             from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
@@ -624,8 +643,8 @@ class StepExecutorMixin:
                                     board = db.query(KanbanBoard).filter(KanbanBoard.id == int(lane.board_id)).first()
                             if ticket:
                                 approved_override = run_data_local.get("approved_route_override")
-                                if self._step_execution_route_enabled(config):
-                                    route = self._apply_step_harness_overrides({}, config)
+                                if self._step_execution_route_enabled(config_local):
+                                    route = self._apply_step_harness_overrides({}, config_local)
                                     route["complexity"] = str(
                                         route.get("complexity")
                                         or run_data_local.get("execution_route", {}).get("complexity")
@@ -650,7 +669,11 @@ class StepExecutorMixin:
                                         "rationale": str(approved_override.get("rationale") or "").strip(),
                                         "requires_approval": False,
                                     }
-                                elif self._active_run_execution_route(run_data_local):
+                                elif stored_step_route:
+                                    route = dict(stored_step_route)
+                                    route.setdefault("source", "active_step_route")
+                                    route.setdefault("rationale", "Continuing this step with its recorded execution route.")
+                                elif not auto_step_routing and self._active_run_execution_route(run_data_local):
                                     route = self._active_run_execution_route(run_data_local)
                                     route.setdefault("source", "active_run_route")
                                     route.setdefault("rationale", "Continuing with the workflow run's active execution route.")
@@ -670,6 +693,10 @@ class StepExecutorMixin:
                                         allow_orchestrator_override=not bool(
                                             run_data_local.get("suppress_orchestrator_override")
                                         ),
+                                        # Auto mode makes a second, role-aware decision below.
+                                        # Emitting the generic baseline here produces two
+                                        # contradictory model announcements for one step.
+                                        emit_event=not auto_step_routing,
                                     )
                                     route = decision.to_route_dict()
                                 if run_row:
@@ -692,35 +719,6 @@ class StepExecutorMixin:
                                         }
                                     run_row.run_data = json.dumps(run_data_local)
                                     db.commit()
-                                backend_for_skills = route.get("backend") or "pi"
-                                if wf and project.folder_location:
-                                    from distr.core.workflow.skill_provision import provision_workflow_skills
-
-                                    provision_workflow_skills(
-                                        workflow=wf,
-                                        project_folder=project.folder_location,
-                                        backend_id=backend_for_skills,
-                                        chain_type="pre_chain",
-                                        run_id=run_id,
-                                        workflow_id=workflow_id,
-                                        ticket_id=int(ticket_id),
-                                        board_id=getattr(board, "id", None) if board else None,
-                                        project_id=int(project_id),
-                                    )
-                                    extra_skills = list(decision.skills or []) if decision else []
-                                    step_skills = config.get("skills") if isinstance(config.get("skills"), list) else []
-                                    for skill_id in step_skills:
-                                        if skill_id and skill_id not in extra_skills:
-                                            extra_skills.append(skill_id)
-                                    if extra_skills:
-                                        from distr.core.workflow.skill_provision import push_skill_to_project
-
-                                        for skill_id in extra_skills:
-                                            push_skill_to_project(
-                                                skill_id=skill_id,
-                                                project_folder=project.folder_location,
-                                                backend_id=backend_for_skills,
-                                            )
                         except Exception:
                             # Route resolution and optional skill provisioning share
                             # this guarded block. Never discard a route that was
@@ -731,26 +729,177 @@ class StepExecutorMixin:
                                 route,
                                 exc_info=True,
                             )
-                    route = self._apply_step_harness_overrides(route, config)
+                    route = self._apply_step_harness_overrides(route, config_local)
                     try:
-                        from distr.core.project_cli_backends.model_policy import apply_workflow_model_policy
+                        from distr.core.project_cli_backends.model_policy import (
+                            apply_auto_step_role_policy,
+                            apply_workflow_model_policy,
+                        )
                         from distr.core.settings import load_settings_from_db
 
-                        if not self._step_execution_route_enabled(config):
+                        routing_settings = load_settings_from_db()
+                        if not self._step_execution_route_enabled(config_local):
                             route = apply_workflow_model_policy(
                                 route,
                                 workflow=wf,
-                                config=config,
-                                settings=load_settings_from_db(),
+                                config=config_local,
+                                settings=routing_settings,
+                            )
+                            route = apply_auto_step_role_policy(
+                                route,
+                                workflow=wf,
+                                config=config_local,
+                                settings=routing_settings,
+                                step_role=requested_step_role,
+                                prior_role_routes=run_data_local.get("step_role_routes") or {},
                             )
                     except Exception:
                         logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
+                    try:
+                        from distr.core.orchestration_events import emit_orchestration_event
+
+                        route_backend = str(route.get("backend") or "pi")
+                        route_model = str(route.get("model") or "auto")
+                        route_provider = str(route.get("model_provider") or "")
+                        route_label = " / ".join(
+                            part for part in (route_backend, route_provider, route_model) if part
+                        )
+                        emit_orchestration_event(
+                            source="orchestrator",
+                            event_type="route_decided",
+                            status="ready",
+                            workflow_id=workflow_id,
+                            run_id=run_id,
+                            step_id=step_data.get("id"),
+                            ticket_id=int(ticket_id) if ticket_id is not None else None,
+                            board_id=getattr(board, "id", None) if board else None,
+                            project_id=int(project_id),
+                            summary=(
+                                f"Using {route_label} for {requested_step_role}. "
+                                f"{str(route.get('policy_reason') or route.get('rationale') or '').strip()}"
+                            ).strip(),
+                            payload={
+                                "decision": route,
+                                "step_role": requested_step_role,
+                                "auto_detected": bool(route.get("auto_detected")),
+                            },
+                        )
+                        if run_id:
+                            from distr.core.kanban.ticket_workflow_engagement import (
+                                build_route_selection_message,
+                                notify_ticket_workflow_progress,
+                            )
+
+                            notify_ticket_workflow_progress(
+                                run_id=int(run_id),
+                                step_id=int(step_data.get("id")) if step_data.get("id") else None,
+                                body=build_route_selection_message(
+                                    ticket_title=str((run_data_local or {}).get("ticket_title") or ""),
+                                    step_name=str(step_data.get("name") or ""),
+                                    step_role=requested_step_role,
+                                    backend=route_backend,
+                                    model=route_model,
+                                    provider=route_provider,
+                                    reason=str(
+                                        route.get("policy_reason")
+                                        or route.get("rationale")
+                                        or ""
+                                    ),
+                                ),
+                                state_fingerprint=(
+                                    f"route_selected:{step_data.get('id')}:"
+                                    f"{route_backend}:{route_provider}:{route_model}"
+                                ),
+                                priority="normal",
+                            )
+                    except Exception:
+                        logger.debug("Could not emit final step route", exc_info=True)
+                    backend_for_skills = route.get("backend") or "pi"
+                    if wf and project.folder_location and ticket_id is not None:
+                        from distr.core.workflow.skill_provision import provision_workflow_skills
+
+                        provision_workflow_skills(
+                            workflow=wf,
+                            project_folder=project.folder_location,
+                            backend_id=backend_for_skills,
+                            chain_type="pre_chain",
+                            run_id=run_id,
+                            workflow_id=workflow_id,
+                            ticket_id=int(ticket_id),
+                            board_id=getattr(board, "id", None) if board else None,
+                            project_id=int(project_id),
+                        )
+                        extra_skills = list(decision.skills or []) if decision else []
+                        step_skills = config_local.get("skills") if isinstance(config_local.get("skills"), list) else []
+                        for skill_id in step_skills:
+                            if skill_id and skill_id not in extra_skills:
+                                extra_skills.append(skill_id)
+                        if extra_skills:
+                            from distr.core.workflow.skill_provision import push_skill_to_project
+
+                            for skill_id in extra_skills:
+                                push_skill_to_project(
+                                    skill_id=skill_id,
+                                    project_folder=project.folder_location,
+                                    backend_id=backend_for_skills,
+                                )
                     required_capabilities = [
                         str(item).strip()
                         for item in (config.get("required_capabilities") or [])
                         if str(item).strip()
                     ]
                     backend_id = route.get("backend") or "pi"
+                    independent_from = str(requested_step_route.get("independent_from") or "").strip()
+                    if independent_from and run_row:
+                        latest = json.loads(run_row.run_data or "{}") or {}
+                        prior_routes = latest.get("step_role_routes")
+                        prior_routes = prior_routes if isinstance(prior_routes, dict) else {}
+                        prior = prior_routes.get(independent_from)
+                        prior = prior if isinstance(prior, dict) else {}
+                        prior_backend = str(prior.get("backend") or "").strip()
+                        prior_model = str(prior.get("model") or "").strip()
+                        if not prior_backend and not prior_model:
+                            return {
+                                "output": (
+                                    f"Independent {requested_step_role} was requested, but the "
+                                    f"{independent_from} route was not recorded. Independence cannot be proven."
+                                ),
+                                "passed": False,
+                            }
+                        same_route = (
+                            prior_backend
+                            and prior_backend == str(backend_id)
+                            and (not prior_model or prior_model == str(route.get("model") or "auto"))
+                        )
+                        if same_route:
+                            from distr.core.project_cli_backends import list_backends
+                            from distr.core.project_cli_backends.ide_handoff import is_ide_backend
+
+                            alternative = next(
+                                (
+                                    candidate
+                                    for candidate in list_backends()
+                                    if candidate.id != prior_backend
+                                    and not is_ide_backend(candidate.id)
+                                    and candidate.setup_status().ready
+                                    and candidate.supports(required_capabilities)
+                                ),
+                                None,
+                            )
+                            if alternative is None:
+                                return {
+                                    "output": (
+                                        f"Independent {requested_step_role} was requested, but no ready "
+                                        f"backend differs from the {independent_from} route {prior_backend}."
+                                    ),
+                                    "passed": False,
+                                }
+                            backend_id = alternative.id
+                            route["backend"] = backend_id
+                            route["model"] = "auto"
+                            route.pop("model_provider", None)
+                            route["independent_from_role"] = independent_from
+                            route["independent_from_backend"] = prior_backend
                     if required_capabilities:
                         from distr.core.project_cli_backends import resolve_backend_for_capabilities
 
@@ -770,6 +919,44 @@ class StepExecutorMixin:
                         route["backend"] = backend_id
                         route["required_capabilities"] = required_capabilities
                         route["capability_routed"] = True
+                    if requested_step_route:
+                        route["request_policy_role"] = requested_step_role
+                        route["request_policy_applied"] = True
+                        route["source"] = "explicit_request_policy"
+                        if run_row:
+                            latest = json.loads(run_row.run_data or "{}") or {}
+                            role_routes = latest.get("step_role_routes")
+                            if not isinstance(role_routes, dict):
+                                role_routes = {}
+                            role_routes[requested_step_role] = {
+                                "backend": backend_id,
+                                "model": str(route.get("model") or "auto"),
+                                "model_provider": str(route.get("model_provider") or ""),
+                                "step_id": step_data.get("id"),
+                            }
+                            latest["step_role_routes"] = role_routes
+                            latest["execution_route"] = route
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
+                    if run_row and auto_step_routing:
+                        latest = json.loads(run_row.run_data or "{}") or {}
+                        step_routes = latest.get("step_routes")
+                        step_routes = step_routes if isinstance(step_routes, dict) else {}
+                        step_routes[str(step_data.get("id"))] = dict(route)
+                        role_routes = latest.get("step_role_routes")
+                        role_routes = role_routes if isinstance(role_routes, dict) else {}
+                        role_routes[requested_step_role] = {
+                            "backend": backend_id,
+                            "model": str(route.get("model") or "auto"),
+                            "model_provider": str(route.get("model_provider") or ""),
+                            "step_id": step_data.get("id"),
+                            "auto_detected": bool(route.get("auto_detected")),
+                        }
+                        latest["step_routes"] = step_routes
+                        latest["step_role_routes"] = role_routes
+                        latest["execution_route"] = route
+                        run_row.run_data = json.dumps(latest)
+                        db.commit()
                     from distr.core.project_cli_backends.ide_handoff import is_ide_backend
                     from distr.core.workflow.step_iteration import build_ide_step_instruction
 
@@ -874,9 +1061,48 @@ class StepExecutorMixin:
                                     )
                                 except Exception:
                                     logger.debug("Could not emit provider failover event", exc_info=True)
+                                try:
+                                    from distr.core.kanban.ticket_workflow_engagement import (
+                                        build_provider_failover_message,
+                                        notify_ticket_workflow_progress,
+                                    )
+
+                                    notify_ticket_workflow_progress(
+                                        run_id=int(run_id),
+                                        step_id=int(step_data.get("id")) if step_data.get("id") else None,
+                                        body=build_provider_failover_message(
+                                            ticket_title=str(
+                                                (json.loads(run_row.run_data or "{}") or {}).get("ticket_title")
+                                                if run_row else ""
+                                            ),
+                                            step_name=str(step_data.get("name") or ""),
+                                            failed_backend=backend_id,
+                                            fallback_backend=fallback_backend,
+                                        ),
+                                        state_fingerprint=(
+                                            f"provider_failover:{step_data.get('id')}:"
+                                            f"{backend_id}:{fallback_backend}"
+                                        ),
+                                        priority="normal",
+                                    )
+                                except Exception:
+                                    logger.debug(
+                                        "Could not send provider failover engagement",
+                                        exc_info=True,
+                                    )
                                 route.update(fallback)
                                 if not fallback.get("model_provider"):
                                     route.pop("model_provider", None)
+                                try:
+                                    from distr.core.project_cli_backends.model_policy import build_auto_fallback_chain
+                                    from distr.core.settings import load_settings_from_db
+
+                                    route["fallback_chain"] = build_auto_fallback_chain(
+                                        route,
+                                        settings=load_settings_from_db(),
+                                    )
+                                except Exception:
+                                    pass
                                 route["source"] = "runtime_provider_failover"
                                 route["policy_source"] = "runtime_provider_failover"
                                 route["policy_reason"] = (
@@ -886,6 +1112,10 @@ class StepExecutorMixin:
                                 if run_row:
                                     run_data_local = json.loads(run_row.run_data or "{}") or {}
                                     run_data_local["execution_route"] = route
+                                    step_routes = run_data_local.get("step_routes")
+                                    step_routes = step_routes if isinstance(step_routes, dict) else {}
+                                    step_routes[str(step_data.get("id"))] = dict(route)
+                                    run_data_local["step_routes"] = step_routes
                                     run_row.run_data = json.dumps(run_data_local)
                                     db.commit()
                                 handle = await dispatch_harness_async(
@@ -909,24 +1139,45 @@ class StepExecutorMixin:
                     return handle.result
 
             async def dispatch_harness_async(context):
-                from distr.core.project_cli_backends.harness import dispatch_harness
+                from distr.core.project_cli_backends.base import BackendTaskResult
+                from distr.core.project_cli_backends.harness import (
+                    HarnessHandle,
+                    HarnessStatus,
+                    dispatch_harness,
+                )
                 timeout_seconds = int(config.get("timeout_seconds", 900) or 900)
                 try:
                     return await asyncio.wait_for(
                         dispatch_harness(context),
                         timeout=timeout_seconds,
                     )
-                except asyncio.TimeoutError as exc:
-                    raise TimeoutError(
-                        f"Project CLI timed out after {timeout_seconds}s"
-                    ) from exc
+                except asyncio.TimeoutError:
+                    # Convert the timeout into the same failed completion
+                    # contract returned by providers. Auto routing can then
+                    # advance to the next evidence-backed provider instead of
+                    # bypassing failover and repeating the identical model.
+                    error = f"Project CLI timed out after {timeout_seconds}s"
+                    result = BackendTaskResult(
+                        False,
+                        context.backend_id,
+                        context.backend_id,
+                        error=error,
+                    )
+                    return HarnessHandle(
+                        backend_id=context.backend_id,
+                        result=result,
+                        status=HarnessStatus.FAILED,
+                        evidence={"error": error},
+                    )
 
             def _threaded_run_task():
                 def _thread_runner():
                     return asyncio.run(_run_task())
+                timeout_seconds = int(config.get("timeout_seconds", 900) or 900)
+                max_attempts = 1 if config.get("allow_provider_failover", True) is False else 2
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     return pool.submit(_thread_runner).result(
-                        timeout=int(config.get("timeout_seconds", 900) or 900)
+                        timeout=(timeout_seconds * max_attempts) + 30
                     )
 
             # asyncio.run() cannot be called from within a running event loop
@@ -1365,27 +1616,55 @@ class StepExecutorMixin:
         if config.get("allow_provider_failover", True) is False:
             return {}
         current_backend = str(route.get("backend") or "pi").strip()
-        fallback_backend = str(
-            config.get("fallback_backend")
-            or route.get("fallback_backend")
-            or ("pi" if current_backend == "codex" else "codex")
-        ).strip()
-        if not fallback_backend or fallback_backend == current_backend:
-            return {}
-        fallback_model = str(
-            config.get("fallback_model")
-            or route.get("fallback_model")
-            or "auto"
-        ).strip() or "auto"
-        fallback: dict[str, Any] = {
-            "backend": fallback_backend,
-            "model": fallback_model,
-        }
+        explicit_fallback = bool(config.get("fallback_backend") or route.get("fallback_backend"))
+        fallback_backend = str(config.get("fallback_backend") or route.get("fallback_backend") or "").strip()
+        fallback_model = str(config.get("fallback_model") or route.get("fallback_model") or "auto").strip() or "auto"
         fallback_provider = str(
             config.get("fallback_model_provider")
             or route.get("fallback_model_provider")
             or ""
         ).strip()
+        if not explicit_fallback:
+            chain = route.get("fallback_chain")
+            chain = chain if isinstance(chain, list) else []
+            candidate = next(
+                (
+                    item for item in chain
+                    if isinstance(item, dict)
+                    and item.get("automatic", True) is not False
+                    and str(item.get("backend") or "").strip()
+                    and str(item.get("backend") or "").strip() != current_backend
+                ),
+                None,
+            )
+            if candidate:
+                fallback_backend = str(candidate.get("backend") or "").strip()
+                fallback_model = str(candidate.get("model") or "auto").strip() or "auto"
+                fallback_provider = str(candidate.get("model_provider") or "").strip()
+            elif current_backend == "pi":
+                fallback_backend = "codex"
+            elif current_backend == "codex":
+                try:
+                    from distr.core.project_cli_backends.model_policy import _openrouter_hy3_route
+                    from distr.core.settings import load_settings_from_db
+
+                    hy3 = _openrouter_hy3_route(load_settings_from_db())
+                except Exception:
+                    hy3 = None
+                if hy3:
+                    fallback_backend = "pi"
+                    fallback_model = str(hy3.get("model") or "tencent/hy3-preview")
+                    fallback_provider = "openrouter"
+                else:
+                    fallback_backend = "claude_code"
+            elif current_backend != "claude_code":
+                fallback_backend = "claude_code"
+        if not fallback_backend or fallback_backend == current_backend:
+            return {}
+        fallback: dict[str, Any] = {
+            "backend": fallback_backend,
+            "model": fallback_model,
+        }
         if fallback_provider:
             fallback["model_provider"] = fallback_provider
         return fallback

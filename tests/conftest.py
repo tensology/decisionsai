@@ -16,6 +16,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+if not ((3, 12, 8) <= tuple(sys.version_info[:3]) < (3, 13, 0)):
+    pytest.exit(
+        "DecisionsAI tests require Python 3.12.8 or newer within the 3.12 series; "
+        f"found {sys.version.split()[0]}. Activate the DecisionsAI environment first.",
+        returncode=4,
+    )
+
 os.environ.setdefault("DECISIONS_DB_DIR", tempfile.mkdtemp(prefix="decisions-test-db-"))
 os.environ.setdefault("DECISIONS_TEST_MODE", "1")
 

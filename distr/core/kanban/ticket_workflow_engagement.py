@@ -8,13 +8,26 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
-from distr.core.db import get_session
 from distr.core.db.kanban import KanbanTicket
 from distr.core.db.time import utc_now_naive
+from distr.core.db.orchestrator import OrchestratorEvent
 from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
 from distr.core.human_engagement import EngagementIntent, HumanEngagementService
 
 logger = logging.getLogger(__name__)
+
+
+def get_session():
+    """Resolve the current DB session factory at call time.
+
+    Workflow execution tests and isolated runtimes replace the canonical DB
+    factory. Keeping a module-imported function here could read a production
+    run with the same numeric ID, then write a notification into the isolated
+    ledger with the wrong ticket context.
+    """
+    from distr.core.db import get_session as current_get_session
+
+    return current_get_session()
 
 from distr.core.kanban.ticket_time_tracking import (
     add_time_spent_seconds,
@@ -41,6 +54,8 @@ def _brief_failure(result_text: str) -> str:
         return "LLM validation is unavailable."
     if "usage limit" in low or "hit your usage" in low:
         return "Cursor usage limit reached — switch backend or wait for reset."
+    if "timed out" in low or "time limit" in low:
+        return "The worker reached its time limit before it could finish this step."
     if "bypassed" in low:
         return "No project was linked for this step."
     sentence = re.split(r"[.!?\n]", clean, maxsplit=1)[0].strip()
@@ -54,13 +69,161 @@ def _ticket_subject(ticket_title: str, fallback: str = "the ticket") -> str:
     return clean or fallback
 
 
+def _spoken_step_action(step_name: str) -> str:
+    """Translate workflow labels into a useful spoken description of the work."""
+    clean = re.sub(r"\s+", " ", (step_name or "").strip())
+    low = clean.lower()
+    if any(term in low for term in ("ingest", "project context", "ticket context", "requirements")):
+        return "reviewing the ticket requirements, project files, and existing constraints"
+    if "plan" in low or "scope" in low:
+        return "turning the requirements into a concrete implementation plan"
+    if any(term in low for term in ("implement", "build", "write code", "make changes")):
+        return "making the requested changes in the project"
+    if any(term in low for term in ("test", "validate", "verification", "check")):
+        return "checking the work against the ticket and running the relevant tests"
+    if any(term in low for term in ("review", "critique", "audit")):
+        return "having the result reviewed independently for defects and missed requirements"
+    if any(term in low for term in ("report", "handoff", "memory", "attach")):
+        return "recording the evidence, updating the ticket, and preparing the handoff"
+    if clean:
+        return clean[0].lower() + clean[1:]
+    return "working through the next part of the ticket"
+
+
+def _spoken_step_outcome(step_name: str, result_text: str) -> str:
+    """Return a conservative outcome that never reads raw worker output aloud."""
+    clean = re.sub(r"\s+", " ", (result_text or "").strip())
+    low_name = (step_name or "").lower()
+    low_result = clean.lower()
+
+    failed = re.search(r"(?i)(?:\bfail(?:ed|ures?)?\b|\berrors?\b)\s*[:=]?\s*(\d+)", clean)
+    if failed and int(failed.group(1)) > 0:
+        return f"The checks found {int(failed.group(1))} failure{'s' if int(failed.group(1)) != 1 else ''}."
+    if re.search(r"(?i)\b(?:0 failures|fail\s+0|all tests passed|validation passed|checks passed)\b", clean):
+        return "The validation checks passed."
+    if "plan" in low_name or "scope" in low_name:
+        return "The implementation plan is ready for the next step."
+    if any(term in low_name for term in ("ingest", "context", "requirements")):
+        return "The requirements, constraints, and relevant project context are now captured."
+    if any(term in low_name for term in ("implement", "build", "write code", "make changes")):
+        return "The requested project changes are now in place."
+    if any(term in low_name for term in ("test", "validate", "verification", "check")):
+        return "The planned validation checks completed successfully."
+    if any(term in low_name for term in ("review", "critique", "audit")):
+        return "The independent review completed and its findings were recorded."
+    if any(term in low_name for term in ("report", "handoff", "memory", "attach")):
+        return "The evidence and next actions are now recorded on the ticket."
+    if "attached" in low_result or "artifact" in low_result:
+        return "The result and its supporting evidence were saved with the ticket."
+    return "That part of the work completed successfully."
+
+
+def _notification_cadence(
+    state_fingerprints: list[str],
+    *,
+    step_id: int,
+) -> tuple[bool, bool]:
+    """Return whether the run started and whether the latest note announced this step."""
+    clean = [str(value or "").strip() for value in state_fingerprints if str(value or "").strip()]
+    run_start_announced = any(value.startswith("step_start:") for value in clean)
+    latest_announced_this_step = bool(clean) and clean[0].endswith(f":next:{int(step_id)}")
+    return run_start_announced, latest_announced_this_step
+
+
+def _notification_state_fingerprints(db, run_id: int, *, limit: int = 100) -> list[str]:
+    """Read voice cadence from the append-only ledger, not mutable worker payload."""
+    events = (
+        db.query(OrchestratorEvent)
+        .filter(OrchestratorEvent.run_id == int(run_id))
+        .filter(OrchestratorEvent.source == "notification")
+        .filter(OrchestratorEvent.event_type == "user_notified")
+        .order_by(OrchestratorEvent.id.desc())
+        .limit(max(1, int(limit)))
+        .all()
+    )
+    fingerprints: list[str] = []
+    for event in events:
+        try:
+            payload = json.loads(event.payload or "{}") or {}
+        except Exception:
+            payload = {}
+        fingerprints.append(str(payload.get("state_fingerprint") or ""))
+    return fingerprints
+
+
+def build_provider_failover_message(
+    *,
+    ticket_title: str,
+    step_name: str,
+    failed_backend: str,
+    fallback_backend: str,
+) -> str:
+    """Explain an automatic provider change without exposing routing internals."""
+    labels = {
+        "pi": "the local model",
+        "ollama": "the local model",
+        "codex": "Codex",
+        "claude_code": "Claude Code",
+        "cursor": "Cursor",
+        "kilo": "Kilo",
+    }
+    failed = labels.get((failed_backend or "").strip().lower(), "the first worker")
+    fallback = labels.get(
+        (fallback_backend or "").strip().lower(),
+        (fallback_backend or "another worker").replace("_", " ").strip().title(),
+    )
+    subject = _ticket_subject(ticket_title)
+    action = _spoken_step_action(step_name)
+    return (
+        f"{failed.capitalize()} couldn't finish this part of {subject}, so I've switched to "
+        f"{fallback} and continued automatically. I'm still {action}. You don't need to do anything."
+    )
+
+
+def build_route_selection_message(
+    *,
+    ticket_title: str,
+    step_name: str,
+    step_role: str,
+    backend: str,
+    model: str = "",
+    provider: str = "",
+    reason: str = "",
+) -> str:
+    """Describe a selected worker in language useful over Telegram voice notes."""
+    backend_key = (backend or "").strip().lower()
+    model_key = (model or "").strip().lower()
+    if model_key.startswith("ornith:"):
+        size = model_key.split(":", 1)[1].upper()
+        worker = f"Ornith {size}, running locally"
+    elif model_key == "tencent/hy3-preview":
+        worker = "Tencent HY3 Preview through OpenRouter"
+    else:
+        worker = {
+            "codex": "Codex",
+            "cursor": "Cursor",
+            "claude_code": "Claude Code",
+            "pi": model or (provider.title() if provider else "the configured local or free model"),
+            "kilo": "Kilo Code",
+        }.get(backend_key, (model or backend or "the selected worker").replace("_", " ").strip())
+    role = (step_role or "work").strip().lower().replace("_", " ")
+    rationale = re.sub(r"\s+", " ", (reason or "").strip()).rstrip(".")
+    why = f" because {rationale[0].lower() + rationale[1:]}" if rationale else ""
+    return (
+        f"For {_ticket_subject(ticket_title)}, I'm using {worker} for the {role}{why}. "
+        f"I'm now {_spoken_step_action(step_name)}."
+    )
+
+
 def build_run_start_message(
     *,
     ticket_title: str,
     step_name: str,
     step_index: int | None = None,
 ) -> str:
-    return f"{_ticket_subject(ticket_title)}: {_step_label(step_index, step_name)} has started."
+    subject = _ticket_subject(ticket_title)
+    position = f" This is step {step_index}." if step_index and step_index > 0 else ""
+    return f"I've started work on {subject}. I'm now {_spoken_step_action(step_name)}.{position}"
 
 
 def build_step_start_message(
@@ -69,10 +232,10 @@ def build_step_start_message(
     step_name: str,
     step_index: int | None = None,
 ) -> str:
-    return build_run_start_message(
-        ticket_title=ticket_title,
-        step_name=step_name,
-        step_index=step_index,
+    position = f"step {step_index}" if step_index and step_index > 0 else "the next step"
+    return (
+        f"For {_ticket_subject(ticket_title)}, I'm moving on to {position}. "
+        f"I'm now {_spoken_step_action(step_name)}."
     )
 
 
@@ -87,8 +250,15 @@ def build_step_done_message(
 ) -> str:
     label = _step_label(step_index, step_name)
     if passed:
-        return f"{_ticket_subject(ticket_title)}: {label} passed."
-    return f"{_ticket_subject(ticket_title)}: {label} failed. {_brief_failure(result_text)}"
+        return (
+            f"I've finished {label.lower()} for {_ticket_subject(ticket_title)}. "
+            f"{_spoken_step_outcome(step_name, result_text)}"
+        )
+    return (
+        f"I couldn't complete this part of {_ticket_subject(ticket_title)} while "
+        f"{_spoken_step_action(step_name)}. "
+        f"{_brief_failure(result_text)}"
+    )
 
 
 def build_run_done_message(
@@ -100,13 +270,16 @@ def build_run_done_message(
 ) -> str:
     normalized = (status or "").strip().lower()
     if warning and "loop" in warning.lower():
-        base = "Run stopped in a loop."
+        base = "The workflow stopped because a routing rule repeated without a safe correction path."
     elif normalized == "completed":
-        base = f"{_ticket_subject(ticket_title)}: Run finished."
+        base = (
+            f"I've finished the workflow for {_ticket_subject(ticket_title)}. "
+            "The result and its supporting evidence are recorded on the ticket."
+        )
     elif normalized == "cancelled":
-        base = f"{_ticket_subject(ticket_title)}: Run stopped."
+        base = f"I've stopped the workflow for {_ticket_subject(ticket_title)}."
     else:
-        base = f"{_ticket_subject(ticket_title)}: Run failed."
+        base = f"I couldn't finish the workflow for {_ticket_subject(ticket_title)}."
     if elapsed_label:
         base = f"{base} Elapsed {elapsed_label}."
     return base
@@ -492,6 +665,7 @@ def record_ticket_workflow_elapsed(
 
 
 def notify_ticket_workflow_step_started(run_id: int, step_id: int) -> None:
+    skip_redundant_announcement = False
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
@@ -506,21 +680,31 @@ def notify_ticket_workflow_step_started(run_id: int, step_id: int) -> None:
             ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(run.ticket_id)).first()
             ticket_title = (ticket.title if ticket else "") or ""
         step_name = (step.name or "").strip() or f"step {step.position + 1}"
+        action_type = (step.action_type or "").strip().lower()
         step_index = int(step.position) + 1
+        run_start_announced, skip_redundant_announcement = _notification_cadence(
+            _notification_state_fingerprints(db, run_id),
+            step_id=step_id,
+        )
         body = build_step_start_message(
             ticket_title=ticket_title,
             step_name=step_name,
             step_index=step_index,
         )
-        if int(run.current_step_id or 0) == int(step_id) and not run_data.get("run_start_announced"):
+        if int(run.current_step_id or 0) == int(step_id) and not run_start_announced:
             body = build_run_start_message(
                 ticket_title=ticket_title,
                 step_name=step_name,
                 step_index=step_index,
             )
-            run_data["run_start_announced"] = True
-            run.run_data = json.dumps(run_data)
-            db.commit()
+    # Project-worker steps announce their final provider/model a moment later,
+    # once Auto routing has actually resolved it. Sending both messages creates
+    # a redundant Telegram voice-note queue and can delay the useful model
+    # announcement behind a generic "started" message.
+    if action_type == "send_to_project_cli":
+        return
+    if skip_redundant_announcement:
+        return
     notify_ticket_workflow_progress(
         run_id=run_id,
         step_id=step_id,
@@ -553,17 +737,39 @@ def notify_ticket_workflow_step_finished(
         step_name = (step.name or "").strip() or f"step {step.position + 1}"
         action_type = (step.action_type or "").strip()
         step_index = int(step.position) + 1
+        next_step = (
+            db.query(AutoWorkflowStep)
+            .filter(AutoWorkflowStep.workflow_id == int(run.workflow_id))
+            .filter(AutoWorkflowStep.position > int(step.position))
+            .order_by(AutoWorkflowStep.position.asc())
+            .first()
+        )
+        next_action = _spoken_step_action(next_step.name or "") if next_step else ""
+        next_action_type = (next_step.action_type or "").strip().lower() if next_step else ""
+    # The next project-worker step immediately announces its actual model and
+    # purpose. Queueing a separate success voice note here delays that useful
+    # announcement and was producing four-deep TTS bursts between steps. The
+    # completion remains visible in the durable activity feed.
+    if passed and next_action_type == "send_to_project_cli":
+        return
+    body = build_step_done_message(
+        ticket_title=ticket_title,
+        step_name=step_name,
+        passed=passed,
+        result_text=result_text,
+        action_type=action_type,
+        step_index=step_index,
+    )
+    if passed and next_action:
+        body = f"{body} Next, I'll be {next_action}."
     notify_ticket_workflow_progress(
         run_id=run_id,
         step_id=step_id,
-        body=build_step_done_message(
-            ticket_title=ticket_title,
-            step_name=step_name,
-            passed=passed,
-            result_text=result_text,
-            action_type=action_type,
-            step_index=step_index,
+        body=body,
+        state_fingerprint=(
+            f"step_done:{step_id}:pass:next:{int(next_step.id)}"
+            if passed and next_step
+            else f"step_done:{step_id}:{'pass' if passed else 'fail'}"
         ),
-        state_fingerprint=f"step_done:{step_id}:{'pass' if passed else 'fail'}",
         priority="normal" if passed else "high",
     )

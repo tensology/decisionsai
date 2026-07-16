@@ -1,6 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from distr.core.project_cli_backends.base import BackendTaskResult
 
 
@@ -223,3 +225,55 @@ def test_run_project_task_records_preflight_failure_before_dispatch(monkeypatch)
     assert packet["next_actions"] == {
         "recommended": ["Resolve the reported error, then retry the worker."]
     }
+
+
+def test_run_project_task_closes_execution_session_when_cancelled(monkeypatch):
+    from distr.core.project_cli_backends import registry
+
+    class CancelledBackend:
+        id = "codex"
+        name = "Codex"
+
+        def setup_status(self):
+            return SimpleNamespace(ready=True)
+
+        async def send_task(self, task, on_event=None):
+            raise asyncio.CancelledError()
+
+    completed = []
+    monkeypatch.setattr(registry, "get_backend", lambda backend_id: CancelledBackend())
+    monkeypatch.setattr(registry, "_git_status_short", lambda folder: [])
+    monkeypatch.setattr(
+        "distr.core.kanban.project_execution.create_execution_session",
+        lambda **kwargs: 98,
+    )
+    monkeypatch.setattr(
+        "distr.core.kanban.project_execution.append_execution_event",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.kanban.project_execution.complete_execution_session",
+        lambda *args, **kwargs: completed.append((args, kwargs)),
+    )
+    monkeypatch.setattr("distr.core.terminal.get_project_runtime_snapshot", lambda project_id: {})
+    monkeypatch.setattr("distr.core.orchestrator.record_backend_handoff", lambda **kwargs: 300)
+
+    async def execute():
+        return await registry.run_project_task(
+            SimpleNamespace(
+                id=3,
+                name="Demo",
+                folder_location="/tmp/demo",
+                coding_backend="codex",
+                coding_backend_model="auto",
+            ),
+            "Fix the UI",
+            backend_id_override="codex",
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(execute())
+
+    assert completed[-1][0] == (98,)
+    assert completed[-1][1]["success"] is False
+    assert completed[-1][1]["error"] == "Codex execution cancelled."

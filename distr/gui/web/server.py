@@ -34,6 +34,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
+
+def _web_port_available(host: str, port: int) -> bool:
+    """Return whether uvicorn can reclaim a port after a recent app restart."""
+    import socket
+
+    test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # Match server-style rebinding so a closed listener's TIME_WAIT sockets
+        # do not make the next DecisionsAI process abandon its stable URL.
+        test_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        test_socket.bind((host, int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        test_socket.close()
+
 # Singleton instance
 _unified_server: Optional['UnifiedGuiServer'] = None
 _APP_VERSION_CACHE: str | None = None
@@ -1043,25 +1060,24 @@ class UnifiedGuiServer:
             time.sleep(0.5)
         
         try:
-            # Check if port is already in use
-            import socket
-            test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                test_socket.bind((self.host, self.port))
-                test_socket.close()
-            except OSError:
+            # A prior process can take a moment to release the configured port.
+            # Prefer the stable control-deck URL rather than immediately moving
+            # existing browser tabs to a silently different port.
+            port_available = _web_port_available(self.host, self.port)
+            for _ in range(12):
+                if port_available:
+                    break
+                time.sleep(0.25)
+                port_available = _web_port_available(self.host, self.port)
+            if not port_available:
                 # Port is in use, try next ports
                 logger.warning(f"Port {self.port} is already in use, trying next port")
                 self.port += 1
                 for _ in range(5):
-                    try:
-                        test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        test_socket.bind((self.host, self.port))
-                        test_socket.close()
+                    if _web_port_available(self.host, self.port):
                         logger.info(f"Using port {self.port} instead")
                         break
-                    except OSError:
-                        self.port += 1
+                    self.port += 1
                 else:
                     logger.error("Could not find an available port")
                     self.is_running = False

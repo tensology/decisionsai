@@ -204,10 +204,10 @@ def run_migrations():
         with Session() as session:
             session.execute(text("SELECT telegram_send_online_notice FROM settings LIMIT 1"))
     except Exception:
-        # Column doesn't exist, add it enabled so Telegram comes back online on initial launch.
+        # Lifecycle notices are opt-in; frequent restarts must not spam Telegram.
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN telegram_send_online_notice BOOLEAN DEFAULT 1"))
+                conn.execute(text("ALTER TABLE settings ADD COLUMN telegram_send_online_notice BOOLEAN DEFAULT 0"))
                 conn.commit()
                 logger.info("Added telegram_send_online_notice column to settings table")
             except Exception as e:

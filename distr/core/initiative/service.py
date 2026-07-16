@@ -399,15 +399,6 @@ class InitiativeService:
         except Exception:
             logger.error("InitiativeService: failed to run settings migration on init", exc_info=True)
 
-        # Pre-load tools for the context assembler (use_navigation_tools=True
-        # so the initiative service has full tool context)
-        try:
-            from distr.core.agent.tools.loader import load_tools as _load_tools
-            self._tools = _load_tools(use_navigation_tools=True)
-        except Exception:
-            logger.debug("InitiativeService: could not pre-load tools, will use defaults")
-            self._tools = []
-
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

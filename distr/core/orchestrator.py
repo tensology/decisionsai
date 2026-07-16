@@ -588,6 +588,11 @@ def format_correction_instruction(packet: dict[str, Any] | None) -> str:
 
 def serialize_event(row: OrchestratorEvent) -> dict[str, Any]:
     created_at = row.created_at or utc_now_naive()
+    # Orchestrator timestamps are persisted as naive UTC. Include the UTC
+    # designator so browsers do not interpret them as local wall-clock time.
+    created_at_iso = created_at.isoformat()
+    if created_at.tzinfo is None:
+        created_at_iso += "Z"
     return {
         "id": row.id,
         "event_uid": row.event_uid,
@@ -605,7 +610,7 @@ def serialize_event(row: OrchestratorEvent) -> dict[str, Any]:
         "summary": row.summary or "",
         "payload": _json_loads(row.payload),
         "evidence": _json_loads(row.evidence),
-        "created_at": created_at.isoformat(),
+        "created_at": created_at_iso,
     }
 
 

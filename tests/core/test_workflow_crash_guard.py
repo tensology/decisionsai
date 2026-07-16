@@ -9,7 +9,13 @@ from sqlalchemy.pool import StaticPool
 
 import distr.core.db.kanban  # noqa: F401 - register tables with shared metadata
 from distr.core.db import Base
-from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+from distr.core.db.kanban import (
+    KanbanBoard,
+    KanbanLane,
+    KanbanTicket,
+    ProjectExecutionEvent,
+    ProjectExecutionSession,
+)
 from distr.core.db.workflow import AutoWorkflow
 from distr.core.db.workflow import AutoWorkflowRun
 from distr.core.workflow.dispatcher import StepDispatcher, _cleanup_orphaned_runs_on_startup
@@ -68,11 +74,32 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
     factory = _factory()
     with _real_session(factory) as session:
         workflow = AutoWorkflow(name="Crash recovery")
-        session.add(workflow)
+        board = KanbanBoard(name="Crash board")
+        session.add_all([workflow, board])
         session.flush()
-        orphan = AutoWorkflowRun(workflow_id=workflow.id, status="running")
+        lane = KanbanLane(board_id=board.id, name="Doing")
+        session.add(lane)
+        session.flush()
+        ticket = KanbanTicket(
+            lane_id=lane.id,
+            title="Interrupted ticket",
+            workflow_status="running",
+        )
+        stale_terminal_ticket = KanbanTicket(
+            lane_id=lane.id,
+            title="Already terminal ticket",
+            workflow_status="running",
+        )
+        session.add_all([ticket, stale_terminal_ticket])
+        session.flush()
+        orphan = AutoWorkflowRun(
+            workflow_id=workflow.id,
+            ticket_id=ticket.id,
+            status="running",
+        )
         completed = AutoWorkflowRun(
             workflow_id=workflow.id,
+            ticket_id=stale_terminal_ticket.id,
             status="completed",
             completed_at=datetime(2026, 1, 1),
         )
@@ -122,6 +149,8 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
             "stale_terminal": stale_terminal.id,
             "missing_run": missing_run.id,
             "durable_waiting": durable_waiting.id,
+            "ticket": ticket.id,
+            "stale_terminal_ticket": stale_terminal_ticket.id,
         }
 
     monkeypatch.setattr(
@@ -138,6 +167,8 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
         stale_terminal = session.get(ProjectExecutionSession, ids["stale_terminal"])
         missing_run = session.get(ProjectExecutionSession, ids["missing_run"])
         durable_waiting = session.get(ProjectExecutionSession, ids["durable_waiting"])
+        recovered_ticket = session.get(KanbanTicket, ids["ticket"])
+        stale_terminal_ticket = session.get(KanbanTicket, ids["stale_terminal_ticket"])
         events = (
             session.query(ProjectExecutionEvent)
             .filter(ProjectExecutionEvent.session_id == ids["active"])
@@ -160,6 +191,8 @@ def test_startup_recovery_atomically_terminalizes_linked_execution_sessions(monk
         assert missing_run.completed_at is not None
         assert durable_waiting.status == "waiting"
         assert durable_waiting.completed_at is None
+        assert recovered_ticket.workflow_status == "cancelled"
+        assert stale_terminal_ticket.workflow_status == "completed"
 
 
 def test_unexpected_backend_exception_becomes_failed_step_result(monkeypatch):

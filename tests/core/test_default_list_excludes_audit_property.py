@@ -157,6 +157,25 @@ class TestDefaultListExcludesAudit:
         assert {row["id"] for row in project_cli_result} == {project_cli_id}
         assert pi_agent_id not in {row["id"] for row in default_result}
 
+    def test_default_list_includes_review_and_deploy_workflows(self):
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        session = factory()
+        review = AutoWorkflow(name="Independent review", status="active", workflow_type="review")
+        deploy = AutoWorkflow(name="Release deployment", status="active", workflow_type="deploy")
+        session.add_all([review, deploy])
+        session.commit()
+        expected = {review.id, deploy.id}
+        session.close()
+
+        with patch("distr.core.workflow.service.get_session", patched_get_session):
+            result = list_workflows()
+
+        assert {row["id"] for row in result} == expected
+
     @settings(max_examples=100, deadline=None)
     @given(workflow_records=_workflow_set_strategy)
     def test_default_list_excludes_audit(self, workflow_records):

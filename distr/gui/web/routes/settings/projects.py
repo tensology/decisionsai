@@ -3,6 +3,7 @@ Projects routes — /projects/*, /browse-folder
 """
 from fastapi import HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 from typing import Optional, Any
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -2495,7 +2496,13 @@ def register_routes(router, templates):
     async def keep_terminal_session_alive(project_id: int, request: Request):
         from distr.core.project_cli_backends.live_sessions import mark_live_session_presence, snapshot_live_session_meta
 
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ClientDisconnect:
+            # Navigating away can cancel the browser's keepalive/sendBeacon
+            # request mid-body. That is an expected lifecycle event, not an
+            # application fault worth a full ASGI exception traceback.
+            return JSONResponse({"success": False, "disconnected": True}, status_code=499)
         backend_id = str(body.get("backend_id") or "").strip() or "pi"
         workflow_id = _coerce_optional_int(body.get("workflow_id"))
         board_id = _coerce_optional_int(body.get("board_id"))
