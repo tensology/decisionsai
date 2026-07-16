@@ -261,13 +261,13 @@ class TestWorkflowsDetailPanel:
             pytest.skip("No workflows to test tabs with")
 
         # Primary tabs should be visible
-        for tab_name in ["tickets", "loop", "activity"]:
+        for tab_name in ["loop", "tickets", "cli"]:
             tab_btn = page.locator(f".wf-tab[data-tab='{tab_name}']")
             assert tab_btn.is_visible(), f"Tab '{tab_name}' not visible"
 
-        # Tickets tab is active by default
-        tickets_tab_content = page.locator("#wf-tab-tickets")
-        assert not tickets_tab_content.is_hidden(), "Tickets tab content hidden by default"
+        # Loop design is the primary workflow task and is available without a ticket.
+        loop_tab_content = page.locator("#wf-tab-loop")
+        assert not loop_tab_content.is_hidden(), "Loop tab content hidden by default"
 
         print_diagnostics(cl, nl, "TABS")
         page.close()
@@ -294,11 +294,11 @@ class TestWorkflowsDetailPanel:
         tickets_content = page.locator("#wf-tab-tickets")
         assert tickets_content.is_hidden(), "Tickets tab still visible after switching away"
 
-        # Switch to Activity log tab
-        page.locator(".wf-tab[data-tab='activity']").click()
+        # Switch to the workflow CLI tab
+        page.locator(".wf-tab[data-tab='cli']").click()
         page.wait_for_timeout(500)
-        activity_content = page.locator("#wf-tab-activity")
-        assert not activity_content.is_hidden(), "Activity log tab content not visible"
+        cli_content = page.locator("#wf-tab-cli")
+        assert not cli_content.is_hidden(), "CLI tab content not visible"
 
         print_diagnostics(cl, nl, "TAB SWITCH")
         page.close()
@@ -987,7 +987,7 @@ class TestWorkflowsConsoleErrors:
                 step_nodes.first.click()
                 page.wait_for_timeout(1000)
 
-            for tab in ["tickets", "loop", "activity"]:
+            for tab in ["loop", "tickets", "cli"]:
                 page.locator(f".wf-tab[data-tab='{tab}']").click()
                 page.wait_for_timeout(500)
 

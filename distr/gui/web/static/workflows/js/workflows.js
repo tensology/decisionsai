@@ -5319,24 +5319,24 @@
 
     function readPersistedWorkflowDetailTab() {
         try {
-            var tab = localStorage.getItem("wf_detail_tab") || "tickets";
-            if (tab === "activity") tab = "tickets";
-            return ["tickets", "loop", "cli", "runs"].indexOf(tab) >= 0 ? tab : "tickets";
+            var tab = localStorage.getItem("wf_detail_tab_v2") || "loop";
+            if (tab === "activity") tab = "loop";
+            return ["loop", "tickets", "cli", "runs"].indexOf(tab) >= 0 ? tab : "loop";
         } catch (e) {
-            return "tickets";
+            return "loop";
         }
     }
 
     function persistWorkflowDetailTab(tab) {
         if (!tab) return;
-        try { localStorage.setItem("wf_detail_tab", tab); } catch (e) {}
+        try { localStorage.setItem("wf_detail_tab_v2", tab); } catch (e) {}
     }
 
     function restoreWorkflowDetailTab() {
         var tab = readPersistedWorkflowDetailTab();
         if (tab === "runs") {
             var runsTabBtn = document.getElementById("wf-runs-tab-btn");
-            if (!runsTabBtn || runsTabBtn.classList.contains("hidden")) tab = "tickets";
+            if (!runsTabBtn || runsTabBtn.classList.contains("hidden")) tab = "loop";
         }
         switchTab(tab, { persist: false });
     }
@@ -6161,7 +6161,10 @@
             var section = document.createElement("section");
             section.className = "kb-ticket-list-section" + (isExpanded ? " kb-ticket-list-section--expanded" : "");
             section.dataset.laneId = laneId;
-            var showAddAll = boardHasProject && hasWorkflowQueueTarget();
+            // Render the compact queue controls up front. Workflow loading and
+            // board loading race on first paint; availability is synchronized
+            // below once the selected workflow is known.
+            var showAddAll = boardHasProject;
             var addAllHtml = showAddAll
                 ? '<button type="button" class="wf-lane-add-all-board-tickets" data-lane-id="' + esc(laneId) + '" title="Add all tickets in this column to the workflow queue">Add all</button>'
                 : "";
@@ -6187,7 +6190,7 @@
                         hideCopy: true,
                         hideAgent: true,
                         disableListDrag: true,
-                        showAddToWorkflow: hasWorkflowQueueTarget(),
+                        showAddToWorkflow: boardHasProject,
                     });
                     bindWorkflowBoardListRow(row, ticket, lane, selected, board);
                     body.appendChild(row);
@@ -7944,15 +7947,14 @@
     }
 
     function syncWorkflowLoopTabAvailability() {
-        var canShowLoop = workflowLoopHasSelectedTicket();
+        var hasTicketContext = workflowLoopHasSelectedTicket();
         document.querySelectorAll('.wf-tab[data-tab="loop"]').forEach(function (btn) {
-            btn.disabled = !canShowLoop;
-            btn.classList.toggle("opacity-50", !canShowLoop);
-            btn.classList.toggle("cursor-not-allowed", !canShowLoop);
-            btn.title = canShowLoop ? "View this ticket's loop activity" : "Select a queued ticket to view its loop";
+            btn.disabled = false;
+            btn.classList.remove("opacity-50", "cursor-not-allowed");
+            btn.title = hasTicketContext
+                ? "Design this loop and view the selected ticket's activity"
+                : "Design the workflow loop";
         });
-        var activeLoop = document.querySelector('.wf-tab[data-tab="loop"].active');
-        if (!canShowLoop && activeLoop) switchTab("tickets", { persist: true });
     }
 
     function selectWorkflowQueueTicket(ticketId, rowEl) {
@@ -12787,10 +12789,6 @@
     // ── Tabs ──
     function switchTab(tab, options) {
         options = options || {};
-        if (tab === "loop" && !workflowLoopHasSelectedTicket()) {
-            tab = "tickets";
-            if (!options.quiet) snack("Select a queued ticket to view its loop", "info");
-        }
         if (tab === "runs") {
             var runsTabBtn = document.getElementById("wf-runs-tab-btn");
             if (runsTabBtn) runsTabBtn.classList.remove("hidden");

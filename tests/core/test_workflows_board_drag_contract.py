@@ -187,6 +187,12 @@ def test_workflows_detail_tabs_use_loop_and_conditional_runs():
     assert 'id="wf-detail-footer"' not in html
     assert "function readPersistedWorkflowDetailTab()" in js
     assert "function syncWorkflowRunsTabVisibility()" in js
+    assert html.index('data-tab="loop"') < html.index('data-tab="tickets"')
+    assert 'localStorage.getItem("wf_detail_tab_v2") || "loop"' in js
+    assert 'tab === "loop" && !workflowLoopHasSelectedTicket()' not in js
+    assert 'btn.title = hasTicketContext' in js
+    assert "var showAddAll = boardHasProject;" in js
+    assert "showAddToWorkflow: boardHasProject" in js
 
 
 def test_workflow_queue_row_exposes_loop_then_play_with_visible_loop_ticket_context():
@@ -231,7 +237,7 @@ def test_workflow_lane_add_all_disables_when_nothing_left_to_add():
     assert "if (!hasWorkflowQueueTarget())" in finish_block
 
 
-def test_workflow_board_add_controls_require_loaded_selected_workflow():
+def test_workflow_board_add_controls_render_before_workflow_load_then_sync_availability():
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
     render_block = js.split("function renderWorkflowBoardTickets(board, selected, message)", 1)[1].split(
         "function getSelectedBoardLocalId", 1
@@ -243,8 +249,8 @@ def test_workflow_board_add_controls_require_loaded_selected_workflow():
         "function initWorkflowBoardTicketMouseDrag", 1
     )[0]
 
-    assert "var showAddAll = boardHasProject && hasWorkflowQueueTarget()" in render_block
-    assert "showAddToWorkflow: hasWorkflowQueueTarget()" in render_block
+    assert "var showAddAll = boardHasProject;" in render_block
+    assert "showAddToWorkflow: boardHasProject" in render_block
     assert "hasWorkflowQueueTarget() && state.canDragToWorkflow" in sync_block
     assert "hasWorkflowQueueTarget() && !state.isLinkedToWorkflow && !state.isPendingLink" in sync_block
     assert "if (!hasWorkflowQueueTarget())" in drag_block

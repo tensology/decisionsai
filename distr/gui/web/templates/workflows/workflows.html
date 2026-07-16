@@ -31,8 +31,20 @@
 .sr-time-input::-webkit-calendar-picker-indicator { filter: brightness(0) invert(1); cursor: pointer; }
 .tab-btn { border-bottom: 2px solid transparent; }
 .tab-btn.active { border-bottom-color: #f97316; color: #fff; }
-.wf-detail-tabbar { min-height: 2.625rem; }
+.wf-detail-tabbar { min-height: 2.25rem; }
 .wf-tab-trailing { margin-left: auto; }
+.wf-page-shell { padding: 0.75rem; }
+.wf-board-panel { padding: 0.75rem !important; }
+.wf-detail-tabbar .wf-tab {
+    min-height: 2.25rem;
+    padding: 0.45rem 0.65rem;
+    font-size: 0.75rem;
+    line-height: 1;
+}
+.wf-detail-tabbar .wf-tab-trailing button {
+    min-height: 1.75rem;
+    padding: 0.25rem 0.55rem;
+}
 @media (max-width: 640px) {
     .wf-detail-tabbar {
         flex-wrap: wrap;
@@ -50,7 +62,8 @@
         pointer-events: auto;
     }
 }
-.wf-workflow-tabbar { min-height: 2.625rem; }
+.wf-workflow-tabbar { min-height: 2.25rem; }
+#wf-split-right { container-type: inline-size; }
 .wf-workflow-tab {
     flex-shrink: 0;
     max-width: 14rem;
@@ -62,6 +75,17 @@
     transition: color 0.15s, border-color 0.15s, background-color 0.15s;
     overflow: hidden;
     min-width: 0;
+}
+.wf-workflow-tabbar .wf-workflow-tab {
+    min-height: 2.25rem;
+    padding: 0.45rem 0.75rem !important;
+    font-size: 0.75rem !important;
+    line-height: 1;
+}
+.wf-workflow-tabbar-actions button {
+    width: 2rem;
+    height: 2rem;
+    padding: 0.35rem !important;
 }
 .wf-workflow-tab-title-wrap {
     display: block;
@@ -411,9 +435,9 @@
 .wf-ticket-list-surface .kb-ticket-list-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    min-height: 34px;
-    padding: 6px 10px;
+    gap: 6px;
+    min-height: 32px;
+    padding: 4px 6px;
     background: #1a1f3a;
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 6px;
@@ -700,8 +724,12 @@ body.wf-board-pointer-dragging * {
     opacity: 1;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 5px;
+    justify-content: center;
+    gap: 3px;
+    width: 1.65rem;
+    min-width: 1.65rem;
+    height: 1.65rem;
+    padding: 0;
     border-radius: 5px;
     border: 1px solid rgba(255,255,255,0.22);
     font-size: 10px;
@@ -789,7 +817,7 @@ body.wf-board-pointer-dragging * {
     flex-wrap: nowrap;
     justify-content: flex-end;
     flex: 0 0 auto;
-    min-width: 9.5rem;
+    min-width: 8rem;
 }
 .wf-workflow-queue-list .wf-workflow-ticket-row {
     cursor: pointer;
@@ -810,8 +838,8 @@ body.wf-board-pointer-dragging * {
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
     flex-shrink: 0;
 }
 .wf-tab-content.hidden {
@@ -848,10 +876,7 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding-left: 1.5rem;
-    padding-right: 0.75rem;
-    padding-top: 0.75rem;
-    padding-bottom: 0.75rem;
+    padding: 0.5rem;
 }
 .wf-loop-layout--feed-expanded .wf-loop-main {
     display: none;
@@ -894,10 +919,10 @@ body.wf-board-pointer-dragging * {
     color: #f8fafc;
 }
 .wf-loop-feed-panel {
-    flex: 0 0 min(300px, 32%);
-    width: min(300px, 32%);
-    min-width: 240px;
-    max-width: 340px;
+    flex: 0 0 min(240px, 28%);
+    width: min(240px, 28%);
+    min-width: 200px;
+    max-width: 280px;
     align-self: stretch;
     min-height: 0;
     display: flex;
@@ -1388,6 +1413,19 @@ body.wf-board-pointer-dragging * {
         border-left: none;
         border-top: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 0.5rem;
+    }
+}
+@container (max-width: 680px) {
+    #wf-tab-loop .wf-loop-layout {
+        flex-direction: column;
+    }
+    .wf-loop-feed-panel {
+        flex: 0 0 12rem;
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+        border-left: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
     }
 }
 .wf-loop-cli-strip {
@@ -2410,7 +2448,7 @@ body.wf-board-pointer-dragging * {
 }
 .wf-loop-ring-stage {
     position: relative;
-    width: min(100%, 780px);
+    width: min(calc(100% - 8.25rem), 680px);
     max-height: 100%;
     aspect-ratio: 1;
     height: auto;
@@ -2429,8 +2467,8 @@ body.wf-board-pointer-dragging * {
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: 7.25rem;
-    height: 7.25rem;
+    width: 6.5rem;
+    height: 6.5rem;
     padding: 0.55rem;
     border-radius: 9999px;
     border: 1px solid rgba(249, 115, 22, 0.35);
@@ -2452,8 +2490,8 @@ body.wf-board-pointer-dragging * {
     line-height: 1.1;
 }
 .wf-loop-ring-center-icon {
-    width: 1.75rem;
-    height: 1.75rem;
+    width: 1.5rem;
+    height: 1.5rem;
     flex-shrink: 0;
 }
 .wf-loop-ring-nodes {
@@ -2462,7 +2500,7 @@ body.wf-board-pointer-dragging * {
 }
 .wf-loop-ring-node {
     position: absolute;
-    width: 10.5rem;
+    width: 8.25rem;
     min-height: 5rem;
     transform: translate(-50%, -50%);
     border-radius: 0.65rem;
@@ -2601,9 +2639,9 @@ body.wf-board-pointer-dragging * {
 .wf-loop-step-status--done { border-color: rgba(34, 197, 94, 0.98) !important; box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.36), 0 10px 26px rgba(34, 197, 94, 0.12) !important; }
 .wf-loop-step-status--failed { border-color: rgba(239, 68, 68, 0.55) !important; }
 .wf-loop-step-modal {
-    width: min(1120px, 96vw);
-    max-height: min(90vh, 880px);
-    height: min(90vh, 880px);
+    width: min(1040px, 96vw);
+    max-height: min(86vh, 820px);
+    height: min(86vh, 820px);
     display: flex;
     flex-direction: column;
 }
@@ -2615,7 +2653,7 @@ body.wf-board-pointer-dragging * {
 .wf-loop-step-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-    gap: 1.25rem;
+    gap: 1rem;
     height: 100%;
     min-height: 0;
     align-items: stretch;
@@ -2630,7 +2668,7 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.65rem;
+    gap: 0.5rem;
     height: 100%;
 }
 .wf-loop-step-col-main {
@@ -2694,10 +2732,10 @@ body.wf-board-pointer-dragging * {
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0.7rem;
     background: rgba(21, 32, 84, 0.42);
-    padding: 0.85rem;
+    padding: 0.65rem;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.5rem;
 }
 .wf-loop-step-route-row {
     display: flex;
@@ -2728,7 +2766,8 @@ body.wf-board-pointer-dragging * {
 }
 .wf-loop-step-route-select {
     width: 100%;
-    padding: 0.7rem 0.85rem;
+    min-height: 2.5rem;
+    padding: 0.5rem 0.65rem;
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 0.6rem;
     background: #152054;
@@ -2760,10 +2799,10 @@ body.wf-board-pointer-dragging * {
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.65rem;
     background: rgba(8, 12, 23, 0.42);
-    padding: 0.8rem;
+    padding: 0.6rem;
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.6rem 0.85rem;
+    gap: 0.4rem 0.75rem;
 }
 .wf-loop-step-route-preview.is-disabled {
     opacity: 0.58;
@@ -2811,7 +2850,7 @@ body.wf-board-pointer-dragging * {
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.65rem;
+    gap: 0.5rem;
 }
 .wf-loop-step-side-panel {
     flex: 1 1 0;
@@ -2832,10 +2871,30 @@ body.wf-board-pointer-dragging * {
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0.5rem;
     background: rgba(13, 19, 51, 0.55);
-    padding: 0.5rem;
+    padding: 0.35rem;
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
+}
+.wf-compact-field-row {
+    display: grid;
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+    gap: 0.5rem;
+    align-items: center;
+}
+.wf-compact-field-row > label {
+    margin: 0 !important;
+    color: #9ca3af;
+    text-align: right;
+}
+.wf-compact-field-row > input,
+.wf-compact-field-row > select {
+    min-height: 2.5rem;
+}
+@media (max-width: 640px) {
+    .wf-page-shell { padding: 0.5rem; }
+    .wf-compact-field-row { grid-template-columns: 1fr; gap: 0.25rem; }
+    .wf-compact-field-row > label { text-align: left; }
 }
 .wf-loop-step-picker-item {
     display: flex;
@@ -2982,7 +3041,7 @@ body.wf-split-dragging * {
 {% endblock %}
 
 {% block content %}
-<div class="w-full px-6 py-4 h-[calc(100vh-4rem)]">
+<div class="wf-page-shell w-full h-[calc(100vh-4rem)]">
     <div id="wf-split-layout" class="wf-split-layout h-full min-h-0">
         <!-- Left panel: board tickets -->
         <div id="wf-split-left" class="wf-board-panel wf-split-pane-left min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
@@ -3052,10 +3111,10 @@ body.wf-split-dragging * {
             </div>
             <div id="wf-detail" class="hidden flex-1 flex flex-col min-h-0">
                 <!-- Tabs -->
-                <div class="wf-detail-tabbar border-b border-white/20 px-6 flex items-center gap-1">
+                <div class="wf-detail-tabbar border-b border-white/20 px-3 flex items-center gap-1">
                     <div class="flex items-center gap-1 min-w-0">
-                        <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="tickets">Tickets</button>
-                        <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="loop">Loop</button>
+                        <button type="button" class="wf-tab tab-btn text-gray-400 hover:text-white active" data-tab="loop">Loop</button>
+                        <button type="button" class="wf-tab tab-btn text-gray-400 hover:text-white" data-tab="tickets">Tickets</button>
                         <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="cli">CLI</button>
                         <button type="button" id="wf-runs-tab-btn" class="wf-tab tab-btn hidden px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Runs</button>
                     </div>
@@ -3066,13 +3125,13 @@ body.wf-split-dragging * {
                             <span>Stop</span>
                         </button>
                         <button type="button" id="wf-harness-handoff-btn" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10" title="Open the agent handoff package for this workflow">Open agent handoff</button>
-                        <button type="button" id="wf-run-all-btn" class="px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Run all</button>
+                        <button type="button" id="wf-run-all-btn" class="hidden px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40" disabled>Run all</button>
                     </div>
                 </div>
                 <div id="wf-run-bar" class="hidden border-b border-white/10 px-6 py-2 bg-[#12183a]/80 text-xs flex items-center gap-2 min-h-[2rem]"></div>
                 <!-- Tab content -->
                 <div class="flex-1 min-h-0 flex flex-col">
-                    <div id="wf-detail-tab-scroll" class="flex-1 min-h-0 overflow-y-auto p-6 flex flex-col">
+                    <div id="wf-detail-tab-scroll" class="wf-tab-scroll--loop flex-1 min-h-0 overflow-y-auto p-3 flex flex-col">
                     <!-- Tickets tab -->
                     <div id="wf-tab-tickets" class="wf-tab-content hidden h-full flex flex-col min-h-[420px]" hidden>
                         <div id="wf-workflow-tickets-list" class="wf-ticket-list-surface wf-workflow-ticket-drop-zone flex-1 min-h-[280px] rounded border border-dashed border-white/10 p-2 transition-colors"></div>
@@ -3080,7 +3139,7 @@ body.wf-split-dragging * {
                         <p id="wf-workflow-tickets-empty" class="hidden"></p>
                     </div>
                     <!-- Loop tab -->
-                    <div id="wf-tab-loop" class="wf-tab-content hidden" hidden>
+                    <div id="wf-tab-loop" class="wf-tab-content">
                         <div id="wf-loop-run-ticket-context" class="wf-loop-run-ticket-context hidden" aria-live="polite"></div>
                         <div class="wf-loop-layout">
                             <div class="wf-loop-main">
@@ -3460,18 +3519,18 @@ body.wf-split-dragging * {
 
 <div id="wf-loop-step-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="wf-loop-step-modal-title">
     <div class="kb-modal p-0 wf-loop-step-modal">
-        <div class="flex items-start justify-between gap-4 px-5 py-4 border-b border-white/10">
+        <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/10">
             <div>
                 <h3 id="wf-loop-step-modal-title" class="text-lg font-semibold text-white">Add step</h3>
                 <p id="wf-loop-step-modal-meta" class="text-xs text-gray-500 mt-0.5"></p>
             </div>
             <button type="button" id="wf-loop-step-modal-close" class="text-gray-400 hover:text-white text-xl leading-none" aria-label="Close">&times;</button>
         </div>
-        <div class="px-5 py-4 wf-loop-step-body">
+        <div class="px-4 py-3 wf-loop-step-body">
             <div class="wf-loop-step-layout">
                 <div class="wf-loop-step-col wf-loop-step-col-main">
                     <p class="wf-loop-step-col-title">Step</p>
-                    <div class="flex-shrink-0">
+                    <div class="wf-compact-field-row flex-shrink-0">
                         <label for="wf-loop-step-name" class="block text-xs text-gray-500 mb-1">Step name</label>
                         <input type="text" id="wf-loop-step-name" class="sf-name w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="What is this step called?">
                     </div>
@@ -3560,7 +3619,7 @@ body.wf-split-dragging * {
                 </div>
             </div>
         </div>
-        <div class="flex justify-between items-center gap-3 px-5 py-3 border-t border-white/20">
+        <div class="flex justify-between items-center gap-3 px-4 py-3 border-t border-white/20">
             <button type="button" id="wf-loop-step-delete" class="hidden px-3 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete step</button>
             <div class="flex items-center gap-3 ml-auto">
                 <button type="button" id="wf-loop-step-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
@@ -3572,7 +3631,7 @@ body.wf-split-dragging * {
 
 <div id="wf-loop-preset-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="kb-modal p-0" style="width:min(560px,96vw);max-height:86vh;display:flex;flex-direction:column;">
-        <div class="flex items-start justify-between gap-4 px-5 py-4 border-b border-white/10">
+        <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-white/10">
             <div>
                 <h3 class="text-lg font-semibold text-white">Loop presets</h3>
                 <p class="text-xs text-gray-500 mt-0.5">Role-based loops for developers, content, and sales — full steps with skills, tools, and routing.</p>
@@ -3688,7 +3747,7 @@ body.wf-split-dragging * {
             <button type="button" id="wf-create-modal-close" class="text-gray-400 hover:text-white text-xl leading-none" aria-label="Close">&times;</button>
         </div>
         <div class="px-4 py-3 space-y-3">
-            <div>
+            <div class="wf-compact-field-row">
                 <label for="wf-new-name" class="block text-xs text-gray-500 mb-1">Name</label>
                 <input type="text" id="wf-new-name" placeholder="Workflow name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
             </div>
