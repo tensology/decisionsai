@@ -154,6 +154,16 @@ def resolve_interaction(
             return {"error": "Interaction not found", "status_code": 404}
         item = dict(row)
         if item["status"] != "pending":
+            if (
+                item["status"] in {"resolving", "resolved"}
+                and item.get("resolved_action") == action
+            ):
+                return {
+                    "success": True,
+                    "run_id": item["run_id"],
+                    "action": action,
+                    "idempotent": True,
+                }
             return {"error": f"Interaction already {item['status']}", "status_code": 409, "idempotent": True}
         if float(item["expires_at"]) <= now:
             conn.execute(text("UPDATE workflow_interactions SET status='expired' WHERE token=:token AND status='pending'"), {"token": token})
@@ -170,6 +180,20 @@ def resolve_interaction(
             WHERE token=:token AND status='pending'
         """), {"action": action, "response": response_text, "source": source, "resolver": resolver_id, "token": token})
         if claimed.rowcount != 1:
+            latest = conn.execute(text(
+                "SELECT status,resolved_action,run_id FROM workflow_interactions WHERE token=:token"
+            ), {"token": token}).mappings().first()
+            if (
+                latest
+                and latest["status"] in {"resolving", "resolved"}
+                and latest["resolved_action"] == action
+            ):
+                return {
+                    "success": True,
+                    "run_id": latest["run_id"],
+                    "action": action,
+                    "idempotent": True,
+                }
             return {"error": "Interaction was resolved concurrently", "status_code": 409, "idempotent": True}
 
     try:

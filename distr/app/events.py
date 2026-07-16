@@ -878,9 +878,10 @@ class EventHandlerMixin:
                         )
                         if workflow_reply:
                             self.telegram_manager._stop_typing_loop()
-                            self.telegram_manager.send_to_telegram(
-                                workflow_reply_message(workflow_reply, voice=True)
-                            )
+                            if not workflow_reply.get("idempotent"):
+                                self.telegram_manager.send_to_telegram(
+                                    workflow_reply_message(workflow_reply, voice=True)
+                                )
                             return
                     except Exception:
                         logger.exception("[Telegram] Voice workflow interaction routing failed")

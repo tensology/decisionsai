@@ -371,7 +371,8 @@ class TelegramMessagesMixin:
                     ),
                 )
                 if workflow_reply:
-                    self.send_to_telegram(workflow_reply_message(workflow_reply))
+                    if not workflow_reply.get("idempotent"):
+                        self.send_to_telegram(workflow_reply_message(workflow_reply))
                     return
             except Exception as exc:
                 logger.error("[Telegram] Workflow interaction routing failed: %s", exc, exc_info=True)
@@ -1113,7 +1114,8 @@ class TelegramMessagesMixin:
                 )
                 if workflow_reply:
                     self._stop_typing_loop()
-                    self.send_to_telegram(workflow_reply_message(workflow_reply, voice=True))
+                    if not workflow_reply.get("idempotent"):
+                        self.send_to_telegram(workflow_reply_message(workflow_reply, voice=True))
                     return
 
             # Explicit work commands become tickets or workflow actions; ordinary

@@ -117,8 +117,30 @@ def test_resolved_interaction_is_idempotent(monkeypatch):
     )
     assert resolve_interaction(token=interaction["token"], action="approve", chat_id=123)["success"]
     duplicate = resolve_interaction(token=interaction["token"], action="approve", chat_id=123)
-    assert duplicate["status_code"] == 409
+    assert duplicate["success"] is True
     assert duplicate["idempotent"] is True
+
+
+def test_resolving_same_action_is_idempotent_but_conflict_is_rejected():
+    interaction = _create()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE workflow_interactions
+            SET status='resolving', resolved_action='approve'
+            WHERE token=:token
+        """), {"token": interaction["token"]})
+
+    duplicate = resolve_interaction(
+        token=interaction["token"], action="approve", chat_id=123
+    )
+    assert duplicate["success"] is True
+    assert duplicate["idempotent"] is True
+
+    conflict = resolve_interaction(
+        token=interaction["token"], action="stop", chat_id=123
+    )
+    assert conflict["status_code"] == 409
+    assert "already resolving" in conflict["error"]
 
 
 def test_chat_binding_blocks_other_private_sender():

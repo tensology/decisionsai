@@ -602,6 +602,30 @@ def test_relay_callback_is_recorded_as_telegram_callback(monkeypatch):
     assert manager.sent == ["accepted"]
 
 
+def test_duplicate_callback_does_not_emit_false_failure(monkeypatch):
+    manager = DummyTelegramMessages()
+    monkeypatch.setattr(
+        "distr.core.workflow.interactions.handle_telegram_workflow_reply",
+        lambda *_args, **_kwargs: {
+            "success": True,
+            "run_id": 92,
+            "action": "approve",
+            "idempotent": True,
+        },
+    )
+
+    manager._handle_telegram_message({"data": {
+        "message_id": "callback-duplicate",
+        "chat_id": 12345,
+        "chat": {"type": "private"},
+        "from": {"id": 12345},
+        "callback_data": "wf:opaque:approve",
+    }})
+
+    assert manager.sent == []
+    assert manager.enqueued == []
+
+
 def test_private_text_is_marked_read_on_receipt():
     manager = DummyTelegramMessages()
 
