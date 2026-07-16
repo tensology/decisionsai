@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-16",
+  "implementation_sha": "a0126326a4bc52f0d8f7e1cd6231906401b3e7bb",
+  "contains_secrets": false,
+  "integrations": {
+    "telegram": {
+      "text_ticket_context": "passed",
+      "approval_run": 92,
+      "approval_action": "approve",
+      "voice_run": 93,
+      "voice_action": "proceed",
+      "attachment_filename": "decisionsai-telegram-proof.txt",
+      "attachment_caption_match": true
+    },
+    "workers": {
+      "codex": {"execution_session": 91, "status": "completed", "model": "auto"},
+      "openrouter": {"execution_session": 89, "status": "completed", "model": "openrouter/free"},
+      "ollama": {"isolated_execution_session": 6, "status": "completed", "model": "ornith:9b"},
+      "kilocode": {"isolated_execution_session": 1, "status": "completed", "backend": "opencode", "model": "openrouter/free"},
+      "claude_code": {"status": "not_verified", "reason": "provider disabled; recorded attempt had insufficient credit"}
+    }
+  },
+  "resilience": {
+    "idle_soak": {"duration_seconds": 590, "requests": 120, "failures": 0, "median_ms": 3.67, "max_ms": 11.86},
+    "network_interruption": {"forced": true, "automatic_reconnect": true, "duplicate_online_notice": false},
+    "restart_recovery": {"orphaned_run_terminalized": true, "durable_wait_preserved": true},
+    "physical_sleep_wake": "pending"
+  },
+  "packaging": {
+    "developer_identities": 0,
+    "notary_profile": false,
+    "unsigned_lifecycle": "hosted_gate",
+    "signed_notarized_release": "pending"
+  }
+}

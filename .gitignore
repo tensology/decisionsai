@@ -98,6 +98,12 @@ docs/*
 !docs/local-harness-preflight.md
 !docs/nous-hermes-agent.md
 !docs/RELEASE_CHECKLIST.md
+!docs/releases/
+docs/releases/*
+!docs/releases/2.8.0-rc1.md
+!docs/release-evidence/
+docs/release-evidence/*
+!docs/release-evidence/2026-07-16-operator-evidence.json
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/plans/

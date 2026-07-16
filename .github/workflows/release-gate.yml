@@ -22,7 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Prepare evidence directory
-        run: mkdir -p artifacts
+        run: |
+          mkdir -p artifacts
+          printf '%s\n' "$GITHUB_SHA" > artifacts/release-commit.txt
+          git status --porcelain=v1 > artifacts/release-worktree.txt
+          test ! -s artifacts/release-worktree.txt
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -38,7 +42,9 @@ jobs:
       - name: Install Chromium
         run: python -m playwright install chromium
       - name: Verify supported runtime
-        run: python scripts/verify_runtime.py --json
+        run: |
+          python scripts/verify_runtime.py --json > artifacts/runtime-contract.json
+          cat artifacts/runtime-contract.json
       - name: Verify collection
         run: python -m pytest --collect-only -q
       - name: Run default test suite
@@ -111,6 +117,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Prepare evidence directory
+        run: mkdir -p artifacts
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -120,4 +128,12 @@ jobs:
       - name: Check patch integrity
         run: git diff-tree --check --no-commit-id -r HEAD
       - name: Run Fallow structural audit
-        run: npx --yes fallow audit --format json --quiet
+        run: |
+          npx --yes fallow audit --format json --quiet > artifacts/fallow.json
+          cat artifacts/fallow.json
+      - name: Upload static audit evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-gate-static-evidence
+          path: artifacts/
