@@ -19,6 +19,12 @@ def build_step_config(step_data: dict) -> dict:
     """
     action_type = step_data["action_type"]
     config = dict(step_data.get("config") or {})
+    # ``timeout_seconds`` is a first-class workflow-step field. Older steps
+    # may also carry an action-specific override inside ``config``; preserve
+    # that override while ensuring executors always receive the canonical
+    # value when only the database column is populated.
+    if step_data.get("timeout_seconds") is not None:
+        config.setdefault("timeout_seconds", step_data["timeout_seconds"])
     if action_type in ("execute_code", "playwright", "browser_use"):
         config.setdefault("code", step_data.get("code", ""))
         config.setdefault("instruction", step_data.get("instruction", ""))

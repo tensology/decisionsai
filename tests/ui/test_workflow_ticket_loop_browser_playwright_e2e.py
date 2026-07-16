@@ -10,6 +10,7 @@ Run (server required on http://127.0.0.1:8765):
 
 from __future__ import annotations
 
+import os
 import re
 
 import pytest
@@ -27,7 +28,7 @@ from scripts.workflow_ticket_loop_e2e import (
 
 pytestmark = pytest.mark.e2e_playwright
 
-BASE_URL = "http://127.0.0.1:8765"
+BASE_URL = os.environ.get("WORKFLOW_E2E_BASE_URL", "http://127.0.0.1:8765").rstrip("/")
 
 
 def _select_seeded_workflow(page: Page, workflow_name: str) -> None:
@@ -126,10 +127,13 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(preview_body).to_contain_text(str(ids["ticket_title"]))
     expect(preview_body).to_contain_text(str(ids["project_name"]))
     expect(preview_body).to_contain_text("Executor")
-    expect(preview_body).to_contain_text(backend_display)
-    expect(preview_body).to_contain_text(backend_model)
-    expect(preview_body).to_contain_text("Skills")
-    expect(preview_body).to_contain_text("webapp-testing")
+    # The modal first renders its local ticket snapshot, then replaces it with
+    # the authoritative project/board route fetched from ``cli-context``.
+    # A cold server may still be warming its backend catalog at this point.
+    expect(preview_body).to_contain_text(backend_display, timeout=15000)
+    expect(preview_body).to_contain_text(backend_model, timeout=15000)
+    expect(preview_body).to_contain_text("Skills", timeout=15000)
+    expect(preview_body).to_contain_text("webapp-testing", timeout=15000)
 
     page.locator("#wf-run-preview-confirm").click()
 

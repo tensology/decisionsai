@@ -311,9 +311,19 @@ class StepExecutorMixin:
                 except Exception:
                     pass
             if action_type == "playwright":
-                exec_result = svc._execute_playwright(exec_code, headless=config.get("headless", True))
+                timeout_seconds = max(1, int(config.get("timeout_seconds", 120) or 120))
+                exec_result = svc._execute_playwright(
+                    exec_code,
+                    headless=config.get("headless", True),
+                    timeout=timeout_seconds,
+                )
             else:
-                exec_result = svc._execute_python(exec_code, cwd=cwd)
+                timeout_seconds = max(1, int(config.get("timeout_seconds", 60) or 60))
+                exec_result = svc._execute_python(
+                    exec_code,
+                    timeout=timeout_seconds,
+                    cwd=cwd,
+                )
             stdout = getattr(exec_result, "stdout", "") or (exec_result.get("stdout", "") if isinstance(exec_result, dict) else "")
             stderr = getattr(exec_result, "stderr", "") or (exec_result.get("stderr", "") if isinstance(exec_result, dict) else "")
             exit_code = getattr(exec_result, "exit_code", None)
