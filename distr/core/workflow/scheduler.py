@@ -9,8 +9,9 @@ import logging
 import json
 import re
 import time as _time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from typing import Any, List, Optional, Callable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func
 
@@ -298,6 +299,31 @@ def _utc_offset() -> timedelta:
     return timedelta(seconds=offset_secs)
 
 
+def _schedule_timezone_info(timezone_name: Optional[str]):
+    """Resolve a persisted IANA zone, falling back to the machine's UTC offset."""
+    name = str(timezone_name or "").strip()
+    if name:
+        try:
+            return ZoneInfo(name)
+        except ZoneInfoNotFoundError:
+            logger.warning("Unknown workflow schedule timezone %r; using system local time", name)
+    return datetime_timezone(_utc_offset())
+
+
+def _utc_naive_to_local_wall(value: datetime, timezone_name: Optional[str]) -> datetime:
+    aware = value
+    if aware.tzinfo is None:
+        aware = aware.replace(tzinfo=datetime_timezone.utc)
+    else:
+        aware = aware.astimezone(datetime_timezone.utc)
+    return aware.astimezone(_schedule_timezone_info(timezone_name)).replace(tzinfo=None)
+
+
+def _local_wall_to_utc_naive(value: datetime, timezone_name: Optional[str]) -> datetime:
+    local = value.replace(tzinfo=_schedule_timezone_info(timezone_name))
+    return local.astimezone(datetime_timezone.utc).replace(tzinfo=None)
+
+
 def _cron_weekday(dt: datetime) -> int:
     """Return cron weekday for a datetime: Sunday=0, Monday=1."""
     return (dt.weekday() + 1) % 7
@@ -407,24 +433,22 @@ def _next_run_from_cron(
             )
     try:
         from croniter import croniter
-        offset = _utc_offset()
         base_utc = from_dt or datetime.utcnow()
         if allow_current_minute:
             base_utc = base_utc - timedelta(seconds=59)
-        base_local = base_utc + offset
+        base_local = _utc_naive_to_local_wall(base_utc, timezone)
         it = croniter(cron_expr, base_local)
         local_next = it.get_next(datetime)
-        # Convert back to UTC
-        return local_next - offset
+        return _local_wall_to_utc_naive(local_next, timezone)
     except Exception as e:
-        offset = _utc_offset()
         base_utc = from_dt or datetime.utcnow()
         if allow_current_minute:
             base_utc = base_utc - timedelta(seconds=59)
-        local_next = _next_run_from_simple_cron(cron_expr, base_utc + offset)
+        base_local = _utc_naive_to_local_wall(base_utc, timezone)
+        local_next = _next_run_from_simple_cron(cron_expr, base_local)
         if local_next:
             logger.warning("croniter failed for %r: %s; used built-in simple schedule fallback", cron_expr, e)
-            return local_next - offset
+            return _local_wall_to_utc_naive(local_next, timezone)
         logger.warning("croniter failed for %r: %s", cron_expr, e)
         return None
 

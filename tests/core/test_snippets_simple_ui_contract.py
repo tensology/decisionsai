@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REMOTE_ROOT = ROOT.parent / "www.decisionsai.net" / "remote-app"
@@ -30,6 +32,8 @@ def test_main_snippets_ui_uses_simple_editable_snippet_field():
 
 
 def test_remote_snippets_ui_does_not_use_textareas_for_snippets():
+    if not REMOTE_ROOT.is_dir():
+        pytest.skip("optional www.decisionsai.net sibling checkout is not present")
     snippets_tab = read(REMOTE_ROOT / "src/components/tabs/SnippetsTab.jsx")
     remote_view = read(REMOTE_ROOT / "src/components/RemoteView.jsx")
 

@@ -47,6 +47,7 @@ def test_next_run_from_daily_cron_falls_back_when_croniter_missing(monkeypatch):
     result = _next_run_from_cron(
         "15 10 * * *",
         from_dt=datetime(2026, 6, 2, 8, 0, 0),
+        timezone="Africa/Johannesburg",
     )
 
     assert result == datetime(2026, 6, 2, 8, 15, 0)
@@ -67,6 +68,7 @@ def test_next_run_from_weekday_cron_falls_back_when_croniter_missing(monkeypatch
     result = _next_run_from_cron(
         "30 8 * * 1,2,3,4,5",
         from_dt=datetime(2026, 6, 6, 9, 0, 0),
+        timezone="Africa/Johannesburg",
     )
 
     assert result == datetime(2026, 6, 8, 6, 30, 0)

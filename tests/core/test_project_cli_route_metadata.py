@@ -249,8 +249,14 @@ def test_cli_models_endpoint_returns_verified_kiro_models(monkeypatch):
         returncode = 0
         stdout = '{"models":[{"model_id":"auto","model_name":"Auto"},{"model_id":"claude-sonnet-4-5","model_name":"Claude Sonnet 4.5"}]}'
 
-    monkeypatch.setattr("distr.core.project_cli_backends.get_backend", lambda backend_id: _FakeBackend())
-    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: _FakeCompleted())
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.get_backend",
+        lambda backend_id: _FakeBackend(),
+    )
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.catalog_probe.subprocess.run",
+        lambda *args, **kwargs: _FakeCompleted(),
+    )
 
     app = FastAPI()
     templates_dir = Path(__file__).resolve().parents[2] / "distr/gui/web/templates"

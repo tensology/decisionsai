@@ -41,6 +41,10 @@ def test_ide_handoff_writes_ticket_packet_and_starts_harness(tmp_path):
 
     async def run():
         with (
+            patch(
+                "distr.core.project_cli_backends.ide_handoff._ide_open_command",
+                return_value="/usr/bin/true",
+            ),
             patch("distr.core.project_cli_backends.ide_handoff.open_ide_project", return_value=True),
             patch(
                 "distr.core.project_cli_backends.ide_handoff.start_cursor_harness_agent",
@@ -91,6 +95,10 @@ def test_run_project_task_sets_ide_handoff_pending(tmp_path):
 
     async def dispatch():
         with (
+            patch(
+                "distr.core.project_cli_backends.ide_handoff._ide_open_command",
+                return_value="/usr/bin/true",
+            ),
             patch("distr.core.project_cli_backends.ide_handoff.open_ide_project", return_value=True),
             patch(
                 "distr.core.project_cli_backends.ide_handoff.start_cursor_harness_agent",

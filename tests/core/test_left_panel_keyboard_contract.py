@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REMOTE_ROOT = ROOT.parent / "www.decisionsai.net" / "remote-app"
@@ -52,6 +54,8 @@ def test_primary_left_panels_use_shared_list_keyboard():
 
 
 def test_remote_chat_no_longer_embeds_whatsapp_reply_form():
+    if not REMOTE_ROOT.is_dir():
+        pytest.skip("optional www.decisionsai.net sibling checkout is not present")
     chat_tab = read(REMOTE_ROOT / "src/components/tabs/ChatTab.jsx")
 
     assert "WhatsApp Reply" not in chat_tab

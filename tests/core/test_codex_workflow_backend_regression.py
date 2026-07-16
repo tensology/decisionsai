@@ -261,6 +261,10 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
         patch("distr.core.workflow.router.record_workflow_chat_event", no_op),
         patch("distr.core.workflow.dispatcher.append_ticket_audit_entry", no_op),
         patch("distr.core.workflow.router.append_ticket_audit_entry", no_op),
+        patch(
+            "distr.core.project_cli_backends.registry._first_executable",
+            return_value="/usr/bin/codex",
+        ),
         patch("distr.core.project_cli_backends.harness.dispatch_harness", fake_dispatch_harness),
     ]
 
