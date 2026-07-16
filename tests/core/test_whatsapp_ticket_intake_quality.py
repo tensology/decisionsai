@@ -35,7 +35,7 @@ def _message(**kwargs):
         "media_filename": None,
         "media_local_path": None,
         "whatsapp_timestamp": 1_700_000_000,
-        "created_date": datetime.utcnow(),
+        "created_date": datetime.now(timezone.utc).replace(tzinfo=None),
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

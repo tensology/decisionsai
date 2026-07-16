@@ -8,7 +8,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 from typing import Optional, List, Tuple, Any
 from urllib.parse import quote, urlparse, unquote
-from datetime import datetime
+from datetime import datetime, timezone
 import html
 import json
 import logging
@@ -500,7 +500,7 @@ def _whatsapp_snapshot_intake_stats(s, identifiers: List[str], scope: str, since
         stats["new_since_last_ticket_count"] = newer_count
         stats["older_unticketed_available"] = total_unticketed > newer_count
     elif scope == "new_since_last_ticket" and since_hours > 0:
-        cutoff = int(datetime.utcnow().timestamp()) - (since_hours * 3600)
+        cutoff = int(datetime.now(timezone.utc).timestamp()) - (since_hours * 3600)
         recent_count = unticketed_query.filter(
             WhatsAppMessage.whatsapp_timestamp >= cutoff,
         ).count()
@@ -513,7 +513,7 @@ def _whatsapp_message_day(message) -> Optional[str]:
     ts = getattr(message, "whatsapp_timestamp", None)
     if ts:
         try:
-            return datetime.utcfromtimestamp(int(ts)).date().isoformat()
+            return datetime.fromtimestamp(int(ts), timezone.utc).date().isoformat()
         except Exception:
             pass
     created = getattr(message, "created_date", None)
