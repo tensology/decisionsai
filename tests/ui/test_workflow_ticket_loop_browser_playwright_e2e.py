@@ -146,7 +146,10 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(feed).to_contain_text("RED validation failed", timeout=25000)
     expect(feed).to_contain_text("Loop iteration 1", timeout=25000)
     expect(feed).to_contain_text(
-        re.compile(rf"Route:\s*{re.escape(backend_id)}\s*/\s*{re.escape(backend_model)}", re.IGNORECASE),
+        re.compile(
+            rf"Route selected:\s*{re.escape(backend_id)}\s*/\s*{re.escape(backend_model)}",
+            re.IGNORECASE,
+        ),
         timeout=25000,
     )
     expect(feed).to_contain_text("Skills: webapp-testing", timeout=25000)
