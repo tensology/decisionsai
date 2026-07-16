@@ -13,6 +13,7 @@ from distr.core.project_cli_backends.model_policy import apply_workflow_model_po
 from distr.core.project_cli_backends.registry import (
     _BoundedCliOutput,
     OneShotCliBackend,
+    OpenCodeBackend,
     PiBackend,
     _ONE_SHOT_PROCESSES,
     _execution_event_message,
@@ -536,6 +537,50 @@ def test_runtime_provider_failover_can_be_disabled_or_scoped():
         "model": "sonnet",
         "model_provider": "anthropic",
     }
+
+
+def test_opencode_translates_kilocode_route_and_scopes_project_folder(tmp_path):
+    backend = OpenCodeBackend()
+    task = ProjectTask(
+        project_id=7,
+        project_name="Pizza House",
+        folder=str(tmp_path),
+        instruction="Implement the ticket.",
+        origin="workflow",
+        model="openrouter/free",
+        adapter_options={"model_provider": "kilocode"},
+    )
+
+    command = backend._build_command("opencode", task)
+
+    assert command == [
+        "opencode",
+        "run",
+        "--dir",
+        str(tmp_path),
+        "-m",
+        "kilo/openrouter/free",
+        "Implement the ticket.",
+    ]
+
+
+def test_opencode_workflow_rejects_success_without_completion_report(monkeypatch, tmp_path):
+    async def fake_send_task(self, task, on_event=None):
+        return BackendTaskResult(True, "opencode", "opencode", output="")
+
+    monkeypatch.setattr(OneShotCliBackend, "send_task", fake_send_task)
+    task = ProjectTask(
+        project_id=7,
+        project_name="Pizza House",
+        folder=str(tmp_path),
+        instruction="Implement the ticket.",
+        origin="workflow",
+    )
+
+    result = asyncio.run(OpenCodeBackend().send_task(task))
+
+    assert result.success is False
+    assert result.error.startswith("OpenCode exited successfully but returned no completion report")
 
 
 @pytest.mark.parametrize("backend_class", ["CodexBackend", "CursorBackend"])

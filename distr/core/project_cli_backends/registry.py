@@ -273,12 +273,12 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
     return command
 
 
-def _pi_workflow_report_error(output: str) -> str:
-    """Require Pi workflow runs to honour the normalized completion contract."""
+def _workflow_report_error(output: str, worker_name: str) -> str:
+    """Require one-shot workflow workers to honour the completion contract."""
     text = str(output or "").strip()
     if not text:
         return (
-            "Pi exited successfully but returned no completion report; "
+            f"{worker_name} exited successfully but returned no completion report; "
             "the workflow treats this as a no-op instead of completed work."
         )
     match = re.search(
@@ -292,13 +292,17 @@ def _pi_workflow_report_error(output: str) -> str:
         )
     if not match:
         return (
-            "Pi returned text without the required 'Status: completed' workflow report; "
+            f"{worker_name} returned text without the required 'Status: completed' workflow report; "
             "the result remains unverified."
         )
     status = match.group(1).lower()
     if status != "completed":
-        return f"Pi reported workflow status {status}; the step was not completed."
+        return f"{worker_name} reported workflow status {status}; the step was not completed."
     return ""
+
+
+def _pi_workflow_report_error(output: str) -> str:
+    return _workflow_report_error(output, "Pi")
 
 
 def _git_status_short(folder: str) -> list[str]:
@@ -1000,8 +1004,21 @@ class OpenCodeBackend(OneShotCliBackend):
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         cmd = [executable] + self.command_args
         if task.model and task.model not in ("auto", "default", ""):
-            cmd += ["-m", task.model]
+            model = task.model
+            provider = str(task.adapter_options.get("model_provider") or "").strip().lower()
+            if provider == "kilocode" and not model.startswith("kilo/"):
+                model = f"kilo/{model}"
+            cmd += ["--dir", task.folder, "-m", model]
         return cmd + [task.instruction]
+
+    async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
+        result = await super().send_task(task, on_event=on_event)
+        if result.success and task.origin == "workflow":
+            report_error = _workflow_report_error(result.output, self.name)
+            if report_error:
+                result.success = False
+                result.error = report_error
+        return result
 
 
 class KiroBackend(OneShotCliBackend):
