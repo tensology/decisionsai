@@ -54,7 +54,10 @@ jobs:
           tests/core/test_principle_workflow_chain_e2e.py::test_principle_workflow_chain_ideation_development_polish
           --junitxml=artifacts/pytest-workflow-chain.xml
       - name: Start local Mission Control server
+        env:
+          DECISIONS_DATA_DIR: ${{ runner.temp }}/browser-state
         run: |
+          rm -rf "$DECISIONS_DATA_DIR"
           python -m uvicorn distr.gui.web.server:create_app --factory --host 127.0.0.1 --port 8765 > artifacts/web-server.log 2>&1 &
           echo $! > artifacts/web-server.pid
           for attempt in {1..60}; do
@@ -64,11 +67,18 @@ jobs:
           cat artifacts/web-server.log
           exit 1
       - name: Run canonical workflow browser journey
+        env:
+          DECISIONS_DATA_DIR: ${{ runner.temp }}/browser-state
         run: >-
           python -m pytest -q -m e2e_playwright
           tests/ui/test_workflow_ticket_loop_browser_playwright_e2e.py
           --browser chromium
           --junitxml=artifacts/pytest-browser.xml
+      - name: Summarize browser-journey failures
+        if: failure() && hashFiles('artifacts/pytest-browser.xml') != ''
+        run: >-
+          python scripts/summarize_pytest_junit.py
+          artifacts/pytest-browser.xml --github-annotations
       - name: Build and lifecycle-test unsigned macOS artifact
         run: |
           DECISIONSAI_OUTPUT_DIR="$RUNNER_TEMP/release" installer/build_app.sh --app-only
