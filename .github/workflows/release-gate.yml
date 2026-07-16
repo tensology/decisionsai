@@ -23,10 +23,11 @@ jobs:
       - uses: actions/checkout@v5
       - name: Prepare evidence directory
         run: |
+          git status --porcelain=v1 > "$RUNNER_TEMP/release-worktree.txt"
+          test ! -s "$RUNNER_TEMP/release-worktree.txt"
           mkdir -p artifacts
           printf '%s\n' "$GITHUB_SHA" > artifacts/release-commit.txt
-          git status --porcelain=v1 > artifacts/release-worktree.txt
-          test ! -s artifacts/release-worktree.txt
+          mv "$RUNNER_TEMP/release-worktree.txt" artifacts/release-worktree.txt
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
