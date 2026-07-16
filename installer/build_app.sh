@@ -8,6 +8,7 @@ BUNDLE_ID="com.tensology.decisionsai"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VERSION_FILE="$PROJECT_ROOT/VERSION"
+ICON_FILE="$PROJECT_ROOT/assets/icons/favicon.png"
 OUTPUT_DIR="${DECISIONSAI_OUTPUT_DIR:-$SCRIPT_DIR/release}"
 BUILD_DIR="${DECISIONSAI_BUILD_DIR:-$SCRIPT_DIR/build}"
 DIST_DIR="$BUILD_DIR/dist"
@@ -45,6 +46,7 @@ done
 
 [ "$(uname -s)" = "Darwin" ] || { printf 'macOS is required to build DecisionsAI.app.\n' >&2; exit 1; }
 [ -f "$VERSION_FILE" ] || { printf 'Missing canonical VERSION file.\n' >&2; exit 1; }
+[ -f "$ICON_FILE" ] || { printf 'Missing tracked application icon: %s\n' "$ICON_FILE" >&2; exit 1; }
 VERSION="${DECISIONSAI_VERSION:-$(tr -d '[:space:]' < "$VERSION_FILE")}"
 printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$' || {
     printf 'Invalid release version: %s\n' "$VERSION" >&2
@@ -134,7 +136,7 @@ cd "$PROJECT_ROOT"
     --exclude-module tkinter \
     --exclude-module matplotlib \
     --exclude-module pandas \
-    --icon "$PROJECT_ROOT/decisions.app/Contents/Resources/icon.icns" \
+    --icon "$ICON_FILE" \
     --osx-bundle-identifier "$BUNDLE_ID" \
     "$PROJECT_ROOT/bin/start.py"
 
