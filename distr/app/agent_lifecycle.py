@@ -16,8 +16,7 @@ from distr.core.signals import signal_manager
 from distr.core.runtime_lifecycle import append_runtime_event
 from distr.core.utils import load_settings_from_db, save_settings_to_db
 
-# Late import to avoid circular dependency — run_agent_session is defined in app.py
-# We import it at function call time instead.
+# Import the headless worker at call time so spawned children never initialize Qt GUI state.
 
 logger = logging.getLogger(__name__)
 

@@ -97,5 +97,15 @@ def run_agent_session(settings, input_device=None, output_device=None,
             time.sleep(0.5)
         except (RuntimeError, KeyboardInterrupt):
             pass
+        try:
+            from distr.core.process_tracker import (
+                close_multiprocessing_resources,
+                run_multiprocessing_finalizers,
+            )
+
+            close_multiprocessing_resources(queues=(command_queue, event_queue))
+            run_multiprocessing_finalizers()
+        except Exception as exc:
+            logger.debug("Agent IPC cleanup failed: %s", exc)
         gc.collect()
         os._exit(0)

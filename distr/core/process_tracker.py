@@ -12,6 +12,7 @@ import os
 import signal
 import time
 import subprocess
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 _PID_FILE: str = ""
 _tracked_pids: set = set()
 _registered: bool = False
+_shutdown_callback: Callable[[], None] | None = None
 
 
 def _get_pid_file() -> str:
@@ -56,6 +58,39 @@ def unregister_child_pid(pid: int):
     """Call this after a child process has been cleanly terminated."""
     _tracked_pids.discard(pid)
     _write_pids()
+
+
+def close_multiprocessing_resources(*, queues=(), managers=()) -> None:
+    """Release application-owned multiprocessing IPC before ``os._exit``."""
+    for queue in queues:
+        if queue is None:
+            continue
+        try:
+            queue.close()
+        except Exception as exc:
+            logger.debug("process_tracker: queue close failed: %s", exc)
+        try:
+            queue.join_thread()
+        except Exception as exc:
+            logger.debug("process_tracker: queue join failed: %s", exc)
+
+    for manager in managers:
+        if manager is None:
+            continue
+        try:
+            manager.shutdown()
+        except Exception as exc:
+            logger.debug("process_tracker: manager shutdown failed: %s", exc)
+
+
+def run_multiprocessing_finalizers() -> None:
+    """Run multiprocessing cleanup that a deliberate ``os._exit`` skips."""
+    try:
+        from multiprocessing.util import _run_finalizers
+
+        _run_finalizers()
+    except Exception as exc:
+        logger.debug("process_tracker: multiprocessing finalizers failed: %s", exc)
 
 
 def kill_tracked_pids(pids: set = None, timeout: float = 3.0):
@@ -222,8 +257,16 @@ def _atexit_cleanup():
 
 
 def _signal_handler(signum, frame):
-    """SIGTERM/SIGINT handler — clean up children then re-raise."""
-    logger.info("process_tracker: caught signal %d — cleaning up workers", signum)
+    """Route termination through app shutdown, with a non-GUI fallback."""
+    logger.info("process_tracker: caught signal %d", signum)
+    if _shutdown_callback is not None:
+        try:
+            _shutdown_callback()
+            return
+        except Exception:
+            logger.exception("process_tracker: application shutdown callback failed")
+
+    logger.info("process_tracker: cleaning up workers without application callback")
     kill_tracked_pids()
     try:
         path = _get_pid_file()
@@ -231,17 +274,22 @@ def _signal_handler(signum, frame):
             os.remove(path)
     except Exception:
         pass
-    # Re-raise as KeyboardInterrupt so Qt's event loop exits normally
-    raise KeyboardInterrupt()
+    raise SystemExit(128 + signum)
 
 
-def setup(main_pid: int = None):
+def setup(
+    main_pid: int = None,
+    *,
+    shutdown_callback: Callable[[], None] | None = None,
+):
     """Call once from the main process at startup.
 
     1. Kills any stale PIDs from a previous (crashed) session.
     2. Registers atexit + signal handlers to kill children on exit.
     """
-    global _registered
+    global _registered, _shutdown_callback
+    if shutdown_callback is not None:
+        _shutdown_callback = shutdown_callback
     if _registered:
         return
     _registered = True

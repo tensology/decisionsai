@@ -343,102 +343,6 @@ def get_device_choices():
     output_devices = ['System Default'] + [d['name'] for d in devices if d['max_output_channels'] > 0]
     return input_devices, output_devices
 
-def run_agent_session(settings, input_device=None, output_device=None, command_queue=None, event_queue=None, confirmation_results_dict=None, skip_welcome=False, screen_info_cache=None, agent_current_chat_id=None):
-    """Runs the agent session in a separate process with proper error handling"""
-    # Suppress MallocStackLogging warnings in agent subprocess
-    if sys.platform == 'darwin':
-        if "MallocStackLogging" in os.environ:
-            del os.environ["MallocStackLogging"]
-        if "MallocStackLoggingDirectory" in os.environ:
-            del os.environ["MallocStackLoggingDirectory"]
-    # Suppress "coroutine was never awaited" from pipecat/transport during process exit
-    import warnings
-    warnings.filterwarnings("ignore", message=r".*coroutine.*was never awaited", category=RuntimeWarning)
-    # Suppress CUDA-not-available warnings from torch autocast (Kanade uses @cuda.amp.autocast on CPU)
-    warnings.filterwarnings("ignore", message=r".*CUDA is not available.*", category=UserWarning)
-    # Suppress FlashAttention fallback warnings from kanade_tokenizer
-    warnings.filterwarnings("ignore", message=r".*FlashAttention.*", category=UserWarning)
-    # Suppress whisper.cpp memory allocation logs (whisper_init_state: kv pad / compute buffer)
-    # These come from the C library via stderr — redirect through logging
-    os.environ.setdefault("WHISPER_LOG_LEVEL", "3")  # 3 = ERROR only
-    setup_logging(clear_logs=False)  # Don't clear logs in agent subprocess
-    
-    # Initialize screen cache in agent process
-    if screen_info_cache:
-        from distr.core.screen_utils import init_screen_cache_manager
-        init_screen_cache_manager(screen_info_cache)
-        logger.info("Initialized screen cache in agent process")
-    
-    # Ensure QCoreApplication exists for signals to work in the agent process
-    # This prevents "wrapped C/C++ object has been deleted" errors
-    if sys.platform == "darwin":
-        from distr.core.macos_background import hide_process_from_dock
-
-        hide_process_from_dock()
-        os.environ.setdefault("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1")
-
-    from PyQt6.QtCore import QCoreApplication
-    app = None
-    if not QCoreApplication.instance():
-        # Create a QCoreApplication (no GUI) for the agent process
-        app = QCoreApplication(sys.argv)
-        
-    agent_session = None
-    try:
-        def exception_handler(exc_type, exc_value, exc_traceback):
-            if exc_type == sd.PortAudioError and "PortAudio not initialized" in str(exc_value):
-                logger.info("Suppressing PortAudio termination error")
-                return
-            # Suppress RuntimeError about closed event loop during shutdown
-            if exc_type == RuntimeError and "Event loop is closed" in str(exc_value):
-                logger.debug("Suppressing event loop closed error during shutdown")
-                return
-            sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        sys.excepthook = exception_handler
-
-        try:
-            agent_session = AgentSession(
-                input_device=input_device, 
-                output_device=output_device, 
-                settings=settings,
-                command_queue=command_queue,
-                event_queue=event_queue,
-                confirmation_results_dict=confirmation_results_dict,
-                skip_welcome=skip_welcome,
-                agent_current_chat_id=agent_current_chat_id
-            )
-            agent_session.start()
-        except Exception as e:
-            logger.error(f"Error initializing or running agent session: {e}")
-            import traceback
-            traceback.print_exc()
-    except Exception as e:
-        logger.error(f"Error in agent session process: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up agent session before exiting
-        if agent_session:
-            try:
-                agent_session.stop()
-            except (RuntimeError, Exception) as e:
-                # Suppress RuntimeError and other exceptions during shutdown
-                # These often occur when event loops are closing
-                if "Event loop is closed" not in str(e) and "coroutine" not in str(e).lower():
-                    logger.debug(f"Error stopping agent session: {e}")
-        
-        logger.info("Agent session process exiting")
-        try:
-            time.sleep(0.5)
-        except (RuntimeError, KeyboardInterrupt):
-            # Suppress errors during shutdown
-            pass
-        gc.collect()
-        # Use os._exit(0) to avoid ggml Metal crash on macOS during normal Python shutdown.
-        # GGML Metal destructor (ggml_metal_device_free) asserts in rsets->data count; bypassing
-        # Python's atexit/__del__/C++ destructors prevents the crash.
-        os._exit(0)
-
 # ===========================================
 # 5. Application Class
 # ===========================================
@@ -479,7 +383,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # register atexit/signal handlers to clean up on this session's exit.
         try:
             from distr.core.process_tracker import setup as _pt_setup
-            _pt_setup()
+            _pt_setup(shutdown_callback=self.quit)
         except Exception as _pt_err:
             logging.getLogger(__name__).debug("process_tracker setup failed: %s", _pt_err)
 
@@ -1788,18 +1692,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 except Exception as e:
                     logger.debug(f"Error disconnecting WhatsApp: {e}")
             
-            # Cleanup multiprocessing managers
-            if hasattr(self, 'screen_info_manager'):
-                try:
-                    self.screen_info_manager.shutdown()
-                except Exception as e:
-                    logger.debug(f"Error shutting down screen_info_manager: {e}")
-            
-            if hasattr(self, 'confirmation_manager'):
-                try:
-                    self.confirmation_manager.shutdown()
-                except Exception as e:
-                    logger.debug(f"Error shutting down confirmation_manager: {e}")
+            self._cleanup_multiprocessing_resources()
             
             # Close database connections
             self._cleanup_database_connections()
@@ -1871,6 +1764,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
 
             self._signal_agent_shutdown_no_wait()
             self._stop_unified_gui_server()
+            self._cleanup_multiprocessing_resources()
             self._cleanup_database_connections()
         except Exception as e:
             logger.error("Error during fast shutdown prep: %s", e, exc_info=True)
@@ -1888,8 +1782,46 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception:
             pass
 
+        try:
+            from distr.core.process_tracker import run_multiprocessing_finalizers
+
+            run_multiprocessing_finalizers()
+        except Exception:
+            pass
+
         # Avoid ggml Metal crash during normal Python/Qt teardown on macOS.
         os._exit(0)
+
+    def _cleanup_multiprocessing_resources(self):
+        """Close queues and managers whose finalizers ``os._exit`` bypasses."""
+        try:
+            from distr.core.signals import set_agent_event_queue
+
+            set_agent_event_queue(None)
+        except Exception:
+            pass
+
+        queues = [
+            getattr(self, "agent_command_queue", None),
+            getattr(self, "agent_event_queue", None),
+        ]
+        managers = [
+            getattr(self, "screen_info_manager", None),
+            getattr(self, "confirmation_manager", None),
+        ]
+        self.agent_command_queue = None
+        self.agent_event_queue = None
+        self.screen_info_manager = None
+        self.confirmation_manager = None
+
+        try:
+            from distr.core.process_tracker import close_multiprocessing_resources
+
+            close_multiprocessing_resources(queues=queues, managers=managers)
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "Multiprocessing resource cleanup failed: %s", exc
+            )
 
     def _log_about_to_quit(self):
         append_runtime_event(
