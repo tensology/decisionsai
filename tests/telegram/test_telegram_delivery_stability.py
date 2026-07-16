@@ -572,6 +572,36 @@ class DummyTelegramMessages(TelegramMessagesMixin):
         self.source_message_ids.append(message_id)
 
 
+def test_relay_callback_is_recorded_as_telegram_callback(monkeypatch):
+    manager = DummyTelegramMessages()
+    seen = {}
+
+    def handle(value, **kwargs):
+        seen.update(value=value, **kwargs)
+        return {"success": True, "run_id": 92, "action": "approve"}
+
+    monkeypatch.setattr(
+        "distr.core.workflow.interactions.handle_telegram_workflow_reply",
+        handle,
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.interactions.workflow_reply_message",
+        lambda result: "accepted",
+    )
+
+    manager._handle_telegram_message({"data": {
+        "message_id": "callback-1",
+        "chat_id": 12345,
+        "chat": {"type": "private"},
+        "from": {"id": 12345},
+        "callback_data": "wf:opaque:approve",
+    }})
+
+    assert seen["value"] == "wf:opaque:approve"
+    assert seen["source"] == "telegram_callback"
+    assert manager.sent == ["accepted"]
+
+
 def test_private_text_is_marked_read_on_receipt():
     manager = DummyTelegramMessages()
 

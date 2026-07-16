@@ -364,7 +364,11 @@ class TelegramMessagesMixin:
                     text,
                     chat_id=chat_id,
                     resolver_id=str(inner_data.get("from", {}).get("id") or chat_id or ""),
-                    source="telegram_text",
+                    source=(
+                        "telegram_callback"
+                        if inner_data.get("callback_data")
+                        else "telegram_text"
+                    ),
                 )
                 if workflow_reply:
                     self.send_to_telegram(workflow_reply_message(workflow_reply))
