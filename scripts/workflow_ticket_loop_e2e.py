@@ -855,6 +855,8 @@ class WorkflowTicketLoopHarness:
             "project_name": project_name,
             "ticket_id": ticket_id,
             "ticket_title": ticket_title,
+            "backend_id": ide_backend,
+            "backend_model": ide_model,
             "route_step_id": int(route_step["id"]),
             "fix_step_id": int(fix_step["id"]),
             "check_step_id": int(check_step["id"]),

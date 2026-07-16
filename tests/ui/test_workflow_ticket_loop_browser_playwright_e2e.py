@@ -60,6 +60,16 @@ def _relevant_console_errors(messages: list[str]) -> list[str]:
     return [msg for msg in messages if not any(token.lower() in msg.lower() for token in ignored)]
 
 
+def _backend_display_pattern(backend_id: str) -> re.Pattern[str]:
+    """Match the route id or its human-facing label in Mission Control."""
+    labels = {
+        "codex": r"(?:codex|Codex CLI)",
+        "pi": r"(?:pi|Pi CLI)",
+        "claude_code": r"(?:claude_code|Claude Code)",
+    }
+    return re.compile(labels.get(backend_id, re.escape(backend_id)), re.IGNORECASE)
+
+
 @pytest.mark.parametrize(
     "viewport",
     [{"width": 1440, "height": 1000}, {"width": 390, "height": 844}],
@@ -76,6 +86,9 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     if not harness.server_reachable():
         pytest.skip(f"Web server not reachable at {BASE_URL}")
     ids = harness.seed_until_green_fixture(tmp_path)
+    backend_id = str(ids["backend_id"])
+    backend_model = str(ids["backend_model"])
+    backend_display = _backend_display_pattern(backend_id)
     page.set_viewport_size(viewport)
 
     console_errors: list[str] = []
@@ -113,8 +126,8 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(preview_body).to_contain_text(str(ids["ticket_title"]))
     expect(preview_body).to_contain_text(str(ids["project_name"]))
     expect(preview_body).to_contain_text("Executor")
-    expect(preview_body).to_contain_text("codex")
-    expect(preview_body).to_contain_text(re.compile(r"gpt-5.*codex"))
+    expect(preview_body).to_contain_text(backend_display)
+    expect(preview_body).to_contain_text(backend_model)
     expect(preview_body).to_contain_text("Skills")
     expect(preview_body).to_contain_text("webapp-testing")
 
@@ -132,7 +145,10 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     feed = page.locator("#wf-loop-feed-messages")
     expect(feed).to_contain_text("RED validation failed", timeout=25000)
     expect(feed).to_contain_text("Loop iteration 1", timeout=25000)
-    expect(feed).to_contain_text(re.compile(r"Route: codex / gpt-5.*codex"), timeout=25000)
+    expect(feed).to_contain_text(
+        re.compile(rf"Route:\s*{re.escape(backend_id)}\s*/\s*{re.escape(backend_model)}", re.IGNORECASE),
+        timeout=25000,
+    )
     expect(feed).to_contain_text("Skills: webapp-testing", timeout=25000)
     expect(feed).to_contain_text("Tools: playwright, browser_use", timeout=25000)
     expect(feed).to_contain_text("Context: ticket_workflow_brief", timeout=25000)
@@ -144,8 +160,8 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(active_runs).to_contain_text(str(ids["ticket_title"]), timeout=25000)
     expect(active_runs).to_contain_text("Fix and rerun green check", timeout=25000)
     expect(active_runs).to_contain_text("Loop 1 / 3", timeout=25000)
-    expect(active_runs).to_contain_text("codex")
-    expect(active_runs).to_contain_text(re.compile(r"gpt-5.*codex"))
+    expect(active_runs).to_contain_text(backend_display)
+    expect(active_runs).to_contain_text(backend_model)
     expect(active_runs).to_contain_text("webapp-testing")
     expect(active_runs).to_contain_text("agent")
 

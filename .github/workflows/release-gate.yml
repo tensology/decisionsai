@@ -69,6 +69,11 @@ jobs:
       - name: Run canonical workflow browser journey
         env:
           DECISIONS_DATA_DIR: ${{ runner.temp }}/browser-state
+          # Keep the UI journey deterministic on a clean runner. Provider-specific
+          # routing is covered separately; this gate verifies that the chosen route
+          # and model remain visible through preview, loop, runs, and reporting.
+          WORKFLOW_E2E_IDE_BACKEND: pi
+          WORKFLOW_E2E_IDE_MODEL: auto
         run: >-
           python -m pytest -q -m e2e_playwright
           tests/ui/test_workflow_ticket_loop_browser_playwright_e2e.py
