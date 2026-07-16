@@ -175,6 +175,9 @@ def kill_rogue_decisions_processes(protected_pids: set | None = None, timeout: f
                     " sidecar",
                     "uvicorn",
                     "decisions ",
+                    "--multiprocessing-fork",
+                    "multiprocessing.resource_tracker",
+                    "resource_tracker import main",
                 )):
                     rogue_pids.add(pid)
             except Exception:
