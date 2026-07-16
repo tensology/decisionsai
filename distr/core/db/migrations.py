@@ -2403,7 +2403,7 @@ def run_migrations():
 
 
 def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
-    """Rename legacy hermes_* tables and settings columns to orchestrator_*."""
+    """Merge legacy Hermes data into the model-agnostic orchestrator schema."""
     table_renames = [
         ("hermes_events", "orchestrator_events"),
         ("hermes_user_memories", "orchestrator_user_memories"),
@@ -2425,11 +2425,24 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
         ("hermes_correction_model", "orchestrator_correction_model"),
         ("hermes_memory_export_enabled", "orchestrator_memory_export_enabled"),
     ]
+    reference_offsets = {
+        ("hermes_events", "parent_event_id"): "hermes_events",
+        ("hermes_visual_baseline_screens", "baseline_set_id"): "hermes_visual_baseline_sets",
+        ("hermes_correction_attempts", "validation_record_id"): "hermes_validation_records",
+    }
     try:
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             existing_tables = {
                 row[0]
                 for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            }
+            offsets = {
+                old_name: int(
+                    conn.execute(text(f'SELECT COALESCE(MAX(id), 0) FROM "{new_name}"')).scalar()
+                    or 0
+                )
+                for old_name, new_name in table_renames
+                if old_name in existing_tables and new_name in existing_tables
             }
             for old_name, new_name in table_renames:
                 if old_name in existing_tables and new_name not in existing_tables:
@@ -2437,7 +2450,65 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
                     existing_tables.discard(old_name)
                     existing_tables.add(new_name)
                     logger.info("Renamed table %s -> %s", old_name, new_name)
-            conn.commit()
+                    continue
+                if old_name not in existing_tables or new_name not in existing_tables:
+                    continue
+
+                old_columns = [row[1] for row in conn.execute(text(f'PRAGMA table_info("{old_name}")'))]
+                new_columns = {row[1] for row in conn.execute(text(f'PRAGMA table_info("{new_name}")'))}
+                missing_columns = set(old_columns) - new_columns
+                if missing_columns:
+                    raise RuntimeError(
+                        f"Cannot merge {old_name}: current schema is missing "
+                        f"{sorted(missing_columns)}"
+                    )
+                columns = [column for column in old_columns if column in new_columns]
+                if columns:
+                    expressions = []
+                    for column in columns:
+                        if column == "id":
+                            expressions.append(f'"id" + {offsets.get(old_name, 0)}')
+                        elif (old_name, column) in reference_offsets:
+                            parent_table = reference_offsets[(old_name, column)]
+                            parent_offset = offsets.get(parent_table, 0)
+                            expressions.append(
+                                f'CASE WHEN "{column}" IS NULL THEN NULL '
+                                f'ELSE "{column}" + {parent_offset} END'
+                            )
+                        else:
+                            expressions.append(f'"{column}"')
+                    quoted_columns = ", ".join(f'"{column}"' for column in columns)
+                    conn.execute(
+                        text(
+                            f'INSERT OR IGNORE INTO "{new_name}" ({quoted_columns}) '
+                            f'SELECT {", ".join(expressions)} FROM "{old_name}"'
+                        )
+                    )
+
+            # Re-link imported event trees by stable uid when a duplicate parent
+            # already existed in the current table and therefore kept its old id.
+            if "hermes_events" in existing_tables and "orchestrator_events" in existing_tables:
+                conn.execute(text("""
+                    UPDATE orchestrator_events AS child
+                    SET parent_event_id = (
+                        SELECT current_parent.id
+                        FROM hermes_events AS legacy_child
+                        JOIN hermes_events AS legacy_parent
+                          ON legacy_parent.id = legacy_child.parent_event_id
+                        JOIN orchestrator_events AS current_parent
+                          ON current_parent.event_uid = legacy_parent.event_uid
+                        WHERE legacy_child.event_uid = child.event_uid
+                    )
+                    WHERE child.event_uid IN (
+                        SELECT event_uid FROM hermes_events WHERE parent_event_id IS NOT NULL
+                    )
+                """))
+
+            # Drop children before parents after every copy has succeeded.
+            for old_name, _new_name in reversed(table_renames):
+                if old_name in existing_tables:
+                    conn.execute(text(f'DROP TABLE "{old_name}"'))
+                    logger.info("Merged and removed legacy table %s", old_name)
 
             settings_cols = set()
             if "settings" in existing_tables:
@@ -2451,19 +2522,37 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
                             logger.info("Renamed settings column %s -> %s", old_col, new_col)
                         except Exception as exc:
                             logger.debug("Could not rename settings.%s: %s", old_col, exc)
-                conn.commit()
+                    elif old_col in settings_cols and new_col in settings_cols:
+                        is_boolean = old_col in {"hermes_enabled", "hermes_memory_export_enabled"}
+                        empty_current = f'"{new_col}" IS NULL OR "{new_col}" = {1 if old_col == "hermes_enabled" else 0}' if is_boolean else f'"{new_col}" IS NULL OR "{new_col}" = \'\''
+                        useful_legacy = f'"{old_col}" IS NOT NULL AND "{old_col}" != {1 if old_col == "hermes_enabled" else 0}' if is_boolean else f'"{old_col}" IS NOT NULL AND "{old_col}" != \'\''
+                        conn.execute(text(
+                            f'UPDATE settings SET "{new_col}" = "{old_col}" '
+                            f'WHERE ({empty_current}) AND ({useful_legacy})'
+                        ))
+                        conn.execute(text(f'ALTER TABLE settings DROP COLUMN "{old_col}"'))
+                        settings_cols.discard(old_col)
+                        logger.info("Merged and removed settings.%s", old_col)
 
             if "kanban_boards" in existing_tables:
                 board_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(kanban_boards)"))}
                 if "hermes_policy" in board_cols and "orchestrator_policy" not in board_cols:
                     try:
                         conn.execute(text('ALTER TABLE kanban_boards RENAME COLUMN hermes_policy TO orchestrator_policy'))
-                        conn.commit()
                         logger.info("Renamed kanban_boards.hermes_policy -> orchestrator_policy")
                     except Exception as exc:
                         logger.debug("Could not rename kanban_boards.hermes_policy: %s", exc)
+                elif "hermes_policy" in board_cols and "orchestrator_policy" in board_cols:
+                    conn.execute(text("""
+                        UPDATE kanban_boards
+                        SET orchestrator_policy = hermes_policy
+                        WHERE (orchestrator_policy IS NULL OR orchestrator_policy = '')
+                          AND hermes_policy IS NOT NULL AND hermes_policy != ''
+                    """))
+                    conn.execute(text("ALTER TABLE kanban_boards DROP COLUMN hermes_policy"))
+                    logger.info("Merged and removed kanban_boards.hermes_policy")
     except Exception as exc:
-        logger.debug("Legacy hermes schema migration skipped: %s", exc)
+        logger.warning("Legacy Hermes schema migration failed: %s", exc, exc_info=True)
 
     try:
         from distr.core.automation.scheduler import ensure_automation_schema
