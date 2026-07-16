@@ -128,7 +128,11 @@ def recommend_cli_model(
         # Kilo's moving aliases are deliberately stable as individual free
         # promotions expire. Prefer the free alias over a dated model that may
         # still linger in the provider catalog after its free period ends.
-        if model_id == "openrouter/free" and str(model.get("provider") or "").lower() == "kilocode":
+        if (
+            not prefer_local
+            and model_id == "openrouter/free"
+            and str(model.get("provider") or "").lower() == "kilocode"
+        ):
             value += 120
         return value
 
@@ -256,13 +260,46 @@ def settings_backed_cloud_models(settings: dict) -> list[dict]:
     return rows
 
 
+def installed_ollama_cli_models(settings: dict) -> list[dict]:
+    """Expose Ollama models that Pi can execute, preserving local/cloud scope."""
+    if not settings.get("ollama_enabled"):
+        return []
+    try:
+        from distr.gui.utils.get_ollama_models import get_installed_ollama_models
+
+        installed = get_installed_ollama_models() or []
+    except Exception as exc:
+        logger.debug("local cli models ollama: %s", exc)
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for item in installed:
+        model_id = str(item.get("id") or "").strip() if isinstance(item, dict) else str(item).strip()
+        if not model_id:
+            continue
+        is_local = bool(item.get("local", True)) if isinstance(item, dict) else True
+        row = model_entry(
+            model_id,
+            "ollama",
+            str(item.get("name") or model_id) if isinstance(item, dict) else model_id,
+            free=is_local,
+            scope="scoped",
+            reason="Installed local Ollama model." if is_local else "Ollama cloud model available through Pi.",
+        )
+        row["local"] = is_local
+        rows.append(row)
+    return rows
+
+
 def pi_cli_models(settings: dict | None = None) -> list[dict]:
     """Pi/OpenCode shared catalog: local models.json + configured cloud providers."""
     from distr.core.settings import load_settings_from_db
 
     settings = settings or load_settings_from_db()
     return dedupe_model_entries(
-        models_from_pi_json() + settings_backed_cloud_models(settings)
+        models_from_pi_json()
+        + installed_ollama_cli_models(settings)
+        + settings_backed_cloud_models(settings)
     )
 
 

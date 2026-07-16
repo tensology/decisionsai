@@ -118,6 +118,8 @@ def collect_harness_evidence(handle: HarnessHandle) -> dict[str, Any]:
         evidence.setdefault("status", handle.normalized_result.status)
         evidence.setdefault("artifacts", handle.normalized_result.artifacts)
         evidence.setdefault("memory_delta", handle.normalized_result.memory_delta)
+        evidence.setdefault("diagnostics", handle.normalized_result.diagnostics)
+        evidence.setdefault("next_actions", handle.normalized_result.next_actions)
     return evidence
 
 

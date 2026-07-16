@@ -14,13 +14,37 @@ def _free_eligible_model(
 ) -> dict[str, str]:
     from distr.core.project_cli_backends.models_catalog import pi_cli_models, recommend_cli_model
 
+    settings = settings or {}
+    models = pi_cli_models(settings)
     selected = recommend_cli_model(
-        pi_cli_models(settings or {}),
+        models,
         prefer_free=True,
         prefer_local=prefer_local,
         prefer_scoped=True,
         complexity=complexity,
     )
+    if prefer_local:
+        configured_provider = str(
+            settings.get("coding_llm_provider") or settings.get("code_provider") or ""
+        ).strip().lower()
+        configured_model = str(
+            settings.get("coding_llm_model") or settings.get("code_model") or ""
+        ).strip()
+        configured = next(
+            (
+                model for model in models
+                if configured_provider == "ollama"
+                and str(model.get("id") or "").strip() == configured_model
+                and bool(model.get("local", True))
+            ),
+            None,
+        )
+        if configured:
+            selected = {
+                "id": configured_model,
+                "provider": "ollama",
+                "reason": "Selected the configured local Ollama coding model.",
+            }
     provider = str(selected.get("provider") or "").strip() or "ollama"
     backend = "pi"
     return {

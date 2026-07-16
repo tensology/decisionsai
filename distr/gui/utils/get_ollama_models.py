@@ -744,6 +744,7 @@ def get_installed_ollama_models():
                         entry = {
                             'id': model_id,
                             'name': display_name,
+                            'local': len(parts) > 2 and parts[2] != '-',
                             # ponytail: custom/community pulls (e.g. ornith:35b) are not in the
                             # Ollama library cache — still selectable for chat/coding slots.
                             'supports_tools': True,

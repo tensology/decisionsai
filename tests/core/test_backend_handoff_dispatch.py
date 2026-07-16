@@ -69,6 +69,14 @@ def test_run_project_task_records_backend_handoff(monkeypatch):
     assert updated["event_type"] == "backend_handoff_updated"
     assert updated["status"] == "completed"
     assert completed
+    packet = completed[-1][1]["output_packet"]
+    assert packet["status"] == "completed"
+    assert packet["artifacts"] == []
+    assert packet["memory_delta"]["summary"] == "Status: completed"
+    assert packet["diagnostics"] == {"backend_id": "codex", "engine": "codex"}
+    assert packet["next_actions"] == {
+        "recommended": ["Validate the worker result before closing the ticket."]
+    }
 
 
 def test_run_project_task_does_not_treat_same_backend_live_session_as_another_cli(monkeypatch):
@@ -208,3 +216,10 @@ def test_run_project_task_records_preflight_failure_before_dispatch(monkeypatch)
     assert events[0][1]["payload"]["preflight"]["ready"] is False
     assert completed[0][0] == (91,)
     assert completed[0][1]["success"] is False
+    packet = completed[0][1]["output_packet"]
+    assert packet["status"] == "failed"
+    assert packet["diagnostics"]["error"] == "Codex CLI authentication required."
+    assert packet["memory_delta"]["blockers"] == ["Codex CLI authentication required."]
+    assert packet["next_actions"] == {
+        "recommended": ["Resolve the reported error, then retry the worker."]
+    }

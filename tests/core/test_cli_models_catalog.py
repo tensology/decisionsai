@@ -17,13 +17,48 @@ class CliModelsCatalogTests(unittest.TestCase):
         with patch.object(catalog, "models_from_pi_json", return_value=[
             {"id": "qwen3:8b", "name": "Qwen3 8B", "provider": "ollama"},
         ]):
-            with patch.object(catalog, "settings_backed_cloud_models", return_value=[
-                {"id": "nvidia/nemotron-3-nano-30b-a3b", "name": "Nemotron Nano", "provider": "nvidia"},
-            ]):
-                models = catalog.pi_cli_models(fake_settings)
+            with patch.object(catalog, "installed_ollama_cli_models", return_value=[]):
+                with patch.object(catalog, "settings_backed_cloud_models", return_value=[
+                    {"id": "nvidia/nemotron-3-nano-30b-a3b", "name": "Nemotron Nano", "provider": "nvidia"},
+                ]):
+                    models = catalog.pi_cli_models(fake_settings)
         ids = [m["id"] for m in models]
         self.assertIn("qwen3:8b", ids)
         self.assertIn("nvidia/nemotron-3-nano-30b-a3b", ids)
+
+    def test_installed_ollama_models_preserve_local_and_cloud_scope(self):
+        installed = [
+            {"id": "ornith:9b", "name": "Ornith 9B", "local": True},
+            {"id": "kimi-k2.7-code:cloud", "name": "Kimi Cloud", "local": False},
+        ]
+        with patch(
+            "distr.gui.utils.get_ollama_models.get_installed_ollama_models",
+            return_value=installed,
+        ):
+            models = catalog.installed_ollama_cli_models({"ollama_enabled": True})
+
+        by_id = {model["id"]: catalog.enrich_model_entry(model) for model in models}
+        self.assertTrue(by_id["ornith:9b"]["local"])
+        self.assertTrue(by_id["ornith:9b"]["free"])
+        self.assertFalse(by_id["kimi-k2.7-code:cloud"]["local"])
+        self.assertFalse(by_id["kimi-k2.7-code:cloud"]["free"])
+
+    def test_recommender_can_select_installed_ornith_for_local_policy(self):
+        selected = catalog.recommend_cli_model(
+            [
+                catalog.model_entry("openrouter/free", "kilocode", free=True, scope="scoped"),
+                {
+                    **catalog.model_entry("ornith:9b", "ollama", free=True, scope="scoped"),
+                    "local": True,
+                },
+            ],
+            prefer_free=True,
+            prefer_local=True,
+            prefer_scoped=True,
+            complexity="standard",
+        )
+        self.assertEqual(selected["id"], "ornith:9b")
+        self.assertEqual(selected["provider"], "ollama")
 
     def test_opencode_backend_registered(self):
         from distr.core.project_cli_backends import get_backend, normalize_backend_id

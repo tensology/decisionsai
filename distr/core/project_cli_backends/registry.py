@@ -281,7 +281,15 @@ def _pi_workflow_report_error(output: str) -> str:
             "Pi exited successfully but returned no completion report; "
             "the workflow treats this as a no-op instead of completed work."
         )
-    match = re.search(r"(?im)^\s*Status:\s*(completed|failed|needs_input)\b", text)
+    match = re.search(
+        r"(?im)^\s*(?:\*\*)?Status(?:\*\*)?\s*:\s*(?:\*\*)?\s*(completed|failed|needs_input)\b",
+        text,
+    )
+    if not match:
+        match = re.search(
+            r"(?im)^\s*\|\s*(?:\*\*)?Status(?:\*\*)?\s*\|\s*`?(completed|failed|needs_input)\b`?\s*\|",
+            text,
+        )
     if not match:
         return (
             "Pi returned text without the required 'Status: completed' workflow report; "
@@ -1453,6 +1461,18 @@ async def run_project_task(
     )
     task.execution_session_id = execution_session_id
 
+    def _normalized_output_packet(raw: Any, **metadata: Any) -> dict[str, Any]:
+        from distr.core.project_cli_backends.contracts import normalize_execution_result
+
+        return {
+            **normalize_execution_result(
+                raw,
+                backend_id=backend_id,
+                attempt_id=execution_session_id,
+            ).to_dict(),
+            **metadata,
+        }
+
     def _status_payload(status: Any) -> dict[str, Any]:
         if status is None:
             return {}
@@ -1496,13 +1516,12 @@ async def run_project_task(
         complete_execution_session(
             execution_session_id,
             success=False,
-            output_packet={
+            output_packet=_normalized_output_packet({
                 "backend_id": backend_id,
                 "engine": backend_id,
                 "success": False,
                 "error": msg,
-                "preflight": preflight_payload["preflight"],
-            },
+            }, preflight=preflight_payload["preflight"]),
             error=msg,
         )
         return BackendTaskResult(
@@ -1524,13 +1543,12 @@ async def run_project_task(
         complete_execution_session(
             execution_session_id,
             success=False,
-            output_packet={
+            output_packet=_normalized_output_packet({
                 "backend_id": backend_id,
                 "engine": backend_id,
                 "success": False,
                 "error": msg,
-                "preflight": preflight_payload["preflight"],
-            },
+            }, preflight=preflight_payload["preflight"]),
             error=msg,
         )
         return BackendTaskResult(
@@ -1681,7 +1699,12 @@ async def run_project_task(
         complete_execution_session(
             execution_session_id,
             success=False,
-            output_packet={"backend_id": backend_id, "engine": backend_id},
+            output_packet=_normalized_output_packet({
+                "success": False,
+                "backend_id": backend_id,
+                "engine": backend_id,
+                "error": str(exc),
+            }),
             error=str(exc),
         )
         raise
@@ -1798,23 +1821,19 @@ async def run_project_task(
     complete_execution_session(
         execution_session_id,
         success=result.success,
-        output_packet={
-            "backend_id": result.backend_id,
-            "engine": result.engine,
-            "success": result.success,
-            "output": result.output,
-            "error": result.error,
-            "ticket_id": ticket_id,
-            "workflow_id": workflow_id,
-            "run_id": run_id,
-            "step_id": step_id,
-            "audit_id": audit_id,
-            "model": selected_model,
-            "complexity": ticket_complexity,
-            "git_status_before": git_status_before,
-            "git_status_after": git_status_after,
-            "runtime_snapshot": runtime_snapshot,
-        },
+        output_packet=_normalized_output_packet(
+            result,
+            ticket_id=ticket_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            audit_id=audit_id,
+            model=selected_model,
+            complexity=ticket_complexity,
+            git_status_before=git_status_before,
+            git_status_after=git_status_after,
+            runtime_snapshot=runtime_snapshot,
+        ),
         error=result.error,
     )
     return result

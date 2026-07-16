@@ -69,6 +69,96 @@ def test_waiting_result_normalizes_independently_of_harness_name():
     assert result.waits_for_human is True
 
 
+def test_worker_report_normalizes_artifacts_memory_diagnostics_and_next_actions():
+    result = normalize_execution_result(
+        BackendTaskResult(
+            success=True,
+            backend_id="pi",
+            engine="pi",
+            output=(
+                "Status: completed\n"
+                "Summary: Added the menu route.\n"
+                "Files changed: src/menu.py\n"
+                "Tests: pytest -q\n"
+                "Evidence: 4 passed\n"
+                "Blockers: none\n"
+                "Next step: Validate the browser journey."
+            ),
+        )
+    )
+
+    assert result.artifacts == [{"type": "changed_files", "value": "src/menu.py"}]
+    assert result.memory_delta["summary"] == "Added the menu route."
+    assert result.memory_delta["changed_files"] == ["src/menu.py"]
+    assert result.memory_delta["evidence"] == ["pytest -q", "4 passed"]
+    assert result.diagnostics == {"backend_id": "pi", "engine": "pi"}
+    assert result.next_actions == {"recommended": ["Validate the browser journey."]}
+
+
+def test_markdown_worker_report_is_accepted_and_normalized():
+    output = (
+        "**Status:** completed\n"
+        "**Summary:** Created the proof.\n"
+        "**Files changed:** proof.txt\n"
+        "**Next step:** Validate it."
+    )
+    assert _pi_workflow_report_error(output) == ""
+    result = normalize_execution_result(
+        BackendTaskResult(success=True, backend_id="pi", engine="pi_cli", output=output)
+    )
+    assert result.memory_delta["summary"] == "Created the proof."
+    assert result.artifacts == [{"type": "changed_files", "value": "proof.txt"}]
+    assert result.next_actions == {"recommended": ["Validate it."]}
+
+    alternate = output.replace("**Status:**", "**Status**:")
+    assert _pi_workflow_report_error(alternate) == ""
+
+
+def test_semicolon_worker_report_is_normalized():
+    output = (
+        "Status: completed; Summary: Created the proof; Files changed: proof.txt; "
+        "Tests: exact comparison passed; Evidence: proof.txt; Blockers: none; "
+        "Next step: Validate it.\nWarning: custom model id"
+    )
+    result = normalize_execution_result(
+        BackendTaskResult(success=True, backend_id="pi", engine="pi_cli", output=output)
+    )
+    assert result.memory_delta == {
+        "summary": "Created the proof",
+        "changed_files": ["proof.txt"],
+        "evidence": ["exact comparison passed", "proof.txt"],
+        "blockers": ["none"],
+    }
+    assert result.artifacts == [{"type": "changed_files", "value": "proof.txt"}]
+    assert result.next_actions == {"recommended": ["Validate it."]}
+
+
+def test_markdown_table_worker_report_is_accepted_and_normalized():
+    output = (
+        "| Field | Value | Explanation |\n"
+        "|---|---|---|\n"
+        "| **Status** | `completed` | Work finished |\n"
+        "| **Summary** | Created the proof | Done |\n"
+        "| **Files changed** | `proof.txt` | One file |\n"
+        "| **Tests** | exact comparison passed | Verified |\n"
+        "| **Evidence** | `proof.txt` | Inspect it |\n"
+        "| **Blockers** | none | Clear |\n"
+        "| **Next step** | Validate it | Continue |"
+    )
+    assert _pi_workflow_report_error(output) == ""
+    result = normalize_execution_result(
+        BackendTaskResult(success=True, backend_id="pi", engine="pi_cli", output=output)
+    )
+    assert result.memory_delta == {
+        "summary": "Created the proof",
+        "changed_files": ["proof.txt"],
+        "evidence": ["exact comparison passed", "proof.txt"],
+        "blockers": ["none"],
+    }
+    assert result.artifacts == [{"type": "changed_files", "value": "proof.txt"}]
+    assert result.next_actions == {"recommended": ["Validate it"]}
+
+
 def test_provider_options_are_opaque_with_legacy_bridge():
     task = ProjectTask(
         project_id=1,
@@ -165,6 +255,29 @@ def test_auto_policy_preserves_board_scoped_non_pi_backend_without_step_override
     assert resolved["backend"] == "claude_code"
     assert resolved["model"] == "auto"
     assert resolved["policy_source"] == "board_override_native_auto_preserved"
+
+
+def test_prefer_local_policy_honors_configured_ollama_coding_model(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [
+            {"id": "codegemma:2b", "provider": "ollama", "local": True, "free": True},
+            {"id": "ornith:9b", "provider": "ollama", "local": True, "free": True},
+        ],
+    )
+    resolved = apply_workflow_model_policy(
+        {"backend": "pi", "model": "auto", "complexity": "medium"},
+        workflow=type("Workflow", (), {"run_settings": '{"prefer_local": true}'})(),
+        config={},
+        settings={
+            "coding_llm_provider": "ollama",
+            "coding_llm_model": "ornith:9b",
+        },
+    )
+    assert resolved["backend"] == "pi"
+    assert resolved["model"] == "ornith:9b"
+    assert resolved["model_provider"] == "ollama"
+    assert resolved["policy_reason"] == "Selected the configured local Ollama coding model."
 
 
 def test_one_shot_backend_cancellation_terminates_and_unregisters_process(tmp_path):
