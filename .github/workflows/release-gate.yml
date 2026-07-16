@@ -35,6 +35,8 @@ jobs:
           python -m pip install --upgrade pip wheel
           python -m pip install -r requirements.txt
           python -m pip install PyInstaller==6.16.0
+      - name: Install Chromium
+        run: python -m playwright install chromium
       - name: Verify supported runtime
         run: python scripts/verify_runtime.py --json
       - name: Verify collection
@@ -51,8 +53,6 @@ jobs:
           python -m pytest -q
           tests/core/test_principle_workflow_chain_e2e.py::test_principle_workflow_chain_ideation_development_polish
           --junitxml=artifacts/pytest-workflow-chain.xml
-      - name: Install Chromium
-        run: python -m playwright install chromium
       - name: Start local Mission Control server
         run: |
           python -m uvicorn distr.gui.web.server:create_app --factory --host 127.0.0.1 --port 8765 > artifacts/web-server.log 2>&1 &

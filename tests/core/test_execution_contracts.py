@@ -292,8 +292,8 @@ def test_pi_workflow_command_honours_provider_for_nested_catalog_model():
 
 def test_pi_empty_success_is_classified_as_failed_noop(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "distr.core.project_cli_backends.registry._first_executable",
-        lambda _candidates: "/usr/bin/pi",
+        "distr.core.pi_rpc.PiRpcSession.find_pi",
+        lambda: "/usr/bin/pi",
     )
     monkeypatch.setattr(
         "distr.core.project_cli_backends.registry.subprocess.run",
