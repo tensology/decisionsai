@@ -5,7 +5,11 @@
 <h1 align="center">DecisionsAI</h1>
 
 <p align="center">
-  A voice-first desktop assistant that runs on your machine. It transcribes speech, calls the LLM you configured, speaks replies, and drives the desktop through the sidecar: app launches, text entry, recorded macros, workflows, and project-linked work.
+  <strong>The last agent you'll ever need.</strong>
+</p>
+
+<p align="center">
+  A voice-first, model-agnostic and CLI-agnostic orchestrator that turns requests into organized, validated work. Talk, dictate, type, or throw the job into Telegram. DecisionsAI remembers the project, chooses the right worker, runs the steps, asks when a real decision is needed, and reports the result back to you.
 </p>
 
 <p align="center">
@@ -28,13 +32,30 @@
 
 ---
 
-## Features
+## Your work has an operating system now
+
+Chatbots answer. Coding CLIs edit. Local model runners serve tokens. DecisionsAI coordinates the whole job.
+
+Give it a voice note, screenshot, ticket, email-shaped brief, Telegram message, or a linked WhatsApp conversation. It can preserve the source context, organize the request under the right project, create or update a ticket, choose a direct action or multi-step workflow, hand each step to the right model or CLI, validate the outcome, retain neutral memory, and keep you informed from your phone.
+
+**Ollama runs models. DecisionsAI runs work.** Use Ollama underneath it, mix in Codex, Cursor, Claude Code, Pi, OpenRouter, or cloud APIs, and change any of them later without rebuilding your projects or losing their memory.
+
+### What makes it different
 
 | | Feature | Description |
 |---|---|---|
-| 🔒 | **Private by default** | Offline STT (Whisper.cpp), local LLM (Ollama), offline TTS (Kokoro) by default. Data stays on disk unless you add cloud API keys |
-| 🤖 | **Every major AI provider** | OpenAI, Anthropic, ElevenLabs, OpenRouter. Swap models in Settings |
-| 🎭 | **Animated skins** | Clippy, Nugget, Rusty, Masko, Madame Patate. Each skin has idle, thinking, working, and attention states. Drop a folder with `skin.json` for your own |
+| 🎙️ | **Voice first** | Push-to-talk conversations, fast system-wide dictation, voice notes, spoken progress, interruption, and offline Whisper/Kokoro options |
+| 📱 | **Telegram work control** | Send text, voice notes, screenshots, files, or steering instructions; approve, reject, continue, stop, and receive progress or the final report |
+| 🧠 | **Durable project memory** | Facts, decisions, changed files, evidence, blockers, and next actions survive model and CLI changes in neutral project memory |
+| 🗂️ | **Projects + tickets** | Keep requests attached to real repositories, boards, source conversations, files, priorities, and acceptance criteria |
+| 🔁 | **Step Runner + Loops** | Break work into scoped planning, implementation, review, browser QA, approval, and reporting steps with validation and correction loops |
+| 🧭 | **Automatic orchestration** | In opt-in Auto mode, route by task role, complexity, risk, cost, capability, and prior failure evidence instead of using one model for everything |
+| 🤖 | **Agent and CLI agnostic** | Codex, Cursor, Claude Code, Pi, local Ollama models, OpenRouter, OpenAI, Anthropic, Gemini, Groq, and other configured backends |
+| 🧰 | **Skills + tools** | Project-scoped skills, MCP tools, browser automation, Computer Use, shell/Python, vision, Google Workspace, macros, screenshots, and evidence capture |
+| 👀 | **Visible while autonomous** | Existing Runs and chat activity show provider/model, routing reason, current step, elapsed time, tools, skills, heartbeats, validation, and artifacts |
+| 🔒 | **Private by default** | Local STT, LLM, TTS, memory, projects, and workflow records stay on disk unless you explicitly connect cloud services |
+| 💬 | **WhatsApp-to-work bridge** | Link a feed to a Ticket Board, sync text/media, auto-snapshot configured conversations into tickets, and route approved tickets into work |
+| 🎭 | **Animated skins** | Oracle plus extensible animated avatars with idle, thinking, working, and attention states |
 
 <p align="center">
   <img src="assets/readme/avatar.webp" alt="DecisionsAI Skins" />
@@ -42,7 +63,7 @@
 
 | | | |
 |---|---|---|
-| 📱 | **Control from your phone** | Link Telegram. Send voice or text, get replies and screenshots, stream the screen, transfer files |
+| 📱 | **Control from your phone** | Link Telegram. Send work, voice or text, get replies and screenshots, stream the screen, transfer files |
 | 📧 | **Google Workspace** | Gmail, Calendar, Drive, Docs, Sheets over direct API access |
 | 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
 | 🔄 | **Recorded macros** | Record keyboard and mouse sequences, replay them by voice |
@@ -56,24 +77,35 @@
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
 | 🌐 | **Remote control** | HMAC-encrypted browser UI with Snippets, Agent, and Dictate. Hold to talk or tap for a text box |
 
-## How It Works
+## From request to verified result
 
 ```
-┌──────────────┐    voice / text     ┌──────────────┐     actions      ┌──────────────┐
-│     You      │ ──────────────────▶ │  DecisionsAI │ ──────────────▶  │   Your Mac   │
-│  (mic/chat)  │ ◀────────────────── │  (Pipecat)   │                  │   / PC       │
-└──────────────┘    speech / reply   └──────────────┘                  └──────────────┘
-                                            │
-                                     ┌──────┴──────┐
-                                     │  Local LLM  │
-                                     │  or Cloud   │
-                                     └─────────────┘
+Voice · Dictation · Telegram · WhatsApp · Web · Ticket Board
+                              │
+                              ▼
+             Project context + durable ticket + memory
+                              │
+                              ▼
+       Orchestrator: direct action or scoped workflow/loop?
+                              │
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+    Plan / research     Build / operate      Review / validate
+    Codex · local       Ornith · Cursor       independent model
+    OpenRouter · ...    Claude Code · Pi      browser · tests · tools
+          └───────────────────┼───────────────────┘
+                              ▼
+               Evidence + memory + report + approval
+                              │
+                              ▼
+                    Telegram · Chat · Runs
 ```
 
-1. **Install and launch.** The bundled launcher installs dependencies, Python, models, and starts the app.
-2. **Pick your AI.** Local Ollama, cloud APIs (OpenAI, Anthropic, OpenRouter), or a mix. Set each slot in Preferences.
-3. **Talk or type.** Push-to-talk, dictation, or Chat. The agent calls tools through the sidecar when a step needs desktop control.
-4. **Choose a skin.** Animated avatar or the default Oracle orb.
+1. **Choose the brains.** Configure the conversational/orchestrator LLM, coding LLM, vision model, Computer Use model, Step Runner, and preferred CLIs independently—or enable Auto routing.
+2. **Connect the work surfaces.** Telegram is the remote control. Projects, Ticket Boards, WhatsApp links, Gmail, Jira, Trello, and the web UI provide durable context.
+3. **Ask naturally.** Dictate on the desktop or send a Telegram text, voice note, image, or file. The orchestrator decides whether to answer, act, create a ticket, ask a question, request approval, or run a workflow.
+4. **Let specialists work.** A planner can scope with Codex, an implementation step can run with local Ornith, and a separate model can review—without sharing model-specific memory.
+5. **See proof, not a spinner.** Follow the current step, selected provider/model, rationale, elapsed time, heartbeat, evidence, validation, retry, and final report in existing Runs or chat.
 
 ---
 
@@ -288,7 +320,11 @@ Defaults are editable in **Preferences → Shortcut Keys**.
 
 ### Telegram
 
-Connect in **Preferences → Advanced → Telegram**. Send voice or text to your bot and get replies, voice notes, and screenshots back. Type `remote` for an HMAC-encrypted link to the full remote control UI: screen stream, click, type, scroll, file transfer.
+Connect in **Preferences → Advanced → Telegram**. Telegram is the fastest way to hand DecisionsAI work from anywhere: send text, a voice note, screenshot, document, correction, or follow-up. The same orchestrator can answer directly, create/update a project ticket, start a workflow, pause for a decision, or steer an existing run. Inline buttons and typed or spoken replies support approve, reject, continue, stop, and feedback. Progress and final reports return to the same conversation. Type `remote` for an HMAC-encrypted link to the full remote-control UI: screen stream, click, type, scroll, and file transfer.
+
+### WhatsApp
+
+Connect WhatsApp in **Preferences → Advanced**, then link a contact or group feed to a Ticket Board. DecisionsAI can sync incoming text, voice/media metadata, captions, and conversation context; configured boards can auto-snapshot new messages into durable tickets. From there the normal approval and orchestration policy can route the ticket to a project, direct action, or workflow. This deliberately keeps ordinary conversation from becoming unintended execution: only the feeds and autonomy boundaries you configure become work.
 
 ### Google Workspace
 
@@ -328,11 +364,19 @@ The Decisions agent exposes **`ide_thread`** to list, read, and prompt Codex/Cur
 
 [Orchestrator](docs/orchestrator.md) holds tickets, boards, automations, workflows, browser runs, project folders, and IDE sessions in one ledger. Local skills live under `skills/`; vendor packs under `plugins/*-pack/`.
 
+### Models are roles, not a lock-in
+
+Preferences separates the conversational/orchestrator LLM, coding LLM, vision model, image model, Computer Use model, Step Runner, and board agent. Each workflow step can override the backend, provider, model, tools, skills, cost tier, and independence requirement.
+
+With opt-in **Auto** routing, DecisionsAI evaluates the step role, complexity, risk, capability requirements, and recorded failures. It can plan with Codex, implement bounded work with a free/local Ornith model, choose an independent reviewer such as HY3, and escalate to more expensive providers only when the lower tier has produced evidence that it is stuck. The chosen route and reason appear immediately in Runs/chat activity.
+
+[Ornith 1.0](https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B) is a particularly strong local fit: the open-source agentic-coding family includes 9B and 35B variants with tool calling. DecisionsAI supports `ornith:9b` for accessible local work and configured 35B variants for more capable machines, while keeping the project memory portable if you swap it out later.
+
 ---
 
 ## Workflows
 
-Multi-step workflows run on the **Step Runner**. **Loops** are importable preset bundles on top of that runner. Each step has an action, optional validation, and routing. Import a loop preset, steer a waiting harness mid-run, and inspect active runs (validation, steering history, executor context). Steps can call screenshots, browser evidence, Python, web search, and IDE handoff through the orchestrator.
+Multi-step workflows run on the **Step Runner**. **Loops** are reusable development and operational playbooks on top of that runner. A group of project tickets can move through planning, implementation, independent review, tests, browser QA, approval, and reporting while each step uses a different model or CLI. Import a loop preset, steer a waiting harness from Telegram or the web UI, and inspect validation, routing history, executor context, evidence, heartbeats, and reports in the existing Runs/chat surfaces.
 
 | Concept | How it works |
 |---|---|
@@ -345,6 +389,9 @@ Multi-step workflows run on the **Step Runner**. **Loops** are importable preset
 | **Presets** | Export/import `.dwf` bundles (workflow + recordings + screenshots) |
 | **Scheduling** | Hourly, daily, or weekly on specific days |
 | **Agent Context** | One context block for rules, credentials, and conventions prepended to step prompts |
+| **Per-step workers** | Choose or auto-detect provider, model, CLI, capabilities, skills, tools, cost tier, and reviewer independence |
+| **Neutral memory** | Save facts, decisions, evidence, files changed, blockers, and next actions without binding the project to one harness |
+| **Remote interaction** | Approve, reject, continue, stop, or steer from Telegram; mirror meaningful progress and results back to the originating channel |
 
 <p align="center">
   <img src="assets/readme/steprunner.webp" alt="Workflows" />

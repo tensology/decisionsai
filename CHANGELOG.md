@@ -2,20 +2,77 @@
 
 ---
 
+## [2.9.0] - 2026-07-16
+
+### The last agent you'll ever need
+
+DecisionsAI 2.9 turns the desktop assistant into a practical work orchestrator. Talk to it, dictate into any app, use Chat, or dump the request into Telegram as text, a voice note, screenshot, or document. It now has one durable path from request → project/ticket → direct action or workflow → specialist worker → validation → memory → report.
+
+This is deliberately model- and CLI-agnostic. Configure separate models for the conversational orchestrator, coding, vision, image generation, Computer Use, Step Runner, and Ticket Boards. Use Codex, Cursor, Claude Code, Pi, Ollama, OpenRouter, OpenAI, Anthropic, Gemini, Groq, or another configured backend. Projects retain neutral memory—facts, decisions, artifacts, evidence, blockers, and next actions—so changing the worker does not throw away what the system learned.
+
+### Automatic specialist routing
+
+Opt-in Auto routing evaluates the actual step: planning, implementation, review, research, or general operation; task complexity and risk; required capabilities; cost preference; reviewer independence; and prior provider failures.
+
+- Medium/high-complexity planning can go to Codex before implementation begins.
+- Bounded implementation can go to a configured local/free Ornith worker.
+- Review can use an independent model such as Tencent HY3 when configured.
+- Codex/Cursor and other paid providers remain escalation options.
+- Claude is held as the expensive final tier after lower-cost attempts produce evidence that they are stuck.
+- Explicitly pinned providers and models remain pinned; Auto never silently overrides them.
+
+The existing Runs and chat feed now show the provider/model, why it was selected, current step, elapsed time, tools, skills, ten-second heartbeats, validation, correction attempts, and artifacts. Five-minute local-worker timeouts become explicit failures that can trigger a bounded failover instead of repeating forever.
+
+### Ornith 1.0 joins the local coding bench
+
+[Ornith 1.0](https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B) is a new MIT-licensed open-source family built for agentic coding and tool use, with 9B, 31B, 35B MoE, and 397B MoE variants. DecisionsAI recommends `ornith:9b` for accessible local chat/coding and supports a configured `ornith:35b` worker for larger machines. Live release testing proved the Codex-planning → Ornith-implementation handoff and exercised both 9B and 35B local routes. Local inference remains bounded by the hardware and configured timeout; a timeout is reported honestly rather than presented as success.
+
+### Telegram is the remote work control
+
+Telegram text, voice notes, photos, documents, captions, approvals, and follow-up instructions now enter the same project-aware orchestration path. DecisionsAI can answer directly, create or update a ticket, start the correct workflow, request missing information, pause for approval, or continue/stop/steer a run. Inline buttons, typed replies, and voice replies resolve durable workflow interactions. Short human progress messages and the final result return to Telegram instead of raw programmatic worker output.
+
+Delivery was hardened against duplicate callbacks, repeated “online” notices, stale interaction races, multiline TTS faults, lost source-message identity, and restart retries. Attachment and voice round trips were exercised against the real bot.
+
+### WhatsApp becomes a work source—not an accidental execution surface
+
+Linked WhatsApp contacts and groups can sync into Ticket Boards with text, captions, media references, sender and conversation context. A board can auto-snapshot new messages into durable tickets; those tickets can then follow the normal orchestrator, approval, workflow, and project rules. This makes it possible to see work requested in a WhatsApp feed from your phone and reroute it into organized work without treating every casual message as permission to execute.
+
+### Workflows that behave like a real development team
+
+- A group of tickets can be scoped and ordered under a real project, then pushed through reusable Loops.
+- Each step can declare a worker role, backend/provider/model, tools, skills, cost tier, capability requirements, and independence requirement.
+- Planning, implementation, review, tests, Playwright browser evidence, approval, correction, and final reporting can use different workers.
+- Heartbeats and elapsed/current-step diagnostics replace silent forever-spinners.
+- Cancellation, steering, retries, bounded failover, crash recovery, duplicate protection, and interaction resolution persist through restarts.
+- Worker results normalize status, artifacts, diagnostics, memory deltas, evidence, and suggested next actions.
+
+### Voice, desktop, and responsiveness
+
+Push-to-talk and system-wide dictation remain first-class. Remote capture is smaller and faster, interruption cancels obsolete work, TTS follows the originating surface, and long initialization/model/tool work is dispatched away from UI request handlers. Startup no longer repeats expensive maintenance unnecessarily, stale web tabs recover from restarts, disconnected terminal streams do not flood logs, and provider heartbeats continue even while a CLI is producing output.
+
+### Release and acceptance evidence
+
+- Full default suite: **2,916 passed**, 27 skipped, 71 intentionally deselected, one expected failure.
+- Focused routing/workflow/Telegram suite: **151 passed**.
+- Pizza House acceptance fixture: **11 Node tests passed**; human browser path rendered the validated menu and changed the subtotal from R0 to R148 after adding an item.
+- Live Auto run showed Codex planning followed by local Ornith implementation with the selected route visible in Runs.
+- Exact `tencent/hy3-preview` routing reached OpenRouter; the configured account returned HTTP 402 before inference because it needs credit.
+- Added runtime, migration, backup/restore, packaging, clean-install, update/rollback, soak, browser, and CI release gates; documented the remaining Apple signing/notarization credential requirement.
+
 ## [What's to Come]
 
-Decisions began as conversational AI, added skills, and learned to hand work to Cursor and Codex and read back when coding finished. The focus now is **loops**: multi-step workflows that run on a ticket until the outcome matches what was asked for, or stop with a concrete report of what failed and where.
+Decisions began as conversational AI, added skills, and learned to hand work to Cursor and Codex. Release 2.9 makes the loop dependable: multi-step workflows run on tickets until the outcome matches what was asked for, or stop with a concrete report of what failed and where.
 
 A loop is a reusable sequence of steps. It can start from a board ticket, a WhatsApp message, or a brief. Decisions breaks the work apart, runs what it can in chat, sends implementation to the linked project, checks the result against the ticket, and retries when validation fails. Progress and evidence land on the board, not only in chat.
 
-Release 2.8 tied together ticket boards, WhatsApp on boards, scheduled automations, calendars, workflow steps, and skills in your coding tools. That foundation is largely built. What remains is making execution dependable: knowing when a ticket is complete without monitoring the IDE yourself.
+The next focus is widening the proven provider and connected-account matrix, learning better routing policies from real outcomes, and packaging signed production builds without weakening the local-first boundary.
 
 **What we are working on next:**
 
-- **Definitive completion** — A finished run states success clearly. An incomplete run names the step that failed, the error, and what was already tried.
-- **Stall detection** — When a step waits on Cursor or Codex and progress stalls, Decisions reports that state instead of leaving it implicit.
-- **Informed retries** — A failed step that runs again carries forward the prior error, test output, and diff. Retries build on the failure, not a generic prompt.
-- **Persistent project context** — What Decisions learns about a repo during one run is available on the next, without re-entering layout, conventions, and ticket background each time.
+- **More live provider evidence** — Expand verified local, OpenRouter, Codex, Cursor, Claude, and vision/Computer Use combinations as credentials and hardware are available.
+- **Outcome-trained routing** — Use recorded cost, latency, validation, and failure evidence to improve Auto choices per project.
+- **More channel adapters** — Feed Gmail, WhatsApp, Jira, Trello, and other work sources through the same durable ticket policy without adding separate orchestration silos.
+- **Signed distribution** — Complete macOS signing/notarization and repeat physical sleep/wake acceptance on release hardware.
 
 Ticket in, verified outcome out, without standing over the IDE.
 
