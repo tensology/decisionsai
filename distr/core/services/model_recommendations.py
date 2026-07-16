@@ -15,9 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from distr.core.paths import MODELS_DIR
+
 logger = logging.getLogger(__name__)
 
-RECOMMENDATIONS_FILE = Path(__file__).parent.parent / "data" / "model_recommendations.json"
+BUNDLED_RECOMMENDATIONS_FILE = Path(__file__).parent.parent / "data" / "model_recommendations.json"
+RECOMMENDATIONS_FILE = Path(MODELS_DIR) / "model_recommendations.json"
 STALE_DAYS = 14
 _refresh_running = False
 
@@ -35,12 +38,22 @@ PROVIDERS = [
 _EMPTY = {"providers": {}, "last_updated": None, "generated_by": None}
 
 
+def _recommendations_read_path() -> Path | None:
+    """Prefer the writable per-user cache, then the read-only bundled seed."""
+    if RECOMMENDATIONS_FILE.exists():
+        return RECOMMENDATIONS_FILE
+    if BUNDLED_RECOMMENDATIONS_FILE.exists():
+        return BUNDLED_RECOMMENDATIONS_FILE
+    return None
+
+
 def is_stale() -> bool:
     """Return True if the recommendations file is missing or older than STALE_DAYS."""
-    if not RECOMMENDATIONS_FILE.exists():
+    source = _recommendations_read_path()
+    if source is None:
         return True
     try:
-        data = json.loads(RECOMMENDATIONS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(source.read_text(encoding="utf-8"))
         last_str = data.get("last_updated")
         if not last_str:
             return True
@@ -54,11 +67,12 @@ def is_stale() -> bool:
 
 
 def load_recommendations(provider: Optional[str] = None) -> dict:
-    """Read the recommendations JSON, optionally filtered to one provider."""
-    if not RECOMMENDATIONS_FILE.exists():
+    """Read the user cache or bundled seed, optionally filtered by provider."""
+    source = _recommendations_read_path()
+    if source is None:
         return dict(_EMPTY)
     try:
-        data = json.loads(RECOMMENDATIONS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(source.read_text(encoding="utf-8"))
     except Exception:
         return dict(_EMPTY)
 

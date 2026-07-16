@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 from hypothesis import given, settings, assume
@@ -117,6 +118,16 @@ class TestSchemaValidation:
 class TestStalenessDetection:
     """is_stale() returns True iff >14 days old or file missing."""
 
+    def test_runtime_cache_is_separate_from_bundled_seed(self):
+        from distr.core.paths import MODELS_DIR
+        from distr.core.services.model_recommendations import (
+            BUNDLED_RECOMMENDATIONS_FILE,
+            RECOMMENDATIONS_FILE,
+        )
+
+        assert RECOMMENDATIONS_FILE == Path(MODELS_DIR) / "model_recommendations.json"
+        assert RECOMMENDATIONS_FILE != BUNDLED_RECOMMENDATIONS_FILE
+
     @given(days_old=st.integers(min_value=0, max_value=60))
     @settings(max_examples=40, deadline=None)
     def test_staleness_by_age(self, days_old):
@@ -141,9 +152,39 @@ class TestStalenessDetection:
     def test_missing_file_is_stale(self):
         from distr.core.services.model_recommendations import is_stale
 
-        with patch("distr.core.services.model_recommendations.RECOMMENDATIONS_FILE") as mock_path:
+        with patch("distr.core.services.model_recommendations.RECOMMENDATIONS_FILE") as mock_path, \
+             patch("distr.core.services.model_recommendations.BUNDLED_RECOMMENDATIONS_FILE") as bundled_path:
             mock_path.exists.return_value = False
+            bundled_path.exists.return_value = False
             assert is_stale() is True
+
+    def test_bundled_seed_is_used_without_mutating_the_app_tree(self, tmp_path):
+        from distr.core.services.model_recommendations import (
+            _write_recommendations,
+            load_recommendations,
+        )
+
+        cache = tmp_path / "models" / "model_recommendations.json"
+        bundled = tmp_path / "bundle" / "model_recommendations.json"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_text(json.dumps({
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "generated_by": "bundled",
+            "providers": {"ollama": {"display_name": "Ollama", "categories": {}}},
+        }), encoding="utf-8")
+
+        with patch("distr.core.services.model_recommendations.RECOMMENDATIONS_FILE", cache), \
+             patch("distr.core.services.model_recommendations.BUNDLED_RECOMMENDATIONS_FILE", bundled):
+            assert load_recommendations()["generated_by"] == "bundled"
+            _write_recommendations({
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "generated_by": "refreshed",
+                "providers": {},
+            })
+            assert load_recommendations()["generated_by"] == "refreshed"
+
+        assert json.loads(bundled.read_text(encoding="utf-8"))["generated_by"] == "bundled"
+        assert json.loads(cache.read_text(encoding="utf-8"))["generated_by"] == "refreshed"
 
 
 # ── Property 3: Provider filter returns correct subset ──────────
