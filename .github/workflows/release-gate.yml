@@ -60,31 +60,19 @@ jobs:
           python -m pytest -q
           tests/core/test_principle_workflow_chain_e2e.py::test_principle_workflow_chain_ideation_development_polish
           --junitxml=artifacts/pytest-workflow-chain.xml
-      - name: Start local Mission Control server
-        env:
-          DECISIONS_DATA_DIR: ${{ runner.temp }}/browser-state
-        run: |
-          rm -rf "$DECISIONS_DATA_DIR"
-          python -m uvicorn distr.gui.web.server:create_app --factory --host 127.0.0.1 --port 8765 > artifacts/web-server.log 2>&1 &
-          echo $! > artifacts/web-server.pid
-          for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:8765/workflows/ >/dev/null; then exit 0; fi
-            sleep 1
-          done
-          cat artifacts/web-server.log
-          exit 1
       - name: Run canonical workflow browser journey
         env:
-          DECISIONS_DATA_DIR: ${{ runner.temp }}/browser-state
           # Keep the UI journey deterministic on a clean runner. Provider-specific
           # routing is covered separately; this gate verifies that the chosen route
           # and model remain visible through preview, loop, runs, and reporting.
           WORKFLOW_E2E_IDE_BACKEND: pi
           WORKFLOW_E2E_IDE_MODEL: auto
         run: >-
-          python -m pytest -q -m e2e_playwright
-          tests/ui/test_workflow_ticket_loop_browser_playwright_e2e.py
+          python scripts/run_isolated_workflow_e2e.py
+          --data-dir "${{ runner.temp }}/browser-state"
+          --log-file artifacts/web-server.log
           --browser chromium
+          -q
           --junitxml=artifacts/pytest-browser.xml
       - name: Summarize browser-journey failures
         if: failure() && hashFiles('artifacts/pytest-browser.xml') != ''
@@ -103,9 +91,6 @@ jobs:
           python installer/smoke_app.py "$RUNNER_TEMP/Applications/DecisionsAI.app"
           cp "$RUNNER_TEMP/release/SHA256SUMS" artifacts/release-SHA256SUMS
           cp "$RUNNER_TEMP/release/DecisionsAI.app/Contents/Info.plist" artifacts/release-Info.plist
-      - name: Stop local server
-        if: always()
-        run: test ! -f artifacts/web-server.pid || kill "$(cat artifacts/web-server.pid)" || true
       - name: Upload release evidence
         if: always()
         uses: actions/upload-artifact@v7

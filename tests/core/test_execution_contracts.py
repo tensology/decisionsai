@@ -1,4 +1,5 @@
 import asyncio
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -638,6 +639,46 @@ def test_pi_empty_success_is_classified_as_failed_noop(monkeypatch, tmp_path):
     assert "no-op" in result.error
 
 
+def test_long_running_local_pi_worker_emits_heartbeat_without_blocking_event_loop(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "distr.core.pi_rpc.PiRpcSession.find_pi",
+        lambda: "/usr/bin/pi",
+    )
+
+    def slow_worker(*_args, **_kwargs):
+        time.sleep(10.2)
+        return SimpleNamespace(returncode=0, stdout="Status: completed\nSummary: local work finished", stderr="")
+
+    monkeypatch.setattr("distr.core.project_cli_backends.registry.subprocess.run", slow_worker)
+    task = ProjectTask(
+        project_id=13,
+        project_name="Responsive local workflow",
+        folder=str(tmp_path),
+        instruction="Complete a local code task.",
+        origin="workflow",
+        model="ornith:9b",
+        adapter_options={"model_provider": "ollama"},
+    )
+    events: list[dict] = []
+
+    async def run_worker() -> tuple[BackendTaskResult, int]:
+        pending = asyncio.create_task(PiBackend().send_task(task, events.append))
+        event_loop_ticks = 0
+        while not pending.done():
+            await asyncio.sleep(0.05)
+            event_loop_ticks += 1
+        return await pending, event_loop_ticks
+
+    result, event_loop_ticks = asyncio.run(run_worker())
+
+    assert result.success is True
+    assert event_loop_ticks >= 100
+    heartbeats = [event for event in events if event.get("type") == "heartbeat"]
+    assert heartbeats
+    assert heartbeats[-1]["backend"] == "pi"
+    assert heartbeats[-1]["model"] == "ornith:9b"
+
+
 def test_pi_workflow_report_contract_rejects_unverified_or_failed_text():
     assert "required" in _pi_workflow_report_error("Should I proceed with the work?")
     assert "failed" in _pi_workflow_report_error("Status: failed\nSummary: test failed")
@@ -663,6 +704,19 @@ def test_unavailable_llm_judge_preserves_explicit_success(monkeypatch):
     })()
     assert _run_verification(step, "Status: completed\nTicket and route are explicit.", True)
     assert not _run_verification(step, "Status: failed", False)
+
+
+def test_browser_ui_validation_is_a_supported_playwright_alias(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.workflow.verification._verify_playwright",
+        lambda step, caller_passed, base_url="": caller_passed,
+    )
+    step = type("Step", (), {
+        "id": 1,
+        "validation_type": "browser_ui",
+        "validation_prompt": "The browser journey passed.",
+    })()
+    assert _run_verification(step, "Browser journey passed.", True)
 
 
 def test_backend_registry_has_module_logger_for_heartbeat_diagnostics():

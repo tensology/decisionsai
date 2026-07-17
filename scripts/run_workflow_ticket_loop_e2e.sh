@@ -3,31 +3,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Avoid macOS Screen Recording permission prompts during harness runs (headless Playwright only).
-export DECISIONS_SKIP_UI_SCREEN_CAPTURE=1
-
 PROFILE="${WORKFLOW_E2E_PROFILE:-until-green}"
-PYTEST_TARGET="tests/ui/test_workflow_ticket_loop_browser_playwright_e2e.py"
-PYTEST_EXTRA=()
+if [ -n "${DECISIONSAI_PYTHON:-}" ]; then
+  PYTHON_BIN="$DECISIONSAI_PYTHON"
+elif [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then
+  PYTHON_BIN="$VIRTUAL_ENV/bin/python"
+elif [ -x "${WORKON_HOME:-$HOME/.virtualenvs}/decisions/bin/python" ]; then
+  PYTHON_BIN="${WORKON_HOME:-$HOME/.virtualenvs}/decisions/bin/python"
+elif command -v python3.12 >/dev/null 2>&1; then
+  PYTHON_BIN="python3.12"
+else
+  PYTHON_BIN="python3"
+fi
 
 if [ "${1:-}" = "--profile" ]; then
   PROFILE="${2:-until-green}"
   shift 2
 fi
 
-# Wipe stamped legacy harness clutter before each run; seeds recreate one canonical fixture.
-rtk python3 scripts/workflow_ticket_loop_e2e.py cleanup-e2e-harness
-
-if [ "$PROFILE" = "spotify" ] || [ "$PROFILE" = "dogfood" ]; then
-  PROFILE="spotify"
-  PYTEST_TARGET="tests/core/test_spotify_program_live_e2e.py"
-  PYTEST_MARKER="e2e"
-else
-  PYTEST_MARKER="e2e_playwright"
-fi
-
-if [ "$#" -eq 0 ]; then
-  set -- "${PYTEST_EXTRA[@]}" -q
-fi
-
-rtk python3 -m pytest -m "$PYTEST_MARKER" "$PYTEST_TARGET" "$@"
+rtk "$PYTHON_BIN" scripts/run_isolated_workflow_e2e.py --profile "$PROFILE" "$@"

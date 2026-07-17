@@ -60,7 +60,7 @@ class MockTransport(FrameProcessor):
     def output(self):
         return self
 
-class TestAgentSession(AgentSession):
+class PipelineAgentSession(AgentSession):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mock_transport = MockTransport()
@@ -99,7 +99,7 @@ async def run_test():
         'vad': {'enabled': True}
     }
     
-    session = TestAgentSession(settings=settings)
+    session = PipelineAgentSession(settings=settings)
     
     # Start session in a separate task
     session_task = asyncio.create_task(session._run_pipeline())

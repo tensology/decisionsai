@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-17",
+  "implementation_base_sha": "1c44cb630d60fd716b81ea2c29c065214abc8334",
+  "candidate_commit_sha": "recorded-after-commit-in-local-and-hosted-release-gate-artifacts",
+  "contains_secrets": false,
+  "automated": {
+    "runtime": {"status": "passed", "python": "3.12.13"},
+    "collection": {"collected": 3021, "selected_by_default": 2950, "deselected": 71, "warnings": 0},
+    "default_suite": {"passed": 2921, "skipped": 27, "deselected": 71, "xfailed": 1, "warnings": 1293, "duration_seconds": 414.33},
+    "workflow_chain": {"status": "passed", "duration_seconds": 147.07},
+    "canonical_browser": {"status": "passed", "browser": "chromium", "viewports": ["1440x1000", "390x844"], "duration_seconds": 165.95},
+    "fallow": {"verdict": "pass", "introduced_dead_code": 0, "introduced_duplication": 0, "introduced_complexity": 0}
+  },
+  "integrations": {
+    "telegram": {
+      "live_round_trip_source": "docs/release-evidence/2026-07-16-operator-evidence.json",
+      "current_contract_regression": "passed",
+      "note": "The prior live text, voice, button, and attachment proof remains operator evidence; no fake second live interaction was claimed for this audit."
+    },
+    "whatsapp": {"current_contract_regression": "passed", "live_account_round_trip": "pending"},
+    "gmail": {"current_contract_regression": "passed", "live_account_round_trip": "pending"}
+  },
+  "workers": {
+    "ollama_ornith_9b": {"status": "passed", "transport": "pi", "artifact": "typed safe_divide implementation", "tests": 2},
+    "opencode_hy3_free": {"status": "passed", "artifact": "slugify implementation", "tests": 5, "self_correction": true},
+    "openrouter_tencent_hy3_preview": {"status": "blocked", "http_status": 402, "reason": "insufficient OpenRouter credits"},
+    "cursor": {"status": "blocked", "reason": "CLI installed but not authenticated"},
+    "claude_code": {"status": "not_reverified", "reason": "previous provider-credit blocker; expensive fallback is not advertised as verified"}
+  },
+  "resilience": {
+    "local_worker_heartbeat": {"duration_seconds": 10.2, "heartbeat_observed": true, "event_loop_ticks_minimum": 100},
+    "idle_soak": {"duration_seconds": 600.01, "requests": 242, "failures": 0, "average_ms": 5.28, "median_ms": 3.78, "p95_ms": 14.14, "max_ms": 33.47},
+    "isolated_browser_server": {"process_group_stopped": true, "port_closed": true, "temporary_state_removed": true},
+    "legacy_orphan_test_server": {"age_hours": 17, "removed": true},
+    "physical_sleep_wake": "pending"
+  },
+  "packaging": {
+    "version": "2.9.0",
+    "unsigned_build": "passed",
+    "isolated_install_verify": "passed",
+    "installed_smoke": {"healthy": true, "bundle_was_mutated": false, "residual_helper_pids": []},
+    "developer_identities": 0,
+    "signed_notarized_release": "blocked"
+  },
+  "hosted_release_gate": "pending-push"
+}

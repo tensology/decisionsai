@@ -77,7 +77,7 @@ def _run_verification(
             )
         elif vtype == "screenshot_compare":
             return _verify_screenshot(step, result, prompt)
-        elif vtype == "playwright":
+        elif vtype in {"playwright", "browser_ui"}:
             runtime = _project_runtime_snapshot(project_id)
             base_url = ""
             urls = runtime.get("urls") or []

@@ -248,12 +248,16 @@ def test_workflow_board_add_controls_render_before_workflow_load_then_sync_avail
     drag_block = js.split("function beginWorkflowBoardMouseDrag(row, ticketKey, evt)", 1)[1].split(
         "function initWorkflowBoardTicketMouseDrag", 1
     )[0]
+    add_block = js.split("function addWorkflowBoardTicketToQueue(ticketKey, btnEl)", 1)[1].split(
+        "function handleWorkflowTicketDropPayload", 1
+    )[0]
 
     assert "var showAddAll = boardHasProject;" in render_block
     assert "showAddToWorkflow: boardHasProject" in render_block
     assert "hasWorkflowQueueTarget() && state.canDragToWorkflow" in sync_block
     assert "hasWorkflowQueueTarget() && !state.isLinkedToWorkflow && !state.isPendingLink" in sync_block
     assert "if (!hasWorkflowQueueTarget())" in drag_block
+    assert 'switchTab("tickets", { persist: true })' in add_block
 
 
 def test_workflows_board_drag_row_state_uses_dataset_draggable():

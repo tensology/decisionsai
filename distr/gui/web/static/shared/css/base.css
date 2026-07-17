@@ -72,6 +72,64 @@
     }
 }
 
+@media (max-width: 759px) {
+    .app-nav-shell {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+    .app-nav-inner {
+        height: 3.5rem !important;
+        gap: 0.5rem;
+    }
+
+    .app-nav-left {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 0.5rem !important;
+    }
+
+    .app-brand {
+        flex: 0 0 auto;
+    }
+
+    .app-brand > span {
+        display: none;
+    }
+
+    .primary-nav {
+        flex: 1 1 auto;
+        min-width: 0;
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+    }
+
+    .primary-nav::-webkit-scrollbar {
+        display: none;
+    }
+
+    .primary-nav .nav-tab {
+        flex: 0 0 auto;
+        padding: 0.5rem !important;
+        gap: 0 !important;
+    }
+
+    .primary-nav .nav-tab-label {
+        display: none;
+    }
+
+    .app-nav-right {
+        flex: 0 0 auto;
+        gap: 0.125rem !important;
+    }
+
+    .app-nav-right > a {
+        padding: 0.4rem !important;
+    }
+}
+
 .nav-chat-bubble {
     display: inline-flex;
     align-items: center;

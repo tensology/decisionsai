@@ -282,3 +282,28 @@ class TestConcurrentRefreshPrevention:
                 assert mod._refresh_running is False
         finally:
             mod._refresh_running = original
+
+
+def test_parser_normalizes_an_unavailable_null_lane_without_warning(caplog):
+    from distr.core.services.model_recommendations import _parse_provider_response
+
+    raw = json.dumps({
+        "display_name": "Example",
+        "categories": {
+            category: {
+                "paid": {
+                    "model_id": "example/model",
+                    "model_name": "Example Model",
+                    "description": "Available paid model.",
+                },
+                "free": {"model_id": None, "model_name": None, "description": None},
+            }
+            for category in ("tool_calling", "coding", "vision", "image_generation")
+        },
+    })
+
+    result = _parse_provider_response(raw, "Example")
+
+    assert result is not None
+    assert all(item["free"] is None for item in result["categories"].values())
+    assert "Missing field" not in caplog.text

@@ -341,6 +341,13 @@ def _parse_provider_response(raw: str, provider_name: str) -> Optional[dict]:
             lane_data = entry.get(lane)
             if lane_data is None:
                 continue
+            # Providers without a free/paid lane commonly return the requested
+            # JSON shape filled with nulls.  That is an unavailable lane, not a
+            # malformed recommendation, so normalize it instead of emitting a
+            # warning for every required field on every background refresh.
+            if not any(lane_data.get(field) for field in ("model_id", "model_name", "description")):
+                entry[lane] = None
+                continue
             for field in ("model_id", "model_name", "description"):
                 if not lane_data.get(field):
                     logger.warning("Missing field '%s' in %s/%s/%s", field, provider_name, cat, lane)

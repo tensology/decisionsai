@@ -8939,6 +8939,7 @@
                 return;
             }
             snack(added + " ticket" + (added === 1 ? "" : "s") + " added to workflow queue");
+            switchTab("tickets", { persist: true });
         }
 
         function processNext(index) {
@@ -8992,7 +8993,11 @@
             return;
         }
         if (promise && typeof promise.finally === "function") {
-            promise.finally(function () {
+            promise.then(function (result) {
+                if (result && result.status === "added") {
+                    switchTab("tickets", { persist: true });
+                }
+            }).finally(function () {
                 syncWorkflowBoardTicketRowUi(ticketKey);
             });
         }

@@ -5,7 +5,7 @@ Extracted from service.py as part of the module decomposition.
 """
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
 from sqlalchemy import text, inspect as sa_inspect
@@ -81,7 +81,7 @@ def _write_migration_marker(session) -> None:
     ))
     session.execute(
         text("INSERT OR IGNORE INTO _migration_markers (marker_key, migrated_at) VALUES (:key, :ts)"),
-        {"key": MIGRATION_MARKER_KEY, "ts": datetime.utcnow()},
+        {"key": MIGRATION_MARKER_KEY, "ts": datetime.now(timezone.utc).isoformat()},
     )
 
 
