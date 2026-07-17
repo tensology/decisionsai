@@ -111,11 +111,14 @@ def _global_complexity_route(level: str) -> dict[str, str]:
         settings = {}
     backend = normalize_backend_id(settings.get(f"project_cli_{level}_backend") or defaults["backend"])
     model = (settings.get(f"project_cli_{level}_model") or defaults["model"]).strip()
+    model_provider = str(settings.get(f"project_cli_{level}_model_provider") or "").strip().lower()
     from distr.core.project_cli_backends.ide_handoff import is_ide_backend
 
     if is_ide_backend(backend):
         model = ""
     route: dict[str, str] = {"backend": backend, "model": model}
+    if model_provider:
+        route["model_provider"] = model_provider
     fallback_backend = normalize_backend_id(settings.get(f"project_cli_{level}_fallback_backend") or "")
     fallback_model = (settings.get(f"project_cli_{level}_fallback_model") or "").strip()
     if fallback_backend and not is_ide_backend(fallback_backend):
@@ -192,6 +195,10 @@ def resolve_ticket_cli_route(
                         route["backend"] = normalize_backend_id(override["backend"])
                     if override.get("model"):
                         route["model"] = str(override["model"]).strip()
+                    if override.get("model_provider") or override.get("provider"):
+                        route["model_provider"] = str(
+                            override.get("model_provider") or override.get("provider") or ""
+                        ).strip().lower()
                     if route.get("backend") == "codex":
                         if override.get("codex_reasoning_effort"):
                             route["codex_reasoning_effort"] = str(override["codex_reasoning_effort"]).strip()
@@ -208,6 +215,8 @@ def resolve_ticket_cli_route(
     except Exception:
         return _apply_configured_fallback({**route, "complexity": level}, level)
     out: dict[str, str] = {"complexity": level, "backend": backend, "model": model}
+    if route.get("model_provider"):
+        out["model_provider"] = route["model_provider"]
     if backend == "codex":
         out["codex_reasoning_effort"] = route.get("codex_reasoning_effort", "")
         out["codex_service_tier"] = route.get("codex_service_tier", "")

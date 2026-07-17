@@ -1,16 +1,19 @@
 """
 Hand-authored loop preset definitions.
 
-Active presets follow workflows-by-intent:
-- Ideation: requirements → brief → board tickets (no Cursor)
-- Development: ticket → plan → CLI harness implementation
-- Polish: security, UI drift, regression, release evidence
+The active catalog intentionally exposes one dependable developer workflow.
+Provider/model selection belongs to Auto routing, not to workflow step names.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from distr.core.workflow.developer_workflow import (
+    DEVELOPER_WORKFLOW_NAME,
+    DEVELOPER_WORKFLOW_RUN_SETTINGS,
+    DEVELOPER_WORKFLOW_SLUG,
+)
 from distr.core.workflow.loop_text import GUARDRAILS_FOOTER, SELF_PACE_FOOTER
 
 _SCOPE = (
@@ -226,7 +229,7 @@ _IDEATION_STEPS = [
     ),
     _step(
         "Queue tickets for development",
-        "Link the board and development-ready tickets to the Development: Ticket to Implementation workflow. Set queue order "
+        "Link the board and development-ready tickets to the Development workflow. Set queue order "
         "from infrastructure/foundation first through feature slices and validation. Attach the brief/result packet and end with "
         "a concise handoff summary that names the first ticket to run.",
         skills=["internal-comms", "product-lens"],
@@ -249,7 +252,7 @@ _IDEATION_STEPS = [
 ]
 
 _DEVELOPMENT_KICKOFF = _kickoff(
-    "Development: Ticket to Implementation",
+    DEVELOPER_WORKFLOW_NAME,
     """Goal: one linked ticket is implemented on the linked project with CLI harness iteration
 Max iterations: 6
 Exit when: plan.md exists, the scoped slice is implemented, relevant checks are green or explicitly blocked, browser evidence exists or is marked N/A with reason, and the ticket has a compact result packet.
@@ -262,7 +265,7 @@ Step 1: Load the ticket, board, project, workflow memory, AGENTS.md/context file
 
 _DEVELOPMENT_STEPS = [
     _step(
-        "Ingest ticket, memory, and acceptance context",
+        "Understand ticket and acceptance criteria",
         "Load the exact linked ticket and project before doing any implementation work. Read the board/lane, ticket title, "
         "description, acceptance criteria, linked media/files, AGENTS.md, project memory, workflow memory, and the current "
         "repository shape. Return a concise context packet with: ticket scope, non-goals, project folder, likely stack, "
@@ -286,13 +289,14 @@ _DEVELOPMENT_STEPS = [
         validation_prompt="A context packet exists with ticket scope, non-goals, project route, linked files/media status, memory status, unknowns, and CLI/model route.",
         config={
             "execution_scope": "ticket",
+            "step_role": "planning",
             "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
             "required_context": ["ticket", "board", "project", "workflow_memory", "project_memory", "linked_attachments"],
             "expected_outputs": ["context_packet", "unknowns", "route_recommendation"],
         },
     ),
     _step(
-        "Plan the smallest implementation slice",
+        "Create the implementation plan",
         "Create a ticket-specific plan.md in the project/workflow handoff area before editing code. The plan must describe the "
         "smallest shippable slice for this ticket, files expected to change, commands to run, browser/evidence plan, rollback "
         "notes, and skip rules for non-applicable checks. Link or attach the plan to the ticket result packet.",
@@ -315,13 +319,14 @@ _DEVELOPMENT_STEPS = [
         validation_prompt="plan.md exists for this ticket and includes slice, expected changed files, checks, browser/evidence plan, rollback notes, and explicit skip rules.",
         config={
             "execution_scope": "ticket",
-            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "step_role": "planning",
+            "model_policy": {"auto_route_models": True},
             "required_context": ["context_packet"],
             "expected_outputs": ["plan_md", "ticket_plan_link"],
         },
     ),
     _step(
-        "Implement the slice with project checks",
+        "Implement the planned change",
         "Implement only the planned slice. Detect stack and commands from real repo files such as package.json, pyproject.toml, "
         "requirements files, manage.py, Makefile, docker compose files, or existing scripts. Make minimal edits, run the relevant "
         "checks that are available, capture exact command output, and report changed files. If setup requires dependency install "
@@ -346,42 +351,49 @@ _DEVELOPMENT_STEPS = [
         on_fail_goto_position=2,
         config={
             "execution_scope": "ticket",
-            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "step_role": "implementation",
+            "model_policy": {"auto_route_models": True},
             "required_context": ["plan_md", "project_repo"],
             "expected_outputs": ["changed_files", "command_log", "blockers"],
         },
     ),
     _step(
-        "Capture browser evidence and self-assess",
-        "If the ticket affects UI or app setup, start the app using the documented project commands, open it with Playwright or the "
-        "browser tool, capture screenshot/evidence, inspect console/runtime errors, and compare the result to the ticket acceptance "
-        "criteria. If browser evidence is not applicable or the app cannot start, record the exact reason and command output.",
-        skills=["qa-tester", "verification-loop", "browser-qa", "systematic-debugging"],
-        tools=["cli", "playwright", "browser_use"],
+        "Independently review and validate the change",
+        "Review the implementation independently from the implementation model. Inspect the diff for correctness, regressions, "
+        "security, maintainability, dead code, and acceptance-criteria coverage. Run the repository's discovered lint, test, and build "
+        "commands. For UI work, start the app and use Playwright or the browser tool to capture evidence and inspect console/runtime "
+        "errors. For non-UI work, record why browser validation is not applicable. Do not edit files in this review step.",
+        skills=["qa-tester", "verification-loop", "browser-qa", "systematic-debugging", "requesting-code-review"],
+        tools=["cli", "shell", "playwright", "browser_use"],
         action_type="send_to_project_cli",
         guardrail=_guardrail(
             _SCOPE,
-            "- Do not fake browser evidence; if the app cannot run, report the blocker and exact command/output",
-            "- Current step remains open until UI evidence is captured or explicitly marked N/A",
+            _DEV_CHECKS,
+            "- Use a provider/model independent from implementation when a ready alternative exists",
+            "- Do not edit files during independent review; return findings to the correction step",
+            "- Do not fake browser evidence; report exact blockers and command output",
         ),
         failure_checklist=[
-            "UI/app setup change has no screenshot or browser evidence",
-            "Console/runtime errors were not checked",
-            "Browser blocker lacks exact command/output",
-            "Non-UI N/A was asserted without a concrete reason",
+            "Review used the same provider as implementation without explaining why",
+            "Repository checks were not discovered and run",
+            "Acceptance criteria were not checked against the diff",
+            "UI work lacks browser evidence or a concrete blocker",
+            "Findings do not have severity and actionable evidence",
         ],
-        validation_prompt="Browser evidence is attached for UI/app changes, or N/A/blocker is justified with exact command output and self-assessment notes.",
-        on_fail_goto_position=2,
+        validation_prompt="Independent review reports no unresolved blocking findings, repository checks pass, acceptance criteria are covered, and UI evidence exists or is explicitly N/A with reason.",
+        on_fail_goto_position=4,
         config={
             "execution_scope": "ticket",
-            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
-            "required_context": ["implemented_slice", "startup_commands"],
-            "expected_outputs": ["browser_evidence", "console_check", "visual_self_assessment"],
+            "step_role": "review",
+            "model_policy": {"auto_route_models": True, "independent_from": "implementation"},
+            "required_context": ["plan_md", "changed_files", "command_log", "acceptance_criteria"],
+            "expected_outputs": ["review_findings", "check_results", "browser_evidence", "ship_verdict"],
         },
+        on_pass_goto_position=5,
     ),
     _step(
-        "Correct, re-run, or skip with reason",
-        "Use command output, browser evidence, and self-assessment to decide the next move. Correct defects and re-run the relevant "
+        "Correct defects found by validation",
+        "Use the independent review, command output, and browser evidence to correct defects. Re-run the relevant "
         "checks, skip only non-applicable checks with a ticket-specific reason, or stop for a human decision when the blocker needs "
         "product or credential input. The result must say whether the loop should continue, retry implementation, or exit.",
         skills=["verification-loop", "systematic-debugging", "executing-plans"],
@@ -399,12 +411,13 @@ _DEVELOPMENT_STEPS = [
             "Next loop action is unclear",
         ],
         validation_prompt="All known defects are corrected or explicitly blocked/skipped with evidence, rerun results are recorded, and the next loop action is explicit.",
-        on_fail_goto_position=2,
-        validation_pass_action="next",
+        on_pass_goto_position=3,
+        on_fail_goto_position=4,
         config={
             "execution_scope": "ticket",
-            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
-            "required_context": ["command_log", "browser_evidence", "self_assessment"],
+            "step_role": "implementation",
+            "model_policy": {"auto_route_models": True},
+            "required_context": ["review_findings", "check_results", "browser_evidence"],
             "expected_outputs": ["rerun_results", "skip_or_blocker_reason", "next_action"],
         },
     ),
@@ -412,7 +425,7 @@ _DEVELOPMENT_STEPS = [
         "Report, update ticket, and compact memory",
         "Update the ticket with a compact result packet: summary, files changed, commands run, browser evidence or N/A reason, "
         "remaining risks, blockers, and next actions. Write only durable memory deltas: project commands, conventions, paths, "
-        "decisions, and gotchas. Do not paste full transcripts into memory.",
+        "decisions, failed approaches, root causes, corrections, and learned rules. Do not paste full transcripts into memory.",
         skills=["internal-comms", "finishing-a-development-branch"],
         tools=["cli", "other"],
         other_tool="Ticket update, result packet, and compact workspace memory",
@@ -434,9 +447,15 @@ _DEVELOPMENT_STEPS = [
         on_fail_goto_position=4,
         config={
             "execution_scope": "ticket",
-            "model_policy": {"mode": "auto", "free_only": True, "prefer_local": False},
+            "step_role": "reporting",
+            "model_policy": {"auto_route_models": True},
             "required_context": ["final_changed_files", "command_log", "evidence", "memory_delta"],
-            "expected_outputs": ["ticket_result_packet", "compact_memory_delta"],
+            "expected_outputs": [
+                "ticket_result_packet",
+                "compact_memory_delta",
+                "failed_attempts",
+                "lessons",
+            ],
         },
     ),
 ]
@@ -528,6 +547,7 @@ def _meta(
     max_iterations: int,
     steps: list[dict[str, Any]],
     tags: list[str] | None = None,
+    run_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     guardrails = [
         line.strip()[2:].strip()
@@ -559,6 +579,7 @@ def _meta(
         "loop_contract": loop_contract,
         "expected_check_command": check_command,
         "tags": tags or [],
+        "run_settings": dict(run_settings or {}),
         "steps": steps,
         "references": {
             "source": "decisionsai_role_presets",
@@ -569,26 +590,8 @@ def _meta(
 
 LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
     _meta(
-        name="Ideation: Brief to Board",
-        slug="ideation-brief-to-board",
-        role="product_manager",
-        category="Product",
-        archetype="scope_then_ship",
-        description=(
-            "Read a requirements document, write a product brief, create a Kanban board with tickets, "
-            "and queue development-ready work. Never hands off to Cursor."
-        ),
-        kickoff=_IDEATION_KICKOFF,
-        goal="requirements become a product/project container, product board, scoped tickets, and a development queue",
-        exit_when="project and board use product names, tickets carry implementation scope, and dev-ready tickets are queued",
-        check_command="brief artifact + board ticket count matches requirements slices",
-        max_iterations=3,
-        steps=_IDEATION_STEPS,
-        tags=["ideation", "board", "tickets", "brief"],
-    ),
-    _meta(
-        name="Development: Ticket to Implementation",
-        slug="development-ticket-to-implementation",
+        name=DEVELOPER_WORKFLOW_NAME,
+        slug=DEVELOPER_WORKFLOW_SLUG,
         role="senior_software_engineer",
         category="Engineering",
         archetype="incremental_ship",
@@ -603,24 +606,7 @@ LOOP_PRESET_DEFINITIONS: list[dict[str, Any]] = [
         max_iterations=6,
         steps=_DEVELOPMENT_STEPS,
         tags=["engineering", "ticket", "plan.md", "cli", "browser-evidence", "memory"],
-    ),
-    _meta(
-        name="Polish: Verify and Ship",
-        slug="polish-verify-and-ship",
-        role="qa_engineer",
-        category="Quality",
-        archetype="review_cleanup",
-        description=(
-            "Review delivery context, run security and project gates, verify UI and drift with Playwright, "
-            "file polish tickets if needed, and close with release evidence."
-        ),
-        kickoff=_POLISH_KICKOFF,
-        goal="security, drift, UI regression, and release evidence are green",
-        exit_when="security audit passes, UI evidence exists, and release notes explain ship readiness",
-        check_command="project safety nets + secret audit + browser UI evidence",
-        max_iterations=4,
-        steps=_POLISH_STEPS,
-        tags=["polish", "security", "playwright", "qa"],
+        run_settings=DEVELOPER_WORKFLOW_RUN_SETTINGS,
     ),
 ]
 

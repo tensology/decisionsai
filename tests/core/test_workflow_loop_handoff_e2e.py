@@ -105,7 +105,7 @@ class LoopFakeWorkflowAgent:
 
 
 def _seed_loop_workflow(factory, tmp_path):
-    preset = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Polish: Verify and Ship")
+    preset = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Development")
     contract = parse_loop_contract(preset["kickoff"])
     loop_input = {
         "goal": contract["goal"],

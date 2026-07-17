@@ -167,6 +167,23 @@ def test_workflow_loop_ui_has_ring_and_list_views():
     assert "mode: mode" in js or "mode: mode," in js
 
 
+def test_complexity_model_dropdowns_are_the_pin_source_of_truth_with_auto_toggle():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    routes = WORKFLOWS_PY.read_text(encoding="utf-8")
+
+    assert 'class="wf-exec-model' in js
+    assert 'class="wf-exec-auto ' in js
+    assert "function syncWorkflowExecAutoToggle(level, root)" in js
+    assert 'model.value = "auto"' in js
+    assert "model.dataset.lastPinnedModel = model.value" in js
+    assert 'String(model.dataset.lastPinnedModel || "")' in js
+    assert '"model_provider": (settings.get(f"project_cli_{level}_model_provider")' in routes
+    assert 'settings[f"project_cli_{level}_model_provider"]' in routes
+    assert "Keeping the pinned model visible." in js
+    assert ".wf-exec-auto-label" in html
+
+
 def test_workflows_detail_tabs_use_loop_and_conditional_runs():
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
@@ -294,3 +311,17 @@ def test_workflows_board_drag_row_state_uses_dataset_draggable():
     assert "syncWorkflowBoardTicketRowUi(ticketKey, row)" in js
     assert "refreshWorkflowBoardTicketDragBindings(list)" in render_block
     assert "refreshWorkflowBoardTicketsFromQueue()" in render_block
+
+
+def test_workflow_queue_status_owns_elapsed_time_and_hides_zero_duration():
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    row_block = js.split("function createWorkflowQueueListRow(ticket, queueId, options)", 1)[1].split(
+        "function renderWorkflowQueueList", 1
+    )[0]
+
+    assert "var showTime = timeLive || elapsedSeconds > 0;" in row_block
+    assert 'class="wf-ticket-status-time ' in row_block
+    assert 'class="wf-ticket-status-label"' in row_block
+    assert "(showTime" in row_block
+    assert 'class="wf-ticket-time-display ' in row_block
+    assert 'title="Workflow queue status"' not in row_block

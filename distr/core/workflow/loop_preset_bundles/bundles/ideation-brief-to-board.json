@@ -129,7 +129,7 @@
     },
     {
       "name": "Queue tickets for development",
-      "instruction": "Link the board and development-ready tickets to the Development: Ticket to Implementation workflow. Set queue order from infrastructure/foundation first through feature slices and validation. Attach the brief/result packet and end with a concise handoff summary that names the first ticket to run.",
+      "instruction": "Link the board and development-ready tickets to the Development workflow. Set queue order from infrastructure/foundation first through feature slices and validation. Attach the brief/result packet and end with a concise handoff summary that names the first ticket to run.",
       "skills": [
         "internal-comms",
         "product-lens"

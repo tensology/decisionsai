@@ -166,6 +166,7 @@ def _get_tool_definitions(
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
         ("BenchmarkModelsTool", {}),
+        ("ManageModelPolicyTool", {}),
         ("DeveloperContextTool", {}),
         ("EcosystemScanTool", {}),
         ("BoardNotesTool", {}),
@@ -501,6 +502,7 @@ TOOL_REGISTRY = {
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "BenchmarkModelsTool":     ("system.benchmark_models", "BenchmarkModelsTool"),
+    "ManageModelPolicyTool":   ("system.manage_model_policy", "ManageModelPolicyTool"),
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
     "EcosystemScanTool":       ("system.ecosystem_scan", "EcosystemScanTool"),
     "BoardNotesTool":          ("system.board_notes", "BoardNotesTool"),
@@ -643,6 +645,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "BenchmarkModelsTool": "Answer questions about the latest and best AI models using the curated multi-source benchmark cache, including rankings, pricing, latency, speed, and context window.",
+    "ManageModelPolicyTool": "Preview or apply editable global and per-workflow provider/model routing, including Auto live-catalog selection and pinned step assignments.",
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
     "EcosystemScanTool": "Scan all boards and projects for health issues: unscoped tickets, missing folders, empty current lanes, and workflow/board name index.",
     "BoardNotesTool": "Read, create, edit, append to, or delete ticket board scratchpad notes in the kanban board area (not MEMORY.md). Actions: list, create, update, append, delete.",

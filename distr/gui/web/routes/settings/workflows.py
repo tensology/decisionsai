@@ -1099,6 +1099,7 @@ def register_routes(router, templates):
             routing[level] = {
                 "backend": backend,
                 "model": (settings.get(f"project_cli_{level}_model") or default_model).strip(),
+                "model_provider": (settings.get(f"project_cli_{level}_model_provider") or "").strip().lower(),
                 "codex_intelligence": normalize_codex_intelligence(
                     settings.get(f"project_cli_{level}_codex_intelligence")
                 ),
@@ -1218,10 +1219,15 @@ def register_routes(router, templates):
                 row = routing.get(level) or {}
                 settings[f"project_cli_{level}_backend"] = normalize_backend_id(row.get("backend") or default_backend)
                 backend_id = settings[f"project_cli_{level}_backend"]
+                if "model_provider" in row or "provider" in row:
+                    settings[f"project_cli_{level}_model_provider"] = (
+                        row.get("model_provider") or row.get("provider") or ""
+                    ).strip().lower()
                 fallback_backend = normalize_backend_id(row.get("fallback_backend") or "")
                 fallback_model = (row.get("fallback_model") or "").strip()
                 if is_ide_backend(backend_id):
                     settings[f"project_cli_{level}_model"] = ""
+                    settings[f"project_cli_{level}_model_provider"] = ""
                     settings[f"project_cli_{level}_fallback_backend"] = (
                         fallback_backend if fallback_backend and not is_ide_backend(fallback_backend) else ""
                     )
@@ -1232,6 +1238,10 @@ def register_routes(router, templates):
                     settings.pop(f"project_cli_{level}_codex_speed", None)
                     continue
                 settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
+                if backend_id == "codex":
+                    settings[f"project_cli_{level}_model_provider"] = "openai"
+                elif backend_id == "claude_code":
+                    settings[f"project_cli_{level}_model_provider"] = "anthropic"
                 settings[f"project_cli_{level}_fallback_backend"] = ""
                 settings[f"project_cli_{level}_fallback_model"] = ""
                 if backend_id == "codex":

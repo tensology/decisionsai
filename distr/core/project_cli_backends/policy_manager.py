@@ -1,0 +1,387 @@
+"""Preview and apply editable model policies for workflows and global routing.
+
+The policy manager deliberately separates *pinned* configuration from *auto*
+preflight resolution.  Pinned routes are database configuration, never model
+identifiers baked into application source.  Auto plans resolve a concrete,
+auditable route for every workflow step before execution.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+import re
+from typing import Any
+
+
+VALID_MODES = {"auto", "pinned"}
+VALID_PREFERENCES = {"free", "balanced", "performance"}
+VALID_SCOPES = {"workflow", "global", "both"}
+LEVELS = ("low", "medium", "high")
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _normalise_route(raw: Any, *, source: str) -> dict[str, Any]:
+    value = raw if isinstance(raw, dict) else {}
+    backend = str(value.get("backend") or value.get("backend_id") or "").strip().lower()
+    model = str(value.get("model") or "auto").strip() or "auto"
+    provider = str(value.get("model_provider") or value.get("provider") or "").strip().lower()
+    if not backend:
+        backend = "pi" if provider in {"ollama", "openrouter", "kilocode", "nvidia", "groq", "gemini"} else "codex"
+    if backend == "codex" and not provider:
+        provider = "openai"
+    if backend == "claude_code" and not provider:
+        provider = "anthropic"
+    return {
+        "backend": backend,
+        "model": model,
+        "model_provider": provider,
+        "source": source,
+    }
+
+
+def _route_key(route: dict[str, Any]) -> str:
+    return "|".join(
+        str(route.get(key) or "").strip().lower()
+        for key in ("backend", "model_provider", "model")
+    )
+
+
+def _step_role(step: Any) -> str:
+    config = _json_dict(getattr(step, "config", None))
+    explicit = str(config.get("step_role") or (config.get("model_policy") or {}).get("step_role") or "").strip().lower()
+    if explicit:
+        return explicit
+
+    def infer(text: str) -> str:
+        text = text.strip().lower()
+        if any(word in text for word in ("report", "summar", "handoff", "compact memory")):
+            return "reporting"
+        if any(word in text for word in ("review", "audit", "quality", "critic", "self-assess")):
+            return "review"
+        if any(word in text for word in ("test", "validate", "validation", "verify", "playwright", " qa", "evidence")):
+            return "validation"
+        if text.startswith(("plan", "scope", "architect", "ingest", "understand", "define")):
+            return "planning"
+        if any(word in text for word in ("implement", "build", "correct", "fix", "develop", "refactor")):
+            return "implementation"
+        if any(word in text for word in ("plan", "scope", "architect", "acceptance criteria")):
+            return "planning"
+        return ""
+
+    # A step title is the operator's declared role.  Only inspect the longer
+    # instruction when the title is genuinely neutral; otherwise incidental
+    # phrases such as "follow the implementation plan" misclassify builders as
+    # planners and collapse independent model routing.
+    role = infer(str(getattr(step, "name", "") or ""))
+    if role:
+        return role
+    role = infer(str(getattr(step, "instruction", "") or ""))
+    if role:
+        return role
+    return "implementation"
+
+
+def _discover_routes(settings: dict[str, Any], *, complexity: str) -> list[dict[str, Any]]:
+    """Return current free/local routes without exposing provider credentials."""
+    from distr.core.project_cli_backends.models_catalog import installed_ollama_cli_models
+    from distr.core.project_cli_backends.provider_preflight import rank_openrouter_free_models
+
+    routes: list[dict[str, Any]] = []
+    for row in installed_ollama_cli_models(settings):
+        if not row.get("usable", True):
+            continue
+        routes.append({
+            "backend": "pi",
+            "model": str(row.get("id") or "auto"),
+            "model_provider": "ollama",
+            "source": "live_local_catalog",
+            "reason": str(row.get("reason") or "Installed local model."),
+            "free": bool(row.get("free", True)),
+            "local": True,
+        })
+    if settings.get("openrouter_enabled") and str(settings.get("openrouter_key") or "").strip():
+        for row in rank_openrouter_free_models(
+            api_key=str(settings.get("openrouter_key") or ""),
+            complexity=complexity,
+            required_capabilities=["tools", "files"],
+            limit=5,
+        ):
+            routes.append({**row, "source": "live_openrouter_free_catalog", "free": True, "local": False})
+    seen: set[str] = set()
+    return [route for route in routes if not (_route_key(route) in seen or seen.add(_route_key(route)))]
+
+
+def _automatic_level_routes(settings: dict[str, Any], preference: str) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    candidates = _discover_routes(settings, complexity="high")
+    local = next((route for route in candidates if route.get("local")), None)
+    free = next((route for route in candidates if route.get("free") and not route.get("local")), None)
+    economical = local or free
+    strongest_free = free or local
+    codex = _normalise_route({"backend": "codex", "model": "auto", "provider": "openai"}, source="auto_policy")
+    claude = _normalise_route({"backend": "claude_code", "model": "auto", "provider": "anthropic"}, source="auto_policy")
+
+    if preference == "performance":
+        levels = {"low": codex, "medium": codex, "high": claude}
+    elif preference == "balanced":
+        levels = {"low": economical or codex, "medium": codex, "high": codex}
+    else:
+        levels = {"low": economical or codex, "medium": strongest_free or codex, "high": codex}
+    return {level: dict(route) for level, route in levels.items()}, candidates
+
+
+def _automatic_role_routes(
+    levels: dict[str, dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    preference: str,
+) -> dict[str, dict[str, Any]]:
+    def strength(route: dict[str, Any]) -> float:
+        if route.get("score") is not None:
+            try:
+                return float(route["score"])
+            except (TypeError, ValueError):
+                pass
+        # Local catalogues do not expose benchmark scores. Model parameter
+        # size is a useful final fallback and prevents a 9B reviewer being
+        # preferred over an installed 35B model merely because it listed first.
+        match = re.search(r"(?:^|[-_:])(\d+(?:\.\d+)?)b(?:$|[-_:])", str(route.get("model") or "").lower())
+        return float(match.group(1)) if match else 0.0
+
+    free_routes = sorted(
+        (route for route in candidates if route.get("free")),
+        key=strength,
+        reverse=True,
+    )
+    implementation = dict(levels["medium"])
+    planning = dict(levels["high"] if preference != "free" else levels["medium"])
+    review = next((dict(route) for route in free_routes if _route_key(route) != _route_key(implementation)), None)
+    review = review or _normalise_route({"backend": "codex", "model": "auto"}, source="auto_policy")
+    validation = next(
+        (dict(route) for route in free_routes if _route_key(route) not in {_route_key(implementation), _route_key(review)}),
+        None,
+    ) or dict(review)
+    return {
+        "planning": planning,
+        "implementation": implementation,
+        "review": review,
+        "validation": validation,
+        "reporting": dict(levels["low"]),
+    }
+
+
+def build_model_policy_plan(
+    *,
+    scope: str = "workflow",
+    workflow_id: int | None = None,
+    mode: str = "auto",
+    preference: str = "free",
+    assignments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a non-mutating, serialisable policy plan."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+    from distr.core.settings import load_settings_from_db
+
+    scope = str(scope or "workflow").strip().lower()
+    mode = str(mode or "auto").strip().lower()
+    preference = str(preference or "free").strip().lower()
+    if scope not in VALID_SCOPES:
+        raise ValueError(f"Unknown scope: {scope}")
+    if mode not in VALID_MODES:
+        raise ValueError(f"Unknown mode: {mode}; use auto or pinned")
+    if preference not in VALID_PREFERENCES:
+        raise ValueError(f"Unknown preference: {preference}")
+    if scope in {"workflow", "both"} and not workflow_id:
+        raise ValueError("workflow_id is required for workflow policy changes")
+
+    settings = load_settings_from_db()
+    supplied = assignments if isinstance(assignments, dict) else {}
+    auto_levels, candidates = _automatic_level_routes(settings, preference)
+    if mode == "pinned":
+        supplied_levels = supplied.get("complexity") if isinstance(supplied.get("complexity"), dict) else {}
+        levels = {
+            level: _normalise_route(
+                supplied_levels.get(level) or {
+                    "backend": settings.get(f"project_cli_{level}_backend"),
+                    "model": settings.get(f"project_cli_{level}_model"),
+                },
+                source="pinned_policy",
+            )
+            for level in LEVELS
+        }
+    else:
+        levels = auto_levels
+
+    roles = _automatic_role_routes(levels, candidates, preference)
+    supplied_roles = supplied.get("roles") if isinstance(supplied.get("roles"), dict) else {}
+    for role, route in supplied_roles.items():
+        roles[str(role).strip().lower()] = _normalise_route(route, source="pinned_policy")
+
+    workflow: dict[str, Any] | None = None
+    if workflow_id:
+        with get_session() as db:
+            record = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+            if not record:
+                raise ValueError(f"Workflow {workflow_id} was not found")
+            steps = (
+                db.query(AutoWorkflowStep)
+                .filter(AutoWorkflowStep.workflow_id == int(workflow_id))
+                .order_by(AutoWorkflowStep.position)
+                .all()
+            )
+            supplied_steps = supplied.get("steps") if isinstance(supplied.get("steps"), dict) else {}
+            planned_steps = []
+            for step in steps:
+                role = _step_role(step)
+                explicit = supplied_steps.get(str(step.id)) or supplied_steps.get(step.id)
+                route = _normalise_route(explicit, source="pinned_policy") if explicit else dict(roles.get(role) or levels["medium"])
+                planned_steps.append({
+                    "step_id": step.id,
+                    "position": step.position,
+                    "name": step.name,
+                    "role": role,
+                    "route": route,
+                })
+            workflow = {"id": record.id, "name": record.name, "steps": planned_steps}
+
+    return {
+        "version": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "scope": scope,
+        "mode": mode,
+        "preference": preference,
+        "complexity_routes": levels,
+        "role_routes": roles,
+        "workflow": workflow,
+        "catalog": {
+            "candidate_count": len(candidates),
+            "candidates": [
+                {key: route.get(key) for key in ("backend", "model_provider", "model", "free", "local", "reason", "score")}
+                for route in candidates[:8]
+            ],
+        },
+    }
+
+
+def _execution_route(route: dict[str, Any], *, mode: str, preference: str) -> dict[str, Any]:
+    provider = str(route.get("model_provider") or "").strip()
+    model = str(route.get("model") or "auto").strip()
+    backend = str(route.get("backend") or "pi").strip()
+    return {
+        "enabled": True,
+        "mode": "scoped",
+        "scoped_model_key": f"{backend}|{provider}|{model}",
+        "route_snapshot": {
+            "backend_id": backend,
+            "provider": provider,
+            "model": model,
+            "name": model if model != "auto" else f"{backend} automatic model",
+            "policy_mode": mode,
+            "preference": preference,
+        },
+    }
+
+
+def apply_model_policy_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Persist a previously previewed plan and return an audit-safe summary."""
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+    from distr.core.settings import save_settings_to_db
+
+    scope = str(plan.get("scope") or "workflow")
+    mode = str(plan.get("mode") or "auto")
+    preference = str(plan.get("preference") or "free")
+    changed: dict[str, Any] = {"global": [], "workflow": None}
+    if scope in {"global", "both"}:
+        updates: dict[str, Any] = {}
+        for level, route in (plan.get("complexity_routes") or {}).items():
+            if level not in LEVELS or not isinstance(route, dict):
+                continue
+            updates[f"project_cli_{level}_backend"] = str(route.get("backend") or "pi")
+            updates[f"project_cli_{level}_model"] = str(route.get("model") or "auto")
+            updates[f"project_cli_{level}_model_provider"] = str(route.get("model_provider") or "")
+        save_settings_to_db(updates)
+        changed["global"] = sorted(updates)
+
+    workflow_plan = plan.get("workflow") if isinstance(plan.get("workflow"), dict) else None
+    if scope in {"workflow", "both"}:
+        if not workflow_plan:
+            raise ValueError("The plan does not contain a workflow")
+        workflow_id = int(workflow_plan["id"])
+        with get_session() as db:
+            workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+            if not workflow:
+                raise ValueError(f"Workflow {workflow_id} was not found")
+            settings = _json_dict(workflow.run_settings)
+            settings.update({
+                "model_policy_mode": mode,
+                "model_policy_preference": preference,
+                "auto_route_models": mode == "auto",
+                "resolved_model_plan": {
+                    "version": plan.get("version", 1),
+                    "generated_at": plan.get("generated_at"),
+                    "role_routes": plan.get("role_routes") or {},
+                },
+            })
+            workflow.run_settings = json.dumps(settings)
+            step_changes = []
+            for item in workflow_plan.get("steps") or []:
+                step = db.query(AutoWorkflowStep).filter(
+                    AutoWorkflowStep.id == int(item["step_id"]),
+                    AutoWorkflowStep.workflow_id == workflow_id,
+                ).first()
+                if not step:
+                    continue
+                config = _json_dict(step.config)
+                route = item.get("route") if isinstance(item.get("route"), dict) else {}
+                config["step_role"] = str(item.get("role") or "implementation")
+                config["model_policy"] = {
+                    **(config.get("model_policy") if isinstance(config.get("model_policy"), dict) else {}),
+                    "mode": mode,
+                    "preference": preference,
+                    "auto_route_models": mode == "auto",
+                }
+                config["execution_route"] = _execution_route(route, mode=mode, preference=preference)
+                step.config = json.dumps(config)
+                step_changes.append({"step_id": step.id, "role": config["step_role"], "route": route})
+            db.commit()
+            changed["workflow"] = {"id": workflow.id, "name": workflow.name, "steps": step_changes}
+    return changed
+
+
+def refresh_auto_model_policy_for_workflow(workflow_id: int) -> dict[str, Any] | None:
+    """Re-resolve an Auto policy immediately before a workflow run starts.
+
+    Pinned workflows intentionally return without mutation.  A failed live
+    catalogue refresh is allowed to bubble to the caller, which can retain the
+    last known-good concrete step routes instead of making the run unusable.
+    """
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow
+
+    with get_session() as db:
+        workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+        if not workflow:
+            raise ValueError(f"Workflow {workflow_id} was not found")
+        settings = _json_dict(workflow.run_settings)
+        if settings.get("model_policy_mode") != "auto":
+            return None
+        preference = str(settings.get("model_policy_preference") or "free")
+    plan = build_model_policy_plan(
+        scope="workflow",
+        workflow_id=int(workflow_id),
+        mode="auto",
+        preference=preference,
+    )
+    return {"plan": plan, "applied": apply_model_policy_plan(plan)}

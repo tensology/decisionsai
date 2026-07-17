@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .base import BackendStatus, BackendTaskResult, EventCallback, ProjectCliBackend, ProjectTask
 from .contracts import BackendCapabilities
+from .timing import ollama_model_loaded, resolve_worker_timing
 
 logger = logging.getLogger(__name__)
 
@@ -418,13 +419,26 @@ class PiBackend(ProjectCliBackend):
             else:
                 last_error = "Pi RPC did not accept the prompt."
 
+        provider = str(task.adapter_options.get("model_provider") or "")
+        loaded = None
+        if task.model and (provider.lower() in {"", "ollama", "local"}):
+            loaded = ollama_model_loaded(task.model)
+        timing = resolve_worker_timing(
+            backend_id=self.id,
+            model=task.model or "auto",
+            provider=provider,
+            complexity=task.ticket_complexity,
+            configured_timeout_seconds=task.adapter_options.get("timeout_seconds"),
+            model_loaded=loaded,
+        )
+
         def _run_pi_print() -> tuple[bool, str, str]:
             try:
                 result = subprocess.run(
                     _pi_print_command(pi_path, task),
                     capture_output=True,
                     text=True,
-                    timeout=300,
+                    timeout=timing.timeout_seconds,
                     cwd=task.folder,
                 )
                 output = ((result.stdout or "") + (result.stderr or "")).strip()
@@ -442,7 +456,12 @@ class PiBackend(ProjectCliBackend):
                     partial += exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else str(exc.stdout)
                 if exc.stderr:
                     partial += exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else str(exc.stderr)
-                return False, partial.strip(), "Pi worker timed out after 300 seconds; the workflow was stopped cleanly."
+                return (
+                    False,
+                    partial.strip(),
+                    f"Pi worker reached its {timing.timeout_seconds}s safety ceiling "
+                    f"({timing.rationale}); the workflow was stopped cleanly.",
+                )
             except Exception as exc:
                 return False, "", str(exc)
 
@@ -451,7 +470,10 @@ class PiBackend(ProjectCliBackend):
             "type": "backend_started",
             "backend": self.id,
             "model": task.model or "auto",
-            "message": "Pi worker started",
+            "timeout_seconds": timing.timeout_seconds,
+            "model_loaded": timing.model_loaded,
+            "timing_rationale": timing.rationale,
+            "message": f"Pi worker started; safety ceiling {timing.timeout_seconds}s ({timing.rationale})",
         })
         worker = asyncio.create_task(asyncio.to_thread(_run_pi_print))
         while not worker.done():
@@ -468,6 +490,9 @@ class PiBackend(ProjectCliBackend):
                     "backend": self.id,
                     "model": task.model or "auto",
                     "elapsed_seconds": elapsed,
+                    "timeout_seconds": timing.timeout_seconds,
+                    "model_loaded": timing.model_loaded,
+                    "timing_rationale": timing.rationale,
                     "message": f"Pi worker is still running ({int(elapsed)}s)",
                 })
         ok, output, error = await worker
@@ -1600,6 +1625,64 @@ async def run_project_task(
             backend_id,
             error=msg,
             execution_session_id=execution_session_id,
+        )
+
+    # Backstop for direct prompts and any execution path that did not pass
+    # through workflow route selection. This probe never invokes a model or
+    # spends tokens. Workflow approvals carry an explicit one-run override.
+    provider_financial = None
+    if not bool(task.adapter_options.get("provider_preflight_override")):
+        try:
+            from distr.core.project_cli_backends.provider_preflight import preflight_provider_route
+            from distr.core.settings import load_settings_from_db
+
+            provider_financial = preflight_provider_route(
+                {
+                    "backend": backend_id,
+                    "model": selected_model,
+                    "model_provider": task.adapter_options.get("model_provider") or "",
+                },
+                settings=load_settings_from_db(),
+                complexity=ticket_complexity,
+            )
+        except Exception:
+            logger.warning("Project CLI provider preflight failed unexpectedly", exc_info=True)
+    if provider_financial is not None:
+        preflight_payload["provider_financial"] = provider_financial.to_dict()
+    if provider_financial is not None and provider_financial.ready is False:
+        msg = (
+            f"{provider_financial.message} No model work was started. "
+            "Would you like to choose another route or proceed anyway?"
+        )
+        append_execution_event(
+            execution_session_id,
+            "provider_preflight",
+            status="waiting",
+            message=msg,
+            payload=preflight_payload,
+        )
+        complete_execution_session(
+            execution_session_id,
+            success=False,
+            output_packet=_normalized_output_packet(
+                {
+                    "backend_id": backend_id,
+                    "engine": backend_id,
+                    "success": False,
+                    "error": msg,
+                },
+                preflight=preflight_payload["preflight"],
+                provider_preflight=provider_financial.to_dict(),
+            ),
+            error=msg,
+        )
+        return BackendTaskResult(
+            False,
+            backend_id,
+            backend_id,
+            error=msg,
+            execution_session_id=execution_session_id,
+            waits_for_human=True,
         )
 
     append_execution_event(

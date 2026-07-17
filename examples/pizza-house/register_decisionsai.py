@@ -6,15 +6,29 @@ import json
 from pathlib import Path
 
 from distr.core.db import get_session
-from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.kanban import KanbanBoard, KanbanTicket
 from distr.core.db.projects import Project
 from distr.core.db.workflow import AutoWorkflow
+from distr.core.kanban.lifecycle import (
+    DELIVERY_DONE_LANE,
+    DELIVERY_SOURCE_LANE,
+    ensure_delivery_lanes,
+)
+from distr.core.workflow.developer_workflow import (
+    DEVELOPER_WORKFLOW_NAME,
+    DEVELOPER_WORKFLOW_RUN_SETTINGS,
+)
 
 
 PROJECT_NAME = "Ember & Crust Pizza House"
 BOARD_NAME = "Ember & Crust Delivery"
-WORKFLOW_NAME = "Development: Ticket to Implementation"
+WORKFLOW_NAME = DEVELOPER_WORKFLOW_NAME
 PROJECT_FOLDER = Path(__file__).resolve().parent
+LEGACY_PROVIDER_PROOF_TITLES = {
+    "Harden Pizza House menu data integrity with independent model review",
+    "Independent HY3 review of Pizza House menu integrity",
+    "Add reusable Pizza House menu validation",
+}
 
 
 def register() -> dict:
@@ -22,7 +36,16 @@ def register() -> dict:
     with get_session() as db:
         workflow = db.query(AutoWorkflow).filter(AutoWorkflow.name == WORKFLOW_NAME).first()
         if not workflow:
-            raise RuntimeError(f'Required workflow "{WORKFLOW_NAME}" is not installed')
+            workflow = AutoWorkflow(
+                name=WORKFLOW_NAME,
+                description="Canonical ticket-to-green software engineering workflow.",
+                status="active",
+                workflow_type="manual",
+            )
+            db.add(workflow)
+            db.flush()
+        workflow.status = "active"
+        workflow.run_settings = json.dumps(DEVELOPER_WORKFLOW_RUN_SETTINGS, sort_keys=True)
 
         project = db.query(Project).filter(Project.name == PROJECT_NAME).first()
         if not project:
@@ -45,27 +68,31 @@ def register() -> dict:
         board.send_to_cli = False
         board.orchestrator_policy = json.dumps({
             "auto_route_models": True,
-            "free_only": True,
-            "prefer_local": True,
+            "prefer_free_local": True,
             "independent_validation": True,
             "max_correction_iterations": 3,
-            "preferred_model": "ornith:35b",
-            "complexity_routing": {
-                "low": {"backend": "pi", "model": "ornith:35b"},
-                "medium": {"backend": "pi", "model": "ornith:35b"},
-                "high": {"backend": "pi", "model": "ornith:35b"},
-            },
+            "require_approval_for_override": True,
         }, sort_keys=True)
+        board.agent_source_lane = DELIVERY_SOURCE_LANE
+        board.agent_done_lane = DELIVERY_DONE_LANE
         project.kanban_board_id = board.id
 
-        lane = db.query(KanbanLane).filter(
-            KanbanLane.board_id == board.id,
-            KanbanLane.name == "Scoped work",
-        ).first()
-        if not lane:
-            lane = KanbanLane(board_id=board.id, name="Scoped work", position=0)
-            db.add(lane)
-            db.flush()
+        # Early versions of this acceptance fixture incorrectly used a single
+        # workflow-oriented bucket. Preserve its tickets while migrating the
+        # board to the same delivery lifecycle as every real project board.
+        lane = ensure_delivery_lanes(
+            db,
+            board.id,
+            legacy_source_names=("Scoped work",),
+        )[DELIVERY_SOURCE_LANE]
+
+        # Remove provider benchmark artifacts from the human acceptance board.
+        # Model/provider coverage belongs in automated tests and run history,
+        # never in the names of product tickets or workflow steps.
+        db.query(KanbanTicket).filter(
+            KanbanTicket.lane_id == lane.id,
+            KanbanTicket.title.in_(LEGACY_PROVIDER_PROOF_TITLES),
+        ).delete(synchronize_session=False)
 
         tickets = []
         for position, spec in enumerate(work["tickets"]):
@@ -94,7 +121,7 @@ def register() -> dict:
             tickets.append(ticket)
 
         db.commit()
-        return {
+        result = {
             "project_id": project.id,
             "board_id": board.id,
             "workflow_id": workflow.id,
@@ -102,6 +129,15 @@ def register() -> dict:
             "folder": str(PROJECT_FOLDER),
             "model": project.coding_backend_model,
         }
+
+    from distr.core.workflow.loop_presets import apply_loop_preset
+
+    applied = apply_loop_preset(result["workflow_id"], WORKFLOW_NAME, mode="replace")
+    if not applied.get("success"):
+        raise RuntimeError(applied.get("error") or "Could not apply developer workflow preset")
+    result["workflow_steps"] = int(applied.get("step_count") or 0)
+    result["auto_route_models"] = True
+    return result
 
 
 if __name__ == "__main__":

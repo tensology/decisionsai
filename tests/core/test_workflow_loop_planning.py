@@ -39,7 +39,7 @@ def test_parse_loop_contract_elorm_catalog(entry):
 
 
 def test_parse_loop_contract_engineering_guardrails():
-    bundle = load_bundle_by_name("Development: Ticket to Implementation") or {}
+    bundle = load_bundle_by_name("Development") or {}
     loop_contract = bundle.get("loop_contract") or {}
     assert len(loop_contract.get("guardrails") or []) >= 2
     rules = loop_contract_to_context_rules(loop_contract)
@@ -48,7 +48,7 @@ def test_parse_loop_contract_engineering_guardrails():
 
 
 def test_infer_loop_archetypes():
-    senior = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Development: Ticket to Implementation")
+    senior = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Development")
     assert infer_loop_archetype(senior["kickoff"]) == "incremental_ship"
 
 
@@ -116,7 +116,7 @@ def test_call_planning_llm_fallback_chain_tries_next_tier():
 
 
 def test_plan_workflow_persists_loop_contract_and_goto(monkeypatch):
-    senior = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Development: Ticket to Implementation")
+    senior = next(e for e in ELORM_LOOP_KICKOFFS if e["name"] == "Development")
     mock_plan = {
         "name": "Senior Software Engineer: Ticket to Green",
         "planning_model_tier": "test",

@@ -33,6 +33,8 @@ class MemoryDelta:
     blockers: list[str] = field(default_factory=list)
     next_actions: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
+    failed_attempts: list[str] = field(default_factory=list)
+    lessons: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,6 +53,8 @@ class MemoryDelta:
             ("Blockers", self.blockers),
             ("Next actions", self.next_actions),
             ("Evidence", self.evidence),
+            ("Failed attempts", self.failed_attempts),
+            ("Lessons", self.lessons),
         ):
             if values:
                 lines.append(f"{label}: " + "; ".join(values))
@@ -71,5 +75,7 @@ def normalize_memory_delta(raw: dict[str, Any] | None, *, summary: str = "", pro
         blockers=_strings(data.get("blockers")),
         next_actions=_strings(data.get("next_actions")),
         evidence=_strings(data.get("evidence") or data.get("tests_run")),
+        failed_attempts=_strings(data.get("failed_attempts") or data.get("mistakes")),
+        lessons=_strings(data.get("lessons") or data.get("self_corrections")),
         provenance=dict(provenance or data.get("provenance") or {}),
     )

@@ -590,10 +590,25 @@ body.wf-board-pointer-dragging * {
 .wf-workflow-queue-list .kb-ticket-list-actions {
     flex-shrink: 0;
 }
-.wf-workflow-queue-list .wf-ticket-time-display {
+.wf-workflow-queue-list .wf-ticket-status-time {
     min-width: 4.75rem;
+    gap: 4px;
+    padding: 0 0.5rem;
+    border: 1px solid rgba(255,255,255,0.14);
+}
+.wf-workflow-queue-list .wf-ticket-status-time-divider {
+    opacity: 0.55;
+}
+.wf-ticket-list-surface .wf-workflow-queue-list .wf-ticket-time-display {
+    min-width: 0;
     justify-content: flex-end;
     font-variant-numeric: tabular-nums;
+    background: transparent;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
 }
 .wf-ticket-list-surface .kb-ticket-list-content {
     flex: 1 1 auto;
@@ -1863,6 +1878,23 @@ body.wf-board-pointer-dragging * {
     color: #fdba74;
     font-size: 0.65rem;
     white-space: nowrap;
+}
+.wf-exec-auto-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-height: 2rem;
+    color: #d1d5db;
+    font-size: 0.68rem;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.wf-exec-auto-label input {
+    width: 0.85rem;
+    height: 0.85rem;
+}
+.wf-exec-model:disabled {
+    opacity: 0.62;
 }
 .wf-cli-model-add,
 .wf-cli-chosen-remove {

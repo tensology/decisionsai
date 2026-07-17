@@ -1,126 +1,85 @@
-"""Principle workflow chain E2E: ideation builds a board, development runs tickets, polish verifies."""
+"""E2E contracts for the single canonical Development workflow."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from distr.core.db.kanban import KanbanBoard, KanbanTicket
 from distr.core.db.workflow import AutoWorkflowStep
-from scripts.workflow_ticket_loop_e2e import build_spotify_ticket_specs
-
-from tests.core.spotify_workflow_chain_harness import (
-    DEVELOPMENT_SLUG,
-    IDEATION_SLUG,
-    POLISH_SLUG,
-    assert_board_cleaned_up,
-    run_spotify_workflow_chain,
-    start_ideation_run,
+from distr.core.workflow.loop_preset_loader import (
+    list_preset_catalog_entries,
+    load_bundle_by_slug,
 )
 from tests.core.workflow_e2e_harness import (
     apply_preset_to_workflow,
     cleanup_workflow_run_context,
     make_factory,
+    start_preset_run,
 )
 
 
+DEVELOPMENT_SLUG = "development-ticket-to-implementation"
+
+
 @pytest.fixture(autouse=True)
-def _isolate_chain_runs():
+def _isolate_runs():
     cleanup_workflow_run_context()
     yield
     cleanup_workflow_run_context()
 
 
 @pytest.fixture()
-def chain_factory(tmp_path):
-    # Sequential queue auto-advance crosses worker threads. A StaticPool-backed
-    # in-memory SQLite connection cannot safely serve those concurrent cursors.
+def workflow_factory(tmp_path):
     return make_factory(tmp_path, memory=False)
 
 
-def test_ideation_preset_has_no_cursor_steps(chain_factory, tmp_path):
-    applied = apply_preset_to_workflow(chain_factory, IDEATION_SLUG)
-    session = chain_factory()
-    try:
-        steps = (
-            session.query(AutoWorkflowStep)
-            .filter(AutoWorkflowStep.workflow_id == applied["workflow_id"])
-            .all()
-        )
-        assert len(steps) == 4
-        assert all(step.action_type == "agent_instruction" for step in steps)
-        assert not any(step.action_type == "send_to_project_cli" for step in steps)
-    finally:
-        session.close()
+def test_only_development_preset_is_user_selectable():
+    catalog = list_preset_catalog_entries()
+    assert [entry["slug"] for entry in catalog] == [DEVELOPMENT_SLUG]
+    assert load_bundle_by_slug("ideation-brief-to-board") is None
+    assert load_bundle_by_slug("polish-verify-and-ship") is None
+    assert load_bundle_by_slug("ship-pr-until-green") is None
 
 
-def test_development_preset_uses_cli_harness_with_evidence_tools(chain_factory, tmp_path):
-    applied = apply_preset_to_workflow(chain_factory, DEVELOPMENT_SLUG)
-    session = chain_factory()
-    try:
+def test_development_covers_plan_build_independent_review_correction_and_memory(
+    workflow_factory,
+):
+    applied = apply_preset_to_workflow(workflow_factory, DEVELOPMENT_SLUG)
+    with workflow_factory() as session:
         steps = (
             session.query(AutoWorkflowStep)
             .filter(AutoWorkflowStep.workflow_id == applied["workflow_id"])
             .order_by(AutoWorkflowStep.position.asc())
             .all()
         )
-        assert len(steps) == 6
+        assert [step.name for step in steps] == [
+            "Understand ticket and acceptance criteria",
+            "Create the implementation plan",
+            "Implement the planned change",
+            "Independently review and validate the change",
+            "Correct defects found by validation",
+            "Report, update ticket, and compact memory",
+        ]
+        configs = [json.loads(step.config or "{}") for step in steps]
         assert all(step.action_type == "send_to_project_cli" for step in steps)
-        assert steps[-1].name == "Report, update ticket, and compact memory"
-        assert any("playwright" in (step.config or "") for step in steps)
-        assert any("browser_use" in (step.config or "") for step in steps)
-    finally:
-        session.close()
+        assert "playwright" in configs[3]["tools"]
+        assert "browser_use" in configs[3]["tools"]
+        assert "security" in (steps[3].instruction or "").lower()
+        assert "ui work" in (steps[3].instruction or "").lower()
+        assert configs[3]["model_policy"]["independent_from"] == "implementation"
+        assert configs[-1]["expected_outputs"][-2:] == ["failed_attempts", "lessons"]
+        assert steps[3].on_pass_goto == steps[5].id
+        assert steps[3].on_fail_goto == steps[4].id
+        assert steps[4].on_pass_goto == steps[3].id
 
 
-def test_polish_preset_covers_security_and_ui(chain_factory, tmp_path):
-    applied = apply_preset_to_workflow(chain_factory, POLISH_SLUG)
-    session = chain_factory()
-    try:
-        steps = (
-            session.query(AutoWorkflowStep)
-            .filter(AutoWorkflowStep.workflow_id == applied["workflow_id"])
-            .all()
-        )
-        action_types = {step.action_type for step in steps}
-        assert "run_command" in action_types
-        assert "playwright" in action_types
-    finally:
-        session.close()
-
-
-def test_ideation_reads_requirements_and_builds_board(chain_factory, tmp_path):
-    dev_applied = apply_preset_to_workflow(chain_factory, DEVELOPMENT_SLUG)
-    ideation_applied = apply_preset_to_workflow(chain_factory, IDEATION_SLUG)
-    result = start_ideation_run(
-        chain_factory,
+def test_development_preset_runs_to_report_and_exits(workflow_factory, tmp_path):
+    result = start_preset_run(
+        workflow_factory,
         tmp_path,
-        dev_workflow_id=dev_applied["workflow_id"],
-        ideation_workflow_id=ideation_applied["workflow_id"],
+        DEVELOPMENT_SLUG,
+        timeout=45.0,
     )
-    board = result["board"]
-    session = chain_factory()
-    try:
-        row = session.query(KanbanBoard).filter(KanbanBoard.id == board["board_id"]).one()
-        tickets = (
-            session.query(KanbanTicket)
-            .filter(KanbanTicket.id.in_(board["ticket_ids"]))
-            .order_by(KanbanTicket.position.asc())
-            .all()
-        )
-        assert row.name.startswith("Spotify E2E")
-        assert len(tickets) == 3
-        expected_titles = [spec.title for spec in build_spotify_ticket_specs()[:3]]
-        assert [ticket.title for ticket in tickets] == expected_titles
-        assert all(ticket.linked_workflow_id for ticket in tickets)
-    finally:
-        session.close()
-
-
-def test_principle_workflow_chain_ideation_development_polish(chain_factory, tmp_path):
-    summary = run_spotify_workflow_chain(chain_factory, tmp_path)
-
-    assert summary["ideation"]["terminal"]["run"].status == "completed"
-    assert summary["development"][0]["terminal"]["run"].status == "completed"
-    assert len(summary["development_run_ids"]) >= 3
-    assert summary["polish"]["terminal"]["run"].status == "completed"
-    assert_board_cleaned_up(chain_factory, summary["board_id"])
+    assert result["terminal"]["run"].status == "completed"
+    assert result["terminal"]["run_data"]["loop_contract"]["max_iterations"] == 6

@@ -2163,7 +2163,7 @@
         return workflowExecRouteLevels().map(function (level) {
             var label = level.charAt(0).toUpperCase() + level.slice(1);
             return '<div class="wf-exec-route-block space-y-2" data-level="' + level + '">' +
-                '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto;">' +
+                '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto auto;">' +
                     '<label class="text-xs text-gray-400 font-medium">' + label + "</label>" +
                     '<select id="' + prefix + "-" + level + '-backend" class="wf-exec-backend w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
                         backendOptions +
@@ -2171,6 +2171,10 @@
                     '<select id="' + prefix + "-" + level + '-model" class="wf-exec-model w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
                         '<option value="auto">Auto</option>' +
                     "</select>" +
+                    '<label class="wf-exec-auto-label" title="Let preflight choose the model for this complexity">' +
+                        '<input id="' + prefix + "-" + level + '-auto" type="checkbox" class="wf-exec-auto accent-[#f97316]" data-level="' + level + '">' +
+                        '<span>Auto</span>' +
+                    '</label>' +
                     '<button type="button" id="' + prefix + "-" + level + '-codex-cog" class="wf-exec-codex-cog inline-flex h-8 w-8 items-center justify-center rounded border border-white/20 text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed" data-level="' + level + '" title="Codex CLI preferences (intelligence &amp; speed)" aria-label="Codex CLI preferences">&#9881;</button>' +
                 "</div>" +
                 '<div id="' + prefix + "-" + level + '-fallback-row" class="wf-exec-route-fallback hidden space-y-1">' +
@@ -2322,7 +2326,7 @@
                 populateCliModelSelect(select, {
                     models: models,
                     current_model: preferred,
-                    current_provider: data.current_provider || ""
+                    current_provider: select.dataset.pinnedProvider || data.current_provider || ""
                 }, { includeAuto: true });
                 if (aliasesOnly && message) {
                     setWorkflowExecRouteModelHint(root, level, message);
@@ -2344,20 +2348,21 @@
                     setWorkflowExecRouteModelHint(root, level, "");
                 }
                 select.disabled = false;
+                syncWorkflowExecAutoToggle(level, root);
                 updateWorkflowExecCodexPrefVisibility(level, root);
             })
             .catch(function (e) {
-                select.innerHTML = "";
-                var opt = document.createElement("option");
-                opt.value = "auto";
-                opt.textContent = "Auto";
-                select.appendChild(opt);
-                select.value = "auto";
-                select.disabled = false;
+                populateCliModelSelect(select, {
+                    models: [],
+                    current_model: preferred,
+                    current_provider: select.dataset.pinnedProvider || ""
+                }, { includeAuto: true });
+                syncWorkflowExecAutoToggle(level, root);
                 setWorkflowExecRouteModelHint(
                     root,
                     level,
-                    (e && e.message) ? e.message : "Could not load models from this executor."
+                    ((e && e.message) ? e.message : "Could not load models from this executor.") +
+                    (preferred !== "auto" ? " Keeping the pinned model visible." : "")
                 );
                 updateWorkflowExecCodexPrefVisibility(level, root);
             });
@@ -2423,9 +2428,12 @@
             var route = (data.routing && data.routing[level]) || {};
             var backendValue = workflowExecNormalizeCliBackend(route.backend || llmData["project_cli_" + level + "_backend"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend);
             var modelValue = route.model || llmData["project_cli_" + level + "_model"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model;
+            var providerValue = route.model_provider || llmData["project_cli_" + level + "_model_provider"] || "";
             var fallbackBackendValue = workflowExecNormalizeCliBackend(route.fallback_backend || llmData["project_cli_" + level + "_fallback_backend"] || "");
             var fallbackModelValue = route.fallback_model || llmData["project_cli_" + level + "_fallback_model"] || "";
             if (backend) backend.value = backendValue;
+            var modelSelect = workflowExecRouteEl(root, level, "model");
+            if (modelSelect) modelSelect.dataset.pinnedProvider = providerValue;
             var fallbackBackend = workflowExecRouteEl(root, level, "fallback-backend");
             if (fallbackBackend) fallbackBackend.value = fallbackBackendValue || "";
             var intelligence = workflowExecRouteEl(root, level, "codex-intelligence");
@@ -2448,6 +2456,7 @@
         workflowExecRouteLevels().forEach(function (level) {
             var backend = workflowExecRouteEl(root, level, "backend");
             var model = workflowExecRouteEl(root, level, "model");
+            var auto = workflowExecRouteEl(root, level, "auto");
             var intelligence = workflowExecRouteEl(root, level, "codex-intelligence");
             var speed = workflowExecRouteEl(root, level, "codex-speed");
             var backendValue = (backend && backend.value) || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend;
@@ -2455,8 +2464,13 @@
                 backend: backendValue,
                 model: workflowExecBackendIsIde(backendValue)
                     ? ""
-                    : ((model && model.value) || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model)
+                    : ((auto && auto.checked) ? "auto" : ((model && model.value) || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model))
             };
+            if (model && model.selectedOptions && model.selectedOptions[0]) {
+                row.model_provider = String(
+                    model.selectedOptions[0].dataset.provider || model.dataset.pinnedProvider || ""
+                ).trim();
+            }
             if (workflowExecBackendIsIde(backendValue)) {
                 var fallbackBackend = workflowExecRouteEl(root, level, "fallback-backend");
                 var fallbackModel = workflowExecRouteEl(root, level, "fallback-model");
@@ -2485,6 +2499,42 @@
                 refreshWorkflowConfigExecutorPills(root);
             });
         });
+        root.querySelectorAll(".wf-exec-model").forEach(function (select) {
+            if (select.dataset.modelPinBound === "1") return;
+            select.dataset.modelPinBound = "1";
+            select.addEventListener("change", function () {
+                select.dataset.pinnedProvider = selectedCliModelProvider(select);
+                syncWorkflowExecAutoToggle(select.dataset.level, root);
+            });
+        });
+        root.querySelectorAll(".wf-exec-auto").forEach(function (checkbox) {
+            if (checkbox.dataset.execBound === "1") return;
+            checkbox.dataset.execBound = "1";
+            checkbox.addEventListener("change", function () {
+                var model = workflowExecRouteEl(root, checkbox.dataset.level, "model");
+                if (!model) return;
+                if (checkbox.checked) {
+                    if (model.value && model.value !== "auto") {
+                        model.dataset.lastPinnedModel = model.value;
+                        model.dataset.lastPinnedProvider = selectedCliModelProvider(model);
+                    }
+                    model.value = "auto";
+                } else if (model.value === "auto") {
+                    var remembered = String(model.dataset.lastPinnedModel || "");
+                    var concrete = Array.prototype.find.call(model.options || [], function (option) {
+                        return remembered && !option.disabled && String(option.value || "") === remembered;
+                    }) || Array.prototype.find.call(model.options || [], function (option) {
+                        return !option.disabled && String(option.value || "") !== "auto";
+                    });
+                    if (concrete) {
+                        model.value = concrete.value;
+                        model.dataset.pinnedProvider = concrete.dataset.provider || model.dataset.lastPinnedProvider || "";
+                    }
+                    else checkbox.checked = true;
+                }
+                syncWorkflowExecAutoToggle(checkbox.dataset.level, root);
+            });
+        });
         root.querySelectorAll(".wf-exec-fallback-backend").forEach(function (select) {
             if (select.dataset.execBound === "1") return;
             select.dataset.execBound = "1";
@@ -2499,6 +2549,22 @@
                 toggleWorkflowExecCodexPrefPanel(btn.dataset.level, root);
             });
         });
+    }
+
+    function syncWorkflowExecAutoToggle(level, root) {
+        root = root || document;
+        var model = workflowExecRouteEl(root, level, "model");
+        var auto = workflowExecRouteEl(root, level, "auto");
+        if (!model || !auto) return;
+        auto.checked = String(model.value || "auto") === "auto";
+        if (!auto.checked) {
+            model.dataset.lastPinnedModel = model.value;
+            model.dataset.lastPinnedProvider = selectedCliModelProvider(model) || model.dataset.pinnedProvider || "";
+        }
+        model.disabled = auto.checked;
+        model.setAttribute("aria-label", auto.checked
+            ? (level + " complexity model: automatic")
+            : (level + " complexity pinned model"));
     }
 
     function saveWorkflowExecRouting(root, options) {
@@ -7106,7 +7172,7 @@
                 var hasDecision = r.approval_decision && r.approval_decision.title;
                 var continueLabel = waitingKind === "ide_handoff"
                     ? "Report CLI complete"
-                    : (waitingKind === "route_approval" ? "Review route" : (hasDecision ? "Yes, go ahead" : "Continue"));
+                    : (waitingKind === "route_approval" || waitingKind === "provider_preflight" ? "Review route" : (hasDecision ? "Yes, go ahead" : "Continue"));
                 var decisionCard = (r.status === "waiting" && hasDecision)
                     ? '<div class="mt-2">' + renderApprovalDecisionCard(r.approval_decision, {
                         showActions: true,
@@ -8053,6 +8119,8 @@
         var statusLabel = status ? status.charAt(0).toUpperCase() + status.slice(1) : "Queued";
         var timeLabel = workflowQueueTicketTimeLabel(ticket);
         var timeLive = workflowQueueTicketTimeIsLive(ticket);
+        var elapsedSeconds = workflowQueueTicketDisplaySeconds(ticket);
+        var showTime = timeLive || elapsedSeconds > 0;
         var timeClass = timeLive
             ? "bg-sky-500/20 text-sky-200"
             : "bg-white/10 text-gray-300";
@@ -8081,7 +8149,6 @@
                     (options.static ? "" : '<span class="wf-queue-position-label" title="Queue position">' + esc(String(queueId) + ".") + "</span>") +
                     workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
                     workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
-                    '<span class="kb-metric-badge ' + executionSessionStatusClass(status) + '" title="Workflow queue status">' + esc(statusLabel) + "</span>" +
                 "</span>" +
             "</div>" +
             '<div class="' + contentClass + '">' +
@@ -8089,7 +8156,12 @@
                 descHtml +
             "</div>" +
             '<div class="kb-ticket-list-actions wf-workflow-queue-actions">' +
-                '<span class="wf-ticket-time-display inline-flex h-6 min-w-[3.15rem] items-center justify-center whitespace-nowrap text-[9px] px-1 rounded tabular-nums leading-none ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '" title="Time spent on this ticket">' + esc(timeLabel) + "</span>" +
+                '<span class="wf-ticket-status-time inline-flex h-6 items-center justify-center whitespace-nowrap text-[9px] px-1 rounded tabular-nums leading-none ' + executionSessionStatusClass(status) + '" title="Workflow status' + (showTime ? " and time spent" : "") + '">' +
+                    '<span class="wf-ticket-status-label">' + esc(statusLabel) + "</span>" +
+                    (showTime
+                        ? '<span class="wf-ticket-status-time-divider" aria-hidden="true">·</span><span class="wf-ticket-time-display ' + timeClass + '" data-ticket-id="' + esc(ticket.id) + '">' + esc(timeLabel) + "</span>"
+                        : "") +
+                "</span>" +
                 '<button type="button" class="wf-workflow-ticket-copy kb-card-action-btn kb-act-copy" data-ticket-id="' + esc(ticket.id) + '" title="Copy title and description" aria-label="Copy title and description">' +
                     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
                 "</button>" +

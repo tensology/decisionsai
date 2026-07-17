@@ -37,9 +37,14 @@ def main() -> int:
     args = parser.parse_args()
 
     from distr.core.db import get_session
-    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.kanban import KanbanBoard, KanbanTicket
     from distr.core.db.projects import Project
     from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+    from distr.core.kanban.lifecycle import DELIVERY_SOURCE_LANE, ensure_delivery_lanes
+    from distr.core.workflow.developer_workflow import (
+        DEVELOPER_WORKFLOW_NAME,
+        DEVELOPER_WORKFLOW_RUN_SETTINGS,
+    )
     from distr.core.workflow.loop_preset_loader import normalize_bundle_steps
 
     project_name = str(args.project_name or DEFAULT_PROJECT_NAME).strip()
@@ -70,20 +75,7 @@ def main() -> int:
     bundle = json.loads(preset_path.read_text(encoding="utf-8"))
     steps = normalize_bundle_steps(bundle)
 
-    run_settings = {
-        "execution_mode": "serial",
-        "concurrency_scope": "workflow",
-        "max_parallel_tickets": 1,
-        "branch_per_ticket": True,
-        "auto_route_models": True,
-        "free_only": True,
-        "prefer_local": False,
-        "complexity_routes": {
-            "low": {"backend": "pi", "provider": "nvidia", "model": models[1]},
-            "medium": {"backend": "pi", "provider": "nvidia", "model": models[0]},
-            "high": {"backend": "pi", "provider": "nvidia", "model": models[0]},
-        },
-    }
+    run_settings = dict(DEVELOPER_WORKFLOW_RUN_SETTINGS)
 
     with get_session() as db:
         project = Project(
@@ -100,7 +92,7 @@ def main() -> int:
         db.flush()
 
         workflow = AutoWorkflow(
-            name="Development: Ticket to Implementation",
+            name=DEVELOPER_WORKFLOW_NAME,
             description=(
                 f"{SMOKE_MARKER} Reusable implementation loop for scoped tickets. "
                 "Uses NVIDIA Nemotron scoped/free models during smoke runs."
@@ -114,14 +106,7 @@ def main() -> int:
 
         for idx, step in enumerate(steps):
             cfg = dict(step.get("config") or {})
-            cfg["backend_id"] = "pi"
-            cfg["model"] = models[idx % 2]
-            cfg["model_provider"] = "nvidia"
-            cfg["model_policy"] = {
-                "free_only": True,
-                "prefer_local": False,
-                "provider": "nvidia",
-            }
+            cfg.setdefault("model_policy", {})["auto_route_models"] = True
             db.add(AutoWorkflowStep(
                 workflow_id=workflow.id,
                 position=idx,
@@ -152,11 +137,7 @@ def main() -> int:
         db.add(board)
         db.flush()
 
-        backlog = KanbanLane(board_id=board.id, name="Backlog", position=0)
-        running = KanbanLane(board_id=board.id, name="Running", position=1)
-        done = KanbanLane(board_id=board.id, name="Done", position=2)
-        db.add_all([backlog, running, done])
-        db.flush()
+        backlog = ensure_delivery_lanes(db, board.id)[DELIVERY_SOURCE_LANE]
 
         ticket_specs = [
             {

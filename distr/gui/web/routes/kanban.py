@@ -36,6 +36,7 @@ from distr.core.kanban.ticket_policy import (
     normalize_ticket_complexity,
     resolve_ticket_complexity,
 )
+from distr.core.kanban.lifecycle import ensure_delivery_lanes
 from distr.core.db import get_session
 from distr.core.db.orm_compat import orm_get_by_id
 from distr.core.db import WhatsAppMessage
@@ -50,9 +51,6 @@ from distr.gui.web.routes.kanban_whatsapp import register_whatsapp_routes
 logger = logging.getLogger(__name__)
 
 KANBAN_UPLOADS_DIR = os.path.join(DB_DIR, "kanban_uploads")
-DEFAULT_LANES = ["Backlog", "Current", "QA / Assess", "Done"]
-
-
 def _whatsapp_message_sender(message) -> str:
     if getattr(message, "from_me", False):
         return "Me"
@@ -2600,8 +2598,7 @@ def create_routes():
             board = KanbanBoard(name=payload.name, description=payload.description or "", source="database")
             s.add(board)
             s.flush()
-            for i, lane_name in enumerate(DEFAULT_LANES):
-                s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+            ensure_delivery_lanes(s, board.id)
             s.flush()
             try:
                 from distr.core.workspace_memory.provision import bootstrap_board
@@ -3887,8 +3884,7 @@ def create_routes():
                         s.add(board)
                         s.flush()
                         project.kanban_board_id = board.id
-                        for i, lane_name in enumerate(DEFAULT_LANES):
-                            s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+                        ensure_delivery_lanes(s, board.id)
                         s.flush()
                 if not board:
                     raise HTTPException(404, "Database board not found")
@@ -4140,8 +4136,7 @@ def create_routes():
                 s.add(board)
                 s.flush()
                 # Create default lanes
-                for i, lane_name in enumerate(DEFAULT_LANES):
-                    s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+                ensure_delivery_lanes(s, board.id)
             else:
                 if payload.name is not None:
                     board.name = payload.name

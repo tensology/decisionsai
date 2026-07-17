@@ -53,6 +53,8 @@ def allowed_actions_for_kind(kind: str) -> list[str]:
     normalized = (kind or "").strip().lower()
     if normalized == "route_approval":
         return ["approve", "reject"]
+    if normalized == "provider_preflight":
+        return ["approve", "stop"]
     if normalized == "pre_execution_approval":
         return ["approve", "stop"]
     if normalized in {"approval", "run_briefing"}:
@@ -69,6 +71,23 @@ def create_workflow_interaction(
     now = time.time()
     normalized_kind = (kind or "feedback").strip().lower()
     actions = allowed_actions_for_kind(normalized_kind)
+    if normalized_kind == "provider_preflight":
+        try:
+            with engine.connect() as conn:
+                run_row = conn.execute(
+                    text("SELECT run_data FROM auto_workflow_runs WHERE id=:run_id"),
+                    {"run_id": int(run_id)},
+                ).mappings().first()
+            run_data = json.loads((run_row or {}).get("run_data") or "{}")
+            candidates = run_data.get("provider_free_candidates") or []
+            available = [
+                index for index, candidate in enumerate(candidates[:3])
+                if not isinstance(candidate, dict) or not candidate.get("readiness_failed")
+            ]
+            if available:
+                actions = [f"model_{index}" for index in available] + ["stop"]
+        except Exception:
+            logger.debug("Could not load provider candidates for interaction", exc_info=True)
     with engine.begin() as conn:
         conn.execute(text("""
             UPDATE workflow_interactions SET status='expired'
@@ -108,16 +127,23 @@ def telegram_reply_markup(interaction: dict[str, Any]) -> dict[str, Any]:
         actions = json.loads(actions)
     labels = {"approve": "Approve", "reject": "Reject", "continue": "Continue", "stop": "Stop"}
     token = interaction["token"]
-    buttons = [
-        {"text": labels[action], "callback_data": f"wf:{token}:{action}"}
-        for action in actions if action in labels
-    ]
-    return {"inline_keyboard": [buttons]} if buttons else {}
+    buttons = []
+    for action in actions:
+        if action in labels:
+            buttons.append({"text": labels[action], "callback_data": f"wf:{token}:{action}"})
+        elif re.fullmatch(r"model_[0-2]", action):
+            buttons.append({"text": f"Try {int(action.rsplit('_', 1)[1]) + 1}", "callback_data": f"wf:{token}:{action}"})
+    return {"inline_keyboard": [buttons[:3], buttons[3:]]} if len(buttons) > 3 else ({"inline_keyboard": [buttons]} if buttons else {})
 
 
 def classify_reply(value: str, allowed_actions: list[str]) -> tuple[str | None, str]:
     clean = re.sub(r"\s+", " ", str(value or "").strip())
     low = clean.lower()
+    option_match = re.search(r"\b(?:try|model|option)?\s*([1-3])\b", low)
+    if option_match:
+        action = f"model_{int(option_match.group(1)) - 1}"
+        if action in allowed_actions:
+            return action, clean
     if re.search(r"\b(reject|decline|deny|no|nope|do not|don't)\b", low) and "reject" in allowed_actions:
         return "reject", clean
     if re.search(r"\b(stop|cancel|abort|hold off|not now|no|nope|do not|don't)\b", low) and "stop" in allowed_actions:
@@ -245,6 +271,15 @@ def _apply_claimed_interaction(
         if item["kind"] == "route_approval":
             from distr.core.workflow.service import apply_run_route_approval
             result = apply_run_route_approval(int(item["run_id"]), approved=action == "approve")
+        elif item["kind"] == "provider_preflight" and action.startswith("model_"):
+            from distr.core.workflow.service import apply_run_provider_model_selection
+
+            result = apply_run_provider_model_selection(
+                int(item["run_id"]), int(action.rsplit("_", 1)[1])
+            )
+        elif item["kind"] == "provider_preflight" and action == "approve":
+            from distr.core.workflow.service import apply_run_route_approval
+            result = apply_run_route_approval(int(item["run_id"]), approved=True)
         elif item["kind"] == "pre_execution_approval" and action == "approve":
             from distr.core.workflow.dispatcher import approve_pre_execution_step
 
@@ -286,7 +321,7 @@ def handle_telegram_workflow_reply(
 ) -> dict[str, Any] | None:
     """Resolve an explicit callback or an unambiguous pending workflow reply."""
     clean = str(text_value or "").strip()
-    callback = re.fullmatch(r"wf:([A-Za-z0-9_-]+):(approve|reject|continue|stop)", clean)
+    callback = re.fullmatch(r"wf:([A-Za-z0-9_-]+):(approve|reject|continue|stop|model_[0-2])", clean)
     if callback:
         return resolve_interaction(token=callback.group(1), action=callback.group(2), response_text=callback.group(2), source=source, resolver_id=resolver_id, chat_id=chat_id, background=background)
     pending = pending_interactions(chat_id=chat_id)
@@ -335,4 +370,7 @@ def workflow_reply_message(result: dict[str, Any], *, voice: bool = False) -> st
         return "More than one workflow needs a decision. Specify the run number:\n" + choices
     if result.get("error"):
         return f"I could not apply that workflow decision: {result['error']}"
-    return f"Workflow run #{result.get('run_id')} accepted: {result.get('action') or 'continue'}."
+    action = str(result.get("action") or "continue")
+    if re.fullmatch(r"model_[0-2]", action):
+        return f"Workflow run #{result.get('run_id')} is checking free-model option {int(action[-1]) + 1}."
+    return f"Workflow run #{result.get('run_id')} accepted: {action}."

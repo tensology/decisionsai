@@ -392,6 +392,12 @@ def build_workflow_waiting_nudge(
             "Open Workflows → Active Runs to approve or reject, or tell me what to do."
         )
         voice = f"{subject} needs route approval. Open Workflows or tell me how to proceed."
+    elif kind == "provider_preflight":
+        text = (
+            f"{subject} paused before model dispatch because the provider preflight needs your decision. "
+            "Tap Approve to use the proposed route, or Stop to cancel. No model work has started."
+        )
+        voice = f"{subject} paused before model work. Say approve to proceed, or stop to cancel."
     elif kind in {"ide_handoff", "needs_human_input", "worker_needs_input"}:
         text = (
             f"{subject} is waiting on you in the linked IDE or harness. "

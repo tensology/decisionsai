@@ -26,6 +26,7 @@ from distr.core.kanban.ticket_policy import (
     normalize_ticket_complexity,
     resolve_ticket_complexity,
 )
+from distr.core.kanban.lifecycle import DELIVERY_LANES, ensure_delivery_lanes
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -2288,13 +2289,12 @@ class KanbanTicketTool(BaseTool):
                 "Board name is required.",
             )
         from distr.core.db.kanban import KanbanBoard, KanbanLane
-        default_lanes = ["Backlog", "Current", "QA / Assess", "Done"]
+        default_lanes = list(DELIVERY_LANES)
         with self._get_session() as s:
             board = KanbanBoard(name=name.strip(), source="database")
             s.add(board)
             s.flush()
-            for i, lane_name in enumerate(default_lanes):
-                s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+            ensure_delivery_lanes(s, board.id)
             s.flush()
             board_id = board.id
         self._last_board_id = board_id

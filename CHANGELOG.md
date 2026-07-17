@@ -2,66 +2,83 @@
 
 ---
 
-## [2.9.0] - 2026-07-16
+## [2.8.5] - 2026-07-17
 
-### The last agent you'll ever need
+### The release where DecisionsAI starts behaving like one agent
 
-DecisionsAI 2.9 turns the desktop assistant into a practical work orchestrator. Talk to it, dictate into any app, use Chat, or dump the request into Telegram as text, a voice note, screenshot, or document. It now has one durable path from request → project/ticket → direct action or workflow → specialist worker → validation → memory → report.
+You should not have to stand over an agent, translate its status messages, choose a model for every prompt, or build a fresh workflow whenever work arrives. DecisionsAI 2.8.5 brings those pieces together. Give it a small change from the desktop or drop a larger request into Telegram; it can attach the request to a real project and ticket, decide whether it needs direct action or a workflow, select the workers, validate the result, remember what happened, and report back in plain language.
 
-This is deliberately model- and CLI-agnostic. Configure separate models for the conversational orchestrator, coding, vision, image generation, Computer Use, Step Runner, and Ticket Boards. Use Codex, Cursor, Claude Code, Pi, Ollama, OpenRouter, OpenAI, Anthropic, Gemini, Groq, or another configured backend. Projects retain neutral memory—facts, decisions, artifacts, evidence, blockers, and next actions—so changing the worker does not throw away what the system learned.
+The product remains deliberately model- and CLI-agnostic. The conversational orchestrator, planner, coder, reviewer, vision model, Computer Use worker, Step Runner, and Ticket Board agent can use different configured providers. Projects keep neutral memory—facts, decisions, files, evidence, failed attempts, lessons, blockers, and next actions—so a model swap does not throw away the work already done.
 
-### Automatic specialist routing
+### One development workflow, not a row of experiments
 
-Opt-in Auto routing evaluates the actual step: planning, implementation, review, research, or general operation; task complexity and risk; required capabilities; cost preference; reviewer independence; and prior provider failures.
+The workflow area now starts from one canonical **Development** workflow with six substantial stages:
 
-- Medium/high-complexity planning can go to Codex before implementation begins.
-- Bounded implementation can go to a configured local/free Ornith worker.
-- Review can use an independent model such as Tencent HY3 when configured.
-- Codex/Cursor and other paid providers remain escalation options.
-- Claude is held as the expensive final tier after lower-cost attempts produce evidence that they are stuck.
-- Explicitly pinned providers and models remain pinned; Auto never silently overrides them.
+1. Understand the ticket, acceptance criteria, repository, and project memory.
+2. Plan the implementation and identify risks before editing.
+3. Implement with the selected coding worker and scoped tools.
+4. Run independent review, tests, security checks, and browser evidence where relevant.
+5. Correct failures and return to independent review through a bounded loop.
+6. Report the outcome, update the ticket, and write the useful memory delta.
 
-The existing Runs and chat feed now show the provider/model, why it was selected, current step, elapsed time, tools, skills, ten-second heartbeats, validation, correction attempts, and artifacts. Five-minute local-worker timeouts become explicit failures that can trigger a bounded failover instead of repeating forever.
+Eleven obsolete example workflows are archived from the active interface rather than competing for attention. Existing run history and step evidence remain available, while linked tickets and project defaults migrate to the canonical workflow. Successful review now proceeds to reporting; failed review enters correction; corrected work returns for another independent review instead of being declared complete early.
 
-### Ornith 1.0 joins the local coding bench
+### The orchestrator chooses before it creates
 
-[Ornith 1.0](https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B) is a new MIT-licensed open-source family built for agentic coding and tool use, with 9B, 31B, 35B MoE, and 397B MoE variants. DecisionsAI recommends `ornith:9b` for accessible local chat/coding and supports a configured `ornith:35b` worker for larger machines. Live release testing proved the Codex-planning → Ornith-implementation handoff and exercised both 9B and 35B local routes. Local inference remains bounded by the hardware and configured timeout; a timeout is reported honestly rather than presented as success.
+An unlinked ticket no longer gives the orchestrator permission to invent a thin workflow. It now audits existing workflows first, considering the work domain, step coverage, context, tools, skills, validation, evidence, routing, failure handling, memory, and model policy.
 
-### Telegram is the remote work control
+- Normal software work reuses the Development workflow.
+- A complete specialist UI or backend workflow can outrank the generic workflow when it genuinely fits better.
+- Unrelated work is not forced through a development loop merely because one exists.
+- Workflow creation is the last resort.
+- Generated workflows are rejected when they contain vague or skeletal steps. A usable step must carry real instructions, context, guardrails, tools and skills, model intent, validation, evidence requirements, failure checks, routing, and memory behaviour.
 
-Telegram text, voice notes, photos, documents, captions, approvals, and follow-up instructions now enter the same project-aware orchestration path. DecisionsAI can answer directly, create or update a ticket, start the correct workflow, request missing information, pause for approval, or continue/stop/steer a run. Inline buttons, typed replies, and voice replies resolve durable workflow interactions. Short human progress messages and the final result return to Telegram instead of raw programmatic worker output.
+Imported and generated workflows also retain their run settings, so the orchestrator's selected execution policy survives creation rather than being silently discarded.
 
-Delivery was hardened against duplicate callbacks, repeated “online” notices, stale interaction races, multiline TTS faults, lost source-message identity, and restart retries. Attachment and voice round trips were exercised against the real bot.
+### Model selection that can be automatic—or firmly pinned
 
-### WhatsApp becomes a work source—not an accidental execution surface
+The existing complexity model pop-up is the source of truth. Each level can be set to **Auto**, allowing the orchestrator to choose per step, or pinned to an explicit provider and model that Auto will not override. The same policy can be changed through the orchestrator's model-policy tool, so a Telegram or desktop instruction such as “use the best free models” updates the real workflow configuration rather than an invisible second setting.
 
-Linked WhatsApp contacts and groups can sync into Ticket Boards with text, captions, media references, sender and conversation context. A board can auto-snapshot new messages into durable tickets; those tickets can then follow the normal orchestrator, approval, workflow, and project rules. This makes it possible to see work requested in a WhatsApp feed from your phone and reroute it into organized work without treating every casual message as permission to execute.
+Auto routing weighs the job's role, complexity, risk, capabilities, cost, reviewer independence, provider readiness, and prior failure evidence. It can use a stronger planner before handing bounded implementation to a local worker, then select a different model for independent review. Local and free routes are preferred when they are fit and ready; Codex, Cursor, and other paid workers remain escalation choices; expensive fallbacks are reserved for evidence that cheaper attempts are not getting the job done.
 
-### Workflows that behave like a real development team
+Ornith is supported as a local coding route, including larger models that may need a cold-load allowance rather than a naive five-minute deadline. Tencent HY3 can be selected through OpenRouter for an independent pass. Both remain normal configurable model choices—not hard-coded product dependencies.
 
-- A group of tickets can be scoped and ordered under a real project, then pushed through reusable Loops.
-- Each step can declare a worker role, backend/provider/model, tools, skills, cost tier, capability requirements, and independence requirement.
-- Planning, implementation, review, tests, Playwright browser evidence, approval, correction, and final reporting can use different workers.
-- Heartbeats and elapsed/current-step diagnostics replace silent forever-spinners.
-- Cancellation, steering, retries, bounded failover, crash recovery, duplicate protection, and interaction resolution persist through restarts.
-- Worker results normalize status, artifacts, diagnostics, memory deltas, evidence, and suggested next actions.
+### Preflight before a workflow spends time or money
 
-### Voice, desktop, and responsiveness
+Provider preflight now checks configuration, reachability, local readiness, and available credit before substantive work begins. When a paid route cannot proceed, DecisionsAI can explain the problem, offer suitable current free alternatives, recommend the next choice, and ask whether to swap. A failed replacement returns as an actionable choice instead of becoming another silent spinner.
 
-Push-to-talk and system-wide dictation remain first-class. Remote capture is smaller and faster, interruption cancels obsolete work, TTS follows the originating surface, and long initialization/model/tool work is dispatched away from UI request handlers. Startup no longer repeats expensive maintenance unnecessarily, stale web tabs recover from restarts, disconnected terminal streams do not flood logs, and provider heartbeats continue even while a CLI is producing output.
+Local timing is model-aware. Cold starts, model size, machine capacity, loading progress, and runtime heartbeats contribute to the allowance. A large local model is given time to load when there is evidence of progress, but a genuinely stalled worker still stops through a bounded timeout and reports why.
 
-### Release and acceptance evidence
+### Telegram messages written for a person
 
-- Full default suite: **2,916 passed**, 27 skipped, 71 intentionally deselected, one expected failure.
-- Focused routing/workflow/Telegram suite: **151 passed**.
-- Pizza House acceptance fixture: **11 Node tests passed**; human browser path rendered the validated menu and changed the subtotal from R0 to R148 after adding an item.
-- Live Auto run showed Codex planning followed by local Ornith implementation with the selected route visible in Runs.
-- Exact `tencent/hy3-preview` routing reached OpenRouter; the configured account returned HTTP 402 before inference because it needs credit.
-- Added runtime, migration, backup/restore, packaging, clean-install, update/rollback, soak, browser, and CI release gates; documented the remaining Apple signing/notarization credential requirement.
+Telegram text, voice notes, photos, documents, captions, buttons, and follow-up instructions use the same project-aware path. DecisionsAI can create or update a ticket, request missing information, seek approval, start the selected workflow, or continue, stop, and steer an existing run. Inline buttons, typed replies, and voice replies resolve the same durable interaction.
+
+Workflow voice notes and progress messages now describe what is happening, why it matters, what changed, and what—if anything—is needed from you. Callback duplication, stale interaction races, repeated online notices, lost source identity, restart retries, and attachment or voice round trips received additional hardening.
+
+### Mission control without another inbox
+
+Work remains ticket-led. Boards use the familiar **Backlog → In Progress → QA → Complete** lifecycle, including small project requests that still need time tracking. The existing Workflows, Runs, Ticket Boards, and chat feed show the current step, provider and model, routing reason, elapsed time only after work starts, heartbeats, tools, skills, validation, correction attempts, artifacts, and final report. Status is grouped with timing and execution controls rather than competing with the ticket title.
+
+The workflow interface was tightened instead of growing a new “work intake” section. Tickets remain the work record; the workflow area remains the control deck you open when you want to inspect or steer what is already running.
+
+### Memory that records the lesson
+
+Workflow results now normalize facts, decisions, artifacts, evidence, blockers, next actions, failed attempts, and lessons. That memory is loaded for future project and workflow decisions without being tied to Ornith, Codex, Cursor, Claude, or any other worker. A failed approach can therefore influence the next route without forcing the next model to inherit an unstructured transcript.
+
+### Verification
+
+- Latest full core suite: **2,253 passed**, 8 skipped, 15 intentionally deselected, and one expected failure.
+- Live workflow selection covered small UI work, backend work, unrelated Gmail-like work, and generator requests.
+- Browser acceptance confirmed that only the canonical Development workflow is active and that the workflow view loads without console errors.
+- Historical runs and step results were retained while obsolete workflow tabs were removed from active use.
+
+### Acknowledgement
+
+Credit to **Stanshaw** for the message that helped sharpen this release's emphasis on practical orchestration and communication that sounds useful to a human, not merely correct to a machine.
 
 ## [What's to Come]
 
-Decisions began as conversational AI, added skills, and learned to hand work to Cursor and Codex. Release 2.9 makes the loop dependable: multi-step workflows run on tickets until the outcome matches what was asked for, or stop with a concrete report of what failed and where.
+Decisions began as conversational AI, added skills, and learned to hand work to Cursor and Codex. Release 2.8.5 makes the loop dependable: multi-step workflows run on tickets until the outcome matches what was asked for, or stop with a concrete report of what failed and where.
 
 A loop is a reusable sequence of steps. It can start from a board ticket, a WhatsApp message, or a brief. Decisions breaks the work apart, runs what it can in chat, sends implementation to the linked project, checks the result against the ticket, and retries when validation fails. Progress and evidence land on the board, not only in chat.
 

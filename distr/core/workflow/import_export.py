@@ -371,6 +371,11 @@ def import_workflow(data: Dict[str, Any], recordings: Optional[Dict[str, bytes]]
             workflow_type=wf_type,
             context_rules=data.get("context_rules") or None,
             workflow_input=data.get("workflow_input") or None,
+            run_settings=(
+                json.dumps(data.get("run_settings"))
+                if isinstance(data.get("run_settings"), dict)
+                else (data.get("run_settings") or None)
+            ),
             start_step_position=data.get("start_step_position", 0),
         )
         db.add(wf)

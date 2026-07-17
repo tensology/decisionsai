@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A voice-first, model-agnostic and CLI-agnostic orchestrator that turns requests into organized, validated work. Talk, dictate, type, or throw the job into Telegram. DecisionsAI remembers the project, chooses the right worker, runs the steps, asks when a real decision is needed, and reports the result back to you.
+  A voice-first, model-agnostic and CLI-agnostic orchestrator that turns ordinary requests into tracked, validated work. Talk, dictate, type, or throw the job into Telegram. DecisionsAI connects it to the right project and ticket, reuses the strongest workflow already available, chooses the right worker for each step, remembers what happened, and reports the result in language that makes sense.
 </p>
 
 <p align="center">
@@ -32,11 +32,13 @@
 
 ---
 
-## Your work has an operating system now
+## Give it the work. Keep the oversight.
 
 Chatbots answer. Coding CLIs edit. Local model runners serve tokens. DecisionsAI coordinates the whole job.
 
-Give it a voice note, screenshot, ticket, email-shaped brief, Telegram message, or a linked WhatsApp conversation. It can preserve the source context, organize the request under the right project, create or update a ticket, choose a direct action or multi-step workflow, hand each step to the right model or CLI, validate the outcome, retain neutral memory, and keep you informed from your phone.
+Give it a one-line fix, voice note, screenshot, ticket, email-shaped brief, Telegram message, or a linked WhatsApp conversation. It preserves the source context, organizes the request under the right project and board, decides whether the job needs a direct action or the existing Development workflow, and hands each step to the most appropriate model or CLI. The result is checked, recorded in neutral project memory, and reported back to you from the same place you asked.
+
+The orchestrator does not invent a new workflow merely because work arrived without one. It first audits the workflows you already have for relevance and completeness. The canonical Development workflow carries the job from understanding and planning through implementation, independent review, correction, reporting, and memory. A specialist workflow is selected only when it is genuinely better; creating another workflow is the last resort, and any new one must include real scope, context, skills, tools, model policy, validation, evidence, failure handling, and memory—not a handful of vague steps.
 
 **Ollama runs models. DecisionsAI runs work.** Use Ollama underneath it, mix in Codex, Cursor, Claude Code, Pi, OpenRouter, or cloud APIs, and change any of them later without rebuilding your projects or losing their memory.
 

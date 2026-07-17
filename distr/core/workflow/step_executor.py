@@ -756,6 +756,98 @@ class StepExecutorMixin:
                     except Exception:
                         logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
                     try:
+                        from distr.core.project_cli_backends.provider_preflight import preflight_provider_route
+
+                        provider_preflight = preflight_provider_route(
+                            route,
+                            settings=routing_settings,
+                            complexity=str(route.get("complexity") or "medium"),
+                        )
+                    except Exception:
+                        logger.warning("Provider preflight failed unexpectedly; leaving route unverified", exc_info=True)
+                        provider_preflight = None
+                    if (
+                        provider_preflight is not None
+                        and provider_preflight.ready is False
+                        and not bool(route.get("provider_preflight_override"))
+                    ):
+                        free_candidates = []
+                        if str(route.get("model_provider") or "").strip().lower() == "openrouter":
+                            try:
+                                from distr.core.project_cli_backends.provider_preflight import rank_openrouter_free_models
+
+                                free_candidates = rank_openrouter_free_models(
+                                    api_key=str((routing_settings or {}).get("openrouter_key") or ""),
+                                    complexity=str(route.get("complexity") or "medium"),
+                                    required_capabilities=list(config.get("required_capabilities") or ["tools"]),
+                                    limit=3,
+                                )
+                            except Exception:
+                                logger.warning("Could not fetch ranked OpenRouter free candidates", exc_info=True)
+                        fallback = self._runtime_provider_fallback_route(route, config_local)
+                        proposed = dict((free_candidates[0] if free_candidates else None) or fallback or route)
+                        proposed["provider_preflight_override"] = not bool(fallback)
+                        if free_candidates:
+                            proposed["provider_preflight_override"] = False
+                            proposed["source"] = "provider_preflight_free_recommendation"
+                        proposed["rationale"] = (
+                            f"{provider_preflight.message} "
+                            + (
+                                "Try the recommended current free model after a readiness probe."
+                                if free_candidates
+                                else ("Use this alternative route instead." if fallback else
+                                "Proceed with the selected route only if you explicitly accept this risk.")
+                            )
+                        ).strip()
+                        current_label = " / ".join(
+                            part for part in (
+                                str(route.get("backend") or "pi"),
+                                str(route.get("model_provider") or ""),
+                                str(route.get("model") or "auto"),
+                            ) if part
+                        )
+                        proposed_label = " / ".join(
+                            part for part in (
+                                str(proposed.get("backend") or "pi"),
+                                str(proposed.get("model_provider") or ""),
+                                str(proposed.get("model") or "auto"),
+                            ) if part
+                        )
+                        question = (
+                            f"I checked {current_label} before starting and cannot safely dispatch it. "
+                            f"{provider_preflight.message}"
+                        )
+                        if free_candidates:
+                            choices = " ".join(
+                                f"{item['rank']}. {item.get('name') or item.get('model')} — {item.get('reason')}"
+                                for item in free_candidates
+                            )
+                            question += (
+                                f" I found these current free coding candidates: {choices} "
+                                f"I recommend option 1. Which one would you like me to readiness-check and try?"
+                            )
+                        elif fallback:
+                            question += f" I can switch to {proposed_label}. Would you like me to proceed?"
+                        else:
+                            question += " Would you like me to proceed anyway?"
+                        if run_row:
+                            latest = json.loads(run_row.run_data or "{}") or {}
+                            latest["pending_route_approval"] = proposed
+                            latest["provider_preflight_pending"] = True
+                            latest["provider_preflight"] = provider_preflight.to_dict()
+                            latest["provider_free_candidates"] = free_candidates
+                            latest["provider_fallback_route"] = dict(fallback or {})
+                            latest["provider_preflight_prompt"] = question
+                            latest["waiting_prompt"] = question
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
+                        return {
+                            "output": question,
+                            "passed": True,
+                            "skip_wait": False,
+                            "provider_preflight_pending": True,
+                        }
+                    try:
                         from distr.core.orchestration_events import emit_orchestration_event
 
                         route_backend = str(route.get("backend") or "pi")
@@ -1010,6 +1102,8 @@ class StepExecutorMixin:
                                     "model_provider": selected_provider,
                                     "quality_tier": config.get("quality_tier"),
                                     "latency_tier": config.get("latency_tier"),
+                                    "timeout_seconds": config.get("timeout_seconds"),
+                                    "provider_preflight_override": route.get("provider_preflight_override"),
                                 }.items() if value not in (None, "")
                             },
                         )
@@ -1022,6 +1116,68 @@ class StepExecutorMixin:
                         )
                     )
                     if handle.result is not None and not bool(handle.result.success):
+                        free_retry_candidates = route.get("free_model_retry_candidates")
+                        free_retry_candidates = (
+                            list(free_retry_candidates)
+                            if isinstance(free_retry_candidates, list)
+                            else []
+                        )
+                        if free_retry_candidates and run_row:
+                            current_model = str(route.get("model") or "")
+                            failed_text = str(
+                                getattr(handle.result, "error", "")
+                                or getattr(handle.result, "output", "")
+                                or "the model did not complete the work contract"
+                            ).strip()
+                            remaining = []
+                            for index, item in enumerate(free_retry_candidates):
+                                candidate = dict(item or {})
+                                if str(candidate.get("model") or "") == current_model:
+                                    candidate["readiness_failed"] = True
+                                    candidate["execution_failed"] = True
+                                    candidate["execution_failure"] = failed_text[:1000]
+                                    free_retry_candidates[index] = candidate
+                                elif not candidate.get("readiness_failed") and not candidate.get("execution_failed"):
+                                    remaining.append((index, candidate))
+                            paid_fallback = dict(route.get("paid_fallback_route") or {})
+                            if remaining:
+                                next_index, recommended = remaining[0]
+                                proposed_retry = dict(recommended)
+                                question = (
+                                    f"{current_model} passed readiness but failed the actual work: {failed_text[:500]} "
+                                    f"I recommend option {next_index + 1}, "
+                                    f"{recommended.get('name') or recommended.get('model')}. "
+                                    "Would you like me to readiness-check and try it?"
+                                )
+                            elif paid_fallback:
+                                proposed_retry = paid_fallback
+                                question = (
+                                    f"{current_model} failed the actual work: {failed_text[:500]} "
+                                    "No ranked free candidates remain. "
+                                    f"I recommend {paid_fallback.get('backend') or 'the fallback'} / "
+                                    f"{paid_fallback.get('model') or 'auto'}. Would you like to proceed?"
+                                )
+                            else:
+                                proposed_retry = {}
+                                question = (
+                                    f"{current_model} failed the actual work: {failed_text[:500]} "
+                                    "No ready candidate remains. Stop the run or change the route."
+                                )
+                            latest = json.loads(run_row.run_data or "{}") or {}
+                            latest["provider_free_candidates"] = free_retry_candidates
+                            latest["provider_preflight_prompt"] = question
+                            latest["waiting_prompt"] = question
+                            latest["provider_preflight_pending"] = True
+                            if proposed_retry:
+                                latest["pending_route_approval"] = proposed_retry
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
+                            return {
+                                "output": question,
+                                "passed": True,
+                                "skip_wait": False,
+                                "provider_preflight_pending": True,
+                            }
                         fallback = self._runtime_provider_fallback_route(route, config)
                         fallback_backend = str(fallback.get("backend") or "")
                         if fallback_backend:
@@ -1145,7 +1301,20 @@ class StepExecutorMixin:
                     HarnessStatus,
                     dispatch_harness,
                 )
-                timeout_seconds = int(config.get("timeout_seconds", 900) or 900)
+                from distr.core.project_cli_backends.timing import resolve_worker_timing
+
+                configured_timeout = int(config.get("timeout_seconds", 900) or 900)
+                timing = resolve_worker_timing(
+                    backend_id=context.backend_id,
+                    model=context.model or "auto",
+                    provider=str((context.adapter_options or {}).get("model_provider") or ""),
+                    complexity=context.ticket_complexity,
+                    configured_timeout_seconds=configured_timeout,
+                    # The backend performs the live Ollama residency probe. The
+                    # outer guard uses the conservative cold/unknown ceiling.
+                    model_loaded=None,
+                )
+                timeout_seconds = timing.timeout_seconds + 30
                 try:
                     return await asyncio.wait_for(
                         dispatch_harness(context),
@@ -1190,14 +1359,19 @@ class StepExecutorMixin:
             else:
                 result = _threaded_run_task()
 
-            if isinstance(result, dict) and result.get("route_approval_pending"):
+            if isinstance(result, dict) and (
+                result.get("route_approval_pending") or result.get("provider_preflight_pending")
+            ):
                 if run_id:
                     try:
                         with get_session() as db:
                             run_row = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
                             if run_row:
                                 payload = json.loads(run_row.run_data or "{}") or {}
-                                payload["route_approval_pending"] = True
+                                if result.get("provider_preflight_pending"):
+                                    payload["provider_preflight_pending"] = True
+                                else:
+                                    payload["route_approval_pending"] = True
                                 run_row.run_data = json.dumps(payload)
                                 db.commit()
                     except Exception:

@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 
 from ._shared import logger, ProjectUpdate, ContextItemCreate, ContextItemUpdate, PROJECT_UPLOADS_DIR
+from distr.core.kanban.lifecycle import ensure_delivery_lanes
 
 
 def _repo_root() -> Path:
@@ -1806,7 +1807,7 @@ def register_routes(router, templates):
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
-            from distr.core.db.kanban import KanbanBoard, KanbanLane
+            from distr.core.db.kanban import KanbanBoard
             with get_session() as session:
                 project = session.query(Project).filter(Project.id == project_id).first()
                 if not project:
@@ -1834,8 +1835,7 @@ def register_routes(router, templates):
                 project.kanban_board_id = board.id
                 session.commit()
                 
-                for i, lane_name in enumerate(["Backlog", "Current", "QA / Assess", "Done"]):
-                    session.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+                ensure_delivery_lanes(session, board.id)
                 session.flush()
                 return JSONResponse({"board": {"id": board.id, "name": board.name}, "created": True})
         except HTTPException:

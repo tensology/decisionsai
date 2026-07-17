@@ -47,22 +47,21 @@ def db_factory(tmp_path, monkeypatch):
     monkeypatch.setattr("distr.core.workflow.spawn_workflow.get_session", _get_session)
     monkeypatch.setattr("distr.core.workflow.service.get_session", _get_session)
     monkeypatch.setattr("distr.core.workflow.import_export.get_session", _get_session)
+    monkeypatch.setattr("distr.core.workflow.loop_presets.get_session", _get_session)
+    monkeypatch.setattr("distr.core.db.get_session", _get_session)
     return factory
 
 
-def test_infer_preset_slug_uses_only_active_principle_presets():
-    assert infer_preset_slug_for_ticket(title="Dogfood catalog page", description="") == (
-        "development-ticket-to-implementation"
-    )
-    assert infer_preset_slug_for_ticket(title="Prepare release", description="Ship PR once CI checks pass") == (
-        "ship-pr-until-green"
-    )
-    assert infer_preset_slug_for_ticket(title="Polish UI", description="Verify and ship with screenshots") == (
-        "polish-verify-and-ship"
-    )
-    assert infer_preset_slug_for_ticket(title="Scope brief", description="Ideation brief to board") == (
-        "ideation-brief-to-board"
-    )
+def test_infer_preset_slug_routes_all_development_work_to_one_workflow():
+    for title, description in [
+        ("Dogfood catalog page", ""),
+        ("Prepare release", "Ship PR once CI checks pass"),
+        ("Polish UI", "Verify and ship with screenshots"),
+        ("Scope brief", "Ideation brief to board"),
+    ]:
+        assert infer_preset_slug_for_ticket(title=title, description=description) == (
+            "development-ticket-to-implementation"
+        )
 
 
 def test_infer_preset_slug_default_development():
@@ -150,7 +149,7 @@ def test_spawn_workflow_for_ticket_creates_steps_and_links(db_factory, monkeypat
 def test_spawn_reuses_existing_linked_workflow(db_factory, monkeypatch):
     session = db_factory()
     try:
-        wf = AutoWorkflow(name="Existing loop", workflow_input="{}")
+        wf = AutoWorkflow(name="UI Development", workflow_input="{}")
         session.add(wf)
         session.flush()
         board = KanbanBoard(name="Reuse board")
@@ -159,22 +158,17 @@ def test_spawn_reuses_existing_linked_workflow(db_factory, monkeypatch):
         lane = KanbanLane(board_id=board.id, name="Ready", position=0)
         session.add(lane)
         session.flush()
-        step = AutoWorkflowStep(
-            workflow_id=wf.id,
-            position=0,
-            name="Only step",
-            action_type="run_command",
-            config='{"command":"echo ok"}',
-        )
-        session.add(step)
-        session.flush()
-        ticket = KanbanTicket(lane_id=lane.id, title="Reuse ticket", linked_workflow_id=wf.id)
+        ticket = KanbanTicket(lane_id=lane.id, title="Fix UI button colour", linked_workflow_id=wf.id)
         session.add(ticket)
         session.commit()
         ticket_id = ticket.id
         workflow_id = wf.id
     finally:
         session.close()
+
+    from distr.core.workflow.loop_presets import apply_loop_preset
+
+    assert apply_loop_preset(workflow_id, "Development", mode="replace")["success"] is True
 
     monkeypatch.setattr(
         "distr.core.workflow.service.start_workflow_run",

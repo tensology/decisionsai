@@ -25,12 +25,11 @@ def _isolate_matrix_workflow_runs():
     cleanup_workflow_run_context()
 
 
-IDEATION_SLUG = "ideation-brief-to-board"
 DEVELOPMENT_SLUG = "development-ticket-to-implementation"
 
 
 def runnable_preset_slugs() -> list[str]:
-    return [slug for slug in all_preset_slugs() if slug != IDEATION_SLUG]
+    return all_preset_slugs()
 
 
 @pytest.fixture()

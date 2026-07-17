@@ -1004,6 +1004,21 @@ def start_workflow_run(
     """
     from distr.core.workflow_agent import WorkflowAgent
 
+    # Auto model policy is intentionally resolved at preflight rather than
+    # permanently freezing yesterday's catalogue choice.  If discovery is
+    # temporarily unavailable, retain the workflow's last known-good concrete
+    # routes and let the existing provider readiness checks report any problem.
+    try:
+        from distr.core.project_cli_backends.policy_manager import refresh_auto_model_policy_for_workflow
+
+        refresh_auto_model_policy_for_workflow(workflow_id)
+    except Exception:
+        logger.warning(
+            "start_workflow_run: Auto model-policy refresh failed for workflow=%s; retaining last known-good routes",
+            workflow_id,
+            exc_info=True,
+        )
+
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:

@@ -856,10 +856,11 @@ class GenerateWorkflowInput(BaseModel):
 class GenerateWorkflowTool(BaseTool):
     name: str = "generate_workflow"
     description: str = (
-        "Generate a complete workflow from a natural language description. "
-        "The LLM will create the workflow with appropriate steps, action types, "
-        "and routing. Use when user says 'create a workflow that does X', "
-        "'build me a workflow for Y', 'I want a workflow with the following steps'. "
+        "Select an existing complete workflow for a request, creating a new specialized workflow only when no "
+        "existing workflow passes the scope and execution-contract audit. New workflow creation is the last resort, "
+        "even when the user describes a large ticket group or product build. When creation is required, every step "
+        "must include scoped instructions, context, skills, tools, model policy, validation, evidence outputs, "
+        "failure routing, and memory. "
         "Valid step types: agent_instruction, computer_use, execute_code, playwright, "
         "play_recording, set_variable."
     )
@@ -871,31 +872,65 @@ class GenerateWorkflowTool(BaseTool):
             import re
             from distr.core.workflow_engine.code_generator import CodeGeneratorService
             from distr.core.workflow.service import import_workflow, get_workflow
+            from distr.core.workflow.selection import (
+                select_workflow_for_request,
+                validate_generated_workflow_payload,
+            )
+
+            selection = select_workflow_for_request(description)
+            selected = selection.get("selected") or {}
+            if selected.get("workflow_id"):
+                wf_id = int(selected["workflow_id"])
+                wf = get_workflow(wf_id)
+                if not wf:
+                    return "The selected workflow could not be reloaded."
+                _remember_workflow_context(workflow_id=wf_id)
+                spoken = (
+                    f"I found that {wf.get('name') or 'the existing workflow'} already covers this work, "
+                    "so I selected it instead of creating another workflow."
+                )
+                return voice_then_reference(
+                    spoken,
+                    _reference_workflow_block(
+                        wf,
+                        header=f"Existing workflow selected after contract audit: {selection.get('reason')}",
+                    ),
+                )
 
             prompt = (
-                "You are a workflow generator. Given the user's description, produce a JSON object "
+                "No existing DecisionsAI workflow safely covers this request. You are designing a durable, reusable "
+                "workflow as the last resort. Produce a complete JSON object "
                 "representing a workflow compatible with the following schema:\n"
                 "{\n"
+                '  "format_version": "2.0",\n'
                 '  "name": "Workflow Name",\n'
                 '  "description": "...",\n'
+                '  "workflow_type": "manual",\n'
+                '  "context_rules": "What every step must know, scope boundaries, memory sources, and evidence rules",\n'
+                '  "run_settings": {"execution_mode":"sequential","auto_route_models":true,'
+                '"memory_enabled":true,"load_project_memory":true,"load_workflow_memory":true,'
+                '"capture_memory_deltas":true,"capture_failures_and_lessons":true},\n'
                 '  "steps": [\n'
                 "    {\n"
                 '      "position": 0,\n'
                 '      "name": "Step 1",\n'
                 '      "action_type": "agent_instruction",\n'
                 '      "instruction": "...",\n'
-                '      "validation_type": "none",\n'
-                '      "validation_prompt": "",\n'
+                '      "validation_type": "llm_judgment",\n'
+                '      "validation_prompt": "Specific observable pass criteria and required evidence",\n'
                 '      "config": {\n'
-                '        "backend_id": "pi",\n'
+                '        "execution_scope": "ticket",\n'
+                '        "step_role": "planning|implementation|review|reporting",\n'
+                '        "backend_id": "auto",\n'
                 '        "model": "auto",\n'
                 '        "model_provider": "",\n'
-                '        "skills": ["skill-id"],\n'
-                '        "tools": ["cli"],\n'
-                '        "guardrail": "Stay within the linked ticket scope",\n'
-                '        "required_context": ["ticket", "project"],\n'
-                '        "expected_outputs": ["implementation", "test_evidence"],\n'
-                '        "model_policy": {"auto_route_models": true, "free_only": false, "prefer_local": true}\n'
+                '        "skills": ["specific-skill-id"],\n'
+                '        "tools": ["specific-tool-capability"],\n'
+                '        "guardrail": "Concrete scope, safety, and non-goal rules",\n'
+                '        "failure_checklist": ["Observable condition that prevents passage"],\n'
+                '        "required_context": ["ticket", "board", "project", "project_memory", "workflow_memory"],\n'
+                '        "expected_outputs": ["named_artifact", "validation_evidence", "memory_delta"],\n'
+                '        "model_policy": {"mode":"auto","free_only":false,"prefer_local":true}\n'
                 "      },\n"
                 '      "max_retries": 1,\n'
                 '      "timeout_seconds": 600,\n'
@@ -912,10 +947,16 @@ class GenerateWorkflowTool(BaseTool):
                 "play_recording, set_variable.\n\n"
                 "For playwright steps, include complete browser automation code in a 'code' field "
                 "that uses page.screenshot() to capture visual results.\n\n"
-                "Give every executable step the smallest useful skills/tools set and an explicit model policy. "
-                "Use different step backends/models only when independence, capability, or validation quality benefits. "
+                "Do not make a minimal or skeletal workflow. For software work use at least five purposeful steps covering "
+                "context and acceptance criteria, planning, implementation, independent validation, correction/re-validation, "
+                "and final reporting/memory. Give every executable step all specifically relevant skills, tools, context, "
+                "guardrails, failure checks, named outputs, and an explicit model policy. The instruction must explain the "
+                "work, non-goals, evidence, and stopping conditions well enough for a CLI/model with no chat history. "
+                "Use different step backends/models when independence, capability, or validation quality benefits. "
                 "Keep provider/model values in config so the runtime can swap routes at step boundaries.\n\n"
-                "The last step's on_pass_goto_position should be null (end workflow).\n"
+                "Use explicit pass and failure routing for every step. A review failure must route to correction; a successful "
+                "correction must route back to independent review; successful review must route to reporting. All loops must "
+                "be bounded by run_settings/loop context. The last step's on_pass_goto_position should be null.\n"
                 "Return ONLY valid JSON, no markdown fences or explanations.\n\n"
                 f"User description:\n{description}"
             )
@@ -930,6 +971,13 @@ class GenerateWorkflowTool(BaseTool):
                 cleaned = cleaned.strip()
 
             workflow_data = json.loads(cleaned)
+            audit = validate_generated_workflow_payload(workflow_data, request_text=description)
+            if not audit.get("viable"):
+                gaps = "; ".join((audit.get("missing") or [])[:12])
+                return (
+                    "I did not create that workflow because the generated definition was incomplete. "
+                    f"It still needs: {gaps}."
+                )
             wf_id = import_workflow(workflow_data)
             wf = get_workflow(wf_id)
             if not wf:
@@ -937,7 +985,7 @@ class GenerateWorkflowTool(BaseTool):
             _remember_workflow_context(workflow_id=wf_id)
             spoken = (
                 _tts_workflow_summary(wf)
-                + " This one was just created from your description."
+                + " This specialized workflow was created only because no existing workflow passed the contract audit."
             )
             ref = _reference_workflow_block(
                 wf,
@@ -958,18 +1006,23 @@ class SpawnTicketWorkflowInput(BaseModel):
     ticket_id: int = Field(description="Kanban ticket ID to spawn a workflow for")
     preset_slug: Optional[str] = Field(
         default=None,
-        description="Loop preset slug (e.g. decisionsai-dogfood-ticket). Inferred from ticket when omitted.",
+        description="Optional preferred preset. Existing viable workflows are still selected before creation.",
     )
     start_run: bool = Field(default=True, description="Start the workflow run immediately after spawning")
-    force: bool = Field(default=False, description="Replace an existing linked workflow when true")
+    force: bool = Field(
+        default=False,
+        description="Ignore an unsuitable existing ticket link and re-run workflow selection; does not force creation",
+    )
 
 
 class SpawnTicketWorkflowTool(BaseTool):
     name: str = "spawn_ticket_workflow"
     description: str = (
-        "Create a workflow for a ticket that does not have one yet (or force a fresh one), "
-        "apply a loop preset or reuse steps, link the ticket, and start the run. "
-        "Use when a ticket needs execution but no workflow is linked — do this silently; "
+        "Select the strongest viable existing workflow for a ticket, link it, and start the run. "
+        "A missing workflow link must not trigger ad-hoc creation. Development is the default for normal software work; "
+        "a complete UI/backend-specialized workflow may outrank it when its scope genuinely matches. "
+        "Workflow creation is a separately audited last resort. "
+        "Use when a ticket needs execution but no workflow is linked; "
         "tell the user about progress on the feature, not about workflow IDs."
     )
     args_schema: Type[BaseModel] = SpawnTicketWorkflowInput

@@ -170,6 +170,27 @@ class TestSelfRoutingGuard:
         assert target == 5
         assert json.loads(run.run_data)["loop_iteration"] == 1
 
+    def test_successful_correction_back_to_review_counts_as_loop_iteration(self):
+        correction = _make_step(id=5, position=4, on_pass_goto=4)
+        review = _make_step(id=4, position=3)
+        run = _make_run(run_data=json.dumps({
+            "loop_contract": {"max_iterations": 3},
+            "loop_iteration": 0,
+        }))
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = review
+
+        target = StepRouter()._apply_loop_iteration_routing(
+            db,
+            run,
+            correction,
+            next_step_id=4,
+            verified_passed=True,
+        )
+
+        assert target == 4
+        assert json.loads(run.run_data)["loop_iteration"] == 1
+
     def test_determine_next_allows_a_counted_bounded_self_retry(self):
         step = _make_step(id=5, position=2, on_fail_goto=5)
         run = _make_run(run_data=json.dumps({

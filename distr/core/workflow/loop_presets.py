@@ -136,6 +136,16 @@ def apply_loop_bundle(
                 if isinstance(chain_value, list):
                     cleaned = [str(item).strip() for item in chain_value if str(item).strip()]
                     setattr(wf, chain_field, json.dumps(cleaned) if cleaned else None)
+            preset_run_settings = validated.get("run_settings")
+            if isinstance(preset_run_settings, dict):
+                try:
+                    current_run_settings = json.loads(wf.run_settings or "{}") or {}
+                except Exception:
+                    current_run_settings = {}
+                if not isinstance(current_run_settings, dict):
+                    current_run_settings = {}
+                current_run_settings.update(preset_run_settings)
+                wf.run_settings = json.dumps(current_run_settings, sort_keys=True)
         merged_input["preset_apply_mode"] = apply_mode
         wf.workflow_input = json.dumps(merged_input)
         db.commit()

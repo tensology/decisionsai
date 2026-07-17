@@ -23,14 +23,9 @@ def infer_preset_slug_for_ticket(
     project_folder: str = "",
 ) -> str:
     """Pick a loop preset from ticket + project context. ponytail: keyword heuristic; upgrade to archetype classifier."""
-    blob = f"{title}\n{description}\n{project_folder}".lower()
-    folder = (project_folder or "").lower()
-    if any(token in blob for token in ("polish", "verify and ship", "ui drift", "screenshot review")):
-        return "polish-verify-and-ship"
-    if any(token in blob for token in ("ideation", "brief to board", "scope brief")):
-        return "ideation-brief-to-board"
-    if any(token in blob for token in ("deploy", "release", "ship pr", "ci checks", "pull request", "merge")):
-        return "ship-pr-until-green"
+    # Development is deliberately the one canonical software-work workflow.
+    # Its internal steps branch between planning, implementation, review,
+    # correction and reporting; ticket keywords must not create more tabs.
     return _DEFAULT_PRESET
 
 
@@ -65,6 +60,7 @@ def spawn_workflow_for_ticket(
     from distr.core.workflow.service import create_workflow, get_workflow
 
     ticket_title = ""
+    ticket_description = ""
     board_id: int | None = None
     project_id: int | None = None
     project_name = ""
@@ -76,6 +72,7 @@ def spawn_workflow_for_ticket(
         if not ticket:
             return {"success": False, "error": "Ticket not found"}
         ticket_title = (ticket.title or "").strip()
+        ticket_description = (ticket.description or "").strip()
         existing_workflow_id = ticket.linked_workflow_id
         lane = db.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).first() if ticket.lane_id else None
         board = db.query(KanbanBoard).filter(KanbanBoard.id == lane.board_id).first() if lane else None
@@ -89,13 +86,20 @@ def spawn_workflow_for_ticket(
 
         if existing_workflow_id and not force:
             wf = get_workflow(int(existing_workflow_id))
-            if wf and (wf.get("steps") or []):
+            from distr.core.workflow.selection import select_workflow_for_request
+
+            linked_selection = select_workflow_for_request(
+                "\n".join(part for part in (ticket_title, ticket_description, project_name) if part),
+                candidates=[wf] if wf else [],
+            )
+            if wf and linked_selection.get("selected"):
                 out: dict[str, Any] = {
                     "success": True,
                     "workflow_id": int(existing_workflow_id),
                     "reused": True,
                     "step_count": len(wf.get("steps") or []),
                     "ticket_id": int(ticket_id),
+                    "selection_reason": linked_selection.get("reason"),
                 }
                 if start_run:
                     run_result = _start_ticket_run(
@@ -112,6 +116,65 @@ def spawn_workflow_for_ticket(
                     else:
                         out["run_id"] = run_result.get("run_id")
                 return out
+
+    # Existing-first selection is mandatory. A missing ticket link is not a
+    # reason to invent a new workflow; select the strongest complete contract.
+    if not steps:
+        from distr.core.workflow.selection import select_workflow_for_request
+
+        selection = select_workflow_for_request(
+            "\n".join(part for part in (ticket_title, ticket_description, project_name) if part)
+        )
+        selected = selection.get("selected") or {}
+        workflow_id = int(selected.get("workflow_id") or 0)
+        if not workflow_id and selection.get("request_profile", {}).get("software"):
+            from distr.core.workflow.developer_workflow import get_or_create_development_workflow
+
+            workflow_id = get_or_create_development_workflow()
+        if not workflow_id:
+            return {
+                "success": False,
+                "error": (
+                    "No existing workflow safely covers this ticket. Workflow creation is a last resort; "
+                    "generate and audit a complete specialized workflow before starting the run."
+                ),
+                "selection": selection,
+            }
+        with get_session() as db:
+            ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+            if ticket:
+                ticket.linked_workflow_id = workflow_id
+                db.commit()
+            if link_board_default and board_id:
+                board = db.query(KanbanBoard).filter(KanbanBoard.id == int(board_id)).first()
+                if board:
+                    board.default_workflow_id = workflow_id
+                    db.commit()
+        wf = get_workflow(workflow_id) or {}
+        result = {
+            "success": True,
+            "workflow_id": workflow_id,
+            "ticket_id": int(ticket_id),
+            "preset_slug": _DEFAULT_PRESET,
+            "step_count": len(wf.get("steps") or []),
+            "reused": True,
+            "selection_reason": selection.get("reason"),
+        }
+        if start_run:
+            run_result = _start_ticket_run(
+                workflow_id,
+                ticket_id=int(ticket_id),
+                board_id=board_id,
+                skip_human_checkpoints=skip_human_checkpoints,
+                run_metadata=run_metadata,
+                dispatch_async=dispatch_async,
+            )
+            if "error" in run_result:
+                result["success"] = False
+                result["error"] = run_result["error"]
+            else:
+                result["run_id"] = run_result.get("run_id")
+        return result
 
     slug = (preset_slug or "").strip() or infer_preset_slug_for_ticket(
         title=ticket_title,

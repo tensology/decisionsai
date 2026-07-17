@@ -91,6 +91,11 @@ class StepRouter:
                     run.run_data = json.dumps(run_data)
                     db.flush()
                     return self._enter_wait_state(db, step, run_id, result, passed)
+                if run_data.pop("provider_preflight_pending", False):
+                    run_data["waiting_kind"] = "provider_preflight"
+                    run.run_data = json.dumps(run_data)
+                    db.flush()
+                    return self._enter_wait_state(db, step, run_id, result, passed)
 
             # ── wait_for_continue gate ──
             # Skip when resuming from feedback (the step has already waited)
@@ -634,7 +639,7 @@ class StepRouter:
         verified_passed: bool,
     ) -> Optional[int]:
         """Track loop iterations when routing back to an earlier step."""
-        if not run or next_step_id is None or verified_passed:
+        if not run or next_step_id is None:
             return next_step_id
         try:
             run_data = json.loads(run.run_data or "{}") or {}
@@ -645,8 +650,10 @@ class StepRouter:
         if max_iterations is None:
             return next_step_id
         target = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == next_step_id).first()
-        # A failed step may intentionally route to itself for a bounded
-        # correction attempt. Only forward routes are outside the loop counter.
+        # Any backward route is another loop iteration. This includes a
+        # successful correction returning to independent review; counting only
+        # failed steps allows review -> correction -> review to recurse forever.
+        # Only forward routes are outside the loop counter.
         if not target or target.position > step.position:
             return next_step_id
         iteration = int(run_data.get("loop_iteration") or 0) + 1
@@ -944,6 +951,29 @@ class StepRouter:
         )
         self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
         self._notify_main_agent(workflow_id, run_id, handoff, result_text=result)
+        if run:
+            try:
+                latest_data = json.loads(run.run_data or "{}") or {}
+                if str(latest_data.get("waiting_kind") or "") == "provider_preflight":
+                    from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+
+                    question = str(
+                        latest_data.get("provider_preflight_prompt")
+                        or latest_data.get("waiting_prompt")
+                        or result
+                        or ""
+                    ).strip()
+                    notify_ticket_workflow_progress(
+                        run_id=run_id,
+                        step_id=step_id,
+                        body=question + " Approve to proceed, or Stop to cancel.",
+                        voice_body=question,
+                        state_fingerprint=f"provider-preflight:{run_id}:{step_id}",
+                        priority="high",
+                        requires_response=True,
+                    )
+            except Exception:
+                logger.warning("Could not send provider preflight approval to Telegram", exc_info=True)
 
         return {"action": "waiting", "notify_main_agent": True, "run_id": run_id}
 

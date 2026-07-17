@@ -196,6 +196,7 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "source_url": getattr(ticket, "source_url", None) if ticket else None,
         "execution_route": run_data.get("execution_route") or {},
         "pending_route_approval": run_data.get("pending_route_approval") or {},
+        "provider_preflight": run_data.get("provider_preflight") or {},
         "execution_session_id": run_data.get("execution_session_id"),
         "ticket_group_id": run_data.get("ticket_group_id"),
         "ticket_group_index": run_data.get("ticket_group_index"),
@@ -216,7 +217,7 @@ def _run_is_steerable(run: AutoWorkflowRun, run_data: dict[str, Any]) -> bool:
     from distr.core.project_cli_backends.harness import is_steerable_backend
 
     waiting_kind = str(run_data.get("waiting_kind") or "")
-    if waiting_kind == "route_approval":
+    if waiting_kind in {"route_approval", "provider_preflight"}:
         return False
     route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
     backend = str(route.get("backend") or "pi")
@@ -506,6 +507,7 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
 
     with get_session() as db:
         q = db.query(AutoWorkflow)
+        q = q.filter(AutoWorkflow.status != "archived")
         if workflow_type:
             q = q.filter(AutoWorkflow.workflow_type == workflow_type)
         else:
@@ -1156,6 +1158,118 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
         }
 
 
+def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dict[str, Any]:
+    """Readiness-check a chosen free model, then resume or offer the next one."""
+    from distr.core.project_cli_backends.provider_preflight import probe_openrouter_model_readiness
+    from distr.core.settings import load_settings_from_db
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
+        run_data = _safe_json_loads(run.run_data) or {}
+        candidates = run_data.get("provider_free_candidates") or []
+        if candidate_index < 0 or candidate_index >= len(candidates):
+            return {"error": "Free-model candidate not found", "status_code": 404}
+        candidate = dict(candidates[candidate_index] or {})
+        model = str(candidate.get("model") or "").strip()
+        step_id = run.current_step_id
+
+    api_key = str(load_settings_from_db().get("openrouter_key") or "")
+    readiness = probe_openrouter_model_readiness(model=model, api_key=api_key)
+    if readiness.ready is True:
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            latest_data = _safe_json_loads(run.run_data) if run else {}
+            retry_candidates = list((latest_data or {}).get("provider_free_candidates") or [])
+            paid_fallback = dict((latest_data or {}).get("provider_fallback_route") or {})
+        candidate.update({
+            "provider_preflight_override": True,
+            "source": "provider_preflight_verified_free_model",
+            "rationale": f"Selected option {candidate_index + 1}; {readiness.message}",
+            "selected_free_candidate_index": candidate_index,
+            "free_model_retry_candidates": retry_candidates,
+            "paid_fallback_route": paid_fallback,
+        })
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if not run:
+                return {"error": "Run not found", "status_code": 404}
+            data = _safe_json_loads(run.run_data) or {}
+            data["pending_route_approval"] = candidate
+            data["selected_provider_model_readiness"] = readiness.to_dict()
+            run.run_data = json.dumps(data)
+            db.commit()
+        return apply_run_route_approval(run_id, approved=True)
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
+        data = _safe_json_loads(run.run_data) or {}
+        candidates = list(data.get("provider_free_candidates") or [])
+        failed = dict(candidates[candidate_index] or {})
+        failed["readiness_failed"] = True
+        failed["readiness"] = readiness.to_dict()
+        candidates[candidate_index] = failed
+        remaining = [
+            (index, item) for index, item in enumerate(candidates)
+            if not (item or {}).get("readiness_failed")
+        ]
+        fallback = data.get("provider_fallback_route") or {}
+        if remaining:
+            next_index, recommended = remaining[0]
+            data["pending_route_approval"] = dict(recommended)
+            question = (
+                f"Option {candidate_index + 1}, {model}, failed readiness: {readiness.message} "
+                f"I recommend option {next_index + 1}, {recommended.get('name') or recommended.get('model')}. "
+                "Would you like to try it?"
+            )
+        elif fallback:
+            data["pending_route_approval"] = dict(fallback)
+            question = (
+                f"{model} failed readiness: {readiness.message} No ranked free candidates remain. "
+                f"I recommend {fallback.get('backend') or 'the fallback'} / {fallback.get('model') or 'auto'}. "
+                "Would you like to proceed?"
+            )
+        else:
+            question = (
+                f"{model} failed readiness: {readiness.message} No ready free or configured fallback remains. "
+                "Stop this run or add provider credit and try again."
+            )
+        data["provider_free_candidates"] = candidates
+        data["provider_preflight_prompt"] = question
+        data["waiting_prompt"] = question
+        data["provider_preflight"] = readiness.to_dict()
+        data["waiting_kind"] = "provider_preflight"
+        run.run_data = json.dumps(data)
+        run.status = "waiting"
+        db.commit()
+
+    try:
+        from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+
+        notify_ticket_workflow_progress(
+            run_id=run_id,
+            step_id=int(step_id) if step_id else None,
+            body=question,
+            voice_body=question,
+            state_fingerprint=f"provider-model-failed:{run_id}:{candidate_index}:{readiness.http_status}",
+            priority="high",
+            requires_response=True,
+        )
+    except Exception:
+        logger.warning("Could not notify provider model readiness failure", exc_info=True)
+    increment_workflow_updated()
+    return {
+        "success": True,
+        "run_id": run_id,
+        "status": "waiting",
+        "readiness": readiness.to_dict(),
+        "message": question,
+    }
+
+
 def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
     """Approve or reject a pending orchestrator route override for an active run."""
     from distr.core.project_cli_backends import normalize_backend_id
@@ -1174,7 +1288,7 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
         ticket_id = run.ticket_id
         board_id = run.board_id
         waiting_kind = str(run_data.get("waiting_kind") or "")
-        was_waiting = run.status == "waiting" and waiting_kind == "route_approval"
+        was_waiting = run.status == "waiting" and waiting_kind in {"route_approval", "provider_preflight"}
 
         if approved:
             backend_id = normalize_backend_id(str(pending.get("backend") or "").strip() or "pi")
@@ -1184,6 +1298,7 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
             run_data["approved_route_override"] = dict(pending)
             run_data["execution_route"] = {
                 **current_route,
+                **pending,
                 "backend": backend_id,
                 "model": model,
                 "source": "orchestrator_override",
@@ -1200,6 +1315,8 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
 
         run_data.pop("pending_route_approval", None)
         run_data.pop("route_approval_pending", None)
+        run_data.pop("provider_preflight_pending", None)
+        run_data.pop("provider_preflight_prompt", None)
         run_data["waiting_kind"] = ""
         run.run_data = json.dumps(run_data)
 

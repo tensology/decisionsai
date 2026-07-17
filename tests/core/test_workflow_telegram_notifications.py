@@ -59,6 +59,21 @@ def test_workflow_waiting_nudge_is_actionable():
     assert "1781725452487" not in voice
 
 
+def test_provider_preflight_nudge_says_no_work_started_and_offers_decision():
+    from distr.core.kanban.ticket_workflow_engagement import build_workflow_waiting_nudge
+
+    text, voice = build_workflow_waiting_nudge(
+        workflow_name="Development",
+        ticket_title="Fix checkout",
+        waiting_kind="provider_preflight",
+    )
+
+    assert "no model work has started" in text.lower()
+    assert "approve" in text.lower()
+    assert "stop" in text.lower()
+    assert "approve" in voice.lower()
+
+
 def test_workflow_waiting_state_notifies_with_continue_prompt(monkeypatch):
     captured = []
 
