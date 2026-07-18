@@ -33,6 +33,8 @@
 
 ## DecisionsAI is an agent
 
+🔊 **Prefer to listen?** [Play the introduction read by Heart](assets/readme/decisionsai-introduction.mp3) *(1 minute 47 seconds)*
+
 DecisionsAI is an agent that helps you develop faster and get everyday work done on your computer. Talk to it, dictate into any app, ask it to control your desktop, or give it work inside a real project. It can use your files, tools, skills, coding agents, and connected services to carry the request through instead of only telling you what to do.
 
 On the desktop, your main point of entry is the **Oracle**—or, more simply, your avatar. It is a small animated character that stays on top of your other windows, giving you a persistent place to speak to DecisionsAI or open its controls without hunting for another app window. It shows when the agent is idle, listening, thinking, or working. You can configure how it looks and choose the Oracle skin or another avatar; the character can change, but the DecisionsAI agent underneath remains the same.
