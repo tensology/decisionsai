@@ -12,6 +12,19 @@
 
 # --- Local runtime artifacts (never commit) ---
 .artifacts/
+
+# Repository-local agent projections and audit scratch are generated state.
+# Keep runtime state under ~/.decisions; do not publish a projection of this
+# repository back into itself.
+/.decisions/
+/.fallow/
+/.fallowrc.json
+/AGENTS.md
+/CLAUDE.md
+
+# Project acceptance fixtures and hosted CI belong outside the product source.
+/examples/pizza-house/
+/.github/workflows/
 *.swp
 *.swo
 *~

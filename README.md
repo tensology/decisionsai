@@ -73,7 +73,7 @@ At this stage it can still be simple: ask a question, send something to your com
 
 Link a real project folder and continue speaking naturally:
 
-> “On the Pizza House site, make the green order button black.”
+> “On my website, make the green order button black.”
 
 DecisionsAI uses the active project to understand what “the green button” refers to. It can create a ticket so the change is trackable, send the work to your coding agent or CLI, check the result, record the time, and tell you what changed.
 

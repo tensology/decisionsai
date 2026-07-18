@@ -2,7 +2,7 @@
   "schema_version": 1,
   "captured_at": "2026-07-17",
   "implementation_base_sha": "1c44cb630d60fd716b81ea2c29c065214abc8334",
-  "candidate_commit_sha": "recorded-after-commit-in-local-and-hosted-release-gate-artifacts",
+  "candidate_commit_sha": "recorded-after-commit-in-local-release-evidence",
   "contains_secrets": false,
   "automated": {
     "runtime": {"status": "passed", "python": "3.12.13"},
@@ -43,5 +43,5 @@
     "developer_identities": 0,
     "signed_notarized_release": "blocked"
   },
-  "hosted_release_gate": "pending-push"
+  "local_release_gate": "pending-exact-commit-verification"
 }
