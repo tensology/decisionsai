@@ -33,7 +33,11 @@
 
 ## DecisionsAI is an agent
 
-🔊 **Prefer to listen?** [Play the introduction read by Heart](assets/readme/decisionsai-introduction.mp3) *(1 minute 47 seconds)*
+🔊 **Listen to the introduction, read by Heart** *(1 minute 47 seconds)*
+
+https://github.com/user-attachments/assets/4abd9c75-37fd-46ae-9b9d-33f2d70bc099
+
+[Download the MP3](assets/readme/decisionsai-introduction.mp3)
 
 DecisionsAI is an agent that helps you develop faster and get everyday work done on your computer. Talk to it, dictate into any app, ask it to control your desktop, or give it work inside a real project. It can use your files, tools, skills, coding agents, and connected services to carry the request through instead of only telling you what to do.
 
