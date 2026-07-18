@@ -2,6 +2,22 @@
 
 ---
 
+## What's to Come?
+
+DecisionsAI already lets you talk to an agent, dictate into any app, control your computer, work inside projects, send requests from Telegram, and run larger jobs through tickets and workflows. The next phase is about making that experience easier to trust and easier to leave running.
+
+**What we are working on next:**
+
+- **A smoother everyday agent** — Faster voice responses, cleaner dictation, better interruption, and less friction moving between the desktop, web control deck, and phone.
+- **Background work you can rely on** — Stronger recovery after sleep, restarts, network changes, failed tools, and long-running local models. If work stops, DecisionsAI should explain why and offer the next useful action.
+- **Better automatic worker choices** — Learn from cost, speed, validation, and previous failures so Auto can choose an appropriate local model, cloud provider, or coding CLI without making you manage every step.
+- **More ways to send work in** — Bring selected WhatsApp, Gmail, Jira, Trello, and other requests into the same project-and-ticket path without turning ordinary conversations into accidental instructions.
+- **A production-ready release** — Finish signed and notarized builds, clean installation and rollback, and repeatable real-machine acceptance checks.
+
+The goal is straightforward: **ask once, check progress when you want to, and get a useful result back where you started.**
+
+---
+
 ## [2.8.5] - 2026-07-17
 
 ### The release where DecisionsAI starts behaving like one agent
@@ -85,25 +101,6 @@ Workflow results now normalize facts, decisions, artifacts, evidence, blockers, 
 ### Acknowledgement
 
 Credit to **Stanshaw** for the message that helped sharpen this release's emphasis on practical orchestration and communication that sounds useful to a human, not merely correct to a machine.
-
-## [What's to Come]
-
-Decisions began as conversational AI, added skills, and learned to hand work to Cursor and Codex. Release 2.8.5 makes the loop dependable: multi-step workflows run on tickets until the outcome matches what was asked for, or stop with a concrete report of what failed and where.
-
-A loop is a reusable sequence of steps. It can start from a board ticket, a WhatsApp message, or a brief. Decisions breaks the work apart, runs what it can in chat, sends implementation to the linked project, checks the result against the ticket, and retries when validation fails. Progress and evidence land on the board, not only in chat.
-
-The next focus is widening the proven provider and connected-account matrix, learning better routing policies from real outcomes, and packaging signed production builds without weakening the local-first boundary.
-
-**What we are working on next:**
-
-- **More live provider evidence** — Expand verified local, OpenRouter, Codex, Cursor, Claude, and vision/Computer Use combinations as credentials and hardware are available.
-- **Outcome-trained routing** — Use recorded cost, latency, validation, and failure evidence to improve Auto choices per project.
-- **More channel adapters** — Feed Gmail, WhatsApp, Jira, Trello, and other work sources through the same durable ticket policy without adding separate orchestration silos.
-- **Signed distribution** — Complete macOS signing/notarization and repeat physical sleep/wake acceptance on release hardware.
-
-Ticket in, verified outcome out, without standing over the IDE.
-
----
 
 ## [2.8.0] - 2026-06-14
 
