@@ -20,36 +20,58 @@ The goal is straightforward: **ask once, check progress when you want to, and ge
 
 ## [2.8.5] - 2026-07-17
 
-### Released
+### Making the agent and the workflow feel like one product
 
-- Added one canonical **Development** workflow: understand, plan, implement, independently review and test, correct failures, then report and save memory.
-- Added existing-first workflow selection. The orchestrator now evaluates reusable workflows before considering creation of a new one.
-- Added completeness checks that reject generated workflows with vague steps, missing context, no tools or skills, weak validation, absent failure handling, or no memory policy.
-- Added **Auto** and **Pinned** model policies to the existing complexity model selectors. These selectors are the shared source of truth for both the UI and orchestrator tools.
-- Added provider preflight for configuration, reachability, local readiness, and available credit before substantive workflow execution.
-- Added free-model alternatives and user confirmation when a selected paid route cannot proceed.
-- Added model-aware local-worker timing based on model size, cold-start state, loading progress, machine capacity, and heartbeats.
-- Added provider-neutral workflow memory for facts, decisions, files, artifacts, evidence, failed attempts, lessons, blockers, and next actions.
-- Added project-aware Telegram control for tickets, workflow approvals, typed or spoken steering, attachments, progress, and final reports.
-- Standardized board progression as **Backlog → In Progress → QA → Complete**.
-- Updated the workflow UI to show execution status with timing, provider/model selection, current step, heartbeats, validation, artifacts, and reports.
+DecisionsAI already had voice, Chat, projects, Ticket Boards, workflows, coding agents, and Telegram. The problem was that a new user could see all of those pieces without understanding how they were meant to work together. A small request could appear to need a workflow, while a large request could create a thin new workflow that did not contain enough context or validation to finish the job properly.
 
-### Fixed
+Version 2.8.5 connects those pieces into one path. A quick instruction can remain a quick instruction. Work that belongs to a project can become a ticket with history and time attached. Larger development work can move through a dependable workflow, use different workers where they add value, and report the result back to the place where the request began.
 
-- Successful independent review now routes to reporting instead of correction.
-- Failed review routes to correction, and corrected work returns to independent review through a bounded loop.
-- Imported and generated workflows retain their run settings.
-- Workflow creation is no longer the default response to an unlinked software ticket.
-- Unrelated work is no longer forced through the Development workflow merely because it exists.
-- Telegram interaction handling was hardened against duplicate callbacks, stale resolution races, repeated online notices, restart retries, and lost source-message context.
-- Workflow progress and voice-note responses now use human-readable summaries instead of raw worker output.
-- Queued tickets no longer display elapsed execution time before work starts.
+### One dependable development workflow
 
-### Migration
+The workflow list had accumulated examples and experiments that made it difficult to know which one should be used. We replaced that choice with one canonical **Development** workflow built around the way real engineering work progresses:
 
-- Archived 11 obsolete workflow examples from the active workflow list.
-- Migrated linked tickets and project defaults to the canonical Development workflow.
-- Preserved historical workflow runs and step results.
+1. Understand the ticket, acceptance criteria, repository, and existing memory.
+2. Plan the change and identify risks before editing.
+3. Implement the scoped work with the selected coding worker.
+4. Review and test it independently, including browser evidence where it matters.
+5. Correct what failed and send it back through review.
+6. Report the outcome, update the ticket, and save the useful lesson.
+
+The workflow is not another interface the user must operate. It is the method DecisionsAI uses when a request is too large or risky for a single action. Eleven obsolete workflow examples were archived from the active list, linked tickets and project defaults were moved to Development, and historical runs and step results were preserved.
+
+The routing was corrected as part of that consolidation. A successful review now moves to reporting. A failed review moves to correction, and corrected work returns to an independent review through a bounded loop instead of being marked complete too early or cycling forever.
+
+### Reuse before creating
+
+The orchestrator no longer creates a workflow simply because a ticket arrived without one. It first asks whether an existing workflow already covers the work. Normal software development uses Development; a genuinely complete specialist workflow can still be chosen when it is a better fit; unrelated work is not pushed through a development process merely because one is available.
+
+Creating a new workflow is now the last option. When creation is necessary, DecisionsAI checks that the result contains real instructions, project context, tools, skills, model intent, guardrails, validation, evidence requirements, failure handling, routing, and memory. Vague collections of steps are rejected rather than presented as something capable of doing the work. Imported and generated workflows also retain the run settings selected for them.
+
+### Automatic models without losing control
+
+Model configuration now has one source of truth: the provider and model selectors already shown for each complexity level. Set a level to **Auto** and the orchestrator can choose a worker for the actual step. Pin a provider and model and that choice remains fixed. The same settings can be changed through the orchestrator, so an instruction from the desktop or Telegram updates the configuration you can see instead of creating a hidden second policy.
+
+Auto considers the role of the step, complexity, risk, required capabilities, cost, reviewer independence, provider readiness, and evidence from previous failures. This makes it possible to use a stronger planner, a local or free coding worker for bounded implementation, and a different model for independent review without tying project memory to any of them.
+
+Preflight now checks configuration, reachability, local readiness, and available credit before substantive work begins. If a paid route cannot proceed, DecisionsAI can explain the problem, offer suitable free alternatives, recommend the next choice, and ask whether to switch. Local timing also accounts for model size, cold starts, machine capacity, loading progress, and heartbeats, so a large model is not treated as dead simply because it needs time to load—but a worker that has genuinely stalled still stops and reports why.
+
+### Telegram becomes the remote control for the same agent
+
+Telegram is no longer treated as a separate message integration. Text, voice notes, photos, documents, captions, buttons, and follow-up instructions can continue the same project and workflow context as the desktop. DecisionsAI can create or update a ticket, request missing information, ask for approval, start the selected workflow, or continue, stop, and steer work that is already running.
+
+The responses were rewritten for people rather than for the workflow engine. Progress and voice notes now explain what is happening, why it matters, what changed, and whether a decision is needed. Duplicate callbacks, stale interaction races, repeated online notices, restart retries, attachments, and lost source-message context received additional hardening.
+
+### A control deck you only open when you need it
+
+Work remains ticket-led. Boards now follow **Backlog → In Progress → QA → Complete**, including small project requests that still need time tracking. The existing Workflows, Runs, Ticket Boards, and Chat surfaces show the current step, selected provider and model, elapsed time after work actually starts, heartbeats, validation, artifacts, correction attempts, and final report.
+
+We deliberately did not add another intake page. The web interface remains the control deck: open it to inspect or steer the work, but let DecisionsAI continue in the background when you do not need to watch it.
+
+### Memory that survives the worker
+
+Workflow memory is stored as neutral facts, decisions, files, artifacts, evidence, failed attempts, lessons, blockers, and next actions. That means a project can move between a local model, OpenRouter, Codex, Cursor, Claude Code, Pi, or another worker without losing what was learned or forcing the next model to interpret an unstructured transcript.
+
+This is the larger result of 2.8.5: the agent, tickets, workflow, workers, Telegram conversation, and memory now describe one piece of work instead of several disconnected systems.
 
 ### Verification
 
@@ -59,7 +81,9 @@ The goal is straightforward: **ask once, check progress when you want to, and ge
 
 ### Credit
 
-Credit to **Stanshaw** for the message that helped sharpen the release's focus on practical orchestration and human-readable communication.
+Credit to **Stanshaw** for the message that helped sharpen this release's focus on practical orchestration and communication that sounds useful to a person, not merely correct to a machine.
+
+---
 
 ## [2.8.0] - 2026-06-14
 
