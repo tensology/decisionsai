@@ -6,9 +6,19 @@
 
 ### The release where DecisionsAI starts behaving like one agent
 
-You should not have to stand over an agent, translate its status messages, choose a model for every prompt, or build a fresh workflow whenever work arrives. DecisionsAI 2.8.5 brings those pieces together. Give it a small change from the desktop or drop a larger request into Telegram; it can attach the request to a real project and ticket, decide whether it needs direct action or a workflow, select the workers, validate the result, remember what happened, and report back in plain language.
+DecisionsAI started as a voice agent: hold a shortcut, ask for something, and let it help. Version 2.8.5 keeps that simple beginning, then gives the agent somewhere useful to grow.
 
-The product remains deliberately model- and CLI-agnostic. The conversational orchestrator, planner, coder, reviewer, vision model, Computer Use worker, Step Runner, and Ticket Board agent can use different configured providers. Projects keep neutral memory—facts, decisions, files, evidence, failed attempts, lessons, blockers, and next actions—so a model swap does not throw away the work already done.
+You can dictate into any app, ask for a quick desktop action, or message the same agent from Telegram. When the request belongs to a project, DecisionsAI can create a ticket and track the work. When the job is larger, it can use one clear Development workflow to understand, plan, build, test, correct, and report the result.
+
+The practical change is simple: **you give DecisionsAI the work; it chooses the right amount of process**.
+
+- A quick instruction stays quick.
+- Project work gets a ticket and history.
+- Larger work gets a proper workflow.
+- Telegram keeps you involved without keeping you at your desk.
+- Models and coding CLIs can change without losing the project's memory.
+
+The sections below explain the engineering changes behind that experience.
 
 ### One development workflow, not a row of experiments
 

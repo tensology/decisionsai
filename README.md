@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A voice-first, model-agnostic and CLI-agnostic orchestrator that turns ordinary requests into tracked, validated work. Talk, dictate, type, or throw the job into Telegram. DecisionsAI connects it to the right project and ticket, reuses the strongest workflow already available, chooses the right worker for each step, remembers what happened, and reports the result in language that makes sense.
+  Start with a voice agent. Let it grow into the agent that runs your work.
 </p>
 
 <p align="center">
@@ -22,92 +22,122 @@
 
 <p align="center">
   <a href="https://www.decisionsai.net/"><strong>Website</strong></a> ·
+  <a href="#start-simple"><strong>Start here</strong></a> ·
   <a href="#installation"><strong>Install</strong></a> ·
-  <a href="#integrations"><strong>Integrations</strong></a> ·
-  <a href="#voice-commands"><strong>Voice Commands</strong></a> ·
-  <a href="#workflows"><strong>Workflows</strong></a> ·
-  <a href="#ide-integration"><strong>IDE Harness</strong></a> ·
-  <a href="docs/orchestrator.md"><strong>Orchestrator</strong></a>
+  <a href="#use-your-voice-in-three-different-ways"><strong>Voice &amp; dictation</strong></a> ·
+  <a href="#use-it-from-your-phone"><strong>Phone</strong></a> ·
+  <a href="#workflows"><strong>Workflows</strong></a>
 </p>
 
 ---
 
-## Give it the work. Keep the oversight.
+## Start simple
 
-Chatbots answer. Coding CLIs edit. Local model runners serve tokens. DecisionsAI coordinates the whole job.
+At its simplest, DecisionsAI is a desktop voice agent. Hold the shortcut, say what you need, and let go.
 
-Give it a one-line fix, voice note, screenshot, ticket, email-shaped brief, Telegram message, or a linked WhatsApp conversation. It preserves the source context, organizes the request under the right project and board, decides whether the job needs a direct action or the existing Development workflow, and hands each step to the most appropriate model or CLI. The result is checked, recorded in neutral project memory, and reported back to you from the same place you asked.
+> “Open Safari.”  
+> “Reply to this message.”  
+> “Take what I’m saying and clean it up.”  
+> “Summarize what is on my screen.”
 
-The orchestrator does not invent a new workflow merely because work arrived without one. It first audits the workflows you already have for relevance and completeness. The canonical Development workflow carries the job from understanding and planning through implementation, independent review, correction, reporting, and memory. A specialist workflow is selected only when it is genuinely better; creating another workflow is the last resort, and any new one must include real scope, context, skills, tools, model policy, validation, evidence, failure handling, and memory—not a handful of vague steps.
+It can talk back, type into the app you are using, control your computer, run an action, or answer in Chat. Push-to-talk and system-wide dictation can run locally, so you do not need to begin with projects, workflows, or a collection of cloud accounts.
 
-**Ollama runs models. DecisionsAI runs work.** Use Ollama underneath it, mix in Codex, Cursor, Claude Code, Pi, OpenRouter, or cloud APIs, and change any of them later without rebuilding your projects or losing their memory.
+That is the first layer: **ask for something and the agent does it**.
 
-### What makes it different
+## Use your voice in three different ways
 
-| | Feature | Description |
+Voice is not a single mode in DecisionsAI. You can use it according to what you are trying to do:
+
+| What you want | How you use it | What happens |
 |---|---|---|
-| 🎙️ | **Voice first** | Push-to-talk conversations, fast system-wide dictation, voice notes, spoken progress, interruption, and offline Whisper/Kokoro options |
-| 📱 | **Telegram work control** | Send text, voice notes, screenshots, files, or steering instructions; approve, reject, continue, stop, and receive progress or the final report |
-| 🧠 | **Durable project memory** | Facts, decisions, changed files, evidence, blockers, and next actions survive model and CLI changes in neutral project memory |
-| 🗂️ | **Projects + tickets** | Keep requests attached to real repositories, boards, source conversations, files, priorities, and acceptance criteria |
-| 🔁 | **Step Runner + Loops** | Break work into scoped planning, implementation, review, browser QA, approval, and reporting steps with validation and correction loops |
-| 🧭 | **Automatic orchestration** | In opt-in Auto mode, route by task role, complexity, risk, cost, capability, and prior failure evidence instead of using one model for everything |
-| 🤖 | **Agent and CLI agnostic** | Codex, Cursor, Claude Code, Pi, local Ollama models, OpenRouter, OpenAI, Anthropic, Gemini, Groq, and other configured backends |
-| 🧰 | **Skills + tools** | Project-scoped skills, MCP tools, browser automation, Computer Use, shell/Python, vision, Google Workspace, macros, screenshots, and evidence capture |
-| 👀 | **Visible while autonomous** | Existing Runs and chat activity show provider/model, routing reason, current step, elapsed time, tools, skills, heartbeats, validation, and artifacts |
-| 🔒 | **Private by default** | Local STT, LLM, TTS, memory, projects, and workflow records stay on disk unless you explicitly connect cloud services |
-| 💬 | **WhatsApp-to-work bridge** | Link a feed to a Ticket Board, sync text/media, auto-snapshot configured conversations into tickets, and route approved tickets into work |
-| 🎭 | **Animated skins** | Oracle plus extensible animated avatars with idle, thinking, working, and attention states |
+| **Talk to the agent** | Hold the push-to-talk shortcut | DecisionsAI understands the request, performs work, and replies |
+| **Write with your voice** | Hold the dictation shortcut in any text field | Your speech is transcribed and inserted where you are typing |
+| **Trigger something familiar** | Say a voice command or use a saved shortcut | DecisionsAI opens an app, runs an action, pastes a snippet, or starts a recorded macro |
+
+The default macOS shortcuts are **Option + Command** for push-to-talk and **Control + Command** for dictation. Shortcuts are editable in **Preferences → Shortcut Keys**, so they can fit around the tools you already use.
+
+You can begin here and never touch a workflow. Voice, dictation, shortcuts, snippets, Chat, and actions are useful on their own.
+
+## Use it from your phone
+
+Telegram gives you the quickest way to reach the same agent away from your desk. Send a text, voice note, screenshot, or document and receive the answer in the same conversation.
+
+When you need more than messaging, send `remote` to the Telegram bot. DecisionsAI returns a secure link to its mobile web interface, where you can talk or type to the agent, use snippets, view the screen, click, scroll, and transfer files. It is an encrypted web remote for your own DecisionsAI instance—not a separate native mobile app or a second agent.
+
+At this stage it can still be simple: ask a question, send something to your computer, or tell the agent to perform one action. The project and workflow layers become useful only when the request needs to be tracked or carried through several steps.
+
+## Then give it a project
+
+Link a real project folder and continue speaking naturally:
+
+> “On the Pizza House site, make the green order button black.”
+
+DecisionsAI uses the active project to understand what “the green button” refers to. It can create a ticket so the change is trackable, send the work to your coding agent or CLI, check the result, record the time, and tell you what changed.
+
+You do not need to name a model, write a technical prompt, or manually assemble a workflow for a small request.
+
+```text
+You ask  →  DecisionsAI does the work  →  You get the result
+                         │
+                         └─ A project ticket keeps the history
+```
+
+Projects give the agent a home for the work. Tickets give each request a visible record. Memory keeps useful facts, decisions, files, failures, and next actions available when you return—even if you change models later.
+
+## Let it handle a larger job
+
+Now ask for something bigger:
+
+> “Rebuild the checkout flow, fix the mobile layout, test it, and report back when it is ready.”
+
+This is where the orchestrator and workflows become useful. DecisionsAI can split the request into tickets, use the existing **Development** workflow, and move the work through six clear stages:
+
+```text
+Understand → Plan → Build → Review and test → Fix what failed → Report
+```
+
+The workflow is not the product you have to operate. It is the method DecisionsAI uses when a request is too large or risky for a single action. The Workflows screen is there when you want to inspect progress, see which worker is active, review evidence, or steer the run.
+
+DecisionsAI reuses a suitable workflow before considering a new one. The Development workflow already covers project context, implementation, independent review, testing, correction, reporting, and memory. Specialist workflows are only useful when they add something genuinely different.
+
+## Grow into it
+
+The product becomes more capable as your work becomes more demanding:
+
+| Your request | What DecisionsAI adds |
+|---|---|
+| “Open this app” | Voice control and computer actions |
+| “Rewrite this paragraph” | Dictation, Chat, and the conversational model |
+| “Change this project” | Project context, a ticket, a coding worker, and time history |
+| “Build and test this feature” | Planning, implementation, independent validation, and correction |
+| “Handle these requests while I’m away” | Telegram, approvals, background runs, and reports |
+| “Use the best worker for every step” | Automatic routing across local models, APIs, and coding CLIs |
+
+Start with one model if that is all you need. Later, you can give planning, coding, vision, Computer Use, and review to different workers. DecisionsAI keeps the project and memory stable while Codex, Cursor, Claude Code, Pi, Ollama, OpenRouter, or another configured provider does a particular part of the job.
+
+As the work grows, Telegram grows with it. The same conversation that handled a quick voice note can receive progress, present approval buttons, accept a correction, steer a running workflow, and return the final report. The web interface becomes mission control rather than another inbox you must watch.
+
+**Ollama runs models. DecisionsAI runs work.**
 
 <p align="center">
-  <img src="assets/readme/avatar.webp" alt="DecisionsAI Skins" />
+  <img src="assets/readme/avatar.webp" alt="DecisionsAI animated agent skins" />
 </p>
 
-| | | |
+## What you get
+
+| | Capability | In plain English |
 |---|---|---|
-| 📱 | **Control from your phone** | Link Telegram. Send work, voice or text, get replies and screenshots, stream the screen, transfer files |
-| 📧 | **Google Workspace** | Gmail, Calendar, Drive, Docs, Sheets over direct API access |
-| 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
-| 🔄 | **Recorded macros** | Record keyboard and mouse sequences, replay them by voice |
-| 👁️ | **Vision** | Send screenshots, photos, or diagrams; the assistant uses your vision model on them |
-| 🔀 | **Workflows + Loops** | Multi-step workflows with loop presets, Step Runner execution, validation, harness steering, recording, browser evidence, and scheduling |
-| 📅 | **Automations + calendar** | Itemized automations with scheduling, time-entry blocks, live timers, and timesheet export |
-| 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
-| 🐍 | **Python executor** | The agent can write and run Python for file ops, image processing, scraping, and other scripted tasks |
-| 🧭 | **[Orchestrator](docs/orchestrator.md)** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
-| 🔧 | **[IDE + coding agents](#ide-integration)** | Unified **harness stack** for [Codex](plugins/codex-ide/README.md), [Cursor](plugins/cursor-ide/README.md), [Claude-compatible harnessing](plugins/ecc/docs/HERMES-SETUP.md), and Pi — skills, MCP merge, Agent Reach, design references, Composio Connect, yt-dlp workflow steps, and IDE thread tools |
-| 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
-| 🌐 | **Remote control** | HMAC-encrypted browser UI with Snippets, Agent, and Dictate. Hold to talk or tap for a text box |
+| 🎙️ | **Voice and dictation** | Talk to the agent or dictate into any app |
+| 💬 | **Chat** | Ask questions, work with files, and follow activity |
+| 🗂️ | **Projects and tickets** | Keep every piece of work attached to the right place |
+| 🔁 | **Development workflow** | Plan, build, review, test, correct, and report larger jobs |
+| 📱 | **Telegram control** | Send work and make decisions from your phone |
+| 🧠 | **Portable memory** | Keep what was learned when you change models or CLIs |
+| 🧰 | **Skills and tools** | Use the browser, Computer Use, code, files, connected apps, and project-specific instructions |
+| 👀 | **Visible progress** | See the current step, worker, elapsed time, evidence, and result |
+| 🔒 | **Local-first operation** | Keep speech, models, memory, and projects local when you choose |
 
-## From request to verified result
-
-```
-Voice · Dictation · Telegram · WhatsApp · Web · Ticket Board
-                              │
-                              ▼
-             Project context + durable ticket + memory
-                              │
-                              ▼
-       Orchestrator: direct action or scoped workflow/loop?
-                              │
-          ┌───────────────────┼───────────────────┐
-          ▼                   ▼                   ▼
-    Plan / research     Build / operate      Review / validate
-    Codex · local       Ornith · Cursor       independent model
-    OpenRouter · ...    Claude Code · Pi      browser · tests · tools
-          └───────────────────┼───────────────────┘
-                              ▼
-               Evidence + memory + report + approval
-                              │
-                              ▼
-                    Telegram · Chat · Runs
-```
-
-1. **Choose the brains.** Configure the conversational/orchestrator LLM, coding LLM, vision model, Computer Use model, Step Runner, and preferred CLIs independently—or enable Auto routing.
-2. **Connect the work surfaces.** Telegram is the remote control. Projects, Ticket Boards, WhatsApp links, Gmail, Jira, Trello, and the web UI provide durable context.
-3. **Ask naturally.** Dictate on the desktop or send a Telegram text, voice note, image, or file. The orchestrator decides whether to answer, act, create a ticket, ask a question, request approval, or run a workflow.
-4. **Let specialists work.** A planner can scope with Codex, an implementation step can run with local Ornith, and a separate model can review—without sharing model-specific memory.
-5. **See proof, not a spinner.** Follow the current step, selected provider/model, rationale, elapsed time, heartbeat, evidence, validation, retry, and final report in existing Runs or chat.
+Ready to try it? Jump to [Installation](#installation). You can start with the voice agent and add the rest later.
 
 ---
 
@@ -135,53 +165,6 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 
 ---
 
-## Technology Stack
-
-**Offline core:**
-
-| Component | Role |
-|---|---|
-| [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) | Fast, accurate offline speech recognition |
-| [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | High-quality offline TTS + custom voice cloning (on-device) |
-| [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK, 100+ speakers) |
-| [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
-| [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
-| **[Orchestrator](docs/orchestrator.md)** | Internal orchestration ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
-| **[Sidecar (Go)](sidecar/README.md)** | Machine control: accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
-
-**Optional cloud services:**
-
-| Service | What it adds |
-|---|---|
-| [OpenRouter](https://openrouter.ai/) | Unified access to GPT-5.4, Gemini 3 Flash, Claude, and every new model as it drops |
-| [OpenAI](https://openai.com/) | GPT-5.4, GPT-4 Turbo, GPT-4o |
-| [Anthropic](https://www.anthropic.com/) | Claude 3.7 Sonnet, Claude 3.5 Opus, Claude 3 Haiku |
-| [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning (up to 5 custom voices) |
-| [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
-
----
-
-## Legal References
-
-Public policy links:
-
-| Document | URL | Policy check date |
-|---|---|---|
-| Privacy Policy | <https://www.decisionsai.net/privacy> | 2026-05-22 |
-| Terms and Conditions | <https://www.decisionsai.net/terms> | 2026-05-22 |
-
-The public pages should show their own last-updated dates. During the
-2026-05-22 check, no visible last-updated date was found in the fetched page
-content.
-
-The legal pages should explicitly cover connected accounts and external streams
-such as WhatsApp, Telegram, Gmail, Jira, Trello, IRC/shared chat rooms, uploaded
-files, voice notes/transcriptions, images, project folders, CLI/IDE execution
-logs, model-provider requests, workflow audit trails, and the internal
-[orchestration ledger](docs/orchestrator.md) used for validation and correction memory.
-
----
-
 ## System Requirements
 
 ### Offline / local mode
@@ -194,9 +177,9 @@ logs, model-provider requests, workflow audit trails, and the internal
 | **System deps** | PortAudio, FFmpeg |
 | **Disk** | ~200 MB for cloud models; ~6 GB for full local models |
 
-> DecisionsAI detects your system RAM at first launch and picks models that fit. Cloud models (marked `:cloud`) run on Ollama's servers with zero local RAM for the weights.
+> DecisionsAI detects your system RAM at first launch and picks models that fit. Local models use your machine's memory. Cloud models (marked `:cloud`) run remotely and do not load their weights into local RAM.
 >
-> **Recommended (cloud, any Mac):**
+> **Recommended local setup (12 GB+ RAM):**
 >
 > | Role | Model | RAM needed |
 > |---|---|---|
@@ -401,6 +384,34 @@ Multi-step workflows run on the **Step Runner**. **Loops** are reusable developm
 
 ---
 
+## Technology Stack
+
+You do not need to understand this stack to use DecisionsAI. These are the main components for people who want to extend or audit it.
+
+**Offline core:**
+
+| Component | Role |
+|---|---|
+| [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) | Fast, accurate offline speech recognition |
+| [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | High-quality offline TTS + custom voice cloning (on-device) |
+| [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK, 100+ speakers) |
+| [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
+| [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
+| **[Orchestrator](docs/orchestrator.md)** | Internal ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
+| **[Sidecar (Go)](sidecar/README.md)** | Machine control: accessibility tree, mouse/keyboard, screenshots, drag, scroll, and Python execution |
+
+**Optional cloud services:**
+
+| Service | What it adds |
+|---|---|
+| [OpenRouter](https://openrouter.ai/) | One connection to a changing catalog of hosted models |
+| [OpenAI](https://openai.com/) | OpenAI language, vision, and tool-capable models |
+| [Anthropic](https://www.anthropic.com/) | Claude language and coding models |
+| [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning |
+| [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
+
+---
+
 ## Project Structure
 
 ```
@@ -421,6 +432,17 @@ docs/                # Orchestrator docs (local planning notes stay gitignored)
 .artifacts/          # Gitignored local runtime output (tickets, pi skills, cursor handoffs)
 tests/               # Property-based and unit tests
 ```
+
+---
+
+## Legal References
+
+| Document | URL | Policy check date |
+|---|---|---|
+| Privacy Policy | <https://www.decisionsai.net/privacy> | 2026-05-22 |
+| Terms and Conditions | <https://www.decisionsai.net/terms> | 2026-05-22 |
+
+Connected services can include WhatsApp, Telegram, Gmail, Jira, Trello, shared chat rooms, uploaded files, voice notes, images, project folders, CLI/IDE logs, model-provider requests, and workflow audit trails. Review the public policies before connecting external accounts or data sources.
 
 ---
 
