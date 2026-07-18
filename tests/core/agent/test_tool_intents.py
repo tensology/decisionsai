@@ -60,6 +60,15 @@ def test_forces_ticket_tool_for_local_and_remote_ticket_requests(monkeypatch):
     assert "create_ticket" in forced_tool_names_for_text("make a Trello card for the UI bug")
     assert "create_ticket" in forced_tool_names_for_text("move ticket 12 from the wrong board to DecisionsAI")
     assert "create_ticket" in forced_tool_names_for_text("transfer this card to the ThatShirtShow board")
+    assert "create_ticket" in forced_tool_names_for_text(
+        "Break this project down into tickets and then run the work."
+    )
+    assert "create_ticket" in forced_tool_names_for_text(
+        "Convert the request into separate work items before implementation."
+    )
+    assert "create_ticket" in forced_tool_names_for_text(
+        "Scope this into clear, independently executable tickets linked to the workflow."
+    )
 
 
 def test_forces_ticket_tool_for_whatsapp_agent_requests(monkeypatch):

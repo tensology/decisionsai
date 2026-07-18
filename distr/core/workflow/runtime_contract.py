@@ -20,6 +20,37 @@ ACTIVITY_NOISE_TYPES = {
     "user_notified",
 }
 
+MISSION_CONTROL_LIFECYCLE_TYPES = {
+    "workflow_step_started",
+    "workflow_step_preflight",
+    "route_decided",
+    "provider_failover",
+    "validation_recorded",
+    "workflow_step_completed",
+    "workflow_run_started",
+    "workflow_run_completed",
+    "workflow_run_cancelled",
+    "approval_requested",
+    "route_approval_requested",
+    "route_approval_granted",
+    "route_approval_rejected",
+}
+
+MISSION_CONTROL_NOISE_TYPES = {
+    "execution_message_start",
+    "execution_message_end",
+    "execution_command_start",
+    "execution_agent_start",
+    "execution_agent_end",
+    "skill_provisioned",
+    "execution_session_created",
+    "execution_preflight",
+    "backend_handoff_created",
+    "backend_handoff_updated",
+    "project_runtime_snapshot",
+    "execution_executor_start",
+}
+
 
 def get_session():
     """Resolve the active session provider at call time, while remaining patchable."""
@@ -32,6 +63,145 @@ def _json_dict(raw: str | None) -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _event_subtype(event: dict[str, Any]) -> str:
+    return str(event.get("subtype") or event.get("legacy_event_type") or event.get("event_type") or "").strip().lower()
+
+
+def _compact_mission_control_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Remove large prompt/output bodies while retaining decision evidence."""
+    item = dict(event)
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    evidence = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
+    keep_payload = {
+        key: payload[key]
+        for key in (
+            "step_name",
+            "action_type",
+            "position",
+            "summary",
+            "decision",
+            "step_role",
+            "auto_detected",
+            "correction_hint",
+            "iteration",
+            "loop_iteration",
+            "backend_id",
+            "route_backend",
+            "model",
+            "skills",
+            "tools",
+            "context",
+        )
+        if key in payload
+    }
+    compact_evidence: dict[str, Any] = {}
+    validation = evidence.get("validation") if isinstance(evidence.get("validation"), dict) else {}
+    if validation:
+        compact_evidence["validation"] = {
+            key: validation[key]
+            for key in (
+                "step_id",
+                "step_name",
+                "validation_type",
+                "expected",
+                "verdict",
+                "correction_hint",
+            )
+            if key in validation
+        }
+    preview = str(evidence.get("result_preview") or "").strip()
+    if preview:
+        compact_evidence["result_preview"] = preview[:700] + ("…" if len(preview) > 700 else "")
+    error = str(evidence.get("error") or "").strip()
+    if error:
+        compact_evidence["error"] = error[:500] + ("…" if len(error) > 500 else "")
+    item["payload"] = keep_payload
+    item["evidence"] = compact_evidence
+    return item
+
+
+def _bound_transcript_value(value: Any, *, depth: int = 0) -> Any:
+    """Bound a redacted event for browser inspection without hiding its shape."""
+    if depth >= 8:
+        return "[nested data omitted]"
+    if isinstance(value, dict):
+        return {
+            str(key): _bound_transcript_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:120]
+        }
+    if isinstance(value, (list, tuple)):
+        items = [_bound_transcript_value(item, depth=depth + 1) for item in list(value)[:200]]
+        if len(value) > 200:
+            items.append(f"[{len(value) - 200} additional items omitted]")
+        return items
+    if isinstance(value, str) and len(value) > 24000:
+        return value[:24000] + f"\n[… {len(value) - 24000} additional characters omitted]"
+    return value
+
+
+def detailed_execution_timeline(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a safe, inspectable execution transcript for the run side panel.
+
+    Mission Control's normal poll intentionally removes transport noise and
+    large prompt/output bodies. This projection is loaded on demand and keeps
+    the complete event sequence, including handoffs, tools, commands and
+    worker output, while redacting credentials and bounding pathological data.
+    """
+    from distr.core.orchestrator import redact_handoff_payload
+
+    transcript: list[dict[str, Any]] = []
+    for event in events:
+        redacted = redact_handoff_payload(event)
+        if not isinstance(redacted, dict):
+            continue
+        transcript.append(_bound_transcript_value(redacted))
+    return transcript
+
+
+def mission_control_timeline(
+    events: list[dict[str, Any]],
+    *,
+    current_step_id: int | None,
+    current_activity_limit: int = 40,
+) -> list[dict[str, Any]]:
+    """Return the complete step story plus compact current-step activity.
+
+    A run can emit hundreds of heartbeat and transport events. Returning only
+    the newest N records hides early completed steps; returning every raw event
+    sends large prompts and validation output to the browser every few seconds.
+    This projection preserves every lifecycle decision while keeping only the
+    useful tail of current-step activity.
+    """
+    lifecycle: list[dict[str, Any]] = []
+    current_activity: list[dict[str, Any]] = []
+    latest_heartbeat: dict[str, Any] | None = None
+    lifecycle_ids: set[int] = set()
+
+    for event in events:
+        subtype = _event_subtype(event)
+        event_id = int(event.get("id") or 0)
+        if subtype in MISSION_CONTROL_LIFECYCLE_TYPES:
+            lifecycle.append(_compact_mission_control_event(event))
+            if event_id:
+                lifecycle_ids.add(event_id)
+            continue
+        if current_step_id and event.get("step_id") not in (None, current_step_id):
+            continue
+        if subtype == "execution_heartbeat":
+            latest_heartbeat = _compact_mission_control_event(event)
+            continue
+        if subtype in MISSION_CONTROL_NOISE_TYPES:
+            continue
+        current_activity.append(_compact_mission_control_event(event))
+
+    current_activity = current_activity[-max(1, int(current_activity_limit or 40)):]
+    if latest_heartbeat:
+        current_activity.append(latest_heartbeat)
+    merged = lifecycle + [event for event in current_activity if int(event.get("id") or 0) not in lifecycle_ids]
+    merged.sort(key=lambda event: (str(event.get("created_at") or ""), int(event.get("id") or 0)))
+    return merged
 
 
 def run_human_checkpoints_enabled(run_id: int | None) -> bool:

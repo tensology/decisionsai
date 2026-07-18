@@ -1850,9 +1850,9 @@ def register_routes(router, templates):
                 return JSONResponse({"detail": "A ticket group may contain at most 100 tickets"}, status_code=422)
 
             from distr.core.workflow.dispatcher import start_workflow_ticket_group
-            from distr.core.workflow.ticket_dispatch import build_ticket_run_item
+            from distr.core.workflow.ticket_dispatch import compact_ticket_run_ref
 
-            ticket_items = [build_ticket_run_item(ticket_id, workflow_id) for ticket_id in ticket_ids]
+            ticket_items = [compact_ticket_run_ref({"ticket_id": ticket_id}) for ticket_id in ticket_ids]
             # WorkflowAgent construction may lazily import and warm many optional
             # tools. Keep that cold-start work off uvicorn's event loop so status,
             # heartbeat, and cancellation requests remain responsive.
@@ -2504,7 +2504,13 @@ def register_routes(router, templates):
             return JSONResponse(_workflow_error_payload(str(e), "steering_memory"), status_code=500)
 
     @router.get("/workflows/{workflow_id}/runs/{run_id}/timeline")
-    async def workflow_run_timeline(workflow_id: int, run_id: int, limit: int = 100):
+    async def workflow_run_timeline(
+        workflow_id: int,
+        run_id: int,
+        limit: int = 100,
+        mission_control: bool = False,
+        detail: bool = False,
+    ):
         """Return the normalized orchestration conversation timeline for a run."""
         try:
             from distr.core.db import get_session
@@ -2520,15 +2526,40 @@ def register_routes(router, templates):
                 )
                 if not run:
                     return JSONResponse(_workflow_error_payload("Run not found", "timeline"), status_code=404)
+                # Copy scalar state before the session closes. Workflow polling
+                # can race with runner commits, which expires ORM attributes;
+                # reading the detached row below used to turn that race into a
+                # stream of 500s in the Mission Control side panel.
+                current_step_id = int(run.current_step_id) if run.current_step_id else None
+            if detail:
+                from distr.core.workflow.runtime_contract import detailed_execution_timeline
+
+                events = detailed_execution_timeline(list_orchestration_timeline(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    limit=min(max(int(limit or 500), 1), 500),
+                ))
+            elif mission_control:
+                from distr.core.orchestration_events import list_mission_control_timeline
+
+                events = list_mission_control_timeline(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    current_step_id=current_step_id,
+                )
+            else:
+                events = list_orchestration_timeline(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    limit=limit,
+                )
             return JSONResponse({
                 "success": True,
                 "workflow_id": workflow_id,
                 "run_id": run_id,
-                "events": list_orchestration_timeline(
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                    limit=limit,
-                ),
+                "events": events,
+                "mission_control": bool(mission_control),
+                "detail": bool(detail),
             })
         except Exception as e:
             logger.error("Workflow timeline failed: %s", e, exc_info=True)

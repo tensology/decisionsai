@@ -27,6 +27,13 @@ def test_sequential_ticket_group_starts_one_and_carries_explicit_group(monkeypat
         _session_for_workflow({"execution_mode": "sequential", "concurrency_scope": "workflow"}),
     )
     calls = []
+    hydrated = {
+        3: {"ticket_id": 3, "board_id": 8, "context": "Ticket three", "run_metadata": {"project_id": "1"}},
+    }
+    monkeypatch.setattr(
+        "distr.core.workflow.ticket_dispatch.hydrate_ticket_run_ref",
+        lambda item, _workflow_id: hydrated[item["ticket_id"]],
+    )
     monkeypatch.setattr(dispatcher, "start_workflow_run", lambda workflow_id, **kwargs: calls.append((workflow_id, kwargs)) or {"run_id": 701})
 
     result = dispatcher.start_workflow_ticket_group(
@@ -46,6 +53,7 @@ def test_sequential_ticket_group_starts_one_and_carries_explicit_group(monkeypat
     metadata = calls[0][1]["run_metadata"]
     assert metadata["ticket_group_size"] == 2
     assert [item["ticket_id"] for item in metadata["ticket_group_items"]] == [3, 4]
+    assert all(set(item) <= {"ticket_id", "board_id"} for item in metadata["ticket_group_items"])
 
 
 def test_parallel_ticket_group_attempts_each_ticket_and_reports_partial_errors(monkeypatch):
@@ -55,6 +63,15 @@ def test_parallel_ticket_group_attempts_each_ticket_and_reports_partial_errors(m
         _session_for_workflow({"execution_mode": "parallel", "max_parallel_tickets": 3}),
     )
     calls = []
+    monkeypatch.setattr(
+        "distr.core.workflow.ticket_dispatch.hydrate_ticket_run_ref",
+        lambda item, _workflow_id: {
+            "ticket_id": item["ticket_id"],
+            "board_id": None,
+            "context": f"Ticket {item['ticket_id']}",
+            "run_metadata": {},
+        },
+    )
 
     def start(_workflow_id, **kwargs):
         calls.append(kwargs)
@@ -72,6 +89,52 @@ def test_parallel_ticket_group_attempts_each_ticket_and_reports_partial_errors(m
     assert result["errors"] == [{"ticket_id": 9, "error": "project concurrency guard"}]
     assert len(calls) == 3
     assert all(call["run_metadata"]["ticket_group_items"] == [] for call in calls)
+
+
+def test_append_ticket_group_extends_live_sequential_run_without_restarting(monkeypatch):
+    run = SimpleNamespace(
+        id=104,
+        workflow_id=369,
+        board_id=12,
+        ticket_id=177,
+        status="running",
+        run_data=json.dumps({
+            "ticket_group_id": "kayla",
+            "ticket_group_index": 0,
+            "ticket_group_size": 1,
+            "ticket_group_items": [{"ticket_id": 177, "board_id": 12, "context": "First", "run_metadata": {}}],
+        }),
+    )
+    workflow = SimpleNamespace(run_settings=json.dumps({"execution_mode": "sequential"}))
+    db = MagicMock()
+
+    def query(model):
+        chain = MagicMock()
+        chain.filter.return_value.first.return_value = run if model is AutoWorkflowRun else workflow
+        return chain
+
+    db.query.side_effect = query
+
+    @contextlib.contextmanager
+    def get_session():
+        yield db
+
+    monkeypatch.setattr(dispatcher, "get_session", get_session)
+    result = dispatcher.append_workflow_ticket_group(
+        104,
+        [
+            {"ticket_id": 178, "board_id": 12, "context": "Second", "run_metadata": {}},
+            {"ticket_id": 178, "board_id": 12, "context": "duplicate", "run_metadata": {}},
+            {"ticket_id": 179, "board_id": 12, "context": "Third", "run_metadata": {}},
+        ],
+    )
+
+    assert result["appended_ticket_ids"] == [178, 179]
+    assert result["ticket_count"] == 3
+    assert result["queued_count"] == 2
+    stored = json.loads(run.run_data)
+    assert [item["ticket_id"] for item in stored["ticket_group_items"]] == [177, 178, 179]
+    assert all("context" not in item and "run_metadata" not in item for item in stored["ticket_group_items"])
 
 
 def test_group_auto_advance_uses_next_selected_ticket_not_global_queue(monkeypatch):
@@ -110,6 +173,10 @@ def test_group_auto_advance_uses_next_selected_ticket_not_global_queue(monkeypat
         yield db
 
     monkeypatch.setattr(dispatcher, "get_session", get_session)
+    monkeypatch.setattr(
+        "distr.core.workflow.ticket_dispatch.hydrate_ticket_run_ref",
+        lambda item, workflow_id: next(row for row in items if row["ticket_id"] == item["ticket_id"]),
+    )
     calls = []
     monkeypatch.setattr(dispatcher, "start_workflow_run", lambda workflow_id, **kwargs: calls.append((workflow_id, kwargs)) or {"run_id": 502})
     monkeypatch.setattr("distr.gui.web.kanban_events.increment_kanban_updated", lambda **_kwargs: None)

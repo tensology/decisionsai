@@ -1995,13 +1995,13 @@ def build_learned_rules_context(board_id: int | None, *, limit: int = 8) -> str:
         return ""
     lines = ["[BOARD LEARNED RULES]"]
     for rule in rules:
-        summary = str(rule.get("summary") or "").strip()
+        summary = " ".join(str(rule.get("summary") or "").split()).strip()
         if not summary:
             continue
         evidence = int(rule.get("evidence_count") or 0)
         rule_type = str(rule.get("rule_type") or "rule").replace("_", " ")
         prefix = f"- ({rule_type}, seen {evidence}x)" if evidence > 1 else f"- ({rule_type})"
-        lines.append(f"{prefix} {summary[:500]}")
+        lines.append(f"{prefix} {summary[:320]}")
     return "\n".join(lines).strip() if len(lines) > 1 else ""
 
 

@@ -76,7 +76,7 @@ def test_active_run_payload_exposes_loop_and_current_step_context():
     assert active is not None
     assert active["loop_iteration"] == 1
     assert active["loop_max_iterations"] == 3
-    assert active["loop_label"] == "Loop 1 / 3"
+    assert active["loop_label"] == "Pass 2 · 1/3 retries"
     assert active["current_step_action_type"] == "playwright"
     assert active["current_step_tools"] == ["playwright", "browser_use"]
     assert active["current_step_skills"] == ["webapp-testing", "verification-loop"]
@@ -91,7 +91,7 @@ def test_active_runs_list_payload_exposes_same_developer_visibility_contract():
 
     assert run["loop_iteration"] == 1
     assert run["loop_max_iterations"] == 3
-    assert run["loop_label"] == "Loop 1 / 3"
+    assert run["loop_label"] == "Pass 2 · 1/3 retries"
     assert run["current_step_action_type"] == "playwright"
     assert run["current_step_tools"] == ["playwright", "browser_use"]
     assert run["current_step_skills"] == ["webapp-testing", "verification-loop"]

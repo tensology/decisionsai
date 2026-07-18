@@ -150,3 +150,80 @@ def test_current_step_activity_filters_run_noise_and_other_steps(monkeypatch):
     assert result["success"] is True
     assert result["current_step_id"] == current_step_id
     assert [event["summary"] for event in result["events"]] == ["Preflight passed."]
+
+
+def test_mission_control_timeline_keeps_all_step_outcomes_without_heartbeat_bloat():
+    from distr.core.workflow.runtime_contract import mission_control_timeline
+
+    events = [
+        {
+            "id": 1,
+            "step_id": 10,
+            "subtype": "workflow_step_started",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "payload": {"step_name": "Plan"},
+            "evidence": {},
+        },
+        {
+            "id": 2,
+            "step_id": 10,
+            "subtype": "workflow_step_completed",
+            "status": "passed",
+            "created_at": "2026-01-01T00:01:00Z",
+            "payload": {"step_name": "Plan"},
+            "evidence": {"result_preview": "x" * 5000},
+        },
+        {
+            "id": 3,
+            "step_id": 20,
+            "subtype": "execution_heartbeat",
+            "status": "running",
+            "created_at": "2026-01-01T00:02:00Z",
+            "summary": "Worker is still running (10s)",
+            "payload": {},
+            "evidence": {},
+        },
+        {
+            "id": 4,
+            "step_id": 20,
+            "subtype": "execution_heartbeat",
+            "status": "running",
+            "created_at": "2026-01-01T00:03:00Z",
+            "summary": "Worker is still running (20s)",
+            "payload": {},
+            "evidence": {},
+        },
+    ]
+
+    compact = mission_control_timeline(events, current_step_id=20)
+
+    assert [event["id"] for event in compact] == [1, 2, 4]
+    assert compact[1]["status"] == "passed"
+    assert len(compact[1]["evidence"]["result_preview"]) < 750
+    assert compact[-1]["summary"] == "Worker is still running (20s)"
+
+
+def test_detailed_execution_timeline_keeps_prompt_tools_output_and_redacts_secrets():
+    from distr.core.workflow.runtime_contract import detailed_execution_timeline
+
+    events = [
+        {
+            "id": 9,
+            "subtype": "backend_handoff_created",
+            "payload": {
+                "instruction": "Fix the checkout and run the browser tests.",
+                "tools": ["shell", "playwright"],
+                "authorization": "Bearer should-not-leak",
+            },
+            "evidence": {"output": "Tests passed.", "api_key": "sk-secret-value"},
+        }
+    ]
+
+    transcript = detailed_execution_timeline(events)
+
+    assert transcript[0]["payload"]["instruction"] == "Fix the checkout and run the browser tests."
+    assert transcript[0]["payload"]["tools"] == ["shell", "playwright"]
+    assert transcript[0]["evidence"]["output"] == "Tests passed."
+    assert transcript[0]["payload"]["authorization"] == "[redacted]"
+    assert transcript[0]["evidence"]["api_key"] == "[redacted]"

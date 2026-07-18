@@ -106,6 +106,10 @@ def build_global_user_standards_context(*, limit: int = 16) -> str:
         memory for memory in memories
         if str(memory.get("scope") or "global") == "global"
         and str(memory.get("category") or "") in GLOBAL_STANDARD_CATEGORIES
+        and (
+            str(memory.get("category") or "") != "user_preference"
+            or int(memory.get("evidence_count") or 0) >= 2
+        )
     ][:max(1, int(limit))]
     if not relevant:
         return ""
@@ -113,7 +117,8 @@ def build_global_user_standards_context(*, limit: int = 16) -> str:
     for memory in relevant:
         evidence = int(memory.get("evidence_count") or 0)
         suffix = f" (reinforced {evidence}x)" if evidence > 1 else ""
-        lines.append(f"- {str(memory.get('content') or '').strip()}{suffix}")
+        content = " ".join(str(memory.get("content") or "").split())[:320]
+        lines.append(f"- {content}{suffix}")
     return "\n".join(lines)
 
 

@@ -222,10 +222,37 @@ def test_workflow_queue_row_exposes_loop_then_play_with_visible_loop_ticket_cont
     assert js.index("wf-workflow-ticket-loop") < js.index("wf-workflow-ticket-run")
     assert "openWorkflowTicketLoop(ticketId, rowEl)" in js
     assert 'id="wf-loop-run-ticket-context"' in html
-    assert "Ticket in run" in js
+    assert "Active workflow run" in js
     assert 'renderLoopTicketContextElement(mainEl, contextRun, "main")' in js
     assert "wf-loop-start-ticket" in js
     assert "wf-loop-continue-ticket" in js
+
+
+def test_loop_mission_control_keeps_tickets_visible_but_binds_execution_to_active_run():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    js = WORKFLOWS_JS.read_text(encoding="utf-8")
+
+    assert 'data-loop-view="list">Timeline</button>' in html
+    assert 'id="wf-loop-list-view" class="wf-loop-view"' in html
+    assert 'id="wf-loop-feed-panel"' in html
+    assert "var workflowLoopViewMode = \"list\";" in js
+    assert "var workflowRun = currentWorkflowActiveRun();" in js
+    assert "if (workflowRun) return workflowRun;" in js
+    assert "You are viewing tickets for" in js
+    assert "Show running project tickets" in js
+    assert "workflowBoardSelectionExplicit" in js
+    assert "focusWorkflowRunBoard(activeCurrentWorkflowRun)" in js
+    assert "function loopStepHandoffHtml" in js
+    assert "Validated output and result packet" in js
+    assert "What is happening" in js
+    assert "No action needed" in js
+    assert "Execution transcript" in js
+    assert "Prompt / handoff" in js
+    assert "Command / tool call" in js
+    assert "Raw event data" in js
+    assert 'detail=true' in js
+    assert ".wf-loop-transcript-record--tool" in html
+    assert "workflowRunStatusLabel(run.status) + \" · \"" in js
 
 
 def test_workflow_lane_add_all_disables_when_nothing_left_to_add():

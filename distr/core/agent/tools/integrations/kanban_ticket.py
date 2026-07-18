@@ -170,10 +170,20 @@ def _sanitize_ticket_title(title: str) -> str:
     return t[:200]
 
 
+class TicketDraftInput(BaseModel):
+    """One independently executable item in an atomic ticket batch."""
+
+    title: str = Field(description="Concrete, outcome-oriented ticket title")
+    description: str = Field(description="Self-contained scope, constraints, acceptance criteria, and validation")
+    priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
+    complexity: str = Field(default="auto", description="Complexity: auto, low, medium, high")
+    parent_ticket_id: int = Field(default=0, description="Optional parent ticket ID")
+
+
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
@@ -181,6 +191,8 @@ class KanbanTicketInput(BaseModel):
     lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
     title: str = Field(default="", description="Ticket title")
     description: str = Field(default="", description="Ticket description")
+    tickets: List[TicketDraftInput] = Field(default_factory=list, description="For create_ticket_batch: 1-25 complete ticket drafts, created atomically in the supplied order")
+    skip_existing_titles: bool = Field(default=True, description="For create_ticket_batch: skip titles already on the board to make retries idempotent")
     priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
     complexity: str = Field(default="auto", description="Ticket complexity: auto, low, medium, high. Auto lets the orchestrator assess complexity; low/medium/high are manual overrides.")
     ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete/discuss actions")
@@ -225,6 +237,7 @@ class KanbanTicketTool(BaseTool):
       delete_board       — delete a board (requires board_id or board_name)
       list_lanes         — list lanes for a board (requires board_id or board_name)
       create_ticket      — create a ticket (requires board_name or board_id, plus title)
+      create_ticket_batch — atomically create 1-25 scoped tickets; prefer this for three or more work items
       list_tickets       — list tickets in a board or lane
       get_ticket         — get ticket details (requires ticket_id)
       discuss_ticket     — load ticket into context for Q&A (ticket_id, external_issue_key, or recent #id / issue key in text); use when user wants to talk through a ticket without sending to project yet
@@ -295,6 +308,8 @@ class KanbanTicketTool(BaseTool):
     description: str = (
         "Full CRUD for Ticket boards and tickets. "
         "Use action='create_ticket' with board_name and title to create a ticket. "
+        "For three or more work items, prefer action='create_ticket_batch' with complete tickets; it creates them "
+        "atomically, returns every concrete ID, and skips matching existing titles on retries. "
         "Do not use this tool when the user asks to type ticket text into the active app; use type_text instead. "
         "Do not use this tool when the user asks to create/write a ticket in a folder such as Downloads, Desktop, "
         "Documents, or a filesystem path; use file_operations to create a file there instead. "
@@ -1230,6 +1245,8 @@ class KanbanTicketTool(BaseTool):
         lane_name: str = "",
         title: str = "",
         description: str = "",
+        tickets: Optional[List[dict]] = None,
+        skip_existing_titles: bool = True,
         priority: str = "medium",
         complexity: str = "",
         ticket_id: int = 0,
@@ -1260,6 +1277,7 @@ class KanbanTicketTool(BaseTool):
         try:
             action = (action or "create_ticket").strip().lower().replace(" ", "_")
             message_ids = message_ids or []
+            tickets = tickets or []
             logger.info("KanbanTicketTool: action=%s board_name=%s board_id=%s title=%s",
                         action, board_name, board_id, title[:50] if title else "")
 
@@ -1341,6 +1359,16 @@ class KanbanTicketTool(BaseTool):
                     source_contact=source_contact,
                     source_url=source_url,
                     source_label=source_label,
+                )
+            elif action == "create_ticket_batch":
+                return self._action_create_ticket_batch(
+                    tickets=tickets,
+                    board_name=board_name,
+                    board_id=board_id or None,
+                    lane_name=lane_name,
+                    linked_project_id=linked_project_id or None,
+                    linked_workflow_id=linked_workflow_id or None,
+                    skip_existing_titles=skip_existing_titles,
                 )
             elif action == "list_tickets":
                 return self._action_list_tickets(board_id or None, board_name or None, lane_name or None)
@@ -2055,6 +2083,101 @@ class KanbanTicketTool(BaseTool):
         ref = f"Created {len(created)} ticket(s) in board '{board['name']}', lane '{lane['name']}':\n" + "\n".join(titles)
         spoken = f"I created {len(created)} tickets on {board['name']} in the {lane['name']} lane."
         return voice_then_reference(spoken, ref)
+
+    def _action_create_ticket_batch(
+        self,
+        *,
+        tickets: List[dict],
+        board_name: str = "",
+        board_id: Optional[int] = None,
+        lane_name: str = "",
+        linked_project_id: Optional[int] = None,
+        linked_workflow_id: Optional[int] = None,
+        skip_existing_titles: bool = True,
+    ) -> str:
+        """Create a verified, retry-safe batch without one tool round per ticket."""
+        if not tickets:
+            return voice_then_reference("Give me the tickets to add.", "No ticket drafts supplied.")
+        if len(tickets) > 25:
+            return voice_then_reference("That batch is too large.", "A ticket batch may contain at most 25 items.")
+
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return voice_then_reference("I could not find that board.", "Board not found.")
+        lane_name = lane_name or board.get("agent_source_lane") or ""
+        lane = self._find_lane(board["id"], lane_name)
+        if not lane:
+            return voice_then_reference("That board has no usable backlog lane.", f"No lane found in board '{board['name']}'.")
+
+        from distr.core.db.kanban import KanbanBoard as KB, KanbanLane, KanbanTicket
+        created: List[dict] = []
+        skipped: List[str] = []
+        with self._get_session() as s:
+            lane_obj = orm_get_by_id(s, KanbanLane, lane["id"])
+            board_obj = orm_get_by_id(s, KB, board["id"])
+            max_pos = max((ticket.position for ticket in lane_obj.tickets), default=-1) if lane_obj else -1
+            existing = {
+                (row.title or "").strip().casefold()
+                for row in s.query(KanbanTicket).join(KanbanLane).filter(KanbanLane.board_id == board["id"]).all()
+            }
+            effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
+            effective_workflow_id = linked_workflow_id or (board_obj.default_workflow_id if board_obj else None)
+            effective_action_id = board_obj.default_action_id if board_obj else None
+            effective_send_to_cli = bool(board_obj.send_to_cli) if board_obj else False
+            if effective_send_to_cli:
+                effective_workflow_id = None
+                effective_action_id = None
+
+            for raw in tickets:
+                item = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
+                title = _sanitize_ticket_title(str(item.get("title") or ""))
+                description = str(item.get("description") or "").strip()
+                if not title or not description:
+                    raise ValueError("Every batch ticket requires a title and self-contained description")
+                title_key = title.casefold()
+                if skip_existing_titles and title_key in existing:
+                    skipped.append(title)
+                    continue
+                priority = str(item.get("priority") or "medium").lower()
+                if priority not in ("low", "medium", "high", "critical"):
+                    priority = "medium"
+                requested_complexity = str(item.get("complexity") or "auto")
+                description, _ = _append_recommended_skills(title, description, "")
+                max_pos += 1
+                ticket = KanbanTicket(
+                    lane_id=lane["id"],
+                    title=title,
+                    description=description,
+                    priority=priority,
+                    complexity=resolve_ticket_complexity(title, description, requested=requested_complexity, file_count=0),
+                    position=max_pos,
+                    linked_project_id=effective_project_id,
+                    linked_workflow_id=effective_workflow_id,
+                    linked_action_id=effective_action_id,
+                    send_to_cli=effective_send_to_cli,
+                    source_chat_id=self._source_chat_id_for_new_ticket(),
+                    source_provider="manual",
+                    parent_ticket_id=int(item.get("parent_ticket_id") or 0) or None,
+                )
+                s.add(ticket)
+                s.flush()
+                existing.add(title_key)
+                created.append({"id": ticket.id, "title": title})
+
+        if created:
+            self._last_ticket_id = created[-1]["id"]
+            self._last_board_id = board["id"]
+        lines = [f"#{item['id']} {item['title']}" for item in created]
+        if skipped:
+            lines.append("Skipped existing titles: " + "; ".join(skipped))
+        reference = (
+            f"Batch verified: created {len(created)} ticket(s) in board '{board['name']}', lane '{lane['name']}'.\n"
+            + "\n".join(lines)
+        )
+        spoken = f"I verified the ticket batch. I created {len(created)} new tickets"
+        if skipped:
+            spoken += f" and skipped {len(skipped)} that already existed"
+        return voice_then_reference(spoken + ".", reference)
 
     def _action_list_tickets(self, board_id=None, board_name=None, lane_name=None) -> str:
         board = self._find_board(board_id, board_name)

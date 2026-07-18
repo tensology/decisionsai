@@ -60,6 +60,10 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             r"\b(create|make|add|new|draft)\s+(?:a\s+|an\s+)?(?:ticket|card|issue)\b",
             r"\b(create|make|add|new|draft)\s+(?:a\s+|an\s+)?(?:jira|trello)\s+(?:ticket|card|issue)\b",
+            r"\b(?:break|split|turn|convert|scope)\b.{0,80}\b(?:work|request|project|brief|instructions?|it|this)\b.{0,40}\b(?:into|as)\b.{0,20}\b(?:tickets?|work\s+items?|tasks?)\b",
+            r"\b(?:break|split|turn|convert|scope)\s+(?:it|this|that|the\s+(?:work|request|project|brief))\s+(?:down\s+)?into\s+(?:separate\s+|individual\s+|a\s+group\s+of\s+)?(?:tickets?|work\s+items?|tasks?)\b",
+            r"\b(?:break|split|turn|convert|scope)\b.{0,140}\b(?:tickets?|work\s+items?)\b",
+            r"\b(?:tickets?|work\s+items?)\b.{0,80}\b(?:independently\s+executable|dependencies|dependency|workflow|backlog)\b",
             r"\b(move|transfer|relocate)\b.+\b(ticket|card|issue)\b.+\bboard\b",
             r"\b(ticket|card|issue)\b.+\b(move|transfer|relocate)\b.+\bboard\b",
             r"\bwhats\s*app\b.+\b(sync|latest|activity|overview|contacts?|chats?|messages?|thread|context|snapshot|ticket|reply|send)\b",

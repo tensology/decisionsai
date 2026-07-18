@@ -422,6 +422,40 @@ _DEVELOPMENT_STEPS = [
         },
     ),
     _step(
+        "Final production polish and ship audit",
+        "Use Codex as the strongest final production pass after implementation and independent review. Read plan.md, the diff, "
+        "review findings, correction evidence, and the exact acceptance criteria. Fix only remaining release-blocking defects, "
+        "then run the discovered project checks and the required Playwright/browser path for UI work. Confirm that no placeholder "
+        "content, debug residue, dead code, broken navigation, console errors, missing responsive states, or unverified checkout/auth "
+        "paths remain. Produce a concise ship verdict with evidence; do not broaden the ticket or redesign accepted work.",
+        skills=["verification-loop", "finishing-a-development-branch", "browser-qa", "requesting-code-review"],
+        tools=["cli", "shell", "playwright", "browser_use"],
+        action_type="send_to_project_cli",
+        guardrail=_guardrail(
+            _SCOPE,
+            _DEV_CHECKS,
+            "- This is a production polish pass, not a new implementation scope",
+            "- Fix release blockers and regressions only; preserve accepted design and behavior",
+            "- Never claim ship-ready without exact test/browser evidence",
+        ),
+        failure_checklist=[
+            "Release-blocking review finding remains unresolved",
+            "UI work lacks final Playwright/browser evidence",
+            "Console/runtime errors or broken critical flows remain",
+            "Ship verdict does not map evidence to acceptance criteria",
+        ],
+        validation_prompt="Codex final polish resolves release blockers, project and browser checks pass, and the ship verdict maps evidence to every acceptance criterion.",
+        on_pass_goto_position=6,
+        on_fail_goto_position=4,
+        config={
+            "execution_scope": "ticket",
+            "step_role": "final_polish",
+            "model_policy": {"auto_route_models": True, "preferred_backend": "codex"},
+            "required_context": ["plan_md", "changed_files", "review_findings", "rerun_results", "acceptance_criteria"],
+            "expected_outputs": ["final_fixes", "final_check_results", "final_browser_evidence", "ship_verdict"],
+        },
+    ),
+    _step(
         "Report, update ticket, and compact memory",
         "Update the ticket with a compact result packet: summary, files changed, commands run, browser evidence or N/A reason, "
         "remaining risks, blockers, and next actions. Write only durable memory deltas: project commands, conventions, paths, "

@@ -7,7 +7,7 @@ from typing import Any
 
 DEVELOPER_WORKFLOW_NAME = "Development"
 DEVELOPER_WORKFLOW_SLUG = "development-ticket-to-implementation"
-DEVELOPER_WORKFLOW_VERSION = 3
+DEVELOPER_WORKFLOW_VERSION = 4
 
 DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "execution_mode": "sequential",

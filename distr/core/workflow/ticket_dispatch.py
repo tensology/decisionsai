@@ -13,6 +13,22 @@ from distr.core.kanban.ticket_policy import normalize_ticket_complexity
 logger = logging.getLogger(__name__)
 
 
+def compact_ticket_run_ref(item: dict[str, Any]) -> dict[str, Any]:
+    """Return the durable queue identity without embedding hydrated ticket context."""
+    if not isinstance(item, dict) or item.get("ticket_id") is None:
+        raise ValueError("A queued ticket reference requires ticket_id")
+    ref = {"ticket_id": int(item["ticket_id"])}
+    if item.get("board_id") is not None:
+        ref["board_id"] = int(item["board_id"])
+    return ref
+
+
+def hydrate_ticket_run_ref(item: dict[str, Any], workflow_id: int) -> dict[str, Any]:
+    """Load complete context only when a queued ticket is about to execute."""
+    ref = compact_ticket_run_ref(item)
+    return build_ticket_run_item(int(ref["ticket_id"]), int(workflow_id))
+
+
 def build_ticket_run_item(ticket_id: int, workflow_id: int) -> dict[str, Any]:
     """Return context and metadata needed to dispatch one queued ticket."""
     with get_session() as db:

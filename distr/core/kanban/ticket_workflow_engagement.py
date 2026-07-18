@@ -32,7 +32,6 @@ def get_session():
 from distr.core.kanban.ticket_time_tracking import (
     add_time_spent_seconds,
     format_time_tracking_seconds,
-    parse_time_tracking_seconds,
 )
 
 
@@ -58,6 +57,8 @@ def _brief_failure(result_text: str) -> str:
         return "The worker reached its time limit before it could finish this step."
     if "bypassed" in low:
         return "No project was linked for this step."
+    if "project cli backend" in low:
+        return "The validation gate still needs clearer evidence; details are in the activity feed."
     sentence = re.split(r"[.!?\n]", clean, maxsplit=1)[0].strip()
     if len(sentence) > 100:
         sentence = sentence[:97] + "..."
@@ -73,7 +74,9 @@ def _spoken_step_action(step_name: str) -> str:
     """Translate workflow labels into a useful spoken description of the work."""
     clean = re.sub(r"\s+", " ", (step_name or "").strip())
     low = clean.lower()
-    if any(term in low for term in ("ingest", "project context", "ticket context", "requirements")):
+    if any(term in low for term in (
+        "ingest", "understand", "project context", "ticket context", "requirements", "acceptance criteria",
+    )):
         return "reviewing the ticket requirements, project files, and existing constraints"
     if "plan" in low or "scope" in low:
         return "turning the requirements into a concrete implementation plan"
@@ -208,6 +211,12 @@ def build_route_selection_message(
         }.get(backend_key, (model or backend or "the selected worker").replace("_", " ").strip())
     role = (step_role or "work").strip().lower().replace("_", " ")
     rationale = re.sub(r"\s+", " ", (reason or "").strip()).rstrip(".")
+    if rationale.lower().startswith((
+        "workflow step selected scoped route",
+        "explicit backend override",
+        "explicit model override",
+    )):
+        rationale = ""
     why = f" because {rationale[0].lower() + rationale[1:]}" if rationale else ""
     return (
         f"For {_ticket_subject(ticket_title)}, I'm using {worker} for the {role}{why}. "
@@ -269,8 +278,11 @@ def build_run_done_message(
     elapsed_label: str = "",
 ) -> str:
     normalized = (status or "").strip().lower()
-    if warning and "loop" in warning.lower():
+    warning_text = re.sub(r"\s+", " ", str(warning or "")).strip()
+    if warning_text and ("loop" in warning_text.lower() or "repeated" in warning_text.lower()):
         base = "The workflow stopped because a routing rule repeated without a safe correction path."
+    elif warning_text:
+        base = f"The workflow stopped before sign-off. {warning_text}"
     elif normalized == "completed":
         base = (
             f"I've finished the workflow for {_ticket_subject(ticket_title)}. "
@@ -458,14 +470,53 @@ def notify_ticket_workflow_progress(
     priority: str = "normal",
     requires_response: bool = False,
     voice_body: Optional[str] = None,
+    audible: bool = False,
 ) -> None:
-    """Deliver a plain-English workflow update via TTS and/or Telegram."""
+    """Record progress, speaking only interruptions and explicit milestones."""
     text = (body or "").strip()
     if not text:
         return
     spoken = (voice_body or text).strip()
 
     ctx = _run_context(run_id)
+    audible = bool(audible or requires_response)
+    if not audible:
+        # Routine model choices, step transitions, retries, and automatic
+        # failovers belong in Mission Control/chat, not in the voice queue.
+        try:
+            from distr.core.workflow.chat_trace import record_workflow_chat_event
+
+            record_workflow_chat_event(
+                run_id,
+                "progress",
+                status="running",
+                step_id=step_id,
+                summary=text,
+                phase="workflow_progress",
+            )
+        except Exception:
+            logger.debug("Could not write quiet workflow progress to chat", exc_info=True)
+        try:
+            from distr.core.orchestration_events import emit_user_notification
+
+            emit_user_notification(
+                channel="activity_feed",
+                text=text,
+                workflow_id=ctx.get("workflow_id"),
+                run_id=run_id,
+                step_id=step_id,
+                ticket_id=ctx.get("ticket_id"),
+                board_id=ctx.get("board_id"),
+                payload={
+                    "engagement_kind": "workflow_progress",
+                    "ticket_title": ctx.get("ticket_title"),
+                    "state_fingerprint": state_fingerprint,
+                    "audible": False,
+                },
+            )
+        except Exception:
+            logger.debug("Could not write quiet workflow progress ledger event", exc_info=True)
+        return
     interaction = None
     reply_markup = None
     if requires_response and ctx.get("workflow_id"):
@@ -507,7 +558,8 @@ def notify_ticket_workflow_progress(
             workflow_id=ctx.get("workflow_id"),
             run_id=run_id,
             step_id=step_id,
-            requires_response=requires_response,
+                requires_response=requires_response,
+                allow_voice=True,
         )
     )
     if not decision.should_send:
@@ -650,9 +702,7 @@ def record_ticket_workflow_elapsed(
         run.run_data = json.dumps(run_data)
         db.commit()
 
-        elapsed_label = format_time_tracking_seconds(
-            parse_time_tracking_seconds(ticket.time_spent)
-        ) or format_time_tracking_seconds(elapsed_seconds)
+        elapsed_label = format_time_tracking_seconds(elapsed_seconds)
         try:
             notify_ticket_workflow_progress(
                 run_id=run_id,
@@ -664,6 +714,7 @@ def record_ticket_workflow_elapsed(
                 ),
                 state_fingerprint=f"run_done:{run_id}:{status}:{warning}",
                 priority="high" if (status or "").strip().lower() == "failed" else "normal",
+                audible=True,
             )
         except Exception:
             logger.debug("run-done engagement failed", exc_info=True)
@@ -703,12 +754,6 @@ def notify_ticket_workflow_step_started(run_id: int, step_id: int) -> None:
                 step_name=step_name,
                 step_index=step_index,
             )
-    # Project-worker steps announce their final provider/model a moment later,
-    # once Auto routing has actually resolved it. Sending both messages creates
-    # a redundant Telegram voice-note queue and can delay the useful model
-    # announcement behind a generic "started" message.
-    if action_type == "send_to_project_cli":
-        return
     if skip_redundant_announcement:
         return
     notify_ticket_workflow_progress(
@@ -717,6 +762,7 @@ def notify_ticket_workflow_step_started(run_id: int, step_id: int) -> None:
         body=body,
         state_fingerprint=f"step_start:{step_id}",
         priority="high",
+        audible=not run_start_announced,
     )
 
 
@@ -726,6 +772,7 @@ def notify_ticket_workflow_step_finished(
     step_id: int,
     passed: bool,
     result_text: str,
+    requires_attention: bool = False,
 ) -> None:
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -778,4 +825,5 @@ def notify_ticket_workflow_step_finished(
             else f"step_done:{step_id}:{'pass' if passed else 'fail'}"
         ),
         priority="normal" if passed else "high",
+        audible=bool(requires_attention),
     )

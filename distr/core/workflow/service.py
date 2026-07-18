@@ -103,9 +103,12 @@ def _run_loop_visibility(run_data: Dict[str, Any]) -> Dict[str, Any]:
         max_iterations = int(max_iterations) if max_iterations not in (None, "") else None
     except (TypeError, ValueError):
         max_iterations = None
-    label = f"Loop {iteration}"
+    # ``loop_iteration`` counts correction cycles, so zero means the first
+    # pass—not “nothing has started”. Keep the durable counter zero-based but
+    # make the operator-facing label describe the state humans expect.
+    label = f"Pass {iteration + 1}"
     if max_iterations is not None:
-        label = f"Loop {iteration} / {max_iterations}"
+        label = f"Pass {iteration + 1} · {iteration}/{max_iterations} retries"
     return {
         "loop_iteration": iteration,
         "loop_max_iterations": max_iterations,
@@ -197,6 +200,7 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "execution_route": run_data.get("execution_route") or {},
         "pending_route_approval": run_data.get("pending_route_approval") or {},
         "provider_preflight": run_data.get("provider_preflight") or {},
+        "provider_model_readiness": run_data.get("provider_model_readiness") or {},
         "execution_session_id": run_data.get("execution_session_id"),
         "ticket_group_id": run_data.get("ticket_group_id"),
         "ticket_group_index": run_data.get("ticket_group_index"),
@@ -1567,6 +1571,7 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
                 "current_step_id": r.current_step_id,
                 **enriched,
                 "phase": run_data.get("phase"),
+                "latest_context_telemetry": run_data.get("latest_context_telemetry") or {},
                 "result_packet": _compact_result_packet_for_api(run_data.get("result_packet")),
                 "correction_attempts": corrections_by_run.get(int(r.id), [])[-5:],
             })
@@ -1716,6 +1721,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "last_heartbeat": heartbeat,
                 "heartbeat_age_seconds": heartbeat_age_seconds,
                 "activity_state": activity_state,
+                "latest_context_telemetry": run_data.get("latest_context_telemetry") or {},
             })
         return results
 

@@ -12,6 +12,69 @@ from distr.core.db.workflow import AutoWorkflowStep
 logger = logging.getLogger(__name__)
 
 
+def _ticket_acceptance_gate(step: AutoWorkflowStep, result: str, ticket_context: str) -> bool | None:
+    """Reject objective evidence gaps before an LLM can hand-wave them away.
+
+    Returns ``False`` for a deterministic acceptance failure and ``None`` when
+    ordinary configured verification should decide. The gate is review-only so
+    planning/context steps are not expected to produce final artifacts.
+    """
+    step_name = str(getattr(step, "name", "") or "").lower()
+    if not any(word in step_name for word in ("review", "validate", "quality")):
+        return None
+    ticket_text = str(ticket_context or "").lower()
+    observed = str(result or "").lower()
+
+    screenshot_required = (
+        "browser evidence required" in ticket_text
+        and any(word in ticket_text for word in ("screenshot", "screen recording", "capture"))
+    )
+    media_evidence = any(ext in observed for ext in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov"))
+    if screenshot_required and not media_evidence:
+        logger.warning("Ticket acceptance gate failed: required browser media evidence was not reported")
+        return False
+
+    from distr.core.workflow.ticket_contract import (
+        classify_ticket_execution,
+        research_review_has_evidence,
+    )
+
+    profile = classify_ticket_execution(ticket_context)
+    no_code_change = bool(profile.get("explicit_no_code"))
+    negated_code_claims = (
+        "no code changes",
+        "no code change",
+        "without code changes",
+        "did not modify code",
+    )
+    observed_without_negations = observed
+    for phrase in negated_code_claims:
+        observed_without_negations = observed_without_negations.replace(phrase, "")
+    claims_code_change = any(
+        phrase in observed
+        for phrase in ("code cleanup", "code change", "modified frontend", "updated frontend", "changed frontend")
+    )
+    claims_code_change = claims_code_change and any(
+        phrase in observed_without_negations
+        for phrase in ("code cleanup", "code change", "modified frontend", "updated frontend", "changed frontend")
+    )
+    if no_code_change and claims_code_change:
+        logger.warning("Ticket acceptance gate failed: review accepted code changes on a research-only ticket")
+        return False
+
+    copy_first = "copy-first" in ticket_text or "must copy" in ticket_text
+    copy_evidence = any(token in observed for token in ("rsync ", "cp -a", "copied from", "copy manifest"))
+    if copy_first and "implement" not in step_name and not copy_evidence:
+        logger.warning("Ticket acceptance gate failed: copy-first review omitted terminal copy evidence")
+        return False
+    if profile.get("research_only") and research_review_has_evidence(result):
+        # Explicit ticket scope beats the generic development validator. The
+        # evidence helper requires a completed structured report, no blockers,
+        # concrete artifact paths, and acceptance/deliverable verification.
+        return True
+    return None
+
+
 # ── Verification engine ──
 
 
@@ -53,6 +116,12 @@ def _run_verification(
     Run the configured validation for a step. Returns True if passed.
     If validation_type is 'none', uses the caller's passed flag.
     """
+    acceptance_gate = _ticket_acceptance_gate(step, result, ticket_context)
+    if acceptance_gate is False:
+        return False
+    if acceptance_gate is True:
+        return bool(caller_passed)
+
     vtype = (step.validation_type or "none").strip().lower()
     if vtype == "none":
         return caller_passed

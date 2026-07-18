@@ -153,7 +153,7 @@ def _notification_text(entry: dict[str, Any]) -> tuple[bool, str]:
                 text = f"{text}; {detail}"
         return False, text
     if event_type == "worker_dispatched":
-        return True, summary or f"{source_label} started on the work."
+        return False, summary or f"{source_label} started on the work."
     if event_type == "worker_progress":
         return False, summary or f"{source_label} sent a progress update."
     if event_type == "needs_input":
@@ -163,9 +163,20 @@ def _notification_text(entry: dict[str, Any]) -> tuple[bool, str]:
         detail = f": {summary}" if summary else "."
         return True, f"I need your approval{detail}"
     if event_type == "worker_completed":
-        return True, summary or f"{source_label} finished the work."
+        subtype = str(entry.get("subtype") or payload.get("subtype") or "").strip().lower()
+        terminal = subtype in {"workflow_run_completed", "run_completed"} or (
+            source == "workflow" and entry.get("step_id") in (None, "")
+        )
+        return terminal, summary or f"{source_label} finished the work."
     if event_type == "worker_failed":
-        return True, summary or f"{source_label} hit a problem."
+        subtype = str(entry.get("subtype") or payload.get("subtype") or "").strip().lower()
+        terminal = subtype in {
+            "workflow_run_failed",
+            "workflow_run_cancelled",
+            "run_failed",
+            "run_cancelled",
+        }
+        return terminal, summary or f"{source_label} hit a problem."
     if event_type == "memory_written":
         return False, summary or "I saved a useful learning from that run."
     if event_type == "user_notified":
@@ -345,3 +356,75 @@ def list_orchestration_timeline(
         limit=limit,
     )
     return [_timeline_entry(event) for event in reversed(events)]
+
+
+def list_mission_control_timeline(
+    *,
+    workflow_id: int,
+    run_id: int,
+    current_step_id: int | None,
+    current_activity_limit: int = 80,
+) -> list[dict[str, Any]]:
+    """Return full step lifecycle history without returning the full raw ledger.
+
+    Heartbeat-heavy local model runs can exceed the general 500-event query
+    limit. Query lifecycle rows independently so early completed steps never
+    disappear from Mission Control, then merge a small current-step activity
+    tail for live feedback.
+    """
+    from sqlalchemy import or_
+
+    from distr.core.db import get_session
+    from distr.core.db.orchestrator import OrchestratorEvent
+    from distr.core.orchestrator import serialize_event
+    from distr.core.workflow.runtime_contract import (
+        MISSION_CONTROL_LIFECYCLE_TYPES,
+        mission_control_timeline,
+    )
+
+    lifecycle_predicates = [
+        OrchestratorEvent.payload.like(f"%{subtype}%")
+        for subtype in sorted(MISSION_CONTROL_LIFECYCLE_TYPES)
+    ]
+    with get_session() as session:
+        lifecycle_rows = (
+            session.query(OrchestratorEvent)
+            .filter(OrchestratorEvent.workflow_id == int(workflow_id))
+            .filter(OrchestratorEvent.run_id == int(run_id))
+            .filter(
+                or_(
+                    OrchestratorEvent.event_type.in_(sorted(MISSION_CONTROL_LIFECYCLE_TYPES)),
+                    *lifecycle_predicates,
+                )
+            )
+            .order_by(OrchestratorEvent.created_at.asc(), OrchestratorEvent.id.asc())
+            .all()
+        )
+        current_query = (
+            session.query(OrchestratorEvent)
+            .filter(OrchestratorEvent.workflow_id == int(workflow_id))
+            .filter(OrchestratorEvent.run_id == int(run_id))
+        )
+        if current_step_id:
+            current_query = current_query.filter(
+                or_(
+                    OrchestratorEvent.step_id == int(current_step_id),
+                    OrchestratorEvent.step_id.is_(None),
+                )
+            )
+        current_rows = (
+            current_query
+            .order_by(OrchestratorEvent.created_at.desc(), OrchestratorEvent.id.desc())
+            .limit(max(1, min(int(current_activity_limit or 80), 160)))
+            .all()
+        )
+        serialized_by_id = {int(row.id): serialize_event(row) for row in lifecycle_rows}
+        serialized_by_id.update({int(row.id): serialize_event(row) for row in current_rows})
+
+    normalized = [_timeline_entry(event) for event in serialized_by_id.values()]
+    normalized.sort(key=lambda event: (str(event.get("created_at") or ""), int(event.get("id") or 0)))
+    return mission_control_timeline(
+        normalized,
+        current_step_id=current_step_id,
+        current_activity_limit=min(current_activity_limit, 60),
+    )

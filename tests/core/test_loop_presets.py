@@ -189,12 +189,13 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     planned = plan_steps_from_bundle(bundle)
     assert planned["success"] is True
     steps = planned["steps"]
-    assert len(steps) == 6
+    assert len(steps) == 7
     assert steps[0]["title"] == "Understand ticket and acceptance criteria"
     assert steps[1]["title"] == "Create the implementation plan"
     assert steps[2]["title"] == "Implement the planned change"
     assert steps[3]["title"] == "Independently review and validate the change"
     assert steps[4]["title"] == "Correct defects found by validation"
+    assert steps[5]["title"] == "Final production polish and ship audit"
     assert steps[-1]["title"] == "Report, update ticket, and compact memory"
     assert any(step["action_type"] == "send_to_project_cli" for step in steps)
     assert any("playwright" in ((step.get("config") or {}).get("tools") or []) for step in steps)
@@ -206,6 +207,7 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
         "implementation",
         "review",
         "implementation",
+        "final_polish",
         "reporting",
     ]
     assert "plan.md" in (planned["loop_contract"].get("exit_when") or "")
@@ -289,17 +291,17 @@ def test_consolidation_leaves_one_development_workflow_and_preserves_history(
 
     assert result["workflow_id"] == canonical_id
     assert result["historical_workflow_id"] is not None
-    assert result["step_count"] == 6
+    assert result["step_count"] == 7
     assert obsolete_id in result["archived_workflow_ids"]
     with db_factory() as db:
         canonical = db.query(AutoWorkflow).filter(AutoWorkflow.id == canonical_id).one()
         assert canonical.name == "Development"
         assert canonical.status == "active"
-        assert len(canonical.steps) == 6
+        assert len(canonical.steps) == 7
         settings = json.loads(canonical.run_settings or "{}")
         assert settings["memory_enabled"] is True
         assert settings["capture_failures_and_lessons"] is True
-        assert settings["canonical_workflow_version"] == 3
+        assert settings["canonical_workflow_version"] == 4
         history = db.query(AutoWorkflow).filter(
             AutoWorkflow.id == result["historical_workflow_id"]
         ).one()

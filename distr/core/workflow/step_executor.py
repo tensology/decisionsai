@@ -431,6 +431,7 @@ class StepExecutorMixin:
                     return None
                 run_data: dict[str, Any] = {}
                 if run.run_data:
+                    routing_settings = {}
                     try:
                         run_data = json.loads(run.run_data or "{}") or {}
                     except Exception:
@@ -766,6 +767,35 @@ class StepExecutorMixin:
                     except Exception:
                         logger.warning("Provider preflight failed unexpectedly; leaving route unverified", exc_info=True)
                         provider_preflight = None
+                    provider_model_readiness = None
+                    if (
+                        provider_preflight is not None
+                        and provider_preflight.ready is True
+                        and str(route.get("model_provider") or "").strip().lower() == "openrouter"
+                        and str(route.get("model") or "").strip().lower().endswith(":free")
+                        and not bool(route.get("provider_preflight_override"))
+                    ):
+                        try:
+                            from distr.core.project_cli_backends.provider_preflight import (
+                                probe_openrouter_model_readiness,
+                            )
+
+                            provider_model_readiness = probe_openrouter_model_readiness(
+                                model=str(route.get("model") or ""),
+                                api_key=str((routing_settings or {}).get("openrouter_key") or ""),
+                            )
+                            if provider_model_readiness.ready is False:
+                                provider_preflight = provider_model_readiness
+                        except Exception:
+                            logger.warning(
+                                "OpenRouter free-model readiness probe failed unexpectedly; leaving route unverified",
+                                exc_info=True,
+                            )
+                    if run_row and provider_model_readiness is not None:
+                        latest = json.loads(run_row.run_data or "{}") or {}
+                        latest["provider_model_readiness"] = provider_model_readiness.to_dict()
+                        run_row.run_data = json.dumps(latest)
+                        db.commit()
                     if (
                         provider_preflight is not None
                         and provider_preflight.ready is False
@@ -1850,10 +1880,10 @@ class StepExecutorMixin:
         step_data: Dict[str, Any],
         run_id: Optional[int],
         workflow_id: Optional[int],
-    ) -> str:
-        """Build the durable DecisionsAI execution packet for project CLI steps."""
+    ) -> dict[str, Any]:
+        """Resolve execution identity and durable memory references for a step."""
         if run_id is None:
-            return ""
+            return {}
 
         try:
             from distr.core.workspace_memory.paths import (
@@ -1869,8 +1899,6 @@ class StepExecutorMixin:
                 projection_root,
             )
             from distr.core.workspace_memory.reader import load_workspace_context
-            from distr.core.workflow.step_iteration import HARNESS_REPORT_TEMPLATE
-
             step_id = step_data.get("id")
             step_name = (step_data.get("name") or f"Step {step_id or ''}").strip()
             action_type = (step_data.get("action_type") or step_data.get("step_type") or "").strip()
@@ -1947,7 +1975,7 @@ class StepExecutorMixin:
             )
 
             def _path_line(label: str, value: str) -> str:
-                return f"- {label}: `{value}`" if value else ""
+                return f"{label}: {value}" if value else ""
 
             context_paths: list[str] = []
             if workflow_id:
@@ -1992,67 +2020,40 @@ class StepExecutorMixin:
                 ])
 
             context_paths = [line for line in context_paths if line]
-            router_chain = []
+            router_chain: list[str] = []
             for row in ctx.router_chain or []:
                 label = row.get("label") or row.get("entity_type") or "router"
                 path = row.get("path") or ""
                 if path:
-                    router_chain.append(f"- {label}: `{path}`")
+                    router_chain.append(f"{label}: {path}")
 
-            parts = [
-                "# DecisionsAI execution packet",
-                "",
-                "Treat this packet plus the referenced memory files as the source of truth for this workflow step.",
-                "Do not execute this step as a standalone prompt. First load the workflow/project/ticket/run context that applies, then do only the current step.",
-                "",
-                "## Execution identity",
-                "",
-                f"- Workflow: {workflow_name or workflow_id or 'unknown'}",
-                f"- Run ID: {run_id}",
-                f"- Step: {step_name} (id={step_id or 'unknown'}, action={action_type or 'unknown'})",
-                f"- Ticket: {ticket_title or ticket_id or 'none'}",
-                f"- Project: {project_name or project_id or 'unknown'}",
-                f"- Project folder: `{project_folder or 'not set'}`",
-                "",
-                "## Read this context before acting",
-                "",
-            ]
-            parts.extend(context_paths or ["- No filesystem memory paths were resolved. Use the ticket and step context below."])
-            if router_chain:
-                parts.extend(["", "## Router chain", ""])
-                parts.extend(router_chain)
-            if ctx.pickup_brief:
-                parts.extend(["", "## Pickup brief", "", ctx.pickup_brief.strip()[:4000]])
-            if ctx.handoff_preview:
-                parts.extend(["", "## Latest handoff preview", "", ctx.handoff_preview.strip()[:2500]])
-            if ctx.active_notes:
-                parts.extend(["", "## Active memory notes", "", ctx.active_notes.strip()[:2500]])
-            if ctx.references_index:
-                parts.extend(["", "## Reference index", ""])
-                parts.extend(f"- {item}" for item in ctx.references_index[:40])
-            parts.extend([
-                "",
-                "## Execution rules",
-                "",
-                "- Stay on the linked ticket and current workflow step; do not wander into unrelated refactors.",
-                "- Use project-local rules and repo instructions before generic assumptions.",
-                "- If context conflicts, prefer the most specific source in this order: run -> ticket -> workflow -> project -> board -> org -> repo.",
-                "- If required files or attachments are missing, report `needs_input` instead of inventing context.",
-                "- Keep changes minimal, evidence-backed, and reversible.",
-                "",
-                "## Return contract",
-                "",
-                "When this step is complete, report back using exactly these fields:",
-                "",
-                HARNESS_REPORT_TEMPLATE,
-            ])
-            return "\n".join(parts).strip()
+            return {
+                "identity": {
+                    "workflow": workflow_name or workflow_id or "unknown",
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "step": step_name,
+                    "step_id": step_id,
+                    "action": action_type or "unknown",
+                    "ticket": ticket_title or ticket_id or "none",
+                    "ticket_id": ticket_id,
+                    "project": project_name or project_id or "unknown",
+                    "project_id": project_id,
+                    "project_folder": project_folder or "not set",
+                },
+                "memory_refs": [*context_paths, *router_chain, *list(ctx.references_index or [])[:20]],
+                "memory_candidates": [
+                    ctx.pickup_brief or "",
+                    ctx.handoff_preview or "",
+                    ctx.active_notes or "",
+                ],
+            }
         except Exception:
             logger.debug("_build_workflow_execution_packet_context failed", exc_info=True)
-            return ""
+            return {}
 
     @staticmethod
-    def _bound_project_cli_prompt(prompt: str, *, max_chars: int = 24000) -> str:
+    def _bound_project_cli_prompt(prompt: str, *, max_chars: int = 16000) -> str:
         """Bound local-worker context while preserving identity and current task.
 
         Execution identity and memory paths live at the start; the current step,
@@ -2066,6 +2067,30 @@ class StepExecutorMixin:
         head_chars = int(max_chars * 0.55)
         tail_chars = max_chars - head_chars - len(marker)
         return value[:head_chars].rstrip() + marker + value[-tail_chars:].lstrip()
+
+    @staticmethod
+    def _record_context_telemetry(run_id: Optional[int], step_id: Any, telemetry: dict[str, Any]) -> None:
+        """Persist bounded prompt diagnostics so Mission Control can explain context cost."""
+        if run_id is None:
+            return
+        try:
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run:
+                    return
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                entry = {"step_id": step_id, **dict(telemetry or {})}
+                history = [item for item in (run_data.get("context_telemetry") or []) if isinstance(item, dict)]
+                history.append(entry)
+                run_data["context_telemetry"] = history[-20:]
+                run_data["latest_context_telemetry"] = entry
+                run.run_data = json.dumps(run_data, default=str)
+                db.commit()
+        except Exception:
+            logger.debug("Could not persist workflow context telemetry", exc_info=True)
 
     def _build_agent_prompt(self, step_data: Dict[str, Any], run_id: Optional[int]) -> str:
         """Build the prompt for the WorkflowAgent, enriched with full context.
@@ -2082,8 +2107,6 @@ class StepExecutorMixin:
             extract_artifact_paths_from_result,
             truncate_step_result,
         )
-        from distr.core.workflow.planning import build_step_context_prompt
-
         step_id = step_data["id"]
         workflow_id = step_data.get("workflow_id")
 
@@ -2274,10 +2297,15 @@ class StepExecutorMixin:
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed to load run context prefix: %s", e)
 
-        # ── Build the prompt using the shared function ──
+        # ── Build the compact handoff packet ──
         step_instruction = step_data["instruction"].strip()
         step_title = step_data.get("name", f"Step {step_index + 1}")
         step_description = step_data.get("description", "")
+        from distr.core.workflow.ticket_contract import step_scope_overlay
+
+        applicability = step_scope_overlay(step_title, workflow_input_context)
+        if applicability:
+            step_instruction = f"{step_instruction}\n\n[Ticket-specific applicability]\n{applicability}"
         step_config = step_data.get("config") or {}
         if isinstance(step_config, str):
             try:
@@ -2356,43 +2384,77 @@ class StepExecutorMixin:
             except Exception as e:
                 logger.debug("_build_agent_prompt: steering context failed: %s", e)
 
-        prompt = build_step_context_prompt(
-            step_index=step_index,
-            total_steps=total_steps,
-            workflow_description=(
-                f"{workflow_description}\n\nWorkflow input:\n{workflow_input_context}".strip()
-                if workflow_input_context
-                else (workflow_description or "Complete the requested workflow.")
-            ),
-            step_title=step_title,
-            step_instruction=step_instruction,
-            prior_results=prior_results,
-            context_rules=context_rules,
-            continuation_input=continuation_input,
-            loop_context_summary=loop_context_summary,
-        )
-        if steering_context:
-            prompt = f"{prompt}\n\n{steering_context}"
-
         execution_packet_context = self._build_workflow_execution_packet_context(
             step_data,
             run_id,
             workflow_id,
         )
-        if execution_packet_context:
-            prompt = f"{execution_packet_context}\n\n---\n\n{prompt}"
+        from distr.core.workflow.handoff_packet import StepHandoffPacket, select_relevant_memory
+        from distr.core.workflow.step_iteration import HARNESS_REPORT_TEMPLATE
+
+        objective_context = (
+            f"{workflow_description}\n\nWorkflow input:\n{workflow_input_context}".strip()
+            if workflow_input_context
+            else (workflow_description or "Complete the requested workflow.")
+        )
+        constraints = [
+            context_rules,
+            loop_context_summary,
+            steering_context,
+            "Stay on the linked ticket and current workflow step. Use project-local rules before generic assumptions. "
+            "If required files or attachments are missing, report needs_input. Keep changes minimal, evidence-backed, and reversible.",
+        ]
+        memory_candidates = [
+            *list(execution_packet_context.get("memory_candidates") or []),
+            context_rules,
+            steering_context,
+        ]
+        memory_facts = select_relevant_memory(
+            memory_candidates,
+            query=f"{step_title}\n{step_instruction}\n{objective_context[:2200]}",
+        )
+        artifact_refs: list[str] = []
+        prior_outcomes: list[dict[str, Any]] = []
+        for item in prior_results:
+            artifact_refs.extend(item.get("artifact_paths") or [])
+            prior_outcomes.append({
+                "title": item.get("title") or "Prior step",
+                "status": item.get("status") or "completed",
+                "summary": item.get("result") or "",
+            })
+        packet = StepHandoffPacket(
+            identity=dict(execution_packet_context.get("identity") or {
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "step": step_title,
+                "position": f"{step_index + 1}/{total_steps}",
+            }),
+            objective=objective_context,
+            current_step={"title": step_title, "instruction": step_instruction},
+            constraints=[item for item in constraints if str(item or "").strip()],
+            prior_outcomes=prior_outcomes,
+            artifact_refs=artifact_refs,
+            memory_refs=list(execution_packet_context.get("memory_refs") or []),
+            memory_facts=memory_facts,
+            continuation=continuation_input,
+            return_contract=HARNESS_REPORT_TEMPLATE,
+        )
+        prompt, telemetry = packet.render(max_chars=8_000)
+        self._record_context_telemetry(run_id, step_id, telemetry)
 
         logger.info(
-            "_build_agent_prompt: step_id=%s run_id=%s prior_results=%d context_rules_len=%d workflow_input_len=%d feedback_len=%d",
+            "_build_agent_prompt: step_id=%s run_id=%s prior_results=%d context_rules_len=%d workflow_input_len=%d feedback_len=%d packet_chars=%d",
             step_id,
             run_id,
             len(prior_results),
             len(context_rules or ""),
             len(workflow_input_context or ""),
             len(continuation_input or ""),
+            len(prompt),
         )
 
-        return self._bound_project_cli_prompt(prompt)
+        return prompt
 
     def _resolve_recording_name(self, step_data: Dict[str, Any], config: dict) -> Optional[str]:
         """Resolve the recording filename from config, step data, or linked action."""

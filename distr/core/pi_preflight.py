@@ -75,6 +75,23 @@ class PiPreflightResult:
         }
 
 
+def infer_project_model_provider(current_provider: str, project_model: str) -> str:
+    """Keep a project model override attached to the provider it identifies.
+
+    Project rows historically stored only a model id.  Free OpenRouter ids such
+    as ``qwen/qwen3-coder:free`` were therefore paired with the global Ollama
+    provider and failed as "not installed" local models.  Preserve explicit
+    non-Ollama choices, and repair the unambiguous OpenRouter-free form.
+    """
+    provider = str(current_provider or "ollama").strip().lower() or "ollama"
+    model = str(project_model or "").strip().lower()
+    if provider == "ollama" and (
+        model == "openrouter/free" or model.endswith(":free")
+    ):
+        return "openrouter"
+    return provider
+
+
 def resolve_coding_cli_config(project_id: Optional[int] = None) -> tuple[str, str, str]:
     """Return (provider, model, cwd) for the coding CLI."""
     provider = "ollama"
@@ -99,12 +116,17 @@ def resolve_coding_cli_config(project_id: Optional[int] = None) -> tuple[str, st
                     project_model = (project.coding_backend_model or "").strip()
                     if project_model:
                         model = project_model
+                        provider = infer_project_model_provider(provider, project_model)
                     folder = (project.folder_location or "").strip()
                     if folder and os.path.isdir(folder):
                         cwd = folder
     except Exception as e:
         logger.debug("resolve_coding_cli_config: %s", e)
 
+    # Legacy settings and orchestrator-written configuration can contain a
+    # provider-identifying free model while the old provider column still says
+    # Ollama. Repair that pair at the final source-of-truth boundary too.
+    provider = infer_project_model_provider(provider, model)
     return provider, model, cwd
 
 

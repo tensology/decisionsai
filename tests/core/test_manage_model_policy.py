@@ -49,7 +49,22 @@ def policy_db(monkeypatch):
     )
     monkeypatch.setattr(
         "distr.core.project_cli_backends.models_catalog.installed_ollama_cli_models",
-        lambda _settings: [{"id": "ornith:35b", "provider": "ollama", "free": True, "usable": True}],
+        lambda _settings: [
+            {
+                "id": "qwen3.5:397b-cloud",
+                "provider": "ollama",
+                "free": False,
+                "local": False,
+                "usable": True,
+            },
+            {
+                "id": "ornith:35b",
+                "provider": "ollama",
+                "free": True,
+                "local": True,
+                "usable": True,
+            },
+        ],
     )
     monkeypatch.setattr(
         "distr.core.project_cli_backends.provider_preflight.rank_openrouter_free_models",
@@ -95,7 +110,8 @@ def test_auto_preview_resolves_every_step_without_mutating(policy_db):
     ]
     assert all(item["route"]["model"] for item in plan["workflow"]["steps"])
     assert plan["catalog"]["candidate_count"] == 3
-    assert plan["workflow"]["steps"][2]["route"]["model"] == "free/validator:free"
+    assert plan["workflow"]["steps"][1]["route"]["model"] == "ornith:35b"
+    assert plan["workflow"]["steps"][2]["route"]["model"] == "free/reviewer:free"
     assert plan["workflow"]["steps"][1]["route"]["model"] != plan["workflow"]["steps"][2]["route"]["model"]
     with factory() as db:
         workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).one()
@@ -186,6 +202,24 @@ def test_global_policy_apply_updates_all_complexity_routes(policy_db, monkeypatc
     assert {f"project_cli_{level}_model_provider" for level in ("low", "medium", "high")} <= saved.keys()
 
 
+@pytest.mark.parametrize("natural_preference", ["prefer_free", "free-first", "local first", "cheap", "cheapest"])
+def test_natural_cost_preference_aliases_resolve_to_free(policy_db, natural_preference):
+    _factory, workflow_id = policy_db
+
+    plan = build_model_policy_plan(workflow_id=workflow_id, mode="auto", preference=natural_preference)
+
+    assert plan["preference"] == "free"
+
+
+@pytest.mark.parametrize("natural_preference", ["auto", "automatic"])
+def test_automatic_preference_aliases_resolve_to_balanced(policy_db, natural_preference):
+    _factory, workflow_id = policy_db
+
+    plan = build_model_policy_plan(workflow_id=workflow_id, mode="auto", preference=natural_preference)
+
+    assert plan["preference"] == "balanced"
+
+
 def test_tool_is_registered_for_the_conversational_orchestrator():
     from distr.core.agent.tools.loader import TOOL_REGISTRY
 
@@ -214,3 +248,25 @@ def test_step_title_wins_over_incidental_plan_words_in_instruction():
         instruction="Correct defects from the plan.",
         config=None,
     )) == "implementation"
+    assert _step_role(SimpleNamespace(
+        name="Final production polish and ship audit",
+        instruction="Fix only remaining release blockers.",
+        config=None,
+    )) == "final_polish"
+
+
+def test_auto_role_policy_reserves_codex_for_final_polish(monkeypatch):
+    from distr.core.project_cli_backends.model_policy import apply_auto_step_role_policy
+
+    workflow = type("Workflow", (), {"run_settings": json.dumps({"auto_route_models": True})})()
+    route = apply_auto_step_role_policy(
+        {"backend": "pi", "model": "ornith:35b", "model_provider": "ollama", "complexity": "high"},
+        workflow=workflow,
+        config={},
+        settings={},
+        step_role="final_polish",
+    )
+
+    assert route["backend"] == "codex"
+    assert route["model"] == "auto"
+    assert "final production polish" in route["policy_reason"].lower()

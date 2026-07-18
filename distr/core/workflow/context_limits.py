@@ -6,10 +6,10 @@ import re
 from typing import List
 
 # Max characters from each prior step's agent_response injected into the next step's prompt.
-PRIOR_STEP_RESULT_MAX_CHARS = 2000
+PRIOR_STEP_RESULT_MAX_CHARS = 1000
 
 # Workflow run summaries shown to the agent / bridge: keep more text when a step failed.
-STEP_SUMMARY_FAILED_MAX_CHARS = 16000
+STEP_SUMMARY_FAILED_MAX_CHARS = 6000
 
 _LINE_FILE = re.compile(
     r"^(?:\s*)([^\s:]+\.(?:py|js|ts|tsx|md|txt|json|yaml|yml|csv|log|pdf|png|jpe?g|webp|ogg|mp3|m4a|opus|mp4|3gp|bin))\s*$",

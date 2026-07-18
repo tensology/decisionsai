@@ -1,7 +1,7 @@
 {
   "development-ticket-to-implementation": {
     "archetype": "incremental_ship",
-    "step_count": 6,
+    "step_count": 7,
     "final_step_name": "Report, update ticket, and compact memory",
     "max_iterations": 6,
     "has_fail_goto": true,

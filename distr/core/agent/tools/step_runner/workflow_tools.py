@@ -351,6 +351,8 @@ class RunWorkflowInput(BaseModel):
     workflow_id: Optional[int] = Field(default=None, description="Workflow ID to run")
     workflow_name: Optional[str] = Field(default=None, description="Workflow name if workflow_id omitted")
     context: Optional[str] = Field(default=None, description="Optional context to prepend to the first step instruction")
+    ticket_ids: List[int] = Field(default_factory=list, description="Ordered board ticket IDs to run as one verified sequential/parallel group")
+    append_to_run_id: Optional[int] = Field(default=None, description="Active sequential run ID whose ticket group should receive these ticket_ids")
 
 
 class RunWorkflowTool(BaseTool):
@@ -358,11 +360,12 @@ class RunWorkflowTool(BaseTool):
     description: str = (
         "Start a workflow run. Executes all steps in sequence using the workflow engine. "
         "Use when user asks 'run the Development workflow', 'start workflow X', "
-        "'execute that workflow', 'run it'."
+        "'execute that workflow', 'run it'. When work is already scoped into tickets, "
+        "pass ticket_ids so the engine preserves ticket/project context and the workflow queue policy."
     )
     args_schema: Type[BaseModel] = RunWorkflowInput
 
-    def _run(self, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, context: Optional[str] = None, **kwargs) -> str:
+    def _run(self, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, context: Optional[str] = None, ticket_ids: Optional[List[int]] = None, append_to_run_id: Optional[int] = None, **kwargs) -> str:
         try:
             from distr.core.workflow.workflow_resolve import resolve_workflow_id
 
@@ -370,6 +373,39 @@ class RunWorkflowTool(BaseTool):
             if err or resolved_id is None:
                 return f"Failed to start workflow: {err or 'not found'}"
             workflow_id = resolved_id
+            ticket_ids = list(dict.fromkeys(int(ticket_id) for ticket_id in (ticket_ids or [])))
+            if ticket_ids:
+                if len(ticket_ids) > 100:
+                    return "Failed to start workflow: a ticket group may contain at most 100 tickets"
+                from distr.core.workflow.dispatcher import start_workflow_ticket_group
+                from distr.core.workflow.ticket_dispatch import build_ticket_run_item
+
+                items = [build_ticket_run_item(ticket_id, workflow_id) for ticket_id in ticket_ids]
+                if append_to_run_id:
+                    from distr.core.workflow.dispatcher import append_workflow_ticket_group
+
+                    result = append_workflow_ticket_group(append_to_run_id, items)
+                    if result.get("error"):
+                        return f"Failed to extend workflow ticket group: {result['error']}"
+                    return (
+                        f"I added {len(result.get('appended_ticket_ids') or [])} tickets to the active Development queue. "
+                        f"There are {int(result.get('queued_count') or 0)} tickets waiting behind the current one. "
+                        f"The current work keeps running; the queued tickets will follow in order."
+                    )
+                result = start_workflow_ticket_group(workflow_id, items, dispatch_async=True)
+                if result.get("error"):
+                    return f"Failed to start workflow ticket group: {result['error']}"
+                started = result.get("started") or []
+                first_run_id = started[0].get("run_id") if started else None
+                _remember_workflow_context(workflow_id=workflow_id, run_id=first_run_id)
+                queued = int(result.get("queued_count") or 0)
+                return (
+                    f"I started the first of {len(ticket_ids)} selected tickets. "
+                    f"The remaining {queued} will follow in order through the same workflow. "
+                    f"You can keep working; I will report progress and any decision that needs you. "
+                    f"REFERENCE: group_id={result.get('group_id')}; first_run_id={first_run_id}; "
+                    f"ticket_ids={','.join(str(ticket_id) for ticket_id in ticket_ids)}"
+                )
             from distr.core.workflow.service import start_workflow_run
             result = start_workflow_run(workflow_id, context=context)
             if "error" in result:

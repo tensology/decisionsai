@@ -465,6 +465,21 @@ def test_route_selection_message_names_model_role_and_reason_plainly():
     assert "route" not in message.lower()
 
 
+def test_route_selection_message_hides_internal_route_jargon_and_speaks_understand_step():
+    message = build_route_selection_message(
+        ticket_title="Research Kayla",
+        step_name="Understand ticket and acceptance criteria",
+        step_role="planning",
+        backend="pi",
+        model="nvidia/nemotron:free",
+        provider="openrouter",
+        reason="Workflow step selected scoped route nvidia/nemotron:free.",
+    )
+
+    assert "scoped route" not in message
+    assert "reviewing the ticket requirements" in message
+
+
 def test_prefer_local_policy_honors_configured_ollama_coding_model(monkeypatch):
     monkeypatch.setattr(
         "distr.core.project_cli_backends.models_catalog.pi_cli_models",

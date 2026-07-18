@@ -46,19 +46,128 @@ class OpenAICompatibleLLMService(BaseLLMService):
     _tool_execution_in_progress = False
     _DIRECT_SPEECH_TOOLS = {"speak_on_desktop"}
     _GENERIC_TOOL_COMPLETIONS = {"done", "done.", "finished", "finished."}
+    _MUTATING_ORCHESTRATION_TOOLS = {
+        "create_action",
+        "create_ticket",
+        "pi_agent",
+        "run_workflow",
+        "continue_workflow",
+        "cancel_workflow_run",
+        "open_project",
+    }
+
+    @staticmethod
+    def _tool_intent_block_reason(
+        func_name: str,
+        last_user_message: str,
+        *,
+        tickets_verified: bool = False,
+    ) -> str:
+        """Reject a cross-domain mutation when the user's intent is deterministic."""
+        if not str(last_user_message or "").strip():
+            return ""
+        try:
+            from distr.core.agent.tool_intents import forced_tool_names_for_text
+
+            ticket_scope_required = "create_ticket" in forced_tool_names_for_text(
+                last_user_message
+            )
+            if func_name == "create_action" and ticket_scope_required:
+                return (
+                    "Blocked wrong-domain mutation: this request is about durable tickets. "
+                    "Use create_ticket and require its returned ticket id; create_action creates "
+                    "a desktop macro Action, not project work."
+                )
+            if func_name == "pi_agent" and ticket_scope_required and not tickets_verified:
+                return (
+                    "Blocked premature worker dispatch: this request explicitly requires ticket "
+                    "scoping first. Create and verify the durable board tickets, then dispatch "
+                    "ready tickets through the linked workflow in a later tool round."
+                )
+        except Exception:
+            logger.debug("Could not evaluate deterministic tool-intent guard", exc_info=True)
+        return ""
+
+    @staticmethod
+    def _is_verified_ticket_result(tool_name: str, result: str) -> bool:
+        if tool_name != "create_ticket":
+            return False
+        text = str(result or "")
+        return bool(
+            re.search(r"\b(?:created|added|updated)\s+ticket\s+#?\d+\b", text, re.I)
+            or re.search(r"\bticket\s+#\d+\b", text, re.I)
+        ) and not text.lower().startswith(("error", "failed"))
+
+    def _tickets_verified_since_last_user(self) -> bool:
+        for message in reversed(self._messages):
+            if message.get("role") == "user":
+                break
+            if message.get("role") == "tool" and self._is_verified_ticket_result(
+                str(message.get("name") or ""), str(message.get("content") or "")
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _tool_execution_timeout_seconds(cls, func_name: str, func_args: dict) -> float:
+        """Return the outer tool ceiling without defeating worker timing policy.
+
+        Project workers already calculate a model-aware ceiling (including cold
+        local-model loading).  The former blanket 90 second wrapper cancelled
+        Pi before that policy could do its job.
+        """
+        if func_name != "pi_agent":
+            return cls._TOOL_EXECUTION_TIMEOUT_SEC
+
+        fallback = 900.0
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.project_cli_backends.timing import (
+                ollama_model_loaded,
+                resolve_worker_timing,
+            )
+
+            project_name = str((func_args or {}).get("project_name") or "").strip()
+            with get_session() as session:
+                query = session.query(Project)
+                if project_name:
+                    project = query.filter(Project.name.ilike(f"%{project_name}%")).first()
+                else:
+                    project = query.filter(Project.in_use.is_(True)).first()
+                if project is None:
+                    return fallback
+                backend = str(project.coding_backend or "pi")
+                model = str(project.coding_backend_model or "auto")
+
+            loaded = None
+            if backend == "pi" and model and "/" not in model:
+                loaded = ollama_model_loaded(model)
+            policy = resolve_worker_timing(
+                backend_id=backend,
+                model=model,
+                complexity="medium",
+                configured_timeout_seconds=600,
+                model_loaded=loaded,
+            )
+            return float(policy.timeout_seconds)
+        except Exception:
+            logger.debug("Could not resolve Pi outer timeout; using fallback", exc_info=True)
+            return fallback
 
     async def _run_tool_with_timeout(self, tool, func_args: dict, func_name: str):
         """Run a blocking tool in the executor with a hard timeout."""
         loop = asyncio.get_running_loop()
+        timeout_seconds = self._tool_execution_timeout_seconds(func_name, func_args)
         try:
             safe_func_args = self._normalize_tool_kwargs(tool, func_args)
             return await asyncio.wait_for(
                 loop.run_in_executor(None, lambda t=tool, a=safe_func_args: t._run(**a)),
-                timeout=self._TOOL_EXECUTION_TIMEOUT_SEC,
+                timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
             raise TimeoutError(
-                f"Tool '{func_name}' timed out after {self._TOOL_EXECUTION_TIMEOUT_SEC:.0f} seconds"
+                f"Tool '{func_name}' timed out after {timeout_seconds:.0f} seconds"
             ) from exc
 
     async def _push_pipeline_frame(self, frame):
@@ -560,6 +669,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 break
 
         decisions = build_computer_use_execution_decisions(tool_calls)
+        branch_failed = False
+        tickets_verified = self._tickets_verified_since_last_user()
         for idx, tc in enumerate(tool_calls):
             func_name = tc["function"]["name"]
             decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
@@ -573,6 +684,33 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 func_args["last_user_message"] = last_user_message
             if getattr(self, '_is_telegram_request', False):
                 func_args.setdefault("is_telegram_request", True)
+
+            intent_block = self._tool_intent_block_reason(
+                func_name,
+                last_user_message,
+                tickets_verified=tickets_verified,
+            )
+            dependency_block = (
+                branch_failed and func_name in self._MUTATING_ORCHESTRATION_TOOLS
+            )
+            if intent_block or dependency_block:
+                result_str = intent_block or (
+                    "Skipped dependent mutation because an earlier tool in this batch failed. "
+                    "Read the failure, then retry the next mutation in a new tool round."
+                )
+                chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                from distr.core.agent.tool_audit import record_tool_execution
+                record_tool_execution(
+                    chat_id, func_name, result_str, "failed", event_queue=self.event_queue
+                )
+                self._messages.append({
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": func_name,
+                    "content": result_str,
+                })
+                branch_failed = True
+                continue
 
             # Hard guard: prevent generic mouse fallback when a recent visual-target
             # flow already reported target-not-found / unresolved coordinates.
@@ -621,6 +759,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 except Exception as e:
                     result = f"Error executing tool: {e}"
                     status = "failed"
+                    branch_failed = True
                     logger.error("Error executing tool %s: %s", func_name, e, exc_info=True)
 
                 chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
@@ -628,6 +767,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 record_tool_execution(chat_id, func_name, str(result), status, event_queue=self.event_queue)
 
                 result_str = str(result)
+                if self._is_verified_ticket_result(func_name, result_str):
+                    tickets_verified = True
 
                 if "[ACTION REQUIRED" in result_str:
                     logger.debug("Tool %s returned [ACTION REQUIRED] — will auto-chain", func_name)

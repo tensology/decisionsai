@@ -138,12 +138,12 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     page.locator("#wf-run-preview-confirm").click()
 
     page.locator(".wf-tab[data-tab='loop']").click()
-    expect(page.locator(".wf-loop-ring-node", has_text="Validate browser with Playwright")).to_be_visible(timeout=15000)
-    expect(page.locator(".wf-loop-ring-node", has_text="Inspect with Browser Use")).to_be_visible(timeout=15000)
-    expect(page.locator(".wf-loop-ring-node", has_text="Inspect with Computer Use")).to_be_visible(timeout=15000)
-    failed_check = page.locator(".wf-loop-ring-node.wf-loop-step-status--failed", has_text="Validate browser with Playwright").first
+    expect(page.locator(".wf-loop-list-row", has_text="Validate browser with Playwright")).to_be_visible(timeout=15000)
+    expect(page.locator(".wf-loop-list-row", has_text="Inspect with Browser Use")).to_be_visible(timeout=15000)
+    expect(page.locator(".wf-loop-list-row", has_text="Inspect with Computer Use")).to_be_visible(timeout=15000)
+    failed_check = page.locator(".wf-loop-list-row.wf-loop-step-status--failed", has_text="Validate browser with Playwright").first
     expect(failed_check).to_be_visible(timeout=35000)
-    running_fix = page.locator(".wf-loop-ring-node.wf-loop-step-status--running", has_text="Fix and rerun green check").first
+    running_fix = page.locator(".wf-loop-list-row.wf-loop-step-status--running", has_text="Fix and rerun green check").first
     expect(running_fix).to_be_visible(timeout=35000)
 
     feed = page.locator("#wf-loop-feed-messages")
@@ -159,6 +159,12 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(feed).to_contain_text("Skills: webapp-testing", timeout=25000)
     expect(feed).to_contain_text("Tools: playwright, browser_use", timeout=25000)
     expect(feed).to_contain_text("Context: ticket_workflow_brief", timeout=25000)
+    transcript = feed.locator(".wf-loop-transcript")
+    expect(transcript).to_be_visible(timeout=15000)
+    expect(transcript).to_contain_text("Execution transcript")
+    transcript.locator(":scope > summary").click()
+    expect(transcript.locator(".wf-loop-transcript-record").first).to_be_visible(timeout=15000)
+    expect(transcript).to_contain_text("Raw event data")
 
     runs_tab = page.locator("#wf-runs-tab-btn")
     expect(runs_tab).to_be_visible(timeout=20000)
@@ -166,7 +172,7 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     active_runs = page.locator("#wf-active-runs-list")
     expect(active_runs).to_contain_text(str(ids["ticket_title"]), timeout=25000)
     expect(active_runs).to_contain_text("Fix and rerun green check", timeout=25000)
-    expect(active_runs).to_contain_text("Loop 1 / 3", timeout=25000)
+    expect(active_runs).to_contain_text(re.compile(r"Pass\s+2\s+·\s+1/3 retries", re.IGNORECASE), timeout=25000)
     expect(active_runs).to_contain_text(backend_display)
     expect(active_runs).to_contain_text(backend_model)
     expect(active_runs).to_contain_text("webapp-testing")

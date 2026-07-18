@@ -34,6 +34,11 @@
     var loopFeedRunId = null;
     var latestLoopFeedItems = [];
     var loopFeedScrollPinned = true;
+    var loopTranscriptEventsByRun = {};
+    var loopTranscriptLoadedAtByRun = {};
+    var loopTranscriptLoadingByRun = {};
+    var loopTranscriptOpenByRun = {};
+    var loopTranscriptRecordOpenByRun = {};
     var shouldRestoreDetailTabOnce = true;
     var wfContextMenuEl = null;
     var wfContextMenuId = null;
@@ -41,6 +46,7 @@
     var wfQueueMetricMenuState = null;
     var workflowRuntimeStateById = {};
     var workflowBoardOptions = [];
+    var workflowBoardSelectionExplicit = false;
     var workflowDatabaseBoards = [];
     var workflowBoardLoadToken = 0;
     var workflowBoardRenderState = { data: null, selected: null };
@@ -75,7 +81,10 @@
     var workflowWhatsappProgressValue = 8;
     var expandedWorkflowExecutionSessionId = null;
     var WORKFLOW_LOOP_MAX_STEPS = 14;
-    var workflowLoopViewMode = "ring";
+    // The execution timeline is the useful default. The ring remains available
+    // as a workflow-design overview, but it does not carry enough evidence to
+    // explain a live run by itself.
+    var workflowLoopViewMode = "list";
     var workflowLoopStepModalState = null;
     var workflowLoopStepModalBound = false;
     var workflowLoopSkillsCatalog = null;
@@ -5413,6 +5422,7 @@
         selectedWorkflowQueueTicketId = null;
         workflowRunsFilterTicketId = null;
         loopFeedRunId = null;
+        workflowBoardSelectionExplicit = false;
         try { localStorage.setItem("wf_last_selected", id); } catch (e) {}
         loadList();
         loadDetail(id);
@@ -6423,15 +6433,6 @@
         return 0;
     }
 
-    function currentWorkflowActiveRun(activeRuns) {
-        activeRuns = activeRuns || latestActiveRuns || [];
-        if (!currentWorkflowId) return null;
-        return activeRuns.filter(function (r) {
-            return r && String(r.workflow_id) === String(currentWorkflowId) &&
-                (r.status === "running" || r.status === "waiting");
-        })[0] || null;
-    }
-
     function updateWorkflowTabRunControls(activeRuns) {
         var run = currentWorkflowActiveRun(activeRuns);
         var timerEl = document.getElementById("wf-tab-run-timer");
@@ -6451,7 +6452,7 @@
         stopBtn.classList.remove("hidden");
         stopBtn.dataset.workflowId = String(run.workflow_id);
         stopBtn.dataset.runId = String(run.id);
-        timerEl.textContent = formatElapsed(workflowRunDurationSeconds(run));
+        timerEl.textContent = workflowRunStatusLabel(run.status) + " · " + formatElapsed(workflowRunDurationSeconds(run));
         if (!workflowTabRunTimerInterval) {
             workflowTabRunTimerInterval = setInterval(function () {
                 var active = currentWorkflowActiveRun();
@@ -6460,9 +6461,26 @@
                     return;
                 }
                 var el = document.getElementById("wf-tab-run-timer");
-                if (el) el.textContent = formatElapsed(workflowRunDurationSeconds(active));
+                if (el) el.textContent = workflowRunStatusLabel(active.status) + " · " + formatElapsed(workflowRunDurationSeconds(active));
             }, 1000);
         }
+    }
+
+    function workflowRunStatusLabel(status) {
+        var labels = {
+            queued: "Queued",
+            preflight: "Preflight",
+            running: "Running",
+            waiting: "Waiting for you",
+            retrying: "Retrying",
+            completed: "Completed",
+            passed: "Passed",
+            failed: "Failed",
+            cancelled: "Cancelled",
+            skipped: "Skipped"
+        };
+        var key = String(status || "running").toLowerCase();
+        return labels[key] || key.replace(/_/g, " ").replace(/^./, function (c) { return c.toUpperCase(); });
     }
 
     function cancelWorkflowRun(workflowId, runId, buttonEl) {
@@ -6800,13 +6818,53 @@
         return run.current_step_id ? ("Step #" + run.current_step_id) : "";
     }
 
+    function loopRunStepPosition(run) {
+        var steps = currentWorkflow && Array.isArray(currentWorkflow.steps) ? currentWorkflow.steps : [];
+        if (!run || run.current_step_id == null) return "";
+        var index = steps.findIndex(function (step) {
+            return String(step.id) === String(run.current_step_id);
+        });
+        return index >= 0 ? ("Step " + (index + 1) + " of " + steps.length) : "";
+    }
+
+    function selectedBoardLabel() {
+        var selected = getSelectedWorkflowBoardOption();
+        return selected && selected.name ? selected.name : "the selected board";
+    }
+
+    function workflowBoardOptionForRun(run) {
+        if (!run) return null;
+        return (workflowBoardOptions || []).filter(function (option) {
+            var localId = workflowBoardLocalId(option);
+            if (localId && run.board_id != null && String(localId) === String(run.board_id)) return true;
+            return option.name && run.board_name && String(option.name).toLowerCase() === String(run.board_name).toLowerCase();
+        })[0] || null;
+    }
+
+    function focusWorkflowRunBoard(run) {
+        var option = workflowBoardOptionForRun(run);
+        var select = document.getElementById("wf-board-select");
+        if (!option || !select) {
+            snack("The running board is not available in this board selector", "error");
+            return;
+        }
+        select.value = option.value;
+        try { localStorage.setItem("wf_board_selected", option.value); } catch (e) {}
+        loadWorkflowBoardTickets(option.value);
+        if (run.ticket_id) {
+            selectedWorkflowQueueTicketId = String(run.ticket_id);
+            workflowRunsFilterTicketId = selectedWorkflowQueueTicketId;
+        }
+        renderLoopRunTicketContext();
+    }
+
     function loopRunTicketMetaBits(run, ticket, mode) {
         return [
             loopRunIdBit(run),
-            run.status || "",
+            workflowRunStatusLabel(run.status),
+            loopRunStepPosition(run),
             loopTicketMetricBit(ticket, "priority", "Priority "),
             loopTicketMetricBit(ticket, "complexity", "Complexity "),
-            loopRunStepBit(run),
             loopRunBoardBit(run, mode)
         ].filter(Boolean);
     }
@@ -6847,18 +6905,52 @@
         var title = workflowTicketLabel(run.ticket_id, run.ticket_title);
         var bits = loopRunTicketMetaBits(run, ticket, mode);
         var actions = loopRunTicketActionHtml(run, mode);
+        var meta = runMetaText(run, currentWorkflow && currentWorkflow.name);
+        var isActive = isRunActiveForTicketContext(run);
+        var mismatch = isActive && !workflowRunMatchesSelectedBoard(run);
+        var route = run.execution_route || {};
+        var routeLabel = [route.backend, route.model_provider, route.model].filter(Boolean).join(" / ");
+        var heartbeatAge = run.heartbeat_age_seconds == null ? null : Math.max(0, parseInt(run.heartbeat_age_seconds, 10) || 0);
+        var heartbeatText = heartbeatAge == null ? "" : (heartbeatAge < 15 ? "Heartbeat now" : ("Heartbeat " + formatElapsed(heartbeatAge) + " ago"));
+        if (mode === "feed") {
+            return '<div class="wf-loop-decision-context">' +
+                '<div class="wf-loop-ticket-kicker"><span>' + esc(isActive ? "Current execution" : "Run context") + '</span></div>' +
+                '<div class="wf-loop-ticket-title">' + esc(loopRunStepBit(run) || title) + '</div>' +
+                '<div class="wf-loop-ticket-meta">' + [workflowRunStatusLabel(run.status), routeLabel, heartbeatText].filter(Boolean).map(function (bit) {
+                    return '<span>' + esc(bit) + '</span>';
+                }).join("") + '</div>' +
+            '</div>';
+        }
         return '' +
-            '<div class="wf-loop-ticket-kicker"><span>Ticket in run</span></div>' +
-            '<div class="wf-loop-ticket-title-wrap" title="' + esc(title) + '">' +
-                '<span class="wf-loop-ticket-title-track"><span class="wf-loop-ticket-title">' + esc(title) + "</span></span>" +
-            "</div>" +
-            '<div class="wf-loop-ticket-meta">' + bits.slice(0, mode === "feed" ? 4 : 6).map(function (bit) {
-                return '<span>' + esc(bit) + '</span>';
-            }).join("") + '</div>' +
-            (actions ? '<div class="wf-loop-ticket-actions">' + actions + '</div>' : '');
+            '<div class="wf-loop-run-header">' +
+                '<div class="wf-loop-run-header-main">' +
+                    '<div class="wf-loop-ticket-kicker"><span>' + esc(isActive ? "Active workflow run" : "Selected ticket") + '</span></div>' +
+                    '<div class="wf-loop-run-breadcrumb">' +
+                        '<span>' + esc(meta.projectText) + '</span><b>›</b><span>' + esc(meta.boardText) + '</span><b>›</b>' +
+                        '<strong title="' + esc(title) + '">' + esc(title) + '</strong>' +
+                    '</div>' +
+                    '<div class="wf-loop-ticket-meta">' + bits.slice(0, 7).map(function (bit) {
+                        return '<span>' + esc(bit) + '</span>';
+                    }).join("") + '</div>' +
+                '</div>' +
+                '<div class="wf-loop-run-header-route">' +
+                    (routeLabel ? '<span class="wf-loop-run-route-label">' + esc(routeLabel) + '</span>' : '') +
+                    (heartbeatText ? '<span class="wf-loop-run-heartbeat">● ' + esc(heartbeatText) + '</span>' : '') +
+                    (actions ? '<div class="wf-loop-ticket-actions">' + actions + '</div>' : '') +
+                '</div>' +
+            '</div>' +
+            (mismatch ? '<div class="wf-loop-board-mismatch">' +
+                '<span>You are viewing tickets for <strong>' + esc(selectedBoardLabel()) + '</strong>, while this run belongs to <strong>' + esc(meta.boardText) + '</strong>.</span>' +
+                '<button type="button" class="wf-loop-focus-run-board" data-run-id="' + esc(run.id || "") + '">Show running project tickets</button>' +
+            '</div>' : '');
     }
 
     function selectedLoopRunContext() {
+        // Live execution is authoritative in the Loop view. Ticket browsing is
+        // allowed to remain on another board, but it must never replace the run
+        // identity or activity with an unrelated queued ticket.
+        var workflowRun = currentWorkflowActiveRun();
+        if (workflowRun) return workflowRun;
         var selectedId = selectedWorkflowQueueTicketId;
         var contextRun = loopFeedContextRun() || (selectedId ? activeRunByTicketId(selectedId) : null);
         if (contextRun) return contextRun;
@@ -6892,6 +6984,10 @@
         if (continueBtn) continueBtn.onclick = function () {
             continueWorkflowRun(continueBtn.dataset.workflowId, continueBtn.dataset.runId, { input: "yes, go ahead" });
         };
+        var focusBoardBtn = mainEl.querySelector(".wf-loop-focus-run-board");
+        if (focusBoardBtn) focusBoardBtn.onclick = function () {
+            focusWorkflowRunBoard(runRecordById(focusBoardBtn.dataset.runId) || currentWorkflowActiveRun());
+        };
     }
 
     function renderLoopRunTicketContext() {
@@ -6908,9 +7004,11 @@
         });
     }
 
-    function currentWorkflowActiveRun() {
-        return (latestActiveRuns || []).filter(function (r) {
-            return currentWorkflowId && r && String(r.workflow_id) === String(currentWorkflowId);
+    function currentWorkflowActiveRun(activeRuns) {
+        activeRuns = activeRuns || latestActiveRuns || [];
+        return activeRuns.filter(function (r) {
+            return currentWorkflowId && r && String(r.workflow_id) === String(currentWorkflowId) &&
+                (r.status === "running" || r.status === "waiting");
         })[0] || null;
     }
 
@@ -7064,6 +7162,15 @@
         }
         return api("GET", query).then(function (runs) {
             latestActiveRuns = Array.isArray(runs) ? runs : [];
+            var activeCurrentWorkflowRun = currentWorkflowActiveRun(latestActiveRuns);
+            if (
+                activeCurrentWorkflowRun &&
+                !workflowBoardSelectionExplicit &&
+                !workflowRunMatchesSelectedBoard(activeCurrentWorkflowRun) &&
+                workflowBoardOptionForRun(activeCurrentWorkflowRun)
+            ) {
+                focusWorkflowRunBoard(activeCurrentWorkflowRun);
+            }
             var stateByWorkflow = {};
             latestActiveRuns.forEach(function (r) {
                 if (!r || !r.workflow_id) return;
@@ -7189,6 +7296,16 @@
                     ? '<div class="md:col-span-2"><span class="text-gray-500">Last activity:</span> <span class="text-gray-300">' + esc(activityText) + '</span>' +
                         (heartbeat.at ? ' <span class="text-emerald-300">· heartbeat ' + esc(new Date(heartbeat.at).toLocaleTimeString()) + '</span>' : '') + '</div>'
                     : '<div class="md:col-span-2 text-amber-300">Waiting for the first worker heartbeat…</div>';
+                var contextTelemetry = r.latest_context_telemetry || {};
+                var contextChars = Math.max(0, parseInt(contextTelemetry.total_chars, 10) || 0);
+                var contextMax = Math.max(0, parseInt(contextTelemetry.max_chars, 10) || 0);
+                var contextCounts = contextTelemetry.counts || {};
+                var contextHtml = contextChars
+                    ? '<div class="md:col-span-2"><span class="text-gray-500">Context packet:</span> <span class="text-gray-300">' +
+                        esc(contextChars.toLocaleString()) + (contextMax ? (' / ' + esc(contextMax.toLocaleString())) : '') +
+                        ' chars · ' + esc(parseInt(contextCounts.artifact_refs, 10) || 0) + ' artifact refs · ' +
+                        esc(parseInt(contextCounts.memory_facts, 10) || 0) + ' relevant memory facts</span></div>'
+                    : '';
                 if (activityState === "stale") {
                     activityHtml += '<div class="md:col-span-2 text-red-300">Worker heartbeat overdue by ' + esc(formatElapsed(heartbeatAge)) + '. You can stop the run or wait for provider recovery.</div>';
                 } else if (activityState === "delayed") {
@@ -7218,6 +7335,7 @@
                         '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
                         '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
                         activityHtml +
+                        contextHtml +
                         recentStepsHtml +
                     '</div>' +
                     '<div class="mt-2">' + routeCard + '</div>' +
@@ -10443,14 +10561,16 @@
 
     function initWorkflowLoopViewMode() {
         try {
-            var saved = localStorage.getItem("wf_loop_view");
+            // v2 intentionally resets the old ring-first preference because
+            // the execution timeline is now the primary Mission Control view.
+            var saved = localStorage.getItem("wf_loop_view_v2");
             if (saved === "list" || saved === "ring") workflowLoopViewMode = saved;
         } catch (e) {}
     }
 
     function setWorkflowLoopViewMode(mode) {
         workflowLoopViewMode = mode === "list" ? "list" : "ring";
-        try { localStorage.setItem("wf_loop_view", workflowLoopViewMode); } catch (e) {}
+        try { localStorage.setItem("wf_loop_view_v2", workflowLoopViewMode); } catch (e) {}
         document.querySelectorAll(".wf-loop-view-toggle").forEach(function (btn) {
             var active = (btn.dataset.loopView || "ring") === workflowLoopViewMode;
             btn.classList.toggle("active", active);
@@ -10534,6 +10654,99 @@
         return text.length > 72 ? text.substring(0, 72) + "…" : text;
     }
 
+    function loopStepPurpose(step) {
+        var text = String((step && (step.instruction || step.description)) || "").replace(/\s+/g, " ").trim();
+        if (!text) return "No purpose has been configured for this step.";
+        var sentence = text.match(/^.*?[.!?](?:\s|$)/);
+        var purpose = sentence ? sentence[0].trim() : text;
+        return purpose.length > 180 ? purpose.substring(0, 177) + "…" : purpose;
+    }
+
+    function loopStepTimelineGroups() {
+        var groups = loopFeedBuildStepGroups(latestLoopFeedItems || []);
+        var map = {};
+        groups.forEach(function (group) {
+            if (group.step_id != null) map[String(group.step_id)] = group;
+        });
+        return map;
+    }
+
+    function loopTimelineItemSubtype(item) {
+        return String((item && (item.subtype || item.title)) || "").replace(/ /g, "_").toLowerCase();
+    }
+
+    function loopStepRuntime(step, index, group, run) {
+        group = group || { items: [], state: "pending" };
+        var items = group.items || [];
+        var startedItems = items.filter(function (item) { return loopTimelineItemSubtype(item) === "workflow_step_started"; });
+        var completed = items.slice().reverse().filter(function (item) { return loopTimelineItemSubtype(item) === "workflow_step_completed"; })[0] || null;
+        var routeItems = items.filter(function (item) { return loopTimelineItemSubtype(item) === "route_decided"; });
+        var routeItem = routeItems.length ? routeItems[routeItems.length - 1] : null;
+        var validation = items.slice().reverse().filter(function (item) { return loopTimelineItemSubtype(item) === "validation_recorded"; })[0] || null;
+        var isCurrent = !!(run && run.current_step_id != null && String(run.current_step_id) === String(step.id));
+        var state = isCurrent ? (String(run.status || "running").toLowerCase() === "waiting" ? "waiting" : "running") : (group.state || "pending");
+        var endTs = completed && completed.ts ? completed.ts : (isCurrent ? Date.now() : 0);
+        var started = startedItems.slice().reverse().filter(function (item) {
+            return !endTs || !item.ts || item.ts <= endTs;
+        })[0] || null;
+        var duration = started && started.ts && endTs ? Math.max(0, Math.floor((endTs - started.ts) / 1000)) : 0;
+        var decision = routeItem && routeItem.payload && routeItem.payload.decision ? routeItem.payload.decision : {};
+        if (isCurrent && run && run.execution_route) decision = run.execution_route;
+        var route = [decision.backend, decision.model_provider, decision.model].filter(Boolean).join(" / ");
+        var resultItem = completed || validation;
+        var outcome = resultItem ? String(resultItem.body || "").trim() : "";
+        if (!outcome && resultItem && resultItem.detail && resultItem.detail.length) outcome = String(resultItem.detail[0] || "").trim();
+        if (outcome.length > 240) outcome = outcome.substring(0, 237) + "…";
+        var nextStep = currentWorkflow && Array.isArray(currentWorkflow.steps) ? currentWorkflow.steps[index + 1] : null;
+        return {
+            state: state,
+            isCurrent: isCurrent,
+            duration: duration,
+            route: route,
+            rationale: decision.rationale || "",
+            outcome: outcome,
+            nextStep: nextStep,
+            attemptCount: routeItems.length,
+            itemCount: items.filter(function (item) { return !loopFeedItemIsNoise(item); }).length
+        };
+    }
+
+    function loopStepStatusLabel(state) {
+        var labels = {
+            pending: "Not started",
+            running: "Running",
+            waiting: "Waiting for you",
+            passed: "Passed",
+            failed: "Needs correction",
+            cancelled: "Cancelled",
+            skipped: "Skipped"
+        };
+        return labels[state] || workflowRunStatusLabel(state);
+    }
+
+    function loopStepContextSummary(run) {
+        var telemetry = run && run.latest_context_telemetry && typeof run.latest_context_telemetry === "object" ? run.latest_context_telemetry : {};
+        var parts = [];
+        if (telemetry.prior_outcome_count != null) parts.push(telemetry.prior_outcome_count + " prior step outcomes");
+        if (telemetry.memory_fact_count != null) parts.push(telemetry.memory_fact_count + " memory facts");
+        if (telemetry.reference_count != null) parts.push(telemetry.reference_count + " references");
+        if (telemetry.total_chars && telemetry.max_chars) {
+            var ratio = Math.round((telemetry.total_chars / telemetry.max_chars) * 100);
+            parts.push("context " + ratio + "% of budget");
+        }
+        return parts.join(" · ");
+    }
+
+    function loopStepHandoffHtml(runtime, nextStep) {
+        if (!nextStep || (runtime.state !== "passed" && runtime.state !== "failed")) return "";
+        var verb = runtime.state === "failed" ? "Failure evidence and correction notes" : "Validated output and result packet";
+        return '<div class="wf-loop-handoff" aria-label="Step handoff">' +
+            '<span class="wf-loop-handoff-line"></span>' +
+            '<span><strong>' + esc(verb) + '</strong> carried into ' + esc(nextStep.name || "the next step") + '</span>' +
+            '<span aria-hidden="true">↓</span>' +
+        '</div>';
+    }
+
     function selectLoopStep(stepId, steps) {
         steps = steps || (currentWorkflow && currentWorkflow.steps) || [];
         var step = steps.filter(function (s) { return s.id === stepId; })[0];
@@ -10580,9 +10793,17 @@
             el.innerHTML = '<p class="text-sm text-gray-500 py-4 text-center">No steps yet. Click "+ Add step" to begin.</p>';
             return;
         }
+        var run = currentWorkflowActiveRun() || loopFeedActiveRun();
+        var groups = loopStepTimelineGroups();
         el.innerHTML = steps.map(function (step, index) {
             var selected = expandedStepId === step.id;
-            var statusCls = loopStepStatusClass(step.status);
+            var runtime = loopStepRuntime(step, index, groups[String(step.id)], run);
+            var statusCls = loopStepStatusClass(runtime.state);
+            var contextSummary = runtime.isCurrent ? loopStepContextSummary(run) : "";
+            var lastActivity = runtime.isCurrent && run && run.last_activity ? run.last_activity.message : "";
+            var nextText = runtime.isCurrent && runtime.nextStep
+                ? ("Next: " + (runtime.nextStep.name || "the next workflow step"))
+                : (runtime.isCurrent ? "This is the final workflow step." : "");
             return '<div class="wf-loop-list-row-wrap flex items-stretch gap-2 mb-2" data-step-id="' + step.id + '">' +
                 '<span class="wf-loop-step-drag-handle kb-ticket-list-drag-handle step-drag-grip shrink-0 self-center" title="Drag to reorder step" aria-label="Drag to reorder step">' +
                     '<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">' +
@@ -10590,15 +10811,32 @@
                     '<circle cx="2.5" cy="8" r="1.2"/><circle cx="7.5" cy="8" r="1.2"/>' +
                     '<circle cx="2.5" cy="14" r="1.2"/><circle cx="7.5" cy="14" r="1.2"/>' +
                     "</svg></span>" +
-                '<button type="button" class="wf-loop-list-row flex-1 min-w-0 text-left rounded-lg border px-3 py-2.5 ' + (selected ? "border-[#f97316]/60 bg-[#f97316]/8" : "border-white/15 bg-[#152054]/35 hover:border-white/25") + (statusCls ? " " + statusCls : "") + '">' +
-                    '<div class="flex items-center gap-2 min-w-0">' +
-                        '<span class="wf-loop-list-step-ball shrink-0">' + (index + 1) + "</span>" +
-                        '<span class="text-sm font-medium text-white truncate flex-1">' + esc(step.name || ("Step " + (index + 1))) + "</span>" +
-                        (loopStepToolIconsHtml(step, "wf-loop-list-tool-icons") || "") +
-                        (step.status && step.status !== "pending" ? ('<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300 capitalize">' + esc(step.status) + "</span>") : "") +
-                    "</div>" +
-                    '<p class="mt-1 text-xs text-gray-400 line-clamp-2">' + esc(loopStepInstructionPreview(step)) + "</p>" +
+                '<div class="wf-loop-timeline-entry flex-1 min-w-0">' +
+                '<button type="button" class="wf-loop-list-row wf-loop-timeline-card flex-1 min-w-0 text-left rounded-lg border ' + (selected ? "is-selected" : "") + (statusCls ? " " + statusCls : "") + '">' +
+                    '<span class="wf-loop-timeline-rail"><span class="wf-loop-list-step-ball">' + (index + 1) + '</span><span class="wf-loop-timeline-connector"></span></span>' +
+                    '<span class="wf-loop-timeline-content">' +
+                        '<span class="wf-loop-timeline-head">' +
+                            '<span class="wf-loop-timeline-title-wrap"><strong>' + esc(step.name || ("Step " + (index + 1))) + '</strong><small>' + esc(loopStepPurpose(step)) + '</small></span>' +
+                            '<span class="wf-loop-timeline-status"><b>' + esc(loopStepStatusLabel(runtime.state)) + '</b>' +
+                                (runtime.duration ? '<small>' + esc(formatElapsed(runtime.duration)) + '</small>' : '') +
+                            '</span>' +
+                        '</span>' +
+                        '<span class="wf-loop-timeline-meta">' +
+                            (runtime.route ? '<span class="wf-loop-route-chip">' + esc(runtime.route) + '</span>' : '') +
+                            (loopStepToolIconsHtml(step, "wf-loop-list-tool-icons") || "") +
+                            (runtime.attemptCount > 1 ? '<span>' + esc(runtime.attemptCount) + ' attempts</span>' : '') +
+                            (runtime.itemCount ? '<span>' + esc(runtime.itemCount) + ' meaningful update' + (runtime.itemCount === 1 ? '' : 's') + '</span>' : '') +
+                        '</span>' +
+                        (runtime.outcome ? '<span class="wf-loop-timeline-result"><b>' + esc(runtime.state === "failed" ? "Why it needs correction" : (runtime.isCurrent ? "Latest check" : "Output")) + ':</b> ' + esc(runtime.outcome) + '</span>' : '') +
+                        (runtime.isCurrent ? '<span class="wf-loop-current-work">' +
+                            '<span><b>Input:</b> ' + esc(contextSummary || "Ticket scope and outputs from completed steps") + '</span>' +
+                            '<span><b>Now:</b> ' + esc(lastActivity || "Waiting for the first worker update") + '</span>' +
+                            '<span><b>' + esc(run && run.status === "waiting" ? "Your decision" : "After this") + ':</b> ' + esc(run && run.status === "waiting" ? (run.worker_question || "Review the requested decision before the run continues.") : nextText) + '</span>' +
+                        '</span>' : '') +
+                    '</span>' +
                 "</button>" +
+                loopStepHandoffHtml(runtime, runtime.nextStep) +
+                "</div>" +
             "</div>";
         }).join("");
         syncLoopStepSelectionUi();
@@ -11857,6 +12095,14 @@
             return r && r.id && !activeIds[String(r.id)];
         });
         var runs = active.concat(history);
+        // An active run stays visible even while the operator browses tickets
+        // from another board. History remains scoped to the selected ticket.
+        if (active.length) {
+            var selectedHistory = !selectedWorkflowQueueTicketId ? [] : history.filter(function (r) {
+                return r && r.ticket_id && String(r.ticket_id) === String(selectedWorkflowQueueTicketId);
+            });
+            return active.concat(selectedHistory);
+        }
         if (!selectedWorkflowQueueTicketId) return [];
         return runs.filter(function (r) {
             return r && r.ticket_id && String(r.ticket_id) === String(selectedWorkflowQueueTicketId);
@@ -12357,9 +12603,12 @@
                 ts: loopFeedTimestamp(event.created_at),
                 detail: loopFeedEventDetailLines(event),
                 event_type: String(event.event_type || ""),
+                subtype: String(event.subtype || event.legacy_event_type || ""),
                 status: String(event.status || ""),
                 step_id: event.step_id || payload.step_id || null,
-                step_name: payload.step_name || event.step_name || ""
+                step_name: payload.step_name || event.step_name || "",
+                payload: payload,
+                evidence: event && event.evidence && typeof event.evidence === "object" ? event.evidence : {}
             });
         });
         (steeringLog || []).forEach(function (entry) {
@@ -12379,18 +12628,22 @@
             return activeRun.status === "waiting" ? "waiting" : "running";
         }
         var events = group.items || [];
+        var completed = events.slice().reverse().filter(function (item) {
+            return String(item.subtype || item.title || "").replace(/ /g, "_").toLowerCase() === "workflow_step_completed";
+        })[0];
+        if (completed) {
+            var completedStatus = String(completed.status || "").toLowerCase();
+            return completedStatus === "failed" || completedStatus === "error" || completedStatus === "fail" ? "failed" : "passed";
+        }
         var failed = events.some(function (item) {
             var status = String(item.status || "").toLowerCase();
             var type = String(item.event_type || "").toLowerCase();
-            return status === "failed" || status === "error" || type === "worker_failed" || type === "workflow_step_failed";
+            var subtype = String(item.subtype || "").toLowerCase();
+            return type === "worker_failed" || subtype === "worker_failed" || subtype === "workflow_step_failed" ||
+                ((status === "failed" || status === "error") && subtype.indexOf("preflight") >= 0);
         });
         if (failed) return "failed";
-        var passed = events.some(function (item) {
-            var status = String(item.status || "").toLowerCase();
-            var type = String(item.event_type || "").toLowerCase();
-            return status === "passed" || status === "completed" || status === "done" || type === "worker_completed" || type === "workflow_step_completed";
-        });
-        return passed ? "passed" : "pending";
+        return "pending";
     }
 
     function loopFeedBuildStepGroups(items) {
@@ -12447,6 +12700,148 @@
             '<div class="wf-loop-feed-msg-meta">' + esc(item.title || "Update") + (when ? " · " + esc(when) : "") + "</div>" +
             '<div class="wf-loop-feed-msg-bubble">' + esc(item.body || "") + detailHtml + "</div>" +
         "</div>";
+    }
+
+    function loopTranscriptSubtype(event) {
+        return String((event && (event.subtype || event.legacy_event_type || event.event_type)) || "event").toLowerCase();
+    }
+
+    function loopTranscriptKind(event) {
+        var type = loopTranscriptSubtype(event);
+        if (type.indexOf("handoff") >= 0 || type.indexOf("prompt") >= 0 || type === "message_end") return "prompt";
+        if (type.indexOf("route") >= 0 || type.indexOf("preflight") >= 0) return "route";
+        if (type.indexOf("command") >= 0 || type.indexOf("tool") >= 0 || type.indexOf("skill") >= 0) return "tool";
+        if (type.indexOf("validation") >= 0 || type.indexOf("review") >= 0) return "check";
+        if (type.indexOf("failover") >= 0 || type.indexOf("retry") >= 0 || type.indexOf("iteration") >= 0) return "retry";
+        if (type.indexOf("completed") >= 0 || type.indexOf("output") >= 0 || type.indexOf("message_update") >= 0) return "output";
+        return "event";
+    }
+
+    function loopTranscriptFind(value, keys, depth) {
+        if (!value || depth > 5) return null;
+        if (typeof value !== "object") return null;
+        var i;
+        for (i = 0; i < keys.length; i += 1) {
+            if (Object.prototype.hasOwnProperty.call(value, keys[i])) {
+                var direct = value[keys[i]];
+                if (direct !== null && direct !== undefined && direct !== "") return direct;
+            }
+        }
+        var values = Array.isArray(value) ? value : Object.keys(value).map(function (key) { return value[key]; });
+        for (i = 0; i < values.length; i += 1) {
+            var found = loopTranscriptFind(values[i], keys, depth + 1);
+            if (found !== null && found !== undefined && found !== "") return found;
+        }
+        return null;
+    }
+
+    function loopTranscriptText(value) {
+        if (value === null || value === undefined || value === "") return "";
+        if (typeof value === "string") return value;
+        try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
+    }
+
+    function loopTranscriptBlock(label, value) {
+        var textValue = loopTranscriptText(value);
+        if (!textValue) return "";
+        return '<div class="wf-loop-transcript-block"><span>' + esc(label) + '</span><pre>' + esc(textValue) + '</pre></div>';
+    }
+
+    function loopTranscriptRecordHtml(event, index) {
+        var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
+        var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
+        var kind = loopTranscriptKind(event);
+        var subtype = loopTranscriptSubtype(event).replace(/_/g, " ");
+        var when = event && event.created_at ? new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+        var prompt = loopTranscriptFind(payload, ["instruction", "prompt", "user_text", "request_text"], 0);
+        var command = loopTranscriptFind(payload, ["command", "argv", "tool_call"], 0);
+        var output = loopTranscriptFind(evidence, ["output", "stdout", "stderr", "result_preview", "result", "response"], 0) ||
+            loopTranscriptFind(payload, ["output", "stdout", "stderr", "result_preview", "response"], 0);
+        var decision = payload.decision && typeof payload.decision === "object" ? payload.decision : {};
+        var route = [decision.backend || payload.backend_id || payload.route_backend, decision.model || payload.model].filter(Boolean).join(" / ");
+        var skills = workflowCleanStringList(decision.skills || payload.skills);
+        var tools = workflowCleanStringList(decision.tools || payload.tools);
+        var validation = evidence.validation && typeof evidence.validation === "object" ? evidence.validation : null;
+        var raw = { payload: payload, evidence: evidence };
+        var runKey = String(loopFeedRunId || "");
+        var recordKey = String((event && event.id) || index);
+        var recordOpen = !!(loopTranscriptRecordOpenByRun[runKey] && loopTranscriptRecordOpenByRun[runKey][recordKey]);
+        var blocks = "";
+        blocks += loopTranscriptBlock("Prompt / handoff", prompt);
+        blocks += loopTranscriptBlock("Route", route);
+        blocks += loopTranscriptBlock("Skills", skills.length ? skills.join(", ") : "");
+        blocks += loopTranscriptBlock("Tools", tools.length ? tools.join(", ") : "");
+        blocks += loopTranscriptBlock("Command / tool call", command);
+        blocks += loopTranscriptBlock("Worker output", output);
+        blocks += loopTranscriptBlock("Validation", validation);
+        return '<details class="wf-loop-transcript-record wf-loop-transcript-record--' + esc(kind) + '" data-record-key="' + esc(recordKey) + '"' + (recordOpen ? " open" : "") + '>' +
+            '<summary><span class="wf-loop-transcript-seq">' + esc(index + 1) + '</span><b>' + esc(kind) + '</b><span class="wf-loop-transcript-event">' + esc(subtype) + '</span><time>' + esc(when) + '</time></summary>' +
+            '<div class="wf-loop-transcript-record-body">' +
+                (event.summary ? '<p class="wf-loop-transcript-summary">' + esc(event.summary) + '</p>' : '') +
+                blocks +
+                '<details class="wf-loop-transcript-raw"><summary>Raw event data</summary><pre>' + esc(JSON.stringify(raw, null, 2)) + '</pre></details>' +
+            '</div>' +
+        '</details>';
+    }
+
+    function renderLoopExecutionTranscript(run) {
+        if (!run || !run.id) return "";
+        var key = String(run.id);
+        var events = loopTranscriptEventsByRun[key];
+        var open = !!loopTranscriptOpenByRun[key];
+        var loading = !!loopTranscriptLoadingByRun[key];
+        var label = events ? (events.length + " events") : (loading ? "Loading…" : "Prompt, tools, commands and output");
+        var body = events
+            ? (events.length ? events.map(loopTranscriptRecordHtml).join("") : '<p class="wf-loop-transcript-empty">No execution events have been recorded yet.</p>')
+            : '<p class="wf-loop-transcript-empty">Open this transcript to load the complete, secret-redacted execution trail.</p>';
+        return '<details class="wf-loop-transcript" data-run-id="' + esc(key) + '"' + (open ? " open" : "") + '>' +
+            '<summary><span><b>Execution transcript</b><small>' + esc(label) + '</small></span><span class="wf-loop-transcript-cli">CLI detail</span></summary>' +
+            '<div class="wf-loop-transcript-body">' + body + '</div>' +
+        '</details>';
+    }
+
+    function bindLoopExecutionTranscript(run) {
+        var root = document.querySelector(".wf-loop-transcript[data-run-id]");
+        if (!root || !run || !run.id) return;
+        root.addEventListener("toggle", function () {
+            var key = String(run.id);
+            loopTranscriptOpenByRun[key] = !!root.open;
+            if (root.open) loadLoopExecutionTranscript(run.id, { quiet: true });
+        });
+        root.querySelectorAll(".wf-loop-transcript-record[data-record-key]").forEach(function (record) {
+            record.addEventListener("toggle", function () {
+                var key = String(run.id);
+                loopTranscriptRecordOpenByRun[key] = loopTranscriptRecordOpenByRun[key] || {};
+                loopTranscriptRecordOpenByRun[key][record.dataset.recordKey] = !!record.open;
+            });
+        });
+    }
+
+    function loadLoopExecutionTranscript(runId, options) {
+        options = options || {};
+        if (!currentWorkflowId || !runId) return Promise.resolve([]);
+        var key = String(runId);
+        var loadedAt = Number(loopTranscriptLoadedAtByRun[key] || 0);
+        if (loopTranscriptLoadingByRun[key]) return loopTranscriptLoadingByRun[key];
+        if (!options.force && loopTranscriptEventsByRun[key] && Date.now() - loadedAt < 15000) {
+            return Promise.resolve(loopTranscriptEventsByRun[key]);
+        }
+        loopTranscriptLoadingByRun[key] = api("GET", "/workflows/" + currentWorkflowId + "/runs/" + runId + "/timeline?limit=500&detail=true")
+            .then(function (resp) {
+                var events = resp && Array.isArray(resp.events) ? resp.events : [];
+                loopTranscriptEventsByRun[key] = events;
+                loopTranscriptLoadedAtByRun[key] = Date.now();
+                return events;
+            })
+            .catch(function (e) {
+                if (!options.quiet) snack(e.message || "Failed to load execution transcript", "error");
+                return loopTranscriptEventsByRun[key] || [];
+            })
+            .finally(function () {
+                delete loopTranscriptLoadingByRun[key];
+                if (String(loopFeedRunId || "") === key) renderLoopActivityFeed(latestLoopFeedItems || []);
+            });
+        return loopTranscriptLoadingByRun[key];
     }
 
     function loopFeedItemIsNoise(item) {
@@ -12528,6 +12923,47 @@
         };
     }
 
+    function loopFeedHumanState(run, meta) {
+        var status = String((run && run.status) || "running").toLowerCase();
+        var route = (run && run.execution_route) || {};
+        var worker = [route.backend, route.model_provider, route.model].filter(Boolean).join(" / ") || "the selected worker";
+        var heartbeatAge = run && run.heartbeat_age_seconds != null ? Math.max(0, parseInt(run.heartbeat_age_seconds, 10) || 0) : null;
+        var activity = run && run.last_activity && run.last_activity.message ? run.last_activity.message : "Waiting for the first worker update.";
+        var nextStep = "";
+        var steps = currentWorkflow && Array.isArray(currentWorkflow.steps) ? currentWorkflow.steps : [];
+        if (meta.index && steps[meta.index]) nextStep = steps[meta.index].name || "the next step";
+        if (status === "waiting") {
+            return {
+                headline: "Your decision is needed before the workflow can continue.",
+                now: run.worker_question || "Review the request below and choose how the workflow should proceed.",
+                next: "After your response, the same run continues with its existing ticket and memory.",
+                action: "Decision required"
+            };
+        }
+        if (status === "failed" || status === "error") {
+            return {
+                headline: "This run stopped because the current step could not produce a valid result.",
+                now: activity,
+                next: "Review the failure evidence before retrying or changing the worker.",
+                action: "Review required"
+            };
+        }
+        if (status === "cancelled") {
+            return {
+                headline: "This workflow run was cancelled.",
+                now: activity,
+                next: "Nothing else will run unless you start this ticket again.",
+                action: "No action needed"
+            };
+        }
+        return {
+            headline: worker + " is working on “" + meta.title + "”.",
+            now: activity + (heartbeatAge == null ? "" : (heartbeatAge < 15 ? " The worker is responding normally." : " The last heartbeat was " + formatElapsed(heartbeatAge) + " ago.")),
+            next: nextStep ? ("If this step passes, the workflow continues to “" + nextStep + "”.") : "This is the final step; the workflow will prepare its delivery report next.",
+            action: "No action needed"
+        };
+    }
+
     function renderLoopActivityFeed(items) {
         var list = document.getElementById("wf-loop-feed-messages");
         if (!list) return;
@@ -12539,6 +12975,7 @@
             return;
         }
         var meta = loopFeedActiveStepMeta(run);
+        var humanState = loopFeedHumanState(run, meta);
         var runStatus = String(run.status || "").toLowerCase();
         var state = "running";
         if (runStatus === "waiting") state = "waiting";
@@ -12563,14 +13000,27 @@
             ? meaningfulItems.map(loopFeedRenderItem).join("")
             : '<p class="wf-loop-feed-step-empty">Waiting for activity from this step.</p>';
         list.innerHTML =
+            '<section class="wf-loop-decision-summary wf-loop-decision-summary--' + esc(state) + '">' +
+                '<div class="wf-loop-decision-summary-head"><span>What is happening</span><b>' + esc(humanState.action) + '</b></div>' +
+                '<p class="wf-loop-decision-headline">' + esc(humanState.headline) + '</p>' +
+                '<dl class="wf-loop-decision-facts">' +
+                    '<div><dt>Now</dt><dd>' + esc(humanState.now) + '</dd></div>' +
+                    '<div><dt>Next</dt><dd>' + esc(humanState.next) + '</dd></div>' +
+                '</dl>' +
+            '</section>' +
+            renderLoopExecutionTranscript(run) +
             '<section class="wf-loop-feed-step wf-loop-feed-step--' + esc(state) + '" data-step-id="' + esc(run.current_step_id || "") + '">' +
                 '<div class="wf-loop-feed-step-summary">' +
                     '<span class="wf-loop-feed-step-index">' + esc(meta.index) + '</span>' +
                     '<span class="wf-loop-feed-step-title" title="' + esc(meta.title) + '">' + esc(meta.title) + '</span>' +
-                    '<span class="wf-loop-feed-step-state">' + esc(state) + '</span>' +
+                    '<span class="wf-loop-feed-step-state">' + esc(loopStepStatusLabel(state)) + '</span>' +
                 '</div>' +
                 '<div class="wf-loop-feed-step-body">' + body + '</div>' +
             '</section>';
+        bindLoopExecutionTranscript(run);
+        if (loopTranscriptOpenByRun[String(run.id)] && loopTranscriptEventsByRun[String(run.id)]) {
+            loadLoopExecutionTranscript(run.id, { quiet: true });
+        }
         if (loopFeedScrollPinned) {
             list.scrollTop = list.scrollHeight;
         }
@@ -12578,18 +13028,21 @@
 
     function loadLoopActivityFeed(options) {
         options = options || {};
-        if (!currentWorkflowId || !selectedWorkflowQueueTicketId) {
+        var contextRun = loopFeedActiveRun() || currentWorkflowActiveRun();
+        var contextTicketId = contextRun && contextRun.ticket_id ? String(contextRun.ticket_id) : selectedWorkflowQueueTicketId;
+        if (!currentWorkflowId || !contextTicketId) {
             renderLoopActivityFeed([]);
             return Promise.resolve([]);
         }
         syncLoopFeedRunSelect();
         var runId = loopFeedRunId;
-        var boardId = getSelectedBoardLocalId();
+        contextRun = loopFeedActiveRun() || currentWorkflowActiveRun() || contextRun;
+        var boardId = contextRun && contextRun.board_id ? contextRun.board_id : getSelectedBoardLocalId();
         var rawQuery = "/workflows/" + currentWorkflowId + "/orchestrator-events?limit=120";
         if (runId) rawQuery += "&run_id=" + encodeURIComponent(runId);
         if (boardId) rawQuery += "&board_id=" + encodeURIComponent(boardId);
         var eventsPromise = runId
-            ? api("GET", "/workflows/" + currentWorkflowId + "/runs/" + runId + "/timeline?limit=160").then(function (resp) {
+            ? api("GET", "/workflows/" + currentWorkflowId + "/runs/" + runId + "/timeline?limit=500&mission_control=true").then(function (resp) {
                 return resp && Array.isArray(resp.events) ? resp.events : [];
             }).catch(function () {
                 return api("GET", rawQuery);
@@ -12601,7 +13054,7 @@
         return Promise.all([eventsPromise, steeringPromise]).then(function (results) {
             var events = Array.isArray(results[0]) ? results[0] : [];
             events = events.filter(function (event) {
-                return !event.ticket_id || String(event.ticket_id) === String(selectedWorkflowQueueTicketId);
+                return !event.ticket_id || String(event.ticket_id) === String(contextTicketId);
             });
             var snapshot = results[1];
             var steeringLog = snapshot && Array.isArray(snapshot.steering_log) ? snapshot.steering_log.slice().reverse() : [];
@@ -12610,6 +13063,7 @@
             });
             var merged = mergeLoopFeedItems(events, steeringLog, optimistic);
             renderLoopActivityFeed(merged);
+            if (currentWorkflow) renderSteps(currentWorkflow.steps || []);
             return merged;
         }).catch(function (e) {
             if (!options.quiet) snack(e.message || "Failed to load activity feed", "error");
@@ -13303,6 +13757,7 @@
         var workflowBoardSelect = document.getElementById("wf-board-select");
         if (workflowBoardSelect) {
             workflowBoardSelect.addEventListener("change", function () {
+                workflowBoardSelectionExplicit = true;
                 if (workflowBoardSelect.value) loadWorkflowBoardTickets(workflowBoardSelect.value);
                 renderWorkflowTickets(workflowQueueTickets);
                 disconnectWorkflowCliWs();

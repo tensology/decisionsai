@@ -103,7 +103,10 @@ class BackgroundChainRunner:
         # Hit MAX_ROUNDS or cancelled
         if self._round_num >= self.MAX_ROUNDS:
             logger.warning("BackgroundChain: Hit MAX_ROUNDS (%d)", self.MAX_ROUNDS)
-            await self._announce_result(full_content or "Chain completed (max rounds reached)")
+            await self._announce_result(
+                "I paused this work after reaching the tool-round safety limit. "
+                "The completed tool results are saved, but the request is not finished; tell me to continue and I will resume from them."
+            )
 
     async def _process_follow_up(self):
         """Make a follow-up LLM call with tool results. Returns (content, tool_calls)."""

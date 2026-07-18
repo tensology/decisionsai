@@ -187,31 +187,30 @@ def apply_auto_step_role_policy(
     selected: dict[str, Any]
     rationale: str
 
-    if role == "planning" and complexity in {"medium", "high"}:
+    if role == "final_polish":
+        selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
+        rationale = "The final production polish uses Codex after cheaper implementation and independent review complete."
+    elif role == "planning" and complexity in {"medium", "high"}:
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = (
             f"{complexity.title()}-complexity planning benefits from a stronger independent "
             "reasoning pass, so Auto selected Codex before implementation."
         )
-    elif role == "implementation" and (complexity == "high" or high_consequence):
+    elif role == "implementation" and high_consequence:
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = (
-            "Implementation is high-complexity or high-consequence, so Auto selected Codex "
+            "Implementation touches a high-consequence boundary, so Auto selected Codex "
             "instead of risking an unproven local edit."
         )
     elif role == "review":
         implementation = (prior_role_routes or {}).get("implementation")
         implementation = implementation if isinstance(implementation, dict) else {}
-        if str(implementation.get("backend") or "") != "codex":
-            selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
-            rationale = "Review uses Codex independently from the local/free implementation route."
-        else:
-            selected = _openrouter_hy3_route(settings) or _free_eligible_model(
-                settings,
-                complexity=complexity,
-                prefer_local=True,
-            )
-            rationale = "Review uses a different provider from implementation to reduce context bias."
+        selected = _openrouter_hy3_route(settings) or _free_eligible_model(
+            settings,
+            complexity=complexity,
+            prefer_local=str(implementation.get("model_provider") or "") != "ollama",
+        )
+        rationale = "Review uses a different free/lower-cost provider from implementation to reduce context bias."
     elif role == "deployment":
         selected = merged
         rationale = "Deployment keeps its approved route; the workflow approval gate controls execution."

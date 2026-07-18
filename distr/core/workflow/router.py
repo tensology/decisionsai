@@ -7,6 +7,7 @@ Extracted from complete_step() in service.py and _advance_workflow_orchestration
 **Validates: Requirements 3, 4, 7**
 """
 import json
+import hashlib
 import logging
 import re
 import uuid
@@ -189,6 +190,14 @@ class StepRouter:
                 return self._enter_approval_state(db, step, run_id, result, verified_passed)
 
             status = "passed" if verified_passed else "failed"
+
+            self._record_validation_progress(
+                run,
+                step,
+                caller_passed=bool(passed),
+                verified_passed=bool(verified_passed),
+                validation_snapshot=validation_snapshot,
+            )
 
             # ── store result ──
             step.status = status
@@ -429,6 +438,10 @@ class StepRouter:
                         step_id=step_id,
                         passed=bool(verified_passed),
                         result_text=result or "",
+                        requires_attention=bool(
+                            not verified_passed
+                            and decision.get("action") in {"end_run", "waiting"}
+                        ),
                     )
                 except Exception:
                     logger.debug("Could not send ticket workflow step engagement", exc_info=True)
@@ -587,6 +600,15 @@ class StepRouter:
         else:
             next_step_id = self._static_route(db, step, verified_passed)
 
+        next_step_id = self._apply_ticket_contract_routing(
+            db,
+            run,
+            step,
+            next_step_id,
+            verified_passed=verified_passed,
+            result=result,
+        )
+
         next_step_id = self._apply_loop_iteration_routing(
             db, run, step, next_step_id, verified_passed,
         )
@@ -627,6 +649,129 @@ class StepRouter:
             "step_id": next_step.id,
             "wait_before_next": step.wait_before_next or 0,
         }
+
+    @staticmethod
+    def _run_ticket_text(db, run: AutoWorkflowRun) -> str:
+        parts: list[str] = []
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        for key in ("ticket_title", "ticket_workflow_brief"):
+            if run_data.get(key):
+                parts.append(str(run_data[key]))
+        return "\n\n".join(part for part in parts if part.strip())
+
+    @staticmethod
+    def _report_step(db, workflow_id: int) -> AutoWorkflowStep | None:
+        steps = (
+            db.query(AutoWorkflowStep)
+            .filter(AutoWorkflowStep.workflow_id == int(workflow_id))
+            .order_by(AutoWorkflowStep.position.desc())
+            .all()
+        )
+        return next(
+            (
+                item for item in steps
+                if any(word in str(item.name or "").lower() for word in ("report", "handoff", "compact memory"))
+            ),
+            steps[0] if steps else None,
+        )
+
+    def _apply_ticket_contract_routing(
+        self,
+        db,
+        run: AutoWorkflowRun,
+        step: AutoWorkflowStep,
+        next_step_id: int | None,
+        *,
+        verified_passed: bool,
+        result: str,
+    ) -> int | None:
+        """Skip inapplicable phases and stop repeating non-actionable failures."""
+        from distr.core.workflow.ticket_contract import (
+            classify_ticket_execution,
+            existing_work_satisfies_contract,
+        )
+
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        if (
+            not verified_passed
+            and int(run_data.get("validation_stalled_step_id") or 0) == int(step.id)
+        ):
+            report_step = self._report_step(db, int(run.workflow_id))
+            run_data["forced_terminal_status"] = "failed"
+            run_data["terminal_warning"] = (
+                "Validation repeated without a new actionable finding; the run stopped instead of looping again."
+            )
+            run.run_data = json.dumps(run_data)
+            return report_step.id if report_step and report_step.id != step.id else -1
+
+        ticket_text = self._run_ticket_text(db, run)
+        profile = classify_ticket_execution(ticket_text)
+        run_data["ticket_execution_profile"] = profile
+        if (
+            profile.get("research_only")
+            and int(step.position or 0) == 0
+            and verified_passed
+            and existing_work_satisfies_contract(ticket_text, result)
+        ):
+            report_step = self._report_step(db, int(run.workflow_id))
+            run_data["already_satisfied_short_circuit"] = True
+            run_data["short_circuit_reason"] = "Existing ticket artifacts satisfy the explicit acceptance contract."
+            run.run_data = json.dumps(run_data)
+            return report_step.id if report_step and report_step.id != step.id else next_step_id
+
+        if profile.get("research_only") and next_step_id not in (None, -1):
+            target = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(next_step_id)).first()
+            if target and any(word in str(target.name or "").lower() for word in ("production polish", "ship audit")):
+                report_step = self._report_step(db, int(run.workflow_id))
+                run_data["skipped_inapplicable_steps"] = list(
+                    dict.fromkeys([*(run_data.get("skipped_inapplicable_steps") or []), int(target.id)])
+                )
+                run.run_data = json.dumps(run_data)
+                return report_step.id if report_step and report_step.id != step.id else next_step_id
+        run.run_data = json.dumps(run_data)
+        return next_step_id
+
+    @staticmethod
+    def _record_validation_progress(
+        run: AutoWorkflowRun | None,
+        step: AutoWorkflowStep,
+        *,
+        caller_passed: bool,
+        verified_passed: bool,
+        validation_snapshot: dict[str, Any],
+    ) -> None:
+        """Detect repeated validator disagreement before it burns every loop pass."""
+        if not run:
+            return
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        state = dict(run_data.get("validation_progress") or {})
+        key = str(step.id)
+        if verified_passed:
+            state.pop(key, None)
+            if int(run_data.get("validation_stalled_step_id") or 0) == int(step.id):
+                run_data.pop("validation_stalled_step_id", None)
+        elif caller_passed:
+            expected = " ".join(str(validation_snapshot.get("expected") or "").lower().split())
+            signature = hashlib.sha256(expected.encode("utf-8")).hexdigest()[:16]
+            previous = dict(state.get(key) or {})
+            count = int(previous.get("count") or 0) + 1 if previous.get("signature") == signature else 1
+            state[key] = {"signature": signature, "count": count}
+            if count >= 2:
+                run_data["validation_stalled_step_id"] = int(step.id)
+                run_data["validation_stall_count"] = count
+        else:
+            state.pop(key, None)
+        run_data["validation_progress"] = state
+        run.run_data = json.dumps(run_data)
 
     # ── Static routing ──────────────────────────────────────────────
 

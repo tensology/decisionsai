@@ -194,6 +194,16 @@ def enforce_validation_requirements(
 def infer_risk_profile(text: str) -> Dict[str, Any]:
     """Classify a ticket/workflow request into low/medium/high risk."""
     lower = (text or "").lower()
+    from distr.core.workflow.ticket_contract import classify_ticket_execution
+
+    execution = classify_ticket_execution(text)
+    if execution.get("research_only"):
+        return {
+            "level": "low",
+            "signals": ["research_documentation"],
+            "risk_type": "research_documentation",
+            "execution_profile": execution,
+        }
     system_matched = [term for term in HIGH_RISK_TERMS if term in lower]
     product_matched = [term for term in PRODUCT_RISK_TERMS if term in lower]
     if system_matched:

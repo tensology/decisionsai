@@ -816,9 +816,12 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 next_item = group_items[group_index + 1]
                 if not isinstance(next_item, dict) or next_item.get("ticket_id") is None:
                     return
-                next_ticket_id = int(next_item["ticket_id"])
-                board_id = next_item.get("board_id")
-                run_metadata = dict(next_item.get("run_metadata") or {})
+                from distr.core.workflow.ticket_dispatch import hydrate_ticket_run_ref
+
+                hydrated = hydrate_ticket_run_ref(next_item, workflow_id)
+                next_ticket_id = int(hydrated["ticket_id"])
+                board_id = hydrated.get("board_id")
+                run_metadata = dict(hydrated.get("run_metadata") or {})
                 run_metadata.update({
                     "ticket_group_id": run_data.get("ticket_group_id"),
                     "ticket_group_index": group_index + 1,
@@ -826,7 +829,7 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                     "ticket_group_items": group_items,
                     "auto_queued_from_run_id": run_id,
                 })
-                group_context = str(next_item.get("context") or "").strip() or None
+                group_context = str(hydrated.get("context") or "").strip() or None
                 next_group_item = {
                     "ticket_id": next_ticket_id,
                     "board_id": int(board_id) if board_id is not None else None,
@@ -921,8 +924,6 @@ def start_workflow_ticket_group(
         normalized.append({
             "ticket_id": ticket_id,
             "board_id": int(raw["board_id"]) if raw.get("board_id") is not None else None,
-            "context": str(raw.get("context") or ""),
-            "run_metadata": dict(raw.get("run_metadata") or {}),
         })
     if not normalized:
         return {"error": "No valid tickets were supplied"}
@@ -935,16 +936,26 @@ def start_workflow_ticket_group(
 
     group_id = uuid4().hex
     mode = run_settings["execution_mode"]
+    from distr.core.workflow.ticket_dispatch import compact_ticket_run_ref
+
+    group_refs = [compact_ticket_run_ref(item) for item in normalized]
     to_start = normalized if mode == "parallel" else normalized[:1]
     started: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
-    for index, item in enumerate(to_start):
+    from distr.core.workflow.ticket_dispatch import hydrate_ticket_run_ref
+
+    for index, ref in enumerate(to_start):
+        try:
+            item = hydrate_ticket_run_ref(ref, int(workflow_id))
+        except ValueError as exc:
+            errors.append({"ticket_id": ref["ticket_id"], "error": str(exc)})
+            continue
         metadata = dict(item["run_metadata"])
         metadata.update({
             "ticket_group_id": group_id,
             "ticket_group_index": index,
             "ticket_group_size": len(normalized),
-            "ticket_group_items": normalized if mode == "sequential" else [],
+            "ticket_group_items": group_refs if mode == "sequential" else [],
         })
         result = start_workflow_run(
             int(workflow_id),
@@ -968,6 +979,81 @@ def start_workflow_ticket_group(
         "errors": errors,
         "queued_count": (len(normalized) - len(started)) if mode == "sequential" and started else 0,
     }
+
+
+def append_workflow_ticket_group(
+    run_id: int,
+    ticket_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Append explicitly selected tickets to a live sequential group.
+
+    This is intentionally explicit: a second Run All request never silently joins
+    unrelated work, while an orchestrator can repair an undersized handoff without
+    cancelling the active ticket or losing its progress.
+    """
+    normalized: List[Dict[str, Any]] = []
+    seen: set[int] = set()
+    for raw in ticket_items or []:
+        if not isinstance(raw, dict) or raw.get("ticket_id") is None:
+            continue
+        ticket_id = int(raw["ticket_id"])
+        if ticket_id in seen:
+            continue
+        seen.add(ticket_id)
+        normalized.append({
+            "ticket_id": ticket_id,
+            "board_id": int(raw["board_id"]) if raw.get("board_id") is not None else None,
+            "context": str(raw.get("context") or ""),
+            "run_metadata": dict(raw.get("run_metadata") or {}),
+        })
+    if not normalized:
+        return {"error": "No valid tickets were supplied"}
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Workflow run not found"}
+        if run.status not in {"running", "waiting"}:
+            return {"error": f"Workflow run is not active (status: {run.status})"}
+        workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(run.workflow_id)).first()
+        if not workflow or _workflow_run_settings(workflow).get("execution_mode") != "sequential":
+            return {"error": "Tickets can only be appended to an active sequential workflow group"}
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        group_items = run_data.get("ticket_group_items")
+        group_items = list(group_items) if isinstance(group_items, list) else []
+        existing_ids = {
+            int(item["ticket_id"])
+            for item in group_items
+            if isinstance(item, dict) and item.get("ticket_id") is not None
+        }
+        if run.ticket_id and int(run.ticket_id) not in existing_ids:
+            group_items.insert(0, {
+                "ticket_id": int(run.ticket_id),
+                "board_id": int(run.board_id) if run.board_id is not None else None,
+            })
+            existing_ids.add(int(run.ticket_id))
+        from distr.core.workflow.ticket_dispatch import compact_ticket_run_ref
+
+        group_items = [compact_ticket_run_ref(item) for item in group_items if isinstance(item, dict) and item.get("ticket_id") is not None]
+        appended = [compact_ticket_run_ref(item) for item in normalized if item["ticket_id"] not in existing_ids]
+        group_items.extend(appended)
+        run_data["ticket_group_id"] = run_data.get("ticket_group_id") or uuid4().hex
+        run_data["ticket_group_items"] = group_items
+        run_data["ticket_group_size"] = len(group_items)
+        run.run_data = json.dumps(run_data, default=str)
+        group_index = int(run_data.get("ticket_group_index") or 0)
+        result = {
+            "success": True,
+            "run_id": int(run.id),
+            "group_id": run_data["ticket_group_id"],
+            "ticket_count": len(group_items),
+            "appended_ticket_ids": [item["ticket_id"] for item in appended],
+            "queued_count": max(0, len(group_items) - group_index - 1),
+        }
+    return result
 
 
 def _clear_workflow_env() -> None:
@@ -1130,8 +1216,21 @@ def start_workflow_run(
                 )
             except Exception:
                 logger.debug("start_workflow_run: developer context assembly failed", exc_info=True)
-        risk_profile = infer_risk_profile((context or ""))
+        risk_text = "\n\n".join(
+            str(value or "").strip()
+            for value in (
+                context,
+                normalized_metadata.get("ticket_title"),
+                normalized_metadata.get("ticket_workflow_brief"),
+            )
+            if str(value or "").strip()
+        )
+        risk_profile = infer_risk_profile(risk_text)
         normalized_metadata.setdefault("risk_profile", risk_profile)
+        normalized_metadata.setdefault(
+            "ticket_execution_profile",
+            dict(risk_profile.get("execution_profile") or {}),
+        )
         normalized_metadata.setdefault(
             "validation_rules",
             validation_rules_for_risk(
@@ -1966,6 +2065,9 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         project_id = run_data.get("project_id")
         execution_session_id = run_data.get("execution_session_id")
         auto_retry: Dict[str, Any] | None = None
+        forced_terminal_status = str(run_data.get("forced_terminal_status") or "").strip().lower()
+        if forced_terminal_status and status == "completed":
+            status = forced_terminal_status
         if packet:
             packet = _finalize_result_packet_for_terminal_run(
                 packet,
@@ -2017,6 +2119,17 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                     ",".join(dogfood_missing),
                 )
             status = dogfood_status or enforced_status or status
+            # Validation gates may adjust terminal status after the first packet
+            # finalization. Reconcile once more so the run, packet, chat, and TTS
+            # all report the same terminal truth.
+            updated_packet = _finalize_result_packet_for_terminal_run(
+                updated_packet,
+                run_id=run_id,
+                status=status,
+                risk_profile=risk_profile,
+            )
+            if run_data.get("terminal_warning"):
+                updated_packet["summary"] = str(run_data["terminal_warning"])
             run_data["result_packet"] = updated_packet
             run.run_data = json.dumps(run_data)
         run.status = status

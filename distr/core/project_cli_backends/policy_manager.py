@@ -66,6 +66,8 @@ def _step_role(step: Any) -> str:
 
     def infer(text: str) -> str:
         text = text.strip().lower()
+        if any(phrase in text for phrase in ("final production polish", "release polish", "final ship audit")):
+            return "final_polish"
         if any(word in text for word in ("report", "summar", "handoff", "compact memory")):
             return "reporting"
         if any(word in text for word in ("review", "audit", "quality", "critic", "self-assess")):
@@ -102,14 +104,18 @@ def _discover_routes(settings: dict[str, Any], *, complexity: str) -> list[dict[
     for row in installed_ollama_cli_models(settings):
         if not row.get("usable", True):
             continue
+        is_local = bool(row.get("local", True))
+        is_free = bool(row.get("free", is_local))
+        if not is_local and not is_free:
+            continue
         routes.append({
             "backend": "pi",
             "model": str(row.get("id") or "auto"),
             "model_provider": "ollama",
             "source": "live_local_catalog",
             "reason": str(row.get("reason") or "Installed local model."),
-            "free": bool(row.get("free", True)),
-            "local": True,
+            "free": is_free,
+            "local": is_local,
         })
     if settings.get("openrouter_enabled") and str(settings.get("openrouter_key") or "").strip():
         for row in rank_openrouter_free_models(
@@ -163,7 +169,12 @@ def _automatic_role_routes(
         key=strength,
         reverse=True,
     )
-    implementation = dict(levels["medium"])
+    local_routes = sorted(
+        (route for route in candidates if route.get("local")),
+        key=strength,
+        reverse=True,
+    )
+    implementation = dict(local_routes[0]) if local_routes else dict(levels["medium"])
     planning = dict(levels["high"] if preference != "free" else levels["medium"])
     review = next((dict(route) for route in free_routes if _route_key(route) != _route_key(implementation)), None)
     review = review or _normalise_route({"backend": "codex", "model": "auto"}, source="auto_policy")
@@ -176,6 +187,10 @@ def _automatic_role_routes(
         "implementation": implementation,
         "review": review,
         "validation": validation,
+        "final_polish": _normalise_route(
+            {"backend": "codex", "model": "auto", "provider": "openai"},
+            source="auto_policy",
+        ),
         "reporting": dict(levels["low"]),
     }
 
@@ -195,7 +210,21 @@ def build_model_policy_plan(
 
     scope = str(scope or "workflow").strip().lower()
     mode = str(mode or "auto").strip().lower()
-    preference = str(preference or "free").strip().lower()
+    preference = str(preference or "free").strip().lower().replace("-", "_").replace(" ", "_")
+    preference = {
+        "prefer_free": "free",
+        "free_first": "free",
+        "local_first": "free",
+        "cheap": "free",
+        "cheapest": "free",
+        "cost": "free",
+        "cost_effective": "free",
+        "auto": "balanced",
+        "automatic": "balanced",
+        "best": "performance",
+        "quality": "performance",
+        "strongest": "performance",
+    }.get(preference, preference)
     if scope not in VALID_SCOPES:
         raise ValueError(f"Unknown scope: {scope}")
     if mode not in VALID_MODES:
