@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  Start with a voice agent. Let it grow into the agent that runs your work.
+  A voice-first development agent for your computer, your projects, and your phone.
 </p>
 
 <p align="center">
@@ -30,6 +30,18 @@
 </p>
 
 ---
+
+## DecisionsAI is an agent
+
+DecisionsAI is an agent that helps you develop faster and get everyday work done on your computer. Talk to it, dictate into any app, ask it to control your desktop, or give it work inside a real project. It can use your files, tools, skills, coding agents, and connected services to carry the request through instead of only telling you what to do.
+
+Its local web interface is the control deck. That is where you chat, organize projects, track tickets, see what is running, review results, and step into a workflow when you want more detail. You do not have to keep it open while the agent works.
+
+Telegram is the remote control. From your phone, you can send the same agent a message, voice note, screenshot, or document; approve a decision; steer work already in progress; and receive the result when it is done.
+
+DecisionsAI is **model-agnostic, provider-agnostic, and CLI-agnostic**. It does not lock your projects or memory to one AI company. Start with a local model, connect a cloud provider, use Codex, Cursor, Claude Code, Pi, or another coding CLI, and swap them later without rebuilding the way you work.
+
+Start with the voice agent. Add projects, tickets, Telegram, and workflows when you need them.
 
 ## Start simple
 
