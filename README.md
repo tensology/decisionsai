@@ -33,14 +33,17 @@
 
 ## Start simple
 
-At its simplest, DecisionsAI is a desktop voice agent. Hold the shortcut, say what you need, and let go.
+At its simplest, DecisionsAI gives you two voice hotkeys:
+
+- Hold **Option + Command** *(the default macOS push-to-talk shortcut)* to speak to the agent, ask for something, and hear its reply.
+- Hold **Control + Command** *(the default macOS dictation shortcut)* to turn your speech into text inside whichever app you are using.
 
 > “Open Safari.”  
 > “Reply to this message.”  
 > “Take what I’m saying and clean it up.”  
 > “Summarize what is on my screen.”
 
-It can talk back, type into the app you are using, control your computer, run an action, or answer in Chat. Push-to-talk and system-wide dictation can run locally, so you do not need to begin with projects, workflows, or a collection of cloud accounts.
+The agent can talk back, control your computer, run an action, or answer in Chat. Dictation simply writes what you say at the cursor. Both modes can run locally, so you do not need to begin with projects, workflows, or a collection of cloud accounts.
 
 That is the first layer: **ask for something and the agent does it**.
 
@@ -50,8 +53,8 @@ Voice is not a single mode in DecisionsAI. You can use it according to what you 
 
 | What you want | How you use it | What happens |
 |---|---|---|
-| **Talk to the agent** | Hold the push-to-talk shortcut | DecisionsAI understands the request, performs work, and replies |
-| **Write with your voice** | Hold the dictation shortcut in any text field | Your speech is transcribed and inserted where you are typing |
+| **Talk to the agent** | Hold **Option + Command** by default on macOS | DecisionsAI understands the request, performs work, and replies |
+| **Write with your voice** | Hold **Control + Command** by default on macOS | Your speech is transcribed and inserted where you are typing |
 | **Trigger something familiar** | Say a voice command or use a saved shortcut | DecisionsAI opens an app, runs an action, pastes a snippet, or starts a recorded macro |
 
 The default macOS shortcuts are **Option + Command** for push-to-talk and **Control + Command** for dictation. Shortcuts are editable in **Preferences → Shortcut Keys**, so they can fit around the tools you already use.

@@ -6,7 +6,7 @@
 
 ### The release where DecisionsAI starts behaving like one agent
 
-DecisionsAI started as a voice agent: hold a shortcut, ask for something, and let it help. Version 2.8.5 keeps that simple beginning, then gives the agent somewhere useful to grow.
+DecisionsAI started as a voice agent: hold **Option + Command** *(the default macOS push-to-talk shortcut)* to ask for help, or hold **Control + Command** *(the default macOS dictation shortcut)* to speak into any text field. Version 2.8.5 keeps that simple beginning, then gives the agent somewhere useful to grow.
 
 You can dictate into any app, ask for a quick desktop action, or message the same agent from Telegram. When the request belongs to a project, DecisionsAI can create a ticket and track the work. When the job is larger, it can use one clear Development workflow to understand, plan, build, test, correct, and report the result.
 
