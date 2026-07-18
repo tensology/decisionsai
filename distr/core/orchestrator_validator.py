@@ -48,6 +48,7 @@ def run_orchestrator_validator_judgment(
     standards_context: str = "",
     ticket_context: str = "",
     mode: str = "primary",
+    route: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """
     Ask the orchestrator validator model to judge step output.
@@ -61,7 +62,11 @@ def run_orchestrator_validator_judgment(
 
         import litellm
 
-        provider, model = get_orchestrator_role_model("validator")
+        route = route if isinstance(route, dict) else {}
+        provider = str(route.get("model_provider") or route.get("provider") or "").strip()
+        model = str(route.get("model") or "").strip()
+        if not provider or not model or model.lower() == "auto":
+            provider, model = get_orchestrator_role_model("validator")
         if not provider and not model:
             return None
 
@@ -102,6 +107,7 @@ def run_orchestrator_validator_judgment(
             "mode": mode,
             "provider": provider,
             "model": model,
+            "route_source": route.get("source") or "orchestrator_validator",
         }
     except Exception as exc:
         logger.debug("Orchestrator validator judgment skipped: %s", exc)
@@ -116,6 +122,7 @@ def apply_orchestrator_validator_overlay(
     mechanical_passed: bool,
     standards_context: str = "",
     ticket_context: str = "",
+    validation_routes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """
     Optional orchestrator second pass after mechanical verification.
@@ -129,22 +136,50 @@ def apply_orchestrator_validator_overlay(
         return None
 
     vtype = (getattr(step, "validation_type", None) or "none").strip().lower()
-    if vtype == "llm_judgment":
+    if vtype == "llm_judgment" and not validation_routes:
         return None
 
     criteria = _validation_criteria(step)
     if not criteria and not ticket_context.strip():
         criteria = "Confirm the step result is complete, accurate, and matches the ticket intent."
 
-    verdict = run_orchestrator_validator_judgment(
-        result=result,
-        validation_prompt=criteria,
-        standards_context=standards_context,
-        ticket_context=ticket_context,
-        mode="second_pass",
-    )
-    if verdict is None:
+    routes = [item for item in (validation_routes or []) if isinstance(item, dict)]
+    verdicts: list[dict[str, Any]] = []
+    if routes:
+        # Independent evaluators do not depend on each other's output, so a
+        # dual review should not impose twice the wall-clock latency.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def judge(route: dict[str, Any]) -> dict[str, Any] | None:
+            return run_orchestrator_validator_judgment(
+                result=result,
+                validation_prompt=criteria,
+                standards_context=standards_context,
+                ticket_context=ticket_context,
+                mode="independent_second_pass",
+                route=route,
+            )
+
+        with ThreadPoolExecutor(max_workers=min(2, len(routes))) as pool:
+            verdicts = [item for item in pool.map(judge, routes[:2]) if item is not None]
+    else:
+        verdict = run_orchestrator_validator_judgment(
+            result=result,
+            validation_prompt=criteria,
+            standards_context=standards_context,
+            ticket_context=ticket_context,
+            mode="second_pass",
+        )
+        if verdict is not None:
+            verdicts = [verdict]
+    if not verdicts:
         return None
+    verdict = dict(verdicts[0])
+    verdict["passed"] = all(bool(item.get("passed")) for item in verdicts)
+    verdict["mode"] = "dual_independent" if len(verdicts) > 1 else verdict.get("mode", "independent")
+    verdict["reviews"] = verdicts
+    if len(verdicts) > 1:
+        verdict["rationale"] = " | ".join(str(item.get("rationale") or "") for item in verdicts)[:2000]
 
     try:
         from distr.core.orchestrator import emit_event

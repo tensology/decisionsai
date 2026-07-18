@@ -15,6 +15,8 @@ DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "max_parallel_tickets": 1,
     "branch_per_ticket": True,
     "auto_route_models": True,
+    "adaptive_multi_model_enabled": True,
+    "max_parallel_evaluators": 2,
     "prefer_free_local": True,
     "independent_validation": True,
     "allow_provider_failover": True,

@@ -365,6 +365,8 @@ def test_apply_loop_preset_from_bundle(db_factory):
     assert merged.get("loop_contract")
     run_settings = json.loads(wf_row.run_settings or "{}")
     assert run_settings["auto_route_models"] is True
+    assert run_settings["adaptive_multi_model_enabled"] is True
+    assert run_settings["max_parallel_evaluators"] == 2
     assert run_settings["independent_validation"] is True
     assert run_settings["max_parallel_tickets"] == 1
 

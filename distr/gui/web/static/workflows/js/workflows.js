@@ -12709,7 +12709,7 @@
     function loopTranscriptKind(event) {
         var type = loopTranscriptSubtype(event);
         if (type.indexOf("handoff") >= 0 || type.indexOf("prompt") >= 0 || type === "message_end") return "prompt";
-        if (type.indexOf("route") >= 0 || type.indexOf("preflight") >= 0) return "route";
+        if (type.indexOf("route") >= 0 || type.indexOf("preflight") >= 0 || type.indexOf("coordination_plan") >= 0) return "route";
         if (type.indexOf("command") >= 0 || type.indexOf("tool") >= 0 || type.indexOf("skill") >= 0) return "tool";
         if (type.indexOf("validation") >= 0 || type.indexOf("review") >= 0) return "check";
         if (type.indexOf("failover") >= 0 || type.indexOf("retry") >= 0 || type.indexOf("iteration") >= 0) return "retry";
@@ -12762,6 +12762,8 @@
         var skills = workflowCleanStringList(decision.skills || payload.skills);
         var tools = workflowCleanStringList(decision.tools || payload.tools);
         var validation = evidence.validation && typeof evidence.validation === "object" ? evidence.validation : null;
+        var coordinationPlan = payload.coordination_plan && typeof payload.coordination_plan === "object" ? payload.coordination_plan : null;
+        var coordinationRevision = payload.revision && typeof payload.revision === "object" ? payload.revision : null;
         var raw = { payload: payload, evidence: evidence };
         var runKey = String(loopFeedRunId || "");
         var recordKey = String((event && event.id) || index);
@@ -12774,6 +12776,8 @@
         blocks += loopTranscriptBlock("Command / tool call", command);
         blocks += loopTranscriptBlock("Worker output", output);
         blocks += loopTranscriptBlock("Validation", validation);
+        blocks += loopTranscriptBlock("Whole-run allocation", coordinationPlan);
+        blocks += loopTranscriptBlock("Plan revision", coordinationRevision);
         return '<details class="wf-loop-transcript-record wf-loop-transcript-record--' + esc(kind) + '" data-record-key="' + esc(recordKey) + '"' + (recordOpen ? " open" : "") + '>' +
             '<summary><span class="wf-loop-transcript-seq">' + esc(index + 1) + '</span><b>' + esc(kind) + '</b><span class="wf-loop-transcript-event">' + esc(subtype) + '</span><time>' + esc(when) + '</time></summary>' +
             '<div class="wf-loop-transcript-record-body">' +

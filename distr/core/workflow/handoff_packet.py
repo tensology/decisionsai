@@ -85,6 +85,7 @@ class StepHandoffPacket:
     identity: dict[str, Any]
     objective: str
     current_step: dict[str, Any]
+    workflow_map: str = ""
     constraints: list[str] = field(default_factory=list)
     prior_outcomes: list[dict[str, Any]] = field(default_factory=list)
     artifact_refs: list[str] = field(default_factory=list)
@@ -100,6 +101,7 @@ class StepHandoffPacket:
             "identity": dict(self.identity),
             "objective": self.objective,
             "current_step": dict(self.current_step),
+            "workflow_map": self.workflow_map,
             "constraints": list(self.constraints),
             "prior_outcomes": list(self.prior_outcomes),
             "artifact_refs": list(self.artifact_refs),
@@ -121,6 +123,8 @@ class StepHandoffPacket:
         step_title = _clean(self.current_step.get("title") or "Current step")
         step_instruction = _bounded(self.current_step.get("instruction"), 2_200)
         sections.append(("current_step", f"## Current step: {step_title}\n{step_instruction}"))
+        if _clean(self.workflow_map):
+            sections.append(("workflow_map", "## Whole-run coordination map\n" + _bounded(self.workflow_map, 1_800)))
 
         constraints = _unique_text(self.constraints, limit=12)
         if constraints:

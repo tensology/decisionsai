@@ -6,6 +6,7 @@ def test_step_handoff_packet_deduplicates_references_and_reports_section_costs()
         identity={"workflow_id": 369, "run_id": 104, "ticket_id": 177},
         objective="Rebuild the artist homepage and preserve checkout.",
         current_step={"title": "Implement", "instruction": "Copy source files first, then edit them."},
+        workflow_map="· 1. Plan [planning; codex / auto]\n→ 2. Implement [implementation; pi / ornith:35b]",
         constraints=["Browser evidence is required.", "Browser evidence is required."],
         prior_outcomes=[{"title": "Plan", "status": "completed", "summary": "Plan saved."}],
         artifact_refs=["docs/plan.md", "docs/plan.md"],
@@ -19,6 +20,8 @@ def test_step_handoff_packet_deduplicates_references_and_reports_section_costs()
     assert prompt.count("docs/plan.md") == 1
     assert prompt.count("Browser evidence is required.") == 1
     assert "Copy source files first" in prompt
+    assert "Whole-run coordination map" in prompt
+    assert "ornith:35b" in prompt
     assert telemetry["total_chars"] == len(prompt)
     assert telemetry["section_chars"]["current_step"] > 0
     assert telemetry["reference_count"] == 2

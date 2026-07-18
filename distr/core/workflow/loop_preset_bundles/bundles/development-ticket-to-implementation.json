@@ -39,6 +39,8 @@
     "max_parallel_tickets": 1,
     "branch_per_ticket": true,
     "auto_route_models": true,
+    "adaptive_multi_model_enabled": true,
+    "max_parallel_evaluators": 2,
     "prefer_free_local": true,
     "independent_validation": true,
     "allow_provider_failover": true,

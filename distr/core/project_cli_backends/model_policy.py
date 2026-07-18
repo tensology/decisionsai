@@ -154,10 +154,14 @@ def apply_auto_step_role_policy(
     # already escalated this step, preserve that recorded route on the workflow
     # loop/retry instead of sending the same work back to the cheaper model that
     # just timed out or failed.
-    if str(merged.get("source") or "").strip().lower() == "runtime_provider_failover":
+    if str(merged.get("source") or "").strip().lower() in {
+        "runtime_provider_failover",
+        "run_coordination_plan",
+        "coordination_replan",
+    }:
         merged["auto_detected"] = True
         merged["step_role"] = step_role
-        merged["policy_source"] = "runtime_provider_failover"
+        merged["policy_source"] = str(merged.get("source") or "run_coordination_plan")
         merged["fallback_chain"] = build_auto_fallback_chain(merged, settings=settings)
         return merged
 

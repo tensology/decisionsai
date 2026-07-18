@@ -53,6 +53,8 @@ Model configuration has one source of truth: the provider and model selectors sh
 
 Auto considers the role of the step, complexity, risk, required capabilities, cost, reviewer independence, provider readiness, and evidence from previous failures. This makes it possible to use a stronger planner, a local or free coding worker for bounded implementation, and a different model for independent review without tying project memory to any of them.
 
+Before a Development run starts, DecisionsAI now creates a run-specific coordination plan across the whole workflow. Each worker receives a compact map of the steps around it, while the reusable workflow itself stays unchanged. Routine checks remain deterministic; consequential implementation and review can ask an independent model for a second opinion, and two independent reviewers can run in parallel where the risk justifies it. When validation exposes a real failure, the next assignment can move to a different viable worker at the step boundary, with the reason and route change preserved in the run transcript.
+
 Preflight checks configuration, reachability, local readiness, and available credit before substantive work begins. If a paid route cannot proceed, DecisionsAI can explain the problem, offer suitable free alternatives, recommend the next choice, and ask whether to switch. Local timing also accounts for model size, cold starts, machine capacity, loading progress, and heartbeats, so a large model is not treated as dead simply because it needs time to load—but a worker that has genuinely stalled still stops and reports why.
 
 ### Telegram becomes the remote control for the same agent

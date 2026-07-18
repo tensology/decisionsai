@@ -2118,6 +2118,7 @@ class StepExecutorMixin:
         total_steps = 1
         step_index = 0
         continuation_input = ""
+        coordination_map = ""
         wf = None
         step_obj = None
         try:
@@ -2198,6 +2199,15 @@ class StepExecutorMixin:
                         AutoWorkflowRun.id == run_id).first()
                     if run and run.run_data:
                         run_data = json.loads(run.run_data or "{}")
+                        try:
+                            from distr.core.workflow.coordination_plan import render_coordination_map
+
+                            coordination_map = render_coordination_map(
+                                run_data.get("coordination_plan") or {},
+                                current_step_id=step_id,
+                            )
+                        except Exception:
+                            coordination_map = ""
                         feedback = run_data.get("feedback", "")
                         if feedback and feedback.strip():
                             continuation_input = feedback.strip()
@@ -2432,6 +2442,7 @@ class StepExecutorMixin:
             }),
             objective=objective_context,
             current_step={"title": step_title, "instruction": step_instruction},
+            workflow_map=coordination_map,
             constraints=[item for item in constraints if str(item or "").strip()],
             prior_outcomes=prior_outcomes,
             artifact_refs=artifact_refs,

@@ -250,6 +250,8 @@ def test_loop_mission_control_keeps_tickets_visible_but_binds_execution_to_activ
     assert "Prompt / handoff" in js
     assert "Command / tool call" in js
     assert "Raw event data" in js
+    assert "Whole-run allocation" in js
+    assert "Plan revision" in js
     assert 'detail=true' in js
     assert ".wf-loop-transcript-record--tool" in html
     assert "workflowRunStatusLabel(run.status) + \" · \"" in js

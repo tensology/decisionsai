@@ -109,13 +109,22 @@ class StepRouter:
 
             # ── verify ──
             verify_project_id = None
+            validation_routes: list[dict[str, Any]] = []
             if run:
                 try:
                     verify_run_data = json.loads(run.run_data or "{}") or {}
                     raw_project_id = verify_run_data.get("project_id")
                     verify_project_id = int(raw_project_id) if raw_project_id not in (None, "") else None
+                    coordination = verify_run_data.get("coordination_plan") or {}
+                    assignments = coordination.get("assignments") if isinstance(coordination, dict) else {}
+                    assignment = assignments.get(str(step_id)) if isinstance(assignments, dict) else {}
+                    validation_routes = [
+                        dict(item) for item in (assignment.get("evaluation_routes") or [])
+                        if isinstance(item, dict)
+                    ] if isinstance(assignment, dict) else []
                 except Exception:
                     verify_project_id = None
+                    validation_routes = []
             ticket_context = ""
             standards_context = ""
             try:
@@ -163,6 +172,7 @@ class StepRouter:
                     mechanical_passed=verified_passed,
                     standards_context=standards_context,
                     ticket_context=ticket_context,
+                    validation_routes=validation_routes,
                 )
                 if orchestrator_overlay is not None:
                     verified_passed = bool(orchestrator_overlay.get("passed"))
@@ -238,6 +248,37 @@ class StepRouter:
                 run_data = json.loads(run.run_data or "{}")
             except Exception:
                 run_data = {}
+            coordination_revision = None
+            coordination_plan = run_data.get("coordination_plan")
+            if isinstance(coordination_plan, dict) and coordination_plan:
+                try:
+                    from distr.core.settings import load_settings_from_db
+                    from distr.core.workflow.coordination_plan import (
+                        coordination_plan_routes,
+                        revise_plan_after_step,
+                    )
+
+                    coordination_plan, coordination_revision = revise_plan_after_step(
+                        coordination_plan,
+                        completed_step_id=int(step_id),
+                        next_step_id=(
+                            int(decision.get("step_id"))
+                            if decision.get("action") == "next_step" and decision.get("step_id")
+                            else None
+                        ),
+                        passed=bool(verified_passed),
+                        reason=(
+                            validation_snapshot.get("correction_hint")
+                            or f"{step.name or f'Step {step_id}'} failed validation; use a different viable worker for correction."
+                        ),
+                        settings=load_settings_from_db(),
+                    )
+                    run_data["coordination_plan"] = coordination_plan
+                    planned_step_routes, planned_role_routes = coordination_plan_routes(coordination_plan)
+                    run_data["step_routes"] = planned_step_routes
+                    run_data["step_role_routes"] = planned_role_routes
+                except Exception:
+                    logger.debug("Could not revise run coordination plan", exc_info=True)
             packet = run_data.get("result_packet") or {}
             packet = append_workflow_step_to_packet(
                 packet,
@@ -258,6 +299,27 @@ class StepRouter:
             # Orchestrator validation and event rows cannot be blocked by this write
             # transaction, especially on SQLite-backed local installs.
             db.commit()
+            if coordination_revision:
+                try:
+                    from distr.core.orchestration_events import emit_orchestration_event
+
+                    emit_orchestration_event(
+                        source="orchestrator",
+                        event_type="coordination_plan_revised",
+                        status="ready",
+                        workflow_id=run.workflow_id,
+                        run_id=run_id,
+                        step_id=step_id,
+                        ticket_id=getattr(run, "ticket_id", None),
+                        board_id=getattr(run, "board_id", None),
+                        project_id=run_data.get("project_id"),
+                        summary=(
+                            f"Reallocated step #{coordination_revision.get('target_step_id')} after validation evidence changed."
+                        ),
+                        payload={"revision": coordination_revision},
+                    )
+                except Exception:
+                    logger.debug("Could not emit coordination plan revision", exc_info=True)
             validation_record_id = None
             correction_attempt_id = None
             correction_packet: dict[str, Any] = {}

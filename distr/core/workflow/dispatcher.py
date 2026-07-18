@@ -1260,6 +1260,25 @@ def start_workflow_run(
             normalized_metadata["loop_iteration"] = 0
         if loop_input.get("skip_human_checkpoints"):
             normalized_metadata["skip_human_checkpoints"] = True
+        try:
+            from distr.core.settings import load_settings_from_db
+            from distr.core.workflow.coordination_plan import (
+                build_run_coordination_plan,
+                coordination_plan_routes,
+            )
+
+            coordination_plan = build_run_coordination_plan(
+                wf,
+                normalized_metadata,
+                settings=load_settings_from_db(),
+            )
+            planned_step_routes, planned_role_routes = coordination_plan_routes(coordination_plan)
+            normalized_metadata["coordination_plan"] = coordination_plan
+            normalized_metadata["step_routes"] = planned_step_routes
+            normalized_metadata["step_role_routes"] = planned_role_routes
+        except Exception:
+            coordination_plan = {}
+            logger.debug("start_workflow_run: coordination planning failed", exc_info=True)
         packet = normalized_metadata.get("result_packet") or {}
         packet_audit = dict(packet.get("audit") or {})
         packet_audit["audits_run"] = build_audit_gates(
@@ -1357,6 +1376,29 @@ def start_workflow_run(
             )
         except Exception:
             logger.debug("start_workflow_run: loop_started event failed", exc_info=True)
+
+    if coordination_plan:
+        try:
+            from distr.core.orchestration_events import emit_orchestration_event
+
+            emit_orchestration_event(
+                source="orchestrator",
+                event_type="coordination_plan_created",
+                status="ready",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=first_step_id,
+                ticket_id=ticket_id,
+                board_id=board_id,
+                project_id=int(normalized_metadata["project_id"]) if str(normalized_metadata.get("project_id") or "").isdigit() else None,
+                summary=(
+                    f"Allocated {len(coordination_plan.get('assignments') or {})} workflow steps "
+                    f"using {coordination_plan.get('strategy') or 'adaptive'} coordination."
+                ),
+                payload={"coordination_plan": coordination_plan},
+            )
+        except Exception:
+            logger.debug("Could not emit coordination plan", exc_info=True)
 
     record_workflow_chat_event(
         run_id,
