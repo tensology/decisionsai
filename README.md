@@ -1,4 +1,4 @@
-https://github.com/user-attachments/assets/5af7bed6-40ab-41da-a9bc-8d5f48657bb7
+https://github.com/user-attachments/assets/cba7775e-f61e-4625-aefd-76417e72ca33
 
 <h1 align="center">DecisionsAI</h1>
 
