@@ -4,15 +4,17 @@
 
 ## What's to Come?
 
-DecisionsAI already lets you talk to an agent, dictate into any app, control your computer, work inside projects, send requests from Telegram, and run larger jobs through tickets and workflows. The next phase is about making that experience easier to trust and easier to leave running.
+DecisionsAI is becoming less about opening the right screen and more about starting work wherever you are. You can talk to the agent, dictate into other apps, control your computer, send work from Telegram, and keep larger jobs moving through projects, tickets, and workflows.
+
+The next phase is about making that feel calmer: fewer moments where you have to check whether the agent is still alive, fewer decisions about which worker should handle a step, and clearer answers when something needs your attention.
 
 **What we are working on next:**
 
-- **A smoother everyday agent** — Faster voice responses, cleaner dictation, better interruption, and less friction moving between the desktop, web control deck, and phone.
-- **Background work you can rely on** — Stronger recovery after sleep, restarts, network changes, failed tools, and long-running local models. If work stops, DecisionsAI should explain why and offer the next useful action.
-- **Better automatic worker choices** — Learn from cost, speed, validation, and previous failures so Auto can choose an appropriate local model, cloud provider, or coding CLI without making you manage every step.
-- **More ways to send work in** — Bring selected WhatsApp, Gmail, Jira, Trello, and other requests into the same project-and-ticket path without turning ordinary conversations into accidental instructions.
-- **A production-ready release** — Finish signed and notarized builds, clean installation and rollback, and repeatable real-machine acceptance checks.
+- **A smoother everyday agent** — Voice, dictation, interruption, and handoff between desktop, web, and phone should feel faster and less fussy.
+- **Background work you can leave alone** — If the machine sleeps, the network changes, a tool fails, or a local model takes a long time to load, DecisionsAI should recover where it can and explain what happened when it cannot.
+- **Automatic worker choices that make sense** — Auto should choose a local model, cloud model, or coding CLI based on the work, cost, speed, risk, and previous results, without making you manage every step yourself.
+- **More ways to send work in** — Selected WhatsApp, Gmail, Jira, Trello, and other requests should be able to enter the same project-and-ticket path, without turning ordinary conversations into accidental instructions.
+- **A release you can install with confidence** — Signed builds, cleaner installation, rollback, and repeatable real-machine checks should make DecisionsAI easier to install, update, and trust.
 
 The goal is straightforward: **ask once, check progress when you want to, and get a useful result back where you started.**
 
