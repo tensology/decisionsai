@@ -20,60 +20,64 @@ The goal is straightforward: **ask once, check progress when you want to, and ge
 
 ## [2.8.5] - 2026-07-17
 
-### One clear path from a request to a result
+### Where 2.8.0 left off
 
-Version 2.8.5 brings the everyday agent and the orchestration system together. Speak to the Oracle, type in Chat, or send work from Telegram. A quick instruction can remain a quick instruction. Work that belongs to a project can become a ticket with history and time attached. Larger development work can move through a dependable workflow, use different workers where they add value, and report the result back to the place where the request began.
+In 2.8.0, DecisionsAI got the main pieces of serious work into place. Automations could run in the background. Workflows were rebuilt around Loops. Tickets could be talked through before starting a run. Model settings moved onto one page. Telegram, voice, boards, and the remote UI all became more useful.
 
-You do not need to decide which internal mechanism should handle every request. DecisionsAI can act directly when the work is small, preserve project tracking when it matters, and use a multi-step workflow when planning, implementation, review, and validation will produce a better result.
+The missing part was the handoff between those pieces. You could ask for work in Chat, send something from Telegram, open a ticket, run a workflow, or look at a board, but the story could still feel like several connected features instead of one clear path.
 
-### One dependable development workflow
+2.8.5 tightens that path. You ask DecisionsAI to do something. If it is small, it can just do it. If it belongs to a project, it can become a ticket with history, time, and a board. If it is software work that needs planning, implementation, review, fixes, and a report, it can move through the Development workflow and come back with the result.
 
-The canonical **Development** workflow follows the way real engineering work progresses:
+### Development is the default software loop
 
-1. Understand the ticket, acceptance criteria, repository, and existing memory.
-2. Plan the change and identify risks before editing.
-3. Implement the scoped work with the selected coding worker.
-4. Review and test it independently, including browser evidence where it matters.
-5. Correct what failed and send it back through review.
-6. Report the outcome, update the ticket, and save the useful lesson.
+The built-in **Development** workflow is now the default route for normal software tickets. It follows the shape of the work instead of asking the user to understand the machinery behind it:
 
-The workflow is not another interface the user must operate. It is the method DecisionsAI uses when a request is too large or risky for a single action. A successful review moves to reporting. A failed review moves to correction, and corrected work returns to an independent review through a bounded loop instead of being marked complete too early or cycling forever.
+1. Read the ticket, repository, acceptance criteria, and project memory.
+2. Plan the change before editing.
+3. Send the implementation to the selected coding worker.
+4. Review and test the result independently.
+5. Send failed work back for correction.
+6. Report the outcome, update the ticket, and save anything useful for next time.
 
-Development is the dependable default for software work, not a restriction on what you can build. Workflows remain configurable, and you can create specialist versions for UI, backend, research, operations, or another repeatable process. The orchestrator can select one of those when its scope is a better match.
+Passing work moves to reporting. Failed work moves to correction, and the corrected version goes back through review before it is called done.
 
-### Reuse before creating
+Workflows are still editable. You can keep specialist loops for UI, backend, research, operations, or another repeatable process. DecisionsAI will use Development for normal software work and choose a specialist loop only when it is a better match.
 
-The orchestrator first matches a request to the workflows you already have. Normal software development uses Development; a complete specialist workflow can be chosen when it is a better fit; unrelated work is not pushed through a development process merely because one is available.
+### Workflows are reused before new ones are made
 
-A new workflow is proposed only when the work introduces a genuinely different repeatable process. DecisionsAI checks that it contains real instructions, project context, tools, skills, model intent, guardrails, validation, evidence requirements, failure handling, routing, and memory. Imported, user-created, and generated workflows retain the run settings selected for them.
+When a request comes in, DecisionsAI first checks the workflows you already have. Normal development work uses **Development**. A complete specialist workflow can be used when it fits. Non-development work is not forced through a software workflow just because one exists.
 
-### Automatic models without losing control
+New workflows are proposed only for genuinely new repeatable processes. Generated and imported workflows keep their selected run settings, and DecisionsAI checks that they include real instructions, context, tools, guardrails, validation, failure handling, and memory before treating them as usable.
 
-Model configuration has one source of truth: the provider and model selectors shown for each complexity level. Set a level to **Auto** and the orchestrator can choose a worker for the actual step. Pin a provider and model and that choice remains fixed. The same settings can be changed through the orchestrator, so an instruction from the desktop or Telegram updates the configuration you can see instead of creating a hidden second policy.
+### Auto model selection is visible
 
-Auto considers the role of the step, complexity, risk, required capabilities, cost, reviewer independence, provider readiness, and evidence from previous failures. This makes it possible to use a stronger planner, a local or free coding worker for bounded implementation, and a different model for independent review without tying project memory to any of them.
+Model settings now have one source of truth: the provider and model selectors for each complexity level. Set a level to **Auto** and DecisionsAI can choose the worker for that step. Pin a provider and model and it stays pinned.
 
-Before a Development run starts, DecisionsAI now creates a run-specific coordination plan across the whole workflow. Each worker receives a compact map of the steps around it, while the reusable workflow itself stays unchanged. Routine checks remain deterministic; consequential implementation and review can ask an independent model for a second opinion, and two independent reviewers can run in parallel where the risk justifies it. When validation exposes a real failure, the next assignment can move to a different viable worker at the step boundary, with the reason and route change preserved in the run transcript.
+Auto looks at the step, complexity, risk, required tools, cost, provider readiness, reviewer independence, and previous failures. That lets a run use a stronger planner, a cheaper or local coding worker, and a separate reviewer without tying the project memory to one model.
 
-Preflight checks configuration, reachability, local readiness, and available credit before substantive work begins. If a paid route cannot proceed, DecisionsAI can explain the problem, offer suitable free alternatives, recommend the next choice, and ask whether to switch. Local timing also accounts for model size, cold starts, machine capacity, loading progress, and heartbeats, so a large model is not treated as dead simply because it needs time to load—but a worker that has genuinely stalled still stops and reports why.
+Before a Development run starts, DecisionsAI creates a coordination plan for that run. Each worker gets the part it needs, plus enough surrounding context to understand where its step fits. The reusable workflow itself does not get rewritten every time a ticket runs.
 
-### Telegram becomes the remote control for the same agent
+Preflight now checks configuration, provider reachability, local model readiness, and available credit before the real work starts. If a paid route cannot run, DecisionsAI can explain the issue, offer free alternatives, recommend one, and ask before switching. Local model timing also understands cold starts, model size, loading progress, and heartbeats, so slow startup is not mistaken for failure.
 
-Telegram is the remote control for the same agent. Text, voice notes, photos, documents, captions, buttons, and follow-up instructions can continue the same project and workflow context as the desktop. DecisionsAI can create or update a ticket, request missing information, ask for approval, start the selected workflow, or continue, stop, and steer work that is already running.
+### Telegram can steer the same work
 
-Progress messages and voice notes explain what is happening, why it matters, what changed, and whether a decision is needed. Callback handling, interaction state, reconnects, attachments, and source-message context are designed to keep that conversation attached to the correct piece of work.
+Telegram now behaves more like a remote control for the same agent. Text, voice notes, photos, documents, captions, buttons, and follow-up instructions can stay attached to the same project, ticket, or workflow run as the desktop.
 
-### A control deck you only open when you need it
+From Telegram, DecisionsAI can create or update a ticket, ask for missing information, request approval, start the selected workflow, continue work, stop work, or steer a run that is already moving.
 
-Work remains ticket-led. Boards follow **Backlog → In Progress → QA → Complete**, including small project requests that still need time tracking. The existing Workflows, Runs, Ticket Boards, and Chat surfaces show the current step, selected provider and model, elapsed time after work actually starts, heartbeats, validation, artifacts, correction attempts, and final report.
+Progress messages and voice notes now try to say what is happening, what changed, and whether a decision is needed. Reconnects, callbacks, attachments, and source-message context are kept with the correct piece of work.
 
-There is no separate intake page to manage. The web interface is the control deck: open it to inspect or steer the work, but let DecisionsAI continue in the background when you do not need to watch it.
+### The web app is the control deck
 
-### Memory that survives the worker
+Work remains ticket-led. Boards follow **Backlog -> In Progress -> QA -> Complete**, including smaller project requests that still need time tracking.
 
-Workflow memory is stored as neutral facts, decisions, files, artifacts, evidence, failed attempts, lessons, blockers, and next actions. That means a project can move between a local model, OpenRouter, Codex, Cursor, Claude Code, Pi, or another worker without losing what was learned or forcing the next model to interpret an unstructured transcript.
+The existing Workflows, Runs, Ticket Boards, and Chat screens show the current step, selected provider and model, elapsed work time, heartbeats, validation, artifacts, correction attempts, and final report. There is no separate intake page to manage. Open the web app when you want to inspect or steer the run; otherwise DecisionsAI can keep working in the background.
 
-This is the larger result of 2.8.5: the agent, tickets, workflow, workers, Telegram conversation, and memory now describe one piece of work instead of several disconnected systems.
+### Memory moves with the work
+
+Workflow memory is now stored as facts, decisions, files, artifacts, evidence, failed attempts, lessons, blockers, and next actions. A project can move between a local model, OpenRouter, Codex, Cursor, Claude Code, Pi, or another worker without losing what was already learned.
+
+The result is simple: the agent, ticket, workflow, worker, Telegram conversation, and project memory now point at the same piece of work.
 
 ### Verification
 
