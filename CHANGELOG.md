@@ -16,9 +16,13 @@ The aim is not to make the product busier. It is to make it calmer: ask once, ch
 
 ### The agent knows where you left off
 
-Initiative and chat now carry a short sense of time and place so the assistant does not treat every return as a brand-new conversation. Cycles see when “now” is, how long it has been since the last real work, and a peek at the latest project handoff. After a long idle, Initiative prefers picking that handoff back up instead of nagging about unrelated board noise.
+Coming back after five hours should not feel like starting over. DecisionsAI now carries a short sense of *when* “now” is, how long it has been since the last real exchange, and what project, ticket, workflow, or handoff was in play — so chat and Initiative can reconnect the thread instead of treating every return as a brand-new conversation. Time gaps are part of the context: a long idle is a reason to resume carefully, not a reason to invent unrelated board noise.
 
-Separately, the desktop can feed a cheap ambient snapshot of what is in front of you — frontmost app and a few accessibility labels, not screenshots and not a full UI tree on every turn. That refresh runs in the background on the Initiative schedule. Chat and the LLM only read a small overwritten cache on the hot path, skip inject when nothing changed, and drop the cache after a day so stale screen context cannot rot the prompt or bloat the chat feed. When the agent needs a deeper look, the usual accessibility tools are still there on demand.
+Initiative itself is clearer about its job. Daily plans stay in Automations. An Initiative cycle is meant to propose one gated next action from the work in front of you. After a long idle it prefers picking up from the latest project handoff — a short peek at what was left unfinished — before nagging about scan items that do not belong to the moment. Developer context is stamped with when it was captured, so the assistant can tell fresh state from stale.
+
+The same calm applies to the machine in front of you. DecisionsAI can keep a cheap ambient sense of the frontmost app from the accessibility tree, not from screenshots and not from stuffing a full UI tree into every turn. That snapshot refreshes in the background on the Initiative schedule, lands in a small overwritten cache on the hot path, skips inject when nothing changed, and expires so it is deleted instead of rotting the prompt or bloating the chat feed. When a deeper look is needed, the usual targeting tools are still there on demand; everyday turns do not pay for them.
+
+Under that awareness layer, this release also hardens how work stays on rails: workflow runs stick closer to their blueprint and control policy, handoffs and ticket contracts carry clearer results between steps, model routing can preflight paid routes before they spend, and the matching harness and board paths are tighter about steering and audit. The sections below spell out how that feels day to day.
 
 ### Work keeps its thread
 
