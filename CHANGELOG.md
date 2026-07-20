@@ -14,6 +14,12 @@ The aim is not to make the product busier. It is to make it calmer: ask once, ch
 
 ## [2.8.5] - 2026-07-17
 
+### The agent knows where you left off
+
+Initiative and chat now carry a short sense of time and place so the assistant does not treat every return as a brand-new conversation. Cycles see when “now” is, how long it has been since the last real work, and a peek at the latest project handoff. After a long idle, Initiative prefers picking that handoff back up instead of nagging about unrelated board noise.
+
+Separately, the desktop can feed a cheap ambient snapshot of what is in front of you — frontmost app and a few accessibility labels, not screenshots and not a full UI tree on every turn. That refresh runs in the background on the Initiative schedule. Chat and the LLM only read a small overwritten cache on the hot path, skip inject when nothing changed, and drop the cache after a day so stale screen context cannot rot the prompt or bloat the chat feed. When the agent needs a deeper look, the usual accessibility tools are still there on demand.
+
 ### Work keeps its thread
 
 2.8.0 put the main work surfaces in place: Automations, Workflows, tickets, boards, model settings, Telegram, voice, and the remote UI. 2.8.5 makes those pieces behave more like one assistant.
@@ -63,10 +69,6 @@ The Workflows, Runs, Ticket Boards, and Chat screens show the current step, sele
 Project memory now moves with the work instead of staying trapped in whichever worker handled the last step. DecisionsAI can save useful facts, decisions, files, artifacts, evidence, failed attempts, lessons, blockers, and next actions.
 
 That means a project can move between a local model, OpenRouter, Codex, Cursor, Claude Code, Pi, or another worker without losing what was already learned. You should not have to keep re-explaining the same project context every time the work changes hands.
-
-### Awareness without slowing you down
-
-Initiative and chat can share a short sense of where you left off and what is on screen, without stuffing screenshots or full accessibility trees into every turn. Ambient desktop context is refreshed in the background, read from a small cache on the hot path, and expires so it does not rot the prompt or the chat feed. After a long idle, Initiative can prefer picking up from a project handoff instead of nagging about unrelated board noise.
 
 ---
 
