@@ -4,121 +4,93 @@
 
 ## What's to Come?
 
-DecisionsAI is moving toward a simpler idea: you should be able to start work wherever you are, then trust the system to keep hold of it. The agent, Telegram, dictation, projects, tickets, workflows, and boards should feel less like separate places to manage and more like different ways into the same thread of work.
+The goal is simple: start work wherever you are, and trust DecisionsAI to hold onto it. Chat, Telegram, voice, projects, tickets, workflows, and boards should feel like different doors into the same job — not separate apps you have to manage.
 
-The next phase is about making that thread easier to leave running. If the machine sleeps, a network drops, a tool fails, or a local model takes time to wake up, DecisionsAI should recover where it can and explain clearly when it cannot. If a job needs a different worker, the choice should make sense without turning model selection into your problem. If work enters from another channel, it should land in the right project path without turning normal conversation into accidental instructions.
+Next up is making that easier to leave running. If the computer sleeps, the network drops, a tool fails, or a local model is slow to wake up, DecisionsAI should recover when it can and say clearly when it cannot. If a job needs a different tool, that choice should make sense without turning model picking into homework. If work arrives from another channel, it should land in the right place without treating normal chat as accidental commands.
 
-The aim is not to make the product busier. It is to make it calmer: ask once, check progress when you want to, and get a useful result back where you started.
+Less busy. More calm. Ask once, check in when you want, get a useful result back where you started.
 
 ---
 
 ## [2.8.5] - 2026-07-17
 
-### The agent knows where you left off
+### It remembers you left five hours ago
 
-Coming back after five hours should not feel like starting over. DecisionsAI now carries a short sense of *when* “now” is, how long it has been since the last real exchange, and what project, ticket, workflow, or handoff was in play — so chat and Initiative can reconnect the thread instead of treating every return as a brand-new conversation. Time gaps are part of the context: a long idle is a reason to resume carefully, not a reason to invent unrelated board noise.
+If you talk to DecisionsAI in the morning, go do something else, and come back at night, it should not act like you are a stranger. It now notices the gap. It can see what you were last working on — the project, the ticket, the notes left behind — and pick up from there instead of changing the subject to random board stuff.
 
-Initiative itself is clearer about its job. Daily plans stay in Automations. An Initiative cycle is meant to propose one gated next action from the work in front of you. After a long idle it prefers picking up from the latest project handoff — a short peek at what was left unfinished — before nagging about scan items that do not belong to the moment. Developer context is stamped with when it was captured, so the assistant can tell fresh state from stale.
+### Initiative stays out of the way until it helps
 
-The same calm applies to the machine in front of you. DecisionsAI can keep a cheap ambient sense of the frontmost app from the accessibility tree, not from screenshots and not from stuffing a full UI tree into every turn. That snapshot refreshes in the background on the Initiative schedule, lands in a small overwritten cache on the hot path, skips inject when nothing changed, and expires so it is deleted instead of rotting the prompt or bloating the chat feed. When a deeper look is needed, the usual targeting tools are still there on demand; everyday turns do not pay for them.
+Initiative is the bit that can nudge you when work is waiting. Daily planning still lives under Automations. Initiative’s job is simpler: suggest one next useful thing, and only when it makes sense. If you have been away a while, it tries to continue from your last project notes first, rather than pestering you about unrelated tasks.
 
-Under that awareness layer, this release also hardens how work stays on rails: workflow runs stick closer to their blueprint and control policy, handoffs and ticket contracts carry clearer results between steps, model routing can preflight paid routes before they spend, and the matching harness and board paths are tighter about steering and audit. The sections below spell out how that feels day to day.
+### It can notice what is on your screen — without slowing chat down
 
-### Work keeps its thread
+DecisionsAI can quietly keep a light idea of which app is in front of you. It does not take screenshots for this, and it does not dump a giant description into the chat. The check runs in the background. If nothing changed, it does not keep repeating itself. After a day it throws that info away so old screen context does not clog things up. If it ever needs a closer look, it can still dig in on purpose.
 
-2.8.0 put the main work surfaces in place: Automations, Workflows, tickets, boards, model settings, Telegram, voice, and the remote UI. 2.8.5 makes those pieces behave more like one assistant.
+### One job, one path
 
-You can start in the Oracle, Chat, or Telegram. A quick request can stay quick. A project request can become a ticket with history, time, and a board. A software ticket can move through planning, implementation, review, fixes, and a final report without you having to manually carry the context from one screen to another.
+You can start from chat, Telegram, or the usual screens. A quick question stays a quick answer. Bigger work can become a ticket with a board and a clear path: plan it, build it, check it, fix it if needed, then tell you what happened. You should not have to copy the same story from one screen to another.
 
-The point is simple: start the work where you are, and DecisionsAI keeps the thread of that work together.
+### Software work has a default route
 
-### Software tickets have a clearer path
+Normal coding tickets use the built-in **Development** path by default. It reads the ticket, plans the change, sends the work to your coding tool, checks the result, and sends failed work back until it is actually done. You can still make custom loops for special jobs. Everyday software work does not need you to invent a new process every time.
 
-The built-in **Development** workflow is now the default route for normal software work. It reads the ticket and project context, plans the change, sends the implementation to the selected coding worker, checks the result, sends failed work back for correction, and reports what happened.
+### It reuses the workflows you already have
 
-That matters when the work is bigger than a single instruction. Instead of asking an agent to make a change and hoping it checked itself properly, the ticket has a visible path from request to result. Passing work moves forward. Failed work goes back for correction before it is called complete.
+Before suggesting a brand new workflow, DecisionsAI looks at what you already set up. Normal build work uses **Development**. A specialist workflow only gets used when it really fits. Random tasks are not forced through a coding workflow just because one exists. That keeps the list shorter and easier to trust.
 
-Workflows are still editable. You can keep specialist loops for UI, backend, research, operations, or another repeatable process. DecisionsAI uses the normal Development path for normal software work and uses a specialist path only when that is the better fit.
+### Auto model choice is still yours to see
 
-### Fewer workflow decisions for you
+Model settings are still in one place. For each difficulty level you can lock a provider and model, or choose **Auto**. Auto means “pick something sensible for this step.” If a paid option cannot run, it should say so and offer a free way forward instead of silently failing. Whatever you pin stays pinned. Auto is not a secret second settings page.
 
-DecisionsAI now tries to reuse the workflows you already have before proposing a new one. Normal development work uses **Development**. A complete specialist workflow can be used when it fits. Unrelated work is not pushed through a software workflow just because one exists.
+### Telegram is the same work, not a side chat
 
-New workflows are reserved for genuinely different repeatable work. That keeps the workflow list cleaner and makes it easier to trust the ones that are there.
+Message DecisionsAI from Telegram and you are talking to the same tickets and runs as on the desktop. Text, voice notes, photos, and files can stay attached to the right project. From Telegram you can open or update a ticket, approve something, start or stop a run, or nudge work that is already going. Updates are meant to answer normal questions: what is happening, what changed, do you need to decide something.
 
-### Auto model selection stays understandable
+### The website is for checking in
 
-Model settings still live in one place. For each complexity level, you can pin a provider and model, or set it to **Auto**.
+Boards still move **Backlog → In Progress → QA → Complete**. The website is where you look when you want to see progress or steer a run. If you do not need to watch, DecisionsAI can keep going in the background.
 
-Auto is for the moments where you care more about the work getting routed sensibly than about choosing every worker yourself. DecisionsAI can consider the step, risk, cost, available providers, local model readiness, and whether the reviewer should be separate from the implementer. If a paid route cannot run, it can explain the issue and offer a free alternative before switching.
+### Memory stays with the project
 
-The useful part is that Auto is not a hidden second settings system. If you pin a model, it stays pinned. If you choose Auto, the choice is tied to the same settings you can see.
-
-### Telegram can steer real work
-
-Telegram now connects to the same work as the desktop instead of feeling like a separate side channel. Text, voice notes, photos, documents, captions, buttons, and follow-up messages can stay attached to the correct project, ticket, or workflow run.
-
-From Telegram, DecisionsAI can create or update a ticket, ask for missing information, request approval, start the selected workflow, continue work, stop work, or steer a run that is already moving.
-
-Progress messages and voice notes are meant to answer the questions a person actually has: what is happening, what changed, and whether a decision is needed.
-
-### The web app is for checking and steering
-
-Work remains ticket-led. Boards follow **Backlog -> In Progress -> QA -> Complete**, including smaller project requests that still need time tracking.
-
-The Workflows, Runs, Ticket Boards, and Chat screens show the current step, selected provider and model, elapsed work time, heartbeats, validation, artifacts, correction attempts, and final report. Open the web app when you want to inspect or steer the run; otherwise DecisionsAI can keep working in the background.
-
-### Memory follows the project
-
-Project memory now moves with the work instead of staying trapped in whichever worker handled the last step. DecisionsAI can save useful facts, decisions, files, artifacts, evidence, failed attempts, lessons, blockers, and next actions.
-
-That means a project can move between a local model, OpenRouter, Codex, Cursor, Claude Code, Pi, or another worker without losing what was already learned. You should not have to keep re-explaining the same project context every time the work changes hands.
+Useful notes travel with the project, not with whichever tool happened to do the last step. Facts, decisions, files, what failed, what to try next — that can move with you if the work changes hands between tools. You should not have to re-explain the same project every time.
 
 ---
 
 ## [2.8.0] - 2026-06-14
 
-### Automations tightened up
+### Automations you can actually set and forget
 
-The Automations hub was cleaned up around create, edit, schedule, run, and history. A gear menu beside **Add Automation** offers built-in presets: daily plan, WhatsApp-to-tickets intake, morning inbox scan, work pulse, timesheet export, end-of-day wrap, weekly board review, and others. Pick a preset and it goes straight into your list to configure. A calendar shows scheduled runs. Time-entry blocks include a live timer and export to boards. Scheduled and on-demand runs execute in the background so chat stays responsive.
+Automations got a cleaner home: create them, edit them, schedule them, run them, and see what they did. Next to **Add Automation** there is a gear with ready-made starters — daily plan, WhatsApp into tickets, morning inbox scan, work pulse, timesheet export, end-of-day wrap, weekly board review, and more. Pick one, then tweak it. There is a calendar for scheduled runs, and a live timer for time tracking that can export onto boards. Scheduled jobs run in the background so chat stays usable.
 
-### Workflows rebuilt around Loops
+### Workflows as simple step lists
 
-The Workflows screen is organized around **Loops**: named presets of steps you can import, append, replace, or export. While a step waits on Cursor or Codex, you can steer the run with new instructions and read validation results, steering history, and the next planned step on the active-run view.
+Workflows are built around **Loops**: a named list of steps you can import, add to, replace, or export. While a step is waiting on a coding tool, you can send new instructions and see what happened so far on the active-run view.
 
-Each ticket has a **complexity** (low, medium, or high) and a **priority**. In workflow settings you map each complexity level to an IDE or CLI backend and model. When that ticket runs, Decisions uses the pairing you set for its complexity.
+Each ticket has a difficulty (low, medium, or high) and a priority. In settings you say which tool and model to use for each difficulty. When that ticket runs, DecisionsAI uses the pairing you chose.
 
-From Workflows or the board, send a ticket to the orchestrator first to talk through the work in chat before you start a loop.
+You can also send a ticket to chat first to talk it through before starting the loop. Steps can say which skills and tools they are meant to use, so the list is readable. When a step finishes, the next one starts. If something hangs too long, it fails instead of running forever.
 
-Each workflow step can name the **skills** and **tools** it is meant to use, so the loop reads clearly step by step. Setup and start still project the full skill library into every harness (Codex, Cursor, Claude Code, and Pi), so the executor has the whole catalog available when a step runs.
+### Works with your coding tools
 
-The workflow execution engine was rewritten to call each LLM through that provider's native tool API (OpenAI, Anthropic, Ollama, Groq, OpenRouter, Gemini, and others). Agent steps can invoke real tools instead of only describing what they would do. When an async agent step finishes, the workflow advances to the next step; hung steps fail on timeout instead of running forever.
+Setup connects DecisionsAI to tools like Codex, Cursor, Claude Code, and Pi in one pass — skills, helpers, and recommended extras included. From chat, DecisionsAI can also find and continue coding sessions you already have open.
 
-### Harness stack and IDE integration
+### All the model picks on one page
 
-Setup and every start now run a single harness pipeline for Codex, Cursor, Claude Code, and Pi: plugin repair, skill projection, ECC, Ponytail/Fallow, browser and content packs, design references, community skills, yt-dlp, and Composio Connect for workplace apps. Recommended MCP servers are merged into Cursor and Codex configuration during recalibrate; deprecated entries are pruned. Composio API keys are set under Settings → API Keys.
+Conversational, coding, vision, images, computer use, workflow steps, and the board agent all live on one settings page. Every provider is available in each slot. Empty optional slots follow your main chat model. The unused **Sub-agent** slot was removed.
 
-IDE plugin sources were consolidated under `plugins/` (`codex-ide`, `cursor-ide`, `ecc`). Committed checkout scratch that used to live in `.tickets` and `.pi` was removed from the repository; local runtime output belongs in gitignored `.artifacts/`.
+### Voice, remote control, and the desktop helper
 
-From Decisions chat, the agent can list and continue Codex or Cursor sessions that are already open (`ide_thread` tooling and `/api/ide/sessions`).
+The desktop helper can look at the screen and help with clicks, typing, and waiting for things to appear. Spoken replies after tool use are more reliable. Voice can go to Telegram or the remote web UI depending on where you are.
 
-### LLM settings on one page
-
-Every model slot now lives on a single settings page: Conversational, Coding, Vision, Image, Computer Use, Step Runner (workflows), and Kanban Agent. All providers are available in each slot; empty optional slots inherit from Conversational. The **Sub-agent** model slot was removed because nothing consumed it.
-
-### Sidecar, voice, and remote delivery
-
-The desktop sidecar gained screen analysis, arbitrary Python execution, drag, scroll, and wait-for-element tools for computer-use workflows. The TTS pipeline was refactored so follow-up speech after tool calls is delivered correctly, and outbound voice routes to Telegram or the remote web UI according to context rather than always using the same path.
-
-The remote control UI centers on Snippets, Agent chat, and Dictate, with hold-to-talk, tap-to-type, streaming audio playback, and an explicit stop control.
+The remote control focuses on Snippets, Agent chat, and Dictate — hold to talk, tap to type, listen as it speaks, and stop when you want.
 
 ### Boards and WhatsApp
 
-Ticket routes were unified under `/tickets`. A WhatsApp number can be tied to a board so inbound messages create or update tickets on that board.
+Ticket links are simpler under `/tickets`. You can tie a WhatsApp number to a board so incoming messages become tickets there.
 
 ### IRC rooms
 
-Shared community chat inside Decisions: rooms, display names, a member list, and a live view of who is connected.
+Shared community chat inside Decisions: rooms, display names, who is in the room, and who is online.
 
 ---
 
