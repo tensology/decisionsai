@@ -37,8 +37,16 @@ MISSION_CONTROL_LIFECYCLE_TYPES = {
 }
 
 MISSION_CONTROL_NOISE_TYPES = {
+    # Token-by-token worker deltas belong in the on-demand diagnostic
+    # transcript.  The Mission Control feed uses lifecycle, command, validation
+    # and heartbeat records so it remains stable and readable.
+    "execution_message_update",
     "execution_message_start",
     "execution_message_end",
+    "execution_turn_start",
+    "execution_turn_end",
+    "execution_tool_execution_start",
+    "execution_tool_execution_end",
     "execution_command_start",
     "execution_agent_start",
     "execution_agent_end",
@@ -152,11 +160,23 @@ def detailed_execution_timeline(events: list[dict[str, Any]]) -> list[dict[str, 
     from distr.core.orchestrator import redact_handoff_payload
 
     transcript: list[dict[str, Any]] = []
+    pending_message_update: dict[str, Any] | None = None
     for event in events:
         redacted = redact_handoff_payload(event)
         if not isinstance(redacted, dict):
             continue
-        transcript.append(_bound_transcript_value(redacted))
+        bounded = _bound_transcript_value(redacted)
+        if _event_subtype(redacted) == "execution_message_update":
+            # Streaming transports may persist the complete growing response on
+            # every token. Keep only the last state from each contiguous burst.
+            pending_message_update = bounded
+            continue
+        if pending_message_update is not None:
+            transcript.append(pending_message_update)
+            pending_message_update = None
+        transcript.append(bounded)
+    if pending_message_update is not None:
+        transcript.append(pending_message_update)
     return transcript
 
 
@@ -317,7 +337,7 @@ def build_step_preflight(step_data: dict[str, Any], run_id: int | None) -> dict[
         "ok": ok,
         "action_type": action_type,
         "checks": checks,
-        "summary": "Preflight passed." if ok else "Preflight failed.",
+        "summary": "Ticket and project preflight passed." if ok else "Ticket and project preflight failed.",
     }
 
 

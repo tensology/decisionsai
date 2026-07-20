@@ -1668,6 +1668,49 @@ body.wf-board-pointer-dragging * {
     background: rgba(15, 23, 42, 0.62);
     overflow: hidden;
 }
+.wf-loop-feed-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+.wf-loop-feed-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0.1rem 0.15rem;
+    color: #94a3b8;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.wf-loop-feed-progress-head b {
+    color: #fdba74;
+    font-size: 0.6rem;
+}
+.wf-loop-feed-progress-rail {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 0.25rem;
+    margin-bottom: 0.15rem;
+}
+.wf-loop-feed-progress-dot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    height: 1.35rem;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 0.3rem;
+    background: rgba(15, 23, 42, 0.7);
+    color: #64748b;
+    font-size: 0.62rem;
+    font-weight: 800;
+}
+.wf-loop-feed-progress-dot--running { border-color: rgba(59, 130, 246, 0.55); background: rgba(59, 130, 246, 0.16); color: #bfdbfe; }
+.wf-loop-feed-progress-dot--waiting { border-color: rgba(245, 158, 11, 0.58); background: rgba(245, 158, 11, 0.16); color: #fde68a; }
+.wf-loop-feed-progress-dot--passed { border-color: rgba(34, 197, 94, 0.45); background: rgba(34, 197, 94, 0.13); color: #bbf7d0; }
+.wf-loop-feed-progress-dot--failed { border-color: rgba(239, 68, 68, 0.55); background: rgba(239, 68, 68, 0.14); color: #fecaca; }
 .wf-loop-feed-step[open] {
     border-color: rgba(249, 115, 22, 0.34);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
@@ -3580,7 +3623,7 @@ body.wf-split-dragging * {
                                     <div class="flex flex-wrap items-center gap-2">
                                         <button type="button" id="wf-loop-presets-btn" class="px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs font-medium hover:bg-white/10">Loop presets</button>
                                         <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs font-medium hover:bg-[#f97316]/10 disabled:opacity-40 disabled:cursor-not-allowed">+ Add step</button>
-                                        <span id="wf-loop-step-count" class="text-[11px] text-gray-500">0 / 14 steps</span>
+                                        <span id="wf-loop-step-count" class="text-[11px] text-gray-500">0 phases</span>
                                     </div>
                                     <div class="flex items-center gap-1">
                                         <button type="button" class="wf-loop-view-toggle active text-white" data-loop-view="list">Timeline</button>
@@ -3757,6 +3800,7 @@ body.wf-split-dragging * {
                         <div class="mb-4 flex items-center justify-between gap-3 border-b border-white/10">
                             <div class="flex gap-1">
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-white border-b-2 border-[#f97316]" data-runs-tab="active">Active</button>
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="inbox">Inbox</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="sessions">Executor</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="memory">Memory</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="timeline">Events</button>
@@ -3778,6 +3822,21 @@ body.wf-split-dragging * {
                             <div id="wf-run-command-center" class="hidden mb-3 rounded border border-[#f97316]/30 bg-[#f97316]/5 p-3"></div>
                             <div id="wf-active-runs-list" class="space-y-2"></div>
                             <p id="wf-active-runs-empty" class="text-sm text-gray-500">No active runs.</p>
+                        </div>
+                        <div id="wf-runs-pane-inbox" class="wf-runs-pane hidden">
+                            <div class="flex items-center justify-between mb-2 gap-2">
+                                <div>
+                                    <p class="text-xs text-gray-400">Work intake inbox</p>
+                                    <p class="text-[11px] text-gray-500">Telegram / WhatsApp / Gmail / web requests that need create, push, continue, stop, or steer.</p>
+                                </div>
+                                <button type="button" id="wf-refresh-intake-inbox" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                            </div>
+                            <div class="mb-3 flex flex-wrap gap-2">
+                                <input id="wf-intake-compose" type="text" class="min-w-[16rem] flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" placeholder="Create a ticket: polish checkout" />
+                                <button type="button" id="wf-intake-submit" class="px-2 py-1.5 rounded border border-[#f97316]/60 text-[#f97316] text-xs hover:bg-[#f97316]/10">Send to intake</button>
+                            </div>
+                            <div id="wf-intake-inbox-list" class="space-y-2"></div>
+                            <p id="wf-intake-inbox-empty" class="text-sm text-gray-500">No intake items yet.</p>
                         </div>
                         <div id="wf-runs-pane-sessions" class="wf-runs-pane hidden">
                             <div class="mb-2 flex items-center justify-between gap-3">

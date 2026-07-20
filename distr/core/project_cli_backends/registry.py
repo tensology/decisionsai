@@ -20,6 +20,12 @@ from .timing import ollama_model_loaded, resolve_worker_timing
 
 logger = logging.getLogger(__name__)
 
+# Pi JSON mode writes one complete event per line. Web/search and browser tool
+# results can legitimately exceed asyncio's 64 KiB StreamReader default. Keep
+# the per-line ceiling bounded, but large enough that transport does not turn a
+# valid tool result into a false model failure.
+PI_JSONL_STREAM_LIMIT = 4 * 1024 * 1024
+
 DEFAULT_BACKEND_ID = "pi"
 
 _ONE_SHOT_PROCESS_LOCK = threading.RLock()
@@ -220,6 +226,29 @@ def _compact_cli_output(output: str, limit: int = 6000) -> str:
     return f"{head}\n\n[... omitted {omitted} chars of CLI output ...]\n\n{tail}"
 
 
+def _preferred_model_error(errors: list[str]) -> str:
+    """Prefer the provider failure a human can act on over downstream parser noise."""
+    clean = [str(value or "").strip() for value in errors if str(value or "").strip()]
+    if not clean:
+        return ""
+    actionable_markers = (
+        "429",
+        "rate limit",
+        "quota",
+        "credit",
+        "insufficient",
+        "unauthorized",
+        "authentication",
+        "forbidden",
+        "model unavailable",
+        "provider unavailable",
+    )
+    for value in reversed(clean):
+        if any(marker in value.lower() for marker in actionable_markers):
+            return value
+    return clean[-1]
+
+
 class _BoundedCliOutput:
     """Retain useful CLI evidence without allowing chatty workers to exhaust RAM."""
 
@@ -256,7 +285,24 @@ class _BoundedCliOutput:
 
 def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
     """Build a terminal Pi invocation that honours the resolved workflow route."""
-    command = [pi_path, "-p"]
+    # JSON mode exposes model text, tool calls and errors as they happen. Text
+    # mode buffers the whole run, leaving the workflow UI with a heartbeat but
+    # no evidence of whether the worker is thinking, using tools or stuck.
+    command = [pi_path, "-p", "--mode", "json"]
+    if task.adapter_options.get("disable_tools"):
+        command.append("--no-tools")
+    elif task.adapter_options.get("read_only_expected"):
+        # Pi has no filesystem sandbox, but its explicit tool allowlist gives
+        # planning/review workers inspection capability without bash/edit/write.
+        # This prevents an overeager model from installing dependencies or
+        # modifying the project while it is only meant to produce evidence.
+        # The installed Pi web-search extension exposes read-only research
+        # tools. Planning/review steps need these for source URLs without
+        # granting bash, edit, or write access.
+        read_only_tools = "read,grep,find,ls"
+        if str(task.adapter_options.get("step_role") or "").strip().lower() in {"review", "validation"}:
+            read_only_tools += ",web_search,web_fetch"
+        command.extend(["--tools", read_only_tools])
     model = str(task.model or "").strip()
     provider = str(task.adapter_options.get("model_provider") or "").strip()
     if model and model != "auto":
@@ -268,14 +314,26 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         command.extend(["--model", model])
     system_prompt = f"You are working on project: {task.project_name}"
     if task.origin == "workflow":
+        expected_outputs = [
+            str(item).strip()
+            for item in (task.adapter_options.get("expected_outputs") or [])
+            if str(item).strip()
+        ]
+        if expected_outputs:
+            system_prompt += (
+                "\nBegin your final response with every exact workflow field label below. "
+                "Keep each value concise; use N/A plus a ticket-specific reason when needed:\n"
+                + "\n".join(f"{item}: <value>" for item in expected_outputs)
+            )
         system_prompt += (
             "\nComplete only the current workflow step. Your final response must end with this "
             "plain-text contract on separate lines:\n"
-            "Status: completed | failed | needs_input\n"
+            "Status: <choose exactly one: completed, failed, or needs_input>\n"
             "Summary: <specific outcome>\n"
             "Files changed: <paths or none>\n"
             "Commands run: <commands or none>\n"
             "Blockers: <details or none>\n"
+            "Do not copy the alternatives into Status; choose one exact value. "
             "Do not omit Status, even when no files changed."
         )
     command.extend([
@@ -286,14 +344,62 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
     return command
 
 
-def _workflow_report_error(output: str, worker_name: str) -> str:
-    """Require one-shot workflow workers to honour the completion contract."""
+def _pi_message_text(message: Any) -> str:
+    """Extract assistant text from a Pi JSON event message without raw logs."""
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        str(item.get("text") or "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text"
+    )
+
+
+def _workflow_report_error(
+    output: str,
+    worker_name: str,
+    *,
+    expected_outputs: Optional[list[str]] = None,
+) -> str:
+    """Require a terminal report, while accepting a complete named handoff.
+
+    Small local models occasionally return every field requested by a workflow
+    step but omit the redundant ``Status`` line.  The workflow's deterministic
+    validator still checks these fields and all downstream evidence; the CLI
+    adapter should not discard that useful result before validation can run.
+    """
     text = str(output or "").strip()
     if not text:
         return (
             f"{worker_name} exited successfully but returned no completion report; "
             "the workflow treats this as a no-op instead of completed work."
         )
+    required = [str(item).strip() for item in (expected_outputs or []) if str(item).strip()]
+
+    def has_named_output(name: str) -> bool:
+        expected = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+        # Small/local models frequently compress a valid handoff onto one line
+        # using semicolons (``rerun_results: ...; next_action: ...``). Treat a
+        # semicolon as a field boundary just like a newline, while retaining the
+        # exact-label requirement so prose that merely mentions a field does not
+        # satisfy the contract.
+        for line in re.split(r"[;\n]", text):
+            # Models commonly return ``**field:** value``, headings, list
+            # items, or backticked labels. Those are presentation choices,
+            # not missing workflow data.
+            cleaned = re.sub(r"^[\s#>*+-]+", "", line).strip()
+            cleaned = cleaned.replace("**", "").replace("__", "").replace("`", "")
+            label = cleaned.split(":", 1)[0]
+            normalized = re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+            if normalized == expected and ":" in cleaned:
+                return True
+        return False
+
     match = re.search(
         r"(?im)^\s*(?:\*\*)?Status(?:\*\*)?\s*:\s*(?:\*\*)?\s*(completed|failed|needs_input)\b",
         text,
@@ -304,6 +410,17 @@ def _workflow_report_error(output: str, worker_name: str) -> str:
             text,
         )
     if not match:
+        lowered = text.lower()
+        unresolved = re.search(
+            r"(?im)^\s*(?:status|blockers?)\s*:\s*(?:failed|needs[_ ]?input|.+(?:missing|blocked|cannot))\b",
+            text,
+        )
+        has_every_named_output = bool(required) and all(has_named_output(name) for name in required)
+        if has_every_named_output and not unresolved and not any(
+            marker in lowered
+            for marker in ("insufficient credits", "rate limit", "quota", "llm call failed")
+        ):
+            return ""
         return (
             f"{worker_name} returned text without the required 'Status: completed' workflow report; "
             "the result remains unverified."
@@ -311,11 +428,22 @@ def _workflow_report_error(output: str, worker_name: str) -> str:
     status = match.group(1).lower()
     if status != "completed":
         return f"{worker_name} reported workflow status {status}; the step was not completed."
+    missing = [name for name in required if not has_named_output(name)]
+    if missing:
+        return (
+            f"{worker_name} reported Status: completed but omitted required workflow fields: "
+            + ", ".join(missing)
+            + "."
+        )
     return ""
 
 
-def _pi_workflow_report_error(output: str) -> str:
-    return _workflow_report_error(output, "Pi")
+def _pi_workflow_report_error(
+    output: str,
+    *,
+    expected_outputs: Optional[list[str]] = None,
+) -> str:
+    return _workflow_report_error(output, "Pi", expected_outputs=expected_outputs)
 
 
 def _git_status_short(folder: str) -> list[str]:
@@ -335,6 +463,67 @@ def _git_status_short(folder: str) -> list[str]:
         return [line for line in (result.stdout or "").splitlines() if line.strip()][:80]
     except Exception:
         return []
+
+
+_READ_ONLY_SNAPSHOT_IGNORES = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "dist",
+    "build",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+}
+
+
+def _workspace_state_snapshot(folder: str) -> dict[str, tuple[int, int]]:
+    """Capture a cheap file-state map for read-only workflow enforcement.
+
+    Git porcelain collapses a whole new directory to ``?? directory/``. That
+    misses writes inside already-untracked copied trees, so read-only planning
+    and review steps also compare path, size and mtime while excluding dependency
+    and build directories. The map stays in-process and only its compact delta
+    is persisted.
+    """
+    snapshot: dict[str, tuple[int, int]] = {}
+    if not folder or not os.path.isdir(folder):
+        return snapshot
+    root = os.path.abspath(folder)
+    try:
+        for current, dirs, files in os.walk(root):
+            dirs[:] = [name for name in dirs if name not in _READ_ONLY_SNAPSHOT_IGNORES]
+            for name in files:
+                path = os.path.join(current, name)
+                try:
+                    stat = os.stat(path, follow_symlinks=False)
+                except OSError:
+                    continue
+                snapshot[os.path.relpath(path, root)] = (int(stat.st_size), int(stat.st_mtime_ns))
+    except OSError:
+        return snapshot
+    return snapshot
+
+
+def _workspace_state_delta(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+    *,
+    limit: int = 80,
+) -> dict[str, Any]:
+    added = sorted(set(after) - set(before))
+    deleted = sorted(set(before) - set(after))
+    modified = sorted(path for path in set(before) & set(after) if before[path] != after[path])
+    return {
+        "changed": bool(added or deleted or modified),
+        "added": added[:limit],
+        "modified": modified[:limit],
+        "deleted": deleted[:limit],
+        "total_changed": len(added) + len(modified) + len(deleted),
+        "truncated": len(added) + len(modified) + len(deleted) > limit,
+    }
 
 
 class PiBackend(ProjectCliBackend):
@@ -432,39 +621,6 @@ class PiBackend(ProjectCliBackend):
             model_loaded=loaded,
         )
 
-        def _run_pi_print() -> tuple[bool, str, str]:
-            try:
-                result = subprocess.run(
-                    _pi_print_command(pi_path, task),
-                    capture_output=True,
-                    text=True,
-                    timeout=timing.timeout_seconds,
-                    cwd=task.folder,
-                )
-                output = ((result.stdout or "") + (result.stderr or "")).strip()
-                report_error = _pi_workflow_report_error(output) if task.origin == "workflow" else ""
-                if result.returncode == 0 and report_error:
-                    return (
-                        False,
-                        output,
-                        report_error,
-                    )
-                return result.returncode == 0, output, ""
-            except subprocess.TimeoutExpired as exc:
-                partial = ""
-                if exc.stdout:
-                    partial += exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else str(exc.stdout)
-                if exc.stderr:
-                    partial += exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else str(exc.stderr)
-                return (
-                    False,
-                    partial.strip(),
-                    f"Pi worker reached its {timing.timeout_seconds}s safety ceiling "
-                    f"({timing.rationale}); the workflow was stopped cleanly.",
-                )
-            except Exception as exc:
-                return False, "", str(exc)
-
         started_at = time.monotonic()
         _emit(on_event, {
             "type": "backend_started",
@@ -475,27 +631,271 @@ class PiBackend(ProjectCliBackend):
             "timing_rationale": timing.rationale,
             "message": f"Pi worker started; safety ceiling {timing.timeout_seconds}s ({timing.rationale})",
         })
-        worker = asyncio.create_task(asyncio.to_thread(_run_pi_print))
-        while not worker.done():
+        output_capture = _BoundedCliOutput(head_limit=4_000, tail_limit=40_000)
+        assistant_deltas = _BoundedCliOutput(head_limit=8_000, tail_limit=120_000)
+        assistant_messages = _BoundedCliOutput(head_limit=12_000, tail_limit=120_000)
+        final_assistant = ""
+        model_errors: list[str] = []
+        progress_events = 0
+        last_progress_at = started_at
+        warned_no_progress = False
+        timed_out = False
+        saw_agent_end = False
+        inspection_budget_exceeded = False
+        inspection_tool_calls = 0
+        raw_inspection_budget = task.adapter_options.get("inspection_budget")
+        inspection_budget = raw_inspection_budget if isinstance(raw_inspection_budget, dict) else {}
+        try:
+            max_inspection_tool_calls = max(0, int(inspection_budget.get("max_tool_calls") or 0))
+        except (TypeError, ValueError):
+            max_inspection_tool_calls = 0
+        inspection_enforcement = str(inspection_budget.get("enforcement") or "hard").strip().lower()
+        try:
+            hard_max_inspection_tool_calls = max(
+                max_inspection_tool_calls,
+                int(inspection_budget.get("hard_max_tool_calls") or max_inspection_tool_calls or 0),
+            )
+        except (TypeError, ValueError):
+            hard_max_inspection_tool_calls = max_inspection_tool_calls
+        inspection_budget_warned = False
+        process: asyncio.subprocess.Process | None = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *_pi_print_command(pi_path, task),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=task.folder,
+                limit=PI_JSONL_STREAM_LIMIT,
+            )
+            _register_oneshot_process(
+                task.project_id,
+                self.id,
+                process,
+                board_id=task.board_id,
+            )
+            assert process.stdout is not None
+            while True:
+                elapsed = time.monotonic() - started_at
+                if elapsed >= timing.timeout_seconds:
+                    timed_out = True
+                    process.terminate()
+                    break
+                try:
+                    raw = await asyncio.wait_for(process.stdout.readline(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    raw = b""
+                    if process.returncode is not None:
+                        break
+                    idle_seconds = round(time.monotonic() - last_progress_at, 1)
+                    logger.info(
+                        "Pi workflow heartbeat audit_id=%s elapsed=%.1fs idle=%.1fs model=%s",
+                        task.audit_id, elapsed, idle_seconds, task.model or "auto",
+                    )
+                    progress_state = "working" if progress_events else (
+                        "loading_model" if timing.model_loaded is False else "awaiting_first_output"
+                    )
+                    _emit(on_event, {
+                        "type": "heartbeat",
+                        "backend": self.id,
+                        "model": task.model or "auto",
+                        "elapsed_seconds": round(elapsed, 1),
+                        "seconds_since_progress": idle_seconds,
+                        "progress_events": progress_events,
+                        "progress_state": progress_state,
+                        "timeout_seconds": timing.timeout_seconds,
+                        "model_loaded": timing.model_loaded,
+                        "timing_rationale": timing.rationale,
+                        "message": (
+                            f"Pi worker: {progress_state.replace('_', ' ')} "
+                            f"({int(elapsed)}s; last evidence {int(idle_seconds)}s ago)"
+                        ),
+                    })
+                    warning_after = 300 if timing.model_loaded is not True else 120
+                    if idle_seconds >= warning_after and not warned_no_progress:
+                        warned_no_progress = True
+                        _emit(on_event, {
+                            "type": "progress_warning",
+                            "backend": self.id,
+                            "model": task.model or "auto",
+                            "elapsed_seconds": round(elapsed, 1),
+                            "seconds_since_progress": idle_seconds,
+                            "message": (
+                                "No model text or tool event has arrived yet; the run is still "
+                                "cancelable and should be rerouted if this continues."
+                            ),
+                        })
+                    continue
+                if not raw:
+                    if process.returncode is not None:
+                        break
+                    continue
+                decoded = raw.decode(errors="replace").strip()
+                if not decoded:
+                    continue
+                output_capture.append(decoded + "\n")
+                try:
+                    event = json.loads(decoded)
+                except json.JSONDecodeError:
+                    event = {
+                        "type": "executor_output",
+                        "message": decoded[:2000],
+                    }
+                progress_events += 1
+                last_progress_at = time.monotonic()
+                if isinstance(event, dict):
+                    event_type = str(event.get("type") or "")
+                    if event_type == "tool_execution_start" and max_inspection_tool_calls:
+                        inspection_tool_calls += 1
+                        if (
+                            inspection_enforcement == "soft"
+                            and inspection_tool_calls > max_inspection_tool_calls
+                            and inspection_tool_calls <= hard_max_inspection_tool_calls
+                            and not inspection_budget_warned
+                        ):
+                            inspection_budget_warned = True
+                            _emit(on_event, {
+                                "type": "inspection_budget_warning",
+                                "backend": self.id,
+                                "model": task.model or "auto",
+                                "observed_tool_calls": inspection_tool_calls,
+                                "max_tool_calls": max_inspection_tool_calls,
+                                "hard_max_tool_calls": hard_max_inspection_tool_calls,
+                                "message": (
+                                    f"Inspection passed its {max_inspection_tool_calls}-call target; "
+                                    f"allowing a bounded finish up to {hard_max_inspection_tool_calls} calls."
+                                ),
+                            })
+                        hard_limit = (
+                            hard_max_inspection_tool_calls
+                            if inspection_enforcement == "soft"
+                            else max_inspection_tool_calls
+                        )
+                        if inspection_tool_calls > hard_limit:
+                            inspection_budget_exceeded = True
+                            _emit(on_event, {
+                                "type": "inspection_budget_exceeded",
+                                "backend": self.id,
+                                "model": task.model or "auto",
+                                "observed_tool_calls": inspection_tool_calls,
+                                "max_tool_calls": max_inspection_tool_calls,
+                                "hard_max_tool_calls": hard_limit,
+                                "message": (
+                                    f"Inspection stopped after {inspection_tool_calls} tool calls; "
+                                    f"this step's hard ceiling is {hard_limit}."
+                                ),
+                            })
+                            process.terminate()
+                            break
+                    assistant_event = event.get("assistantMessageEvent")
+                    if isinstance(assistant_event, dict) and assistant_event.get("type") == "text_delta":
+                        assistant_deltas.append(str(assistant_event.get("delta") or ""))
+                    if event_type == "message_end":
+                        message = event.get("message")
+                        if isinstance(message, dict) and message.get("role") == "assistant":
+                            message_text = _pi_message_text(message).strip()
+                            if message_text:
+                                final_assistant = message_text
+                                assistant_messages.append(message_text + "\n\n")
+                    error_message = str(event.get("errorMessage") or "").strip()
+                    if not error_message and isinstance(event.get("message"), dict):
+                        error_message = str(event["message"].get("errorMessage") or "").strip()
+                    if error_message:
+                        model_errors.append(error_message)
+                    _emit(on_event, event)
+                    # In one-shot JSON mode Pi's ``agent_end`` event is the
+                    # terminal protocol signal. Some provider/extension
+                    # combinations leave the wrapper process alive after that
+                    # signal, which previously made a completed workflow sit
+                    # silent until the outer 15-minute timeout cancelled it.
+                    # Stop consuming after the terminal event; the bounded
+                    # assistant report above is already authoritative and is
+                    # still checked against the workflow return contract.
+                    if event_type == "agent_end":
+                        saw_agent_end = True
+                        break
             try:
-                await asyncio.wait_for(asyncio.shield(worker), timeout=10.0)
+                await asyncio.wait_for(process.wait(), timeout=1.0 if saw_agent_end else 5.0)
             except asyncio.TimeoutError:
-                elapsed = round(time.monotonic() - started_at, 1)
-                logger.info(
-                    "Pi workflow heartbeat audit_id=%s elapsed=%.1fs model=%s",
-                    task.audit_id, elapsed, task.model or "auto",
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+        except asyncio.CancelledError:
+            if process and process.returncode is None:
+                process.terminate()
+            raise
+        except Exception as exc:
+            model_errors.append(str(exc))
+        finally:
+            if process is not None:
+                _clear_oneshot_process(
+                    task.project_id,
+                    self.id,
+                    process,
+                    board_id=task.board_id,
                 )
-                _emit(on_event, {
-                    "type": "heartbeat",
-                    "backend": self.id,
-                    "model": task.model or "auto",
-                    "elapsed_seconds": elapsed,
-                    "timeout_seconds": timing.timeout_seconds,
-                    "model_loaded": timing.model_loaded,
-                    "timing_rationale": timing.rationale,
-                    "message": f"Pi worker is still running ({int(elapsed)}s)",
-                })
-        ok, output, error = await worker
+
+        # Pi can emit a complete workflow report and then add a short epilogue
+        # in a second assistant message. Selecting only the final message loses
+        # the named handoff fields and Status contract, causing a false failure
+        # and unnecessary provider escalation. Preserve the bounded sequence of
+        # assistant messages; raw JSON/tool logs remain in execution events.
+        output = (
+            assistant_messages.render()
+            or final_assistant
+            or assistant_deltas.render()
+        ).strip()
+        returncode = process.returncode if process is not None else 1
+        report_error = (
+            _pi_workflow_report_error(
+                output,
+                expected_outputs=task.adapter_options.get("expected_outputs"),
+            )
+            if task.origin == "workflow"
+            else ""
+        )
+        transient_after_report = bool(model_errors) and all(
+            any(marker in str(item or "").lower() for marker in (
+                "connection error",
+                "connection reset",
+                "stream closed",
+                "unexpected eof",
+            ))
+            for item in model_errors
+        )
+        ignored_transient_errors = transient_after_report and not report_error
+        terminal_event_ok = (
+            saw_agent_end
+            and not report_error
+            and (not model_errors or ignored_transient_errors)
+        )
+        if inspection_budget_exceeded:
+            error = (
+                f"Inspection budget exceeded: model used {inspection_tool_calls} tool calls; "
+                f"this step's hard ceiling is {hard_max_inspection_tool_calls if inspection_enforcement == 'soft' else max_inspection_tool_calls}."
+            )
+        elif timed_out:
+            error = (
+                f"Pi worker reached its {timing.timeout_seconds}s safety ceiling "
+                f"({timing.rationale}); the workflow was stopped cleanly."
+            )
+        elif model_errors and not ignored_transient_errors:
+            error = _preferred_model_error(model_errors)
+        elif returncode != 0 and not terminal_event_ok:
+            error = f"Pi exited with code {returncode}."
+        else:
+            error = report_error
+        ok = (
+            (returncode == 0 or terminal_event_ok)
+            and not timed_out
+            and (not model_errors or ignored_transient_errors)
+            and not error
+        )
+        if not output and output_capture.render().strip() and not error:
+            error = _pi_workflow_report_error("") if task.origin == "workflow" else "Pi returned no assistant text."
+            ok = False
         _emit(on_event, {
             "type": "backend_finished",
             "backend": self.id,
@@ -507,7 +907,11 @@ class PiBackend(ProjectCliBackend):
             ok,
             self.id,
             "pi_cli",
-            output=output[:3000],
+            # Preserve both the opening handoff fields and terminal contract.
+            # A hard prefix slice silently removed fields placed at the end of
+            # otherwise successful local-model responses and caused false
+            # validation failures plus pointless retries.
+            output=_compact_cli_output(output, limit=12_000),
             error=error or ("" if ok else last_error),
             session_id=task.audit_id,
         )
@@ -579,6 +983,10 @@ class OneShotCliBackend(ProjectCliBackend):
     def _task_subprocess_env(self, task: ProjectTask) -> dict[str, str]:
         return self._subprocess_env()
 
+    def _result_output(self, output: str) -> str:
+        """Return the compact result handed to validation and the next step."""
+        return _compact_cli_output(output)
+
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
         status = self.setup_status()
         if not status.ready or not status.path:
@@ -616,6 +1024,14 @@ class OneShotCliBackend(ProjectCliBackend):
         output_buffer = _BoundedCliOutput()
         started_at = time.monotonic()
         last_heartbeat_at = started_at
+        try:
+            safety_ceiling = max(
+                1,
+                int((task.adapter_options or {}).get("timeout_seconds") or 900),
+            )
+        except (TypeError, ValueError):
+            safety_ceiling = 900
+        timed_out = False
 
         def _emit_liveness_heartbeat() -> None:
             nonlocal last_heartbeat_at
@@ -633,9 +1049,21 @@ class OneShotCliBackend(ProjectCliBackend):
         try:
             assert process.stdout is not None
             while True:
+                remaining = safety_ceiling - (time.monotonic() - started_at)
+                if remaining <= 0:
+                    timed_out = True
+                    process.terminate()
+                    break
                 try:
-                    chunk = await asyncio.wait_for(process.stdout.read(4096), timeout=10.0)
+                    chunk = await asyncio.wait_for(
+                        process.stdout.read(4096),
+                        timeout=min(10.0, max(0.1, remaining)),
+                    )
                 except asyncio.TimeoutError:
+                    if time.monotonic() - started_at >= safety_ceiling:
+                        timed_out = True
+                        process.terminate()
+                        break
                     _emit_liveness_heartbeat()
                     continue
                 if not chunk:
@@ -649,7 +1077,11 @@ class OneShotCliBackend(ProjectCliBackend):
                 # dead worker while it is actively streaming commands.
                 if time.monotonic() - last_heartbeat_at >= 10.0:
                     _emit_liveness_heartbeat()
-            rc = await process.wait()
+            try:
+                rc = await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                rc = await process.wait()
         except asyncio.CancelledError:
             # Workflow timeouts and user cancellation must stop the underlying
             # provider process too. Without this, the run can be marked failed
@@ -672,7 +1104,17 @@ class OneShotCliBackend(ProjectCliBackend):
         _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "done"}})
         _emit(on_event, {"type": "message_end", "message": {"role": "assistant", "content": output}})
         _emit(on_event, {"type": "agent_end", "backend": self.id})
-        compact_output = _compact_cli_output(output)
+        compact_output = self._result_output(output)
+        if timed_out:
+            error = f"{self.name} reached its {safety_ceiling}s safety ceiling and was stopped."
+            return BackendTaskResult(
+                False,
+                self.id,
+                self.id,
+                output=compact_output,
+                error=error,
+                session_id=task.audit_id,
+            )
         if rc == 0:
             return BackendTaskResult(True, self.id, self.id, output=compact_output, session_id=task.audit_id)
         return BackendTaskResult(False, self.id, self.id, output=compact_output, error=compact_output or f"{self.name} exited with code {rc}", session_id=task.audit_id)
@@ -1003,9 +1445,30 @@ class CodexBackend(OneShotCliBackend):
             )
         return env
 
+    def _result_output(self, output: str) -> str:
+        """Keep Codex's final contract, not its CLI banner/MCP transcript.
+
+        The raw stream is already durable in ProjectExecutionEvent for Mission
+        Control. Passing it into validation and the next model wastes context
+        and can bury the actual result under startup warnings.
+        """
+        text = str(output or "").strip()
+        matches = list(re.finditer(r"(?im)^\s*(?:\*\*)?Status(?:\*\*)?\s*:\s*", text))
+        if matches:
+            return _compact_cli_output(text[matches[-1].start():], limit=12_000)
+        return super()._result_output(text)
+
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         cmd = [executable] + self.command_args
-        sandbox = (os.environ.get("DECISIONSAI_CODEX_SANDBOX") or "workspace-write").strip()
+        # Planning and independent-review steps are contracts for observation,
+        # not implementation. Enforce that boundary in Codex itself instead of
+        # merely detecting writes after the worker has polluted the project.
+        # An explicit environment override still controls mutable steps.
+        sandbox = (
+            "read-only"
+            if task.adapter_options.get("read_only_expected")
+            else (os.environ.get("DECISIONSAI_CODEX_SANDBOX") or "workspace-write").strip()
+        )
         if sandbox:
             cmd += ["--sandbox", sandbox]
         if task.model and task.model not in ("auto", "default"):
@@ -1240,8 +1703,47 @@ def get_project_backend_id(project: Any) -> str:
 def _execution_event_message(event: dict[str, Any]) -> str:
     if not isinstance(event, dict):
         return ""
-    if event.get("message"):
-        return str(event.get("message"))[:1000]
+
+    def _structured_message(value: Any) -> str:
+        if not isinstance(value, dict):
+            return str(value or "")[:1000]
+        content = value.get("content")
+        if isinstance(content, str):
+            return content[:1000]
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            has_reasoning = False
+            has_tool = False
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type") or "").lower()
+                if part_type in {"thinking", "reasoning", "reasoning_details"}:
+                    has_reasoning = True
+                    continue
+                if part_type in {"toolcall", "tool_call", "tool_use"}:
+                    has_tool = True
+                    continue
+                text_value = part.get("text") or part.get("content")
+                if isinstance(text_value, str) and text_value.strip():
+                    text_parts.append(text_value.strip())
+            if text_parts:
+                joined = " ".join(text_parts)
+                return joined[:1000] if len(joined) <= 500 else "Worker is processing project context."
+            if has_tool:
+                return "Worker is using a project tool."
+            if has_reasoning:
+                return "Worker is reasoning over the ticket and project evidence."
+        role = str(value.get("role") or "").lower()
+        if role == "assistant":
+            return "Worker completed a reasoning turn."
+        return "Worker reported a structured execution update."
+
+    message = event.get("message")
+    if message:
+        return _structured_message(message)
+    if event.get("role") or isinstance(event.get("content"), list):
+        return _structured_message(event)
     if event.get("type") == "command_start" and event.get("command"):
         command = event.get("command")
         if isinstance(command, list):
@@ -1252,15 +1754,21 @@ def _execution_event_message(event: dict[str, Any]) -> str:
         if assistant_event.get("type") == "text_delta":
             delta = str(assistant_event.get("delta") or "").strip()
             lines = delta.splitlines()
-            diff_lines = sum(
-                1 for line in lines
-                if line.startswith(("+", "-", "@@", "diff --git", "*** Begin Patch"))
-            )
             lowered = delta.lower()
-            if diff_lines >= 3 or "*** begin patch" in lowered:
-                return "Worker is updating project files."
             if delta.startswith("exec\n") or (" exited " in lowered and " in " in lowered):
                 return "Worker ran a project command."
+            if "# decisionsai step handoff" in lowered:
+                return "Worker received the ticket and step context."
+            has_patch_marker = any(
+                line.startswith(("@@", "diff --git", "*** Begin Patch"))
+                for line in lines
+            )
+            changed_lines = sum(
+                1 for line in lines
+                if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+            )
+            if "*** begin patch" in lowered or (has_patch_marker and changed_lines >= 2):
+                return "Worker is updating project files."
             if len(delta) > 1000 and ("# " in delta or "---\nname:" in lowered):
                 return "Worker loaded project guidance."
             if len(delta) > 500:
@@ -1268,31 +1776,49 @@ def _execution_event_message(event: dict[str, Any]) -> str:
             return delta[:600]
         if assistant_event.get("type"):
             return str(assistant_event.get("type"))[:1000]
-    message = event.get("message")
-    if isinstance(message, dict):
-        content = message.get("content")
-        if content:
-            return str(content)[:1000]
     if event.get("type"):
         return str(event.get("type"))[:1000]
     return ""
 
 
+def _compact_execution_value(value: Any, *, depth: int = 0) -> Any:
+    """Bound one CLI event before it reaches any live or durable consumer."""
+    if depth >= 5:
+        return str(value)[:1000]
+    if isinstance(value, dict):
+        return {
+            str(key): _compact_execution_value(item, depth=depth + 1)
+            for key, item in list(value.items())[:40]
+            if str(key) not in {"partial", "thinkingSignature"}
+        }
+    if isinstance(value, (list, tuple)):
+        return [_compact_execution_value(item, depth=depth + 1) for item in list(value)[:20]]
+    if isinstance(value, str):
+        return value[:4000]
+    return value
+
+
 def _compact_execution_event(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(event, dict):
         return {"value": str(event)[:4000]}
-    compact = dict(event)
-    assistant_event = compact.get("assistantMessageEvent")
-    if isinstance(assistant_event, dict) and "delta" in assistant_event:
-        assistant_event = dict(assistant_event)
-        assistant_event["delta"] = str(assistant_event.get("delta") or "")[:4000]
-        compact["assistantMessageEvent"] = assistant_event
-    message = compact.get("message")
-    if isinstance(message, dict) and "content" in message:
-        message = dict(message)
-        message["content"] = str(message.get("content") or "")[:4000]
-        compact["message"] = message
-    return compact
+    if str(event.get("type") or "").strip().lower() == "message_update":
+        # Token deltas can split a credential label and its value across
+        # different events, making content-aware redaction impossible. The
+        # terminal message is persisted on message_end; streaming updates only
+        # need a semantic progress marker for Mission Control.
+        assistant_event = event.get("assistantMessageEvent")
+        update_type = (
+            str(assistant_event.get("type") or "")
+            if isinstance(assistant_event, dict)
+            else ""
+        )
+        return {
+            "type": "message_update",
+            "update_type": update_type,
+            "summary": _execution_event_message(event),
+        }
+    compact = _compact_execution_value(event)
+    return compact if isinstance(compact, dict) else {"value": str(compact)[:4000]}
 
 
 def _is_duplicate_progress_event(
@@ -1303,12 +1829,21 @@ def _is_duplicate_progress_event(
     previous_at: float,
     now: float,
 ) -> bool:
-    """Coalesce bursty CLI deltas before they hit SQLite, WebSocket, and chat."""
+    """Coalesce bursty CLI deltas before they hit SQLite, WebSocket, and chat.
+
+    Streaming backends often resend the complete assistant message for every
+    token.  Comparing only the rendered message misses those growing deltas and
+    can create hundreds of database writes and browser updates per second.  A
+    human progress surface does not need token cadence, so persist at most one
+    changing message per second and suppress an unchanged message for longer.
+    Lifecycle, command and tool events are never throttled here.
+    """
     if str((event or {}).get("type") or "") != "message_update":
         return False
-    if not message or message != previous_message:
-        return False
-    return now - previous_at < 1.0
+    elapsed = now - previous_at
+    if elapsed < 1.0:
+        return True
+    return bool(message and message == previous_message and elapsed < 5.0)
 
 
 def _handoff_callback_metadata(task: ProjectTask) -> dict[str, Any]:
@@ -1469,6 +2004,10 @@ async def run_project_task(
     else:
         selection_reason += "; backend default model"
     git_status_before = _git_status_short(task.folder)
+    read_only_expected = bool(task.adapter_options.get("read_only_expected"))
+    workspace_state_before = (
+        _workspace_state_snapshot(task.folder) if read_only_expected else {}
+    )
     runtime_snapshot: dict[str, Any] = {}
     try:
         from distr.core.terminal import get_project_runtime_snapshot
@@ -1524,6 +2063,7 @@ async def run_project_task(
             "origin": origin,
             "instruction": instruction,
             "git_status_before": git_status_before,
+            "read_only_expected": read_only_expected,
             "runtime_snapshot": runtime_snapshot,
         },
     )
@@ -1792,10 +2332,15 @@ async def run_project_task(
     progress_state = {"message": "", "at": 0.0}
 
     def _tracked_event(event: dict[str, Any]) -> None:
-        message = _execution_event_message(event)
+        from distr.core.orchestrator import redact_handoff_payload
+
+        safe_event = redact_handoff_payload(event)
+        if not isinstance(safe_event, dict):
+            safe_event = {}
+        message = _execution_event_message(safe_event)
         now = time.monotonic()
         if _is_duplicate_progress_event(
-            event,
+            safe_event,
             message,
             previous_message=str(progress_state["message"]),
             previous_at=float(progress_state["at"]),
@@ -1804,10 +2349,11 @@ async def run_project_task(
             return
         progress_state["message"] = message
         progress_state["at"] = now
+        compact_event = _compact_execution_event(safe_event)
         try:
             from distr.core.project_cli_backends.live_sessions import publish_live_session_event
 
-            publish_live_session_event(task.project_id, backend_id, event, board_id=task.board_id)
+            publish_live_session_event(task.project_id, backend_id, compact_event, board_id=task.board_id)
         except Exception:
             pass
         append_execution_event(
@@ -1815,9 +2361,9 @@ async def run_project_task(
             str((event or {}).get("type") or "event"),
             status="running",
             message=message,
-            payload=_compact_execution_event(event),
+            payload=compact_event,
         )
-        _emit(on_event, event)
+        _emit(on_event, compact_event)
 
     try:
         result = await backend.send_task(task, on_event=_tracked_event)
@@ -1856,8 +2402,24 @@ async def run_project_task(
         except Exception:
             pass
 
+    # The backend result is returned to the workflow dispatcher and therefore
+    # must be redacted as well as the durable execution transcript. A worker
+    # may quote a secret it inspected even when it was explicitly told not to.
+    from distr.core.orchestrator import redact_handoff_payload
+
+    result.output = str(redact_handoff_payload(result.output or ""))
+    result.error = str(redact_handoff_payload(result.error or ""))
+
     result.execution_session_id = execution_session_id
     git_status_after = _git_status_short(task.folder)
+    workspace_state_delta = (
+        _workspace_state_delta(
+            workspace_state_before,
+            _workspace_state_snapshot(task.folder),
+        )
+        if read_only_expected
+        else {"changed": False, "added": [], "modified": [], "deleted": [], "total_changed": 0, "truncated": False}
+    )
     if getattr(result, "waits_for_human", False) and result.success:
         append_execution_event(
             execution_session_id,
@@ -1972,6 +2534,9 @@ async def run_project_task(
             complexity=ticket_complexity,
             git_status_before=git_status_before,
             git_status_after=git_status_after,
+            read_only_expected=read_only_expected,
+            read_only_violation=bool(read_only_expected and workspace_state_delta.get("changed")),
+            workspace_state_delta=workspace_state_delta,
             runtime_snapshot=runtime_snapshot,
         ),
         error=result.error,

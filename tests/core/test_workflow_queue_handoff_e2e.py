@@ -61,11 +61,25 @@ def _seed_two_queued_tickets(factory, tmp_path, workflow_id: int) -> dict:
             description="Should auto-start after first completes.",
             linked_project_id=project.id,
             linked_workflow_id=workflow_id,
-            workflow_queue_position=2,
+            workflow_queue_position=3,
             position=1,
+        )
+        unrelated_board = KanbanBoard(name="Other project board", in_use=True, default_workflow_id=workflow_id)
+        session.add(unrelated_board)
+        session.flush()
+        unrelated_lane = KanbanLane(board_id=unrelated_board.id, name="Backlog", position=0)
+        session.add(unrelated_lane)
+        session.flush()
+        unrelated_ticket = KanbanTicket(
+            lane_id=unrelated_lane.id,
+            title="Unrelated ticket with an earlier global queue position",
+            linked_workflow_id=workflow_id,
+            workflow_queue_position=2,
+            position=0,
         )
         session.add(ticket_a)
         session.add(ticket_b)
+        session.add(unrelated_ticket)
         session.flush()
 
         ids = {

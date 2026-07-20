@@ -161,7 +161,9 @@ def _required_projection_paths(home: Path, detected: dict[str, bool]) -> list[Pa
     if detected.get("claude"):
         paths.append(home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md")
     if detected.get("cursor"):
-        paths.append(home / ".cursor" / "decisions-competition-harness.md")
+        paths.append(home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md")
+        paths.append(home / ".cursor" / "skills" / "ponytail" / "SKILL.md")
+        paths.append(home / ".cursor" / "skills" / "fallow" / "SKILL.md")
     if detected.get("pi"):
         paths.append(home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md")
     return paths
@@ -213,6 +215,13 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
                 skill_targets[f"claude:{skill_dir.name}"] = base / skill_dir.name
         skill_targets["claude:fallow"] = base / "fallow"
         skill_targets["claude:decisions-competition-harness"] = base / "decisions-competition-harness"
+    if detected.get("cursor"):
+        base = home / ".cursor" / "skills"
+        for skill_dir in sorted(ponytail_src.iterdir()) if ponytail_src.is_dir() else []:
+            if skill_dir.is_dir():
+                skill_targets[f"cursor:{skill_dir.name}"] = base / skill_dir.name
+        skill_targets["cursor:fallow"] = base / "fallow"
+        skill_targets["cursor:decisions-competition-harness"] = base / "decisions-competition-harness"
     if detected.get("pi"):
         base = home / ".pi" / "skills"
         for skill_dir in sorted(ponytail_src.iterdir()) if ponytail_src.is_dir() else []:
@@ -233,7 +242,7 @@ def _install_harness_skills(home: Path, detected: dict[str, bool]) -> list[str]:
     projection_targets = {
         "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "decisions-competition-harness" / "SKILL.md",
         "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
-        "cursor": home / ".cursor" / "decisions-competition-harness.md",
+        "cursor": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
         "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
     }
     for harness, path in projection_targets.items():

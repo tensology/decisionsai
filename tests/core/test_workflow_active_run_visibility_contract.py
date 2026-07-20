@@ -83,6 +83,24 @@ def test_active_run_payload_exposes_loop_and_current_step_context():
     assert active["execution_route"]["skills"] == ["executing-plans", "webapp-testing"]
 
 
+def test_active_run_payload_exposes_the_exact_waiting_question():
+    workflow_id, run_id = _seed_active_loop_run()
+    question = "Gemma failed readiness. Approve North Mini Code, choose another model, or Stop."
+    with get_session() as session:
+        stored = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).one()
+        data = json.loads(stored.run_data or "{}")
+        data["waiting_kind"] = "provider_preflight"
+        data["waiting_prompt"] = question
+        stored.run_data = json.dumps(data)
+        stored.status = "waiting"
+        session.commit()
+
+    active = get_active_run(workflow_id)
+
+    assert active is not None
+    assert active["waiting_prompt"] == question
+
+
 def test_active_runs_list_payload_exposes_same_developer_visibility_contract():
     workflow_id, run_id = _seed_active_loop_run()
 

@@ -124,3 +124,10 @@ def test_move_ticket_to_board_named_in_text_without_lane(monkeypatch):
     )
 
     assert "'ThatShirtShow' / 'Ready'" in result
+
+
+def test_agent_cannot_move_a_ticket_to_complete():
+    result = KanbanTicketTool()._action_move_ticket(42, "Complete")
+
+    assert "ready for your acceptance in QA" in result
+    assert "Only you can move a QA ticket to Complete" in result

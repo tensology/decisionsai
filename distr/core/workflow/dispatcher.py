@@ -171,9 +171,9 @@ from distr.core.workflow.runtime_contract import (
 class _RunContext:
     """Per-run state for the WorkflowAgent lifecycle."""
     run_id: int
-    workflow_agent: "WorkflowAgent"  # noqa: F821
-    event_loop: asyncio.AbstractEventLoop
-    thread: threading.Thread
+    workflow_agent: Optional["WorkflowAgent"]  # noqa: F821
+    event_loop: Optional[asyncio.AbstractEventLoop]
+    thread: Optional[threading.Thread]
     context_prefix: str = ""
     run_ctx: Optional["WorkflowRunContext"] = None
 
@@ -394,6 +394,29 @@ def _record_packet_ui_quality_validation(
     return updated
 
 
+def _run_requires_terminal_ui_quality(
+    run_data: Dict[str, Any],
+    packet: Dict[str, Any],
+) -> bool:
+    """Return whether screenshot artifacts represent implemented product UI.
+
+    Research and documentation tickets may require browser screenshots as
+    source evidence.  Treating those captures as a rendered UI implementation
+    invents click-flow/before-state requirements and can turn an accepted
+    research result into a false terminal failure.
+    """
+    profile = dict((run_data or {}).get("ticket_execution_profile") or {})
+    if profile:
+        if bool(profile.get("research_only")) or bool(profile.get("explicit_no_code")):
+            return False
+        if profile.get("implementation_required") is False:
+            return False
+        if profile.get("ui_evidence_required") is not None:
+            return bool(profile.get("ui_evidence_required"))
+    artifacts = dict((packet or {}).get("artifacts") or {})
+    return bool(artifacts.get("ui_quality"))
+
+
 def _packet_has_failed_ui_quality_validation(packet: Dict[str, Any]) -> bool:
     execution = dict((packet or {}).get("execution") or {})
     for snapshot in execution.get("validation_snapshots") or []:
@@ -483,14 +506,16 @@ def _cleanup_run(run_id: int) -> None:
         ctx = _active_runs.pop(run_id, None)
     if ctx is None:
         return
-    try:
-        ctx.workflow_agent.shutdown()
-    except Exception:
-        pass
-    try:
-        ctx.event_loop.call_soon_threadsafe(ctx.event_loop.stop)
-    except Exception:
-        pass
+    if ctx.workflow_agent is not None:
+        try:
+            ctx.workflow_agent.shutdown()
+        except Exception:
+            pass
+    if ctx.event_loop is not None:
+        try:
+            ctx.event_loop.call_soon_threadsafe(ctx.event_loop.stop)
+        except Exception:
+            pass
 
 
 def _cancel_linked_execution_sessions(
@@ -749,6 +774,16 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                         details=f"Workflow run {run_id} finished with status {terminal_status}.",
                     )
                     ticket.workflow_status = status
+                    if terminal_status == "completed":
+                        # Automated work stops at QA. Only a human may accept
+                        # the ticket and move it from QA to Complete.
+                        from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                        move_ticket_to_delivery_lane(
+                            db,
+                            int(run_rec.ticket_id),
+                            "QA",
+                        )
                     try:
                         from distr.core.kanban.ticket_workflow_engagement import (
                             record_ticket_workflow_elapsed,
@@ -793,7 +828,7 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             run_settings = _workflow_run_settings(wf)
             if run_settings.get("execution_mode") != "sequential":
                 return
-            from distr.core.db.kanban import KanbanTicket
+            from distr.core.db.kanban import KanbanLane, KanbanTicket
 
             current_ticket = db.query(KanbanTicket).filter(
                 KanbanTicket.id == int(run_rec.ticket_id)
@@ -839,13 +874,18 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
             else:
                 next_group_item = None
             current_pos = int(current_ticket.workflow_queue_position or 0)
+            queue_board_id = run_rec.board_id or getattr(getattr(current_ticket, "lane", None), "board_id", None)
             next_ticket = None
             if next_group_item is None:
+                if queue_board_id is None:
+                    return
                 next_ticket = (
                     db.query(KanbanTicket)
+                    .join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
                     .filter(
                         KanbanTicket.linked_workflow_id == workflow_id,
                         KanbanTicket.workflow_queue_position > current_pos,
+                        KanbanLane.board_id == int(queue_board_id),
                     )
                     .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.id.asc())
                     .first()
@@ -1088,23 +1128,6 @@ def start_workflow_run(
         run_ctx: Structured context from the parent session, including
                  recent conversation, user intent, and project linkage.
     """
-    from distr.core.workflow_agent import WorkflowAgent
-
-    # Auto model policy is intentionally resolved at preflight rather than
-    # permanently freezing yesterday's catalogue choice.  If discovery is
-    # temporarily unavailable, retain the workflow's last known-good concrete
-    # routes and let the existing provider readiness checks report any problem.
-    try:
-        from distr.core.project_cli_backends.policy_manager import refresh_auto_model_policy_for_workflow
-
-        refresh_auto_model_policy_for_workflow(workflow_id)
-    except Exception:
-        logger.warning(
-            "start_workflow_run: Auto model-policy refresh failed for workflow=%s; retaining last known-good routes",
-            workflow_id,
-            exc_info=True,
-        )
-
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
@@ -1172,6 +1195,10 @@ def start_workflow_run(
 
         # Validate all steps before starting
         sorted_steps = sorted(wf.steps, key=lambda s: s.position)
+        requires_workflow_agent = any(
+            str(step.action_type or "").strip() == "agent_instruction"
+            for step in sorted_steps
+        )
         for step in sorted_steps:
             if step.action_type == "agent_instruction" and (step.instruction is None or step.instruction == ""):
                 return {"error": f"Step '{step.name}' (#{step.position}) has no instruction"}
@@ -1193,6 +1220,8 @@ def start_workflow_run(
         if first_step is None:
             first_step = sorted_steps[0]
             start_idx = 0
+        first_step_id = first_step.id
+        first_step_name = first_step.name
 
         for i, step in enumerate(sorted_steps):
             if i >= start_idx:
@@ -1203,19 +1232,22 @@ def start_workflow_run(
         normalized_metadata.setdefault("workflow_id", workflow_id)
         if ticket_id is not None:
             normalized_metadata.setdefault("ticket_id", ticket_id)
-        if (board_id is not None or ticket_id is not None) and not normalized_metadata.get("developer_context"):
             try:
-                from distr.core.developer_context import build_developer_context
+                from distr.core.db.kanban import KanbanTicket
 
-                developer_context = build_developer_context().to_dict()
-                normalized_metadata["developer_context"] = _scope_developer_context_to_run(
-                    developer_context,
-                    normalized_metadata,
-                    board_id=board_id,
-                    ticket_id=ticket_id,
-                )
+                ticket_row = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                if ticket_row:
+                    ticket_complexity = str(ticket_row.complexity or "").strip().lower()
+                    ticket_priority = str(ticket_row.priority or "").strip().lower()
+                    normalized_metadata.setdefault("ticket_complexity", ticket_complexity)
+                    normalized_metadata.setdefault("ticket_priority", ticket_priority)
+                    route_seed = normalized_metadata.get("execution_route")
+                    route_seed = dict(route_seed) if isinstance(route_seed, dict) else {}
+                    if ticket_complexity:
+                        route_seed.setdefault("complexity", ticket_complexity)
+                    normalized_metadata["execution_route"] = route_seed
             except Exception:
-                logger.debug("start_workflow_run: developer context assembly failed", exc_info=True)
+                logger.debug("start_workflow_run: ticket route metadata failed", exc_info=True)
         risk_text = "\n\n".join(
             str(value or "").strip()
             for value in (
@@ -1260,25 +1292,11 @@ def start_workflow_run(
             normalized_metadata["loop_iteration"] = 0
         if loop_input.get("skip_human_checkpoints"):
             normalized_metadata["skip_human_checkpoints"] = True
-        try:
-            from distr.core.settings import load_settings_from_db
-            from distr.core.workflow.coordination_plan import (
-                build_run_coordination_plan,
-                coordination_plan_routes,
-            )
-
-            coordination_plan = build_run_coordination_plan(
-                wf,
-                normalized_metadata,
-                settings=load_settings_from_db(),
-            )
-            planned_step_routes, planned_role_routes = coordination_plan_routes(coordination_plan)
-            normalized_metadata["coordination_plan"] = coordination_plan
-            normalized_metadata["step_routes"] = planned_step_routes
-            normalized_metadata["step_role_routes"] = planned_role_routes
-        except Exception:
-            coordination_plan = {}
-            logger.debug("start_workflow_run: coordination planning failed", exc_info=True)
+        # Provider discovery and whole-run allocation can involve subprocess and
+        # network probes. They are performed after this transaction commits so
+        # starting a workflow never holds SQLite's write lock while doing model
+        # catalogue work.
+        coordination_plan = {}
         packet = normalized_metadata.get("result_packet") or {}
         packet_audit = dict(packet.get("audit") or {})
         packet_audit["audits_run"] = build_audit_gates(
@@ -1303,24 +1321,6 @@ def start_workflow_run(
         db.add(run)
         db.flush()
         run_id = run.id
-        project_id = normalized_metadata.get("project_id")
-        try:
-            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
-
-            hook_ensure_workspace(
-                "runs",
-                run_id,
-                reason="start_workflow_run",
-                run_kwargs={
-                    "workflow_id": workflow_id,
-                    "board_id": board_id,
-                    "ticket_id": ticket_id,
-                    "project_id": int(project_id) if project_id else None,
-                    "step_id": first_step.id if first_step else None,
-                },
-            )
-        except Exception:
-            logger.debug("start_workflow_run: workspace bootstrap failed", exc_info=True)
         loop_contract = dict(normalized_metadata.get("loop_contract") or {})
         workflow_name = str(wf.name or f"Workflow {workflow_id}")
         if ticket_id:
@@ -1341,14 +1341,15 @@ def start_workflow_run(
         # Keep step at "pending" until StepDispatcher.run_in_workflow runs — otherwise the
         # run_in_workflow idempotency guard sees running + current_step_id match and skips the
         # initial dispatch (start_workflow_run always loads DB then dispatches once).
-        first_step_id = first_step.id
-        first_step_name = first_step.name
         # Mark the ticket as "running" immediately so the board reflects in-progress state
         if ticket_id:
             from distr.core.db.kanban import KanbanTicket as _KT
+            from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
             _ticket = db.query(_KT).filter(_KT.id == ticket_id).first()
             if _ticket:
                 _ticket.workflow_status = "running"
+                move_ticket_to_delivery_lane(db, int(ticket_id), "In Progress")
         db.commit()
 
     # emit_event uses its own database session. Emit only after the run creation
@@ -1434,11 +1435,174 @@ def start_workflow_run(
     except Exception:
         logger.debug("Could not emit orchestrator workflow_run_started event", exc_info=True)
 
+    def _enrich_run_context() -> None:
+        """Build expensive context and model allocation after the run commits."""
+        try:
+            with get_session() as db:
+                wf_row = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+                run_row = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if not wf_row or not run_row or run_row.status == "cancelled":
+                    return
+                run_data = json.loads(run_row.run_data or "{}") or {}
+                workflow_snapshot = type("WorkflowSnapshot", (), {
+                    "id": wf_row.id,
+                    "name": wf_row.name,
+                    "run_settings": wf_row.run_settings,
+                    "steps": [
+                        type("StepSnapshot", (), {
+                            "id": step.id,
+                            "position": step.position,
+                            "name": step.name,
+                            "description": step.description,
+                            "config": step.config,
+                            "validation_type": step.validation_type,
+                        })()
+                        for step in sorted(wf_row.steps, key=lambda item: item.position)
+                    ],
+                })()
+
+            if (board_id is not None or ticket_id is not None) and not run_data.get("developer_context"):
+                from distr.core.developer_context import build_developer_context
+
+                developer_context = build_developer_context().to_dict()
+                run_data["developer_context"] = _scope_developer_context_to_run(
+                    developer_context,
+                    run_data,
+                    board_id=board_id,
+                    ticket_id=ticket_id,
+                )
+
+            from distr.core.settings import load_settings_from_db
+            from distr.core.workflow.coordination_plan import (
+                build_run_coordination_plan,
+                coordination_plan_routes,
+            )
+
+            plan = build_run_coordination_plan(
+                workflow_snapshot,
+                run_data,
+                settings=load_settings_from_db(),
+            )
+            planned_step_routes, planned_role_routes = coordination_plan_routes(plan)
+            run_data["coordination_plan"] = plan
+            run_data["step_routes"] = planned_step_routes
+            run_data["step_role_routes"] = planned_role_routes
+            first_planned_route = planned_step_routes.get(str(first_step_id)) or {}
+            if first_planned_route:
+                run_data["execution_route"] = dict(first_planned_route)
+
+            try:
+                from distr.core.workflow.blueprint_adherence import (
+                    build_run_version_pin,
+                    ensure_run_blueprint_defaults,
+                )
+
+                complexity = str(
+                    (first_planned_route or {}).get("complexity")
+                    or plan.get("complexity")
+                    or "medium"
+                )
+                run_data = ensure_run_blueprint_defaults(run_data, complexity=complexity)
+                run_data["version_pin"] = build_run_version_pin(
+                    workflow_id=workflow_id,
+                    workflow_name=str(getattr(workflow_snapshot, "name", "") or ""),
+                    workflow_revision=str(
+                        getattr(workflow_snapshot, "updated_at", None)
+                        or getattr(workflow_snapshot, "id", "")
+                        or workflow_id
+                    ),
+                    coordination_plan=plan,
+                    tool_ids=["cli", "playwright", "shell", "http"],
+                    prompt_fingerprint=str(plan.get("created_at") or "")[:64],
+                )
+            except Exception:
+                logger.debug("start_workflow_run: blueprint defaults failed", exc_info=True)
+
+            with get_session() as db:
+                run_row = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if not run_row or run_row.status == "cancelled":
+                    return
+                run_row.run_data = json.dumps(run_data)
+                db.commit()
+
+            try:
+                from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+                project_id = run_data.get("project_id")
+                hook_ensure_workspace(
+                    "runs",
+                    run_id,
+                    reason="start_workflow_run",
+                    run_kwargs={
+                        "workflow_id": workflow_id,
+                        "board_id": board_id,
+                        "ticket_id": ticket_id,
+                        "project_id": int(project_id) if project_id else None,
+                        "step_id": first_step_id,
+                    },
+                )
+            except Exception:
+                logger.debug("start_workflow_run: workspace bootstrap failed", exc_info=True)
+
+            try:
+                from distr.core.orchestration_events import emit_orchestration_event
+                from distr.core.workflow.blueprint_adherence import build_run_blueprint_snapshot
+
+                emit_orchestration_event(
+                    source="orchestrator",
+                    event_type="coordination_plan_created",
+                    status="ready",
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    step_id=first_step_id,
+                    ticket_id=ticket_id,
+                    board_id=board_id,
+                    project_id=int(run_data["project_id"]) if str(run_data.get("project_id") or "").isdigit() else None,
+                    summary=(
+                        f"Allocated {len(plan.get('assignments') or {})} workflow steps "
+                        f"using {plan.get('strategy') or 'adaptive'} coordination."
+                    ),
+                    payload={
+                        "coordination_plan": plan,
+                        "version_pin": run_data.get("version_pin") or {},
+                        "blueprint": build_run_blueprint_snapshot(run_data),
+                    },
+                )
+            except Exception:
+                logger.debug("Could not emit coordination plan", exc_info=True)
+        except Exception:
+            logger.warning("start_workflow_run: deferred context enrichment failed", exc_info=True)
+
     def _initialize_run_context() -> Optional[Dict[str, Any]]:
         """Create heavyweight worker resources outside the caller/UI thread."""
         agent_loop = None
         workflow_agent = None
         try:
+            if not requires_workflow_agent:
+                # Project-CLI workflows already launch their own scoped worker.
+                # Constructing another conversational WorkflowAgent here warmed
+                # the full tool cache, stalled Qt, and then sat unused for the
+                # entire Development run.
+                with _runs_lock:
+                    if run_id not in _initializing_runs:
+                        return {"error": "Workflow run was cancelled during initialization"}
+                    _active_runs[run_id] = _RunContext(
+                        run_id=run_id,
+                        workflow_agent=None,
+                        event_loop=None,
+                        thread=None,
+                        context_prefix=context or "",
+                        run_ctx=run_ctx,
+                    )
+                    _initializing_runs.discard(run_id)
+                return None
+
+            # WorkflowAgent imports the full provider/tool stack and can take
+            # many seconds on a cold process. Keep that import in the background
+            # initialization phase; the durable run and HTTP response must not
+            # wait for it.
+            from distr.core.workflow_agent import WorkflowAgent
+
             workflow_agent = WorkflowAgent(event_queue=event_queue)
             agent_loop = asyncio.new_event_loop()
 
@@ -1543,6 +1707,21 @@ def start_workflow_run(
         return None
 
     def _initialize_then_continue() -> Dict[str, Any]:
+        # Provider catalogue discovery may involve network probes. It belongs in
+        # the already asynchronous initialization phase so clicking Run returns
+        # immediately and cannot freeze the desktop/web event loop. The step
+        # executor reads the refreshed route from the database before dispatch.
+        try:
+            from distr.core.project_cli_backends.policy_manager import refresh_auto_model_policy_for_workflow
+
+            refresh_auto_model_policy_for_workflow(workflow_id)
+        except Exception:
+            logger.warning(
+                "start_workflow_run: Auto model-policy refresh failed for workflow=%s; retaining last known-good routes",
+                workflow_id,
+                exc_info=True,
+            )
+        _enrich_run_context()
         init_error = _initialize_run_context()
         if init_error:
             return init_error
@@ -1555,11 +1734,13 @@ def start_workflow_run(
         _initializing_runs.add(run_id)
 
     if dispatch_async:
-        dispatch_thread = threading.Thread(
-            target=_initialize_then_continue,
-            name=f"workflow-initialize-{run_id}",
-            daemon=True,
-        )
+        # Give the HTTP/UI caller a chance to serialize the accepted response
+        # before catalogue refresh and worker imports begin competing for the
+        # GIL. A plain Thread.start() can otherwise let the new thread monopolize
+        # a cold process and make a successful Run click appear to time out.
+        dispatch_thread = threading.Timer(0.1, _initialize_then_continue)
+        dispatch_thread.name = f"workflow-initialize-{run_id}"
+        dispatch_thread.daemon = True
         dispatch_thread.start()
         return {
             "run_id": run_id,
@@ -1911,6 +2092,82 @@ def _handle_step_review_response(run_id: int, optional_input: str) -> Dict[str, 
     }
 
 
+def _resume_worker_needs_input(run_id: int, feedback: str) -> Dict[str, Any]:
+    """Re-run the blocked step with human input instead of routing past it."""
+    clean = (feedback or "").strip()
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run or run.status != "waiting" or not run.current_step_id:
+            return {"error": "No worker question is waiting", "status_code": 409}
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(run.current_step_id)).first()
+        if not step or step.status != "waiting":
+            return {"error": "No waiting step found", "status_code": 409}
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        step_id = int(step.id)
+        workflow_id = run.workflow_id
+        ticket_id = run.ticket_id
+        board_id = run.board_id
+        project_id = run_data.get("project_id")
+        run.status = "running"
+        step.status = "queued"
+        run_data["feedback"] = clean
+        run_data["worker_answer"] = clean
+        run_data.pop("waiting_kind", None)
+        run_data.pop("worker_question", None)
+        run_data.pop("waiting_prompt", None)
+        run_data["human_intervention_state"] = "answer_received"
+        run_data["next_action"] = "worker_continue"
+        run.run_data = json.dumps(run_data)
+        db.commit()
+
+    if clean:
+        try:
+            from distr.core.workflow.steering_memory import record_run_steering_feedback
+
+            record_run_steering_feedback(
+                run_id=run_id,
+                message=clean,
+                source="workflow",
+                event_type="worker_question_answered",
+                workflow_id=workflow_id,
+                step_id=step_id,
+                board_id=board_id,
+                ticket_id=ticket_id,
+                project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                capture_standard=False,
+            )
+        except Exception:
+            logger.debug("Could not store worker answer", exc_info=True)
+    try:
+        from distr.core.orchestration_events import emit_orchestration_event
+
+        emit_orchestration_event(
+            source="workflow",
+            event_type="workflow_run_resumed",
+            status="running",
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            summary="The worker received the requested information and is retrying the step.",
+            payload={"feedback": clean, "waiting_kind": "worker_needs_input"},
+        )
+    except Exception:
+        logger.debug("Could not emit worker-question resume event", exc_info=True)
+
+    dispatch = StepDispatcher().run_in_workflow(step_id, run_id)
+    return {
+        "success": True,
+        "action": "retry_step",
+        "step_id": step_id,
+        "dispatch": dispatch,
+    }
+
+
 def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, Any]:
     """Resume a workflow run that is in 'waiting' status."""
     waiting_kind = ""
@@ -1930,6 +2187,51 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         return _handle_run_briefing_response(run_id, optional_input)
     if waiting_kind == "step_review":
         return _handle_step_review_response(run_id, optional_input)
+    if waiting_kind == "worker_needs_input":
+        return _resume_worker_needs_input(run_id, optional_input)
+    if waiting_kind == "control_interrupt":
+        clean = (optional_input or "").strip()
+        lowered = clean.lower()
+        if lowered in {"stop", "cancel", "abort"} or lowered.startswith("stop "):
+            cancel_run(run_id)
+            return {"success": True, "action": "end_run", "status": "cancelled"}
+        if any(token in lowered for token in ("change worker", "swap model", "use cursor", "use codex", "use claude")):
+            try:
+                from distr.core.workflow.service import apply_run_harness_steer
+
+                apply_run_harness_steer(run_id, clean or "Change worker for the remaining steps", source="control_interrupt")
+            except Exception:
+                logger.debug("control interrupt steer failed", exc_info=True)
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if run and run.run_data:
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                run_data.pop("waiting_kind", None)
+                run_data.pop("interrupt_context", None)
+                run_data["consecutive_step_failures"] = 0
+                run_data.pop("validation_stalled_step_id", None)
+                run_data.pop("validation_stall_count", None)
+                if clean:
+                    run_data["feedback"] = clean[:2000]
+                run.status = "running"
+                run.run_data = json.dumps(run_data)
+                step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == run.current_step_id).first()
+                if step:
+                    step.status = "pending"
+                db.commit()
+                step_id = int(run.current_step_id or 0)
+            else:
+                return {"error": "Run not found", "status_code": 404}
+        if step_id:
+            return {
+                "success": True,
+                "action": "dispatch_step",
+                **_dispatch_workflow_step(int(run_id), int(step_id)),
+            }
+        return {"error": "No step to resume", "status_code": 409}
 
     from distr.core.workflow.router import StepRouter
 
@@ -2099,6 +2401,22 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             run_data = json.loads(run.run_data or "{}")
         except Exception:
             run_data = {}
+        # A terminal run cannot still be waiting for a provider or approval.
+        # Keep that history in events, but clear the actionable current-state
+        # fields so Mission Control and Telegram do not show a stale question.
+        for waiting_key in (
+            "waiting_kind",
+            "waiting_prompt",
+            "waiting_result",
+            "waiting_passed",
+            "provider_preflight_pending",
+            "provider_preflight_prompt",
+            "pending_provider_selection",
+            "pending_route_approval",
+            "route_approval_pending",
+            "route_approval_prompt",
+        ):
+            run_data.pop(waiting_key, None)
         packet = dict(run_data.get("result_packet") or {})
         risk_profile = dict(run_data.get("risk_profile") or {})
         workflow_id = run.workflow_id
@@ -2117,18 +2435,25 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                 status=status,
                 risk_profile=risk_profile,
             )
-            packet = _record_packet_ui_quality_validation(
-                packet,
-                workflow_id=workflow_id,
-                run_id=run_id,
-                step_id=getattr(run, "current_step_id", None),
-                ticket_id=ticket_id,
-                board_id=board_id,
-                project_id=int(project_id) if str(project_id or "").isdigit() else None,
-                execution_session_id=int(execution_session_id) if str(execution_session_id or "").isdigit() else None,
-            )
+            requires_terminal_ui_quality = _run_requires_terminal_ui_quality(run_data, packet)
+            if requires_terminal_ui_quality:
+                packet = _record_packet_ui_quality_validation(
+                    packet,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    step_id=getattr(run, "current_step_id", None),
+                    ticket_id=ticket_id,
+                    board_id=board_id,
+                    project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                    execution_session_id=int(execution_session_id) if str(execution_session_id or "").isdigit() else None,
+                )
             e2e_smoke = _is_e2e_smoke_workflow(workflow_id)
-            if status == "completed" and _packet_has_failed_ui_quality_validation(packet) and not e2e_smoke:
+            if (
+                status == "completed"
+                and requires_terminal_ui_quality
+                and _packet_has_failed_ui_quality_validation(packet)
+                and not e2e_smoke
+            ):
                 status = "failed"
                 auto_retry = _maybe_auto_dispatch_terminal_ui_correction(
                     db,
@@ -2409,6 +2734,8 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                     return {"success": True, "message": "Step already in progress.", "deduped": True}
         except Exception:
             logger.debug("run_in_workflow dedupe check failed", exc_info=True)
+
+        self._consume_pending_coordination_replan(run_id=run_id, step_id=step_id)
 
         step_data = self._load_step(step_id)
         if "error" in step_data:
@@ -2751,6 +3078,88 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         except Exception:
             logger.debug("Could not emit pre-execution approval event", exc_info=True)
         return True
+
+    def _consume_pending_coordination_replan(self, *, run_id: int, step_id: int) -> None:
+        """Apply deferred plan/route reallocation before the worker starts."""
+        try:
+            from distr.core.settings import load_settings_from_db
+            from distr.core.workflow.coordination_plan import (
+                consume_step_replan,
+                coordination_plan_routes,
+            )
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run:
+                    return
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                plan = run_data.get("coordination_plan")
+                if not isinstance(plan, dict) or not plan.get("assignments"):
+                    return
+                assignment = (plan.get("assignments") or {}).get(str(int(step_id)))
+                if not isinstance(assignment, dict) or not assignment.get("needs_replan"):
+                    return
+                workflow = (
+                    db.query(AutoWorkflow)
+                    .filter(AutoWorkflow.id == int(run.workflow_id))
+                    .first()
+                )
+                if workflow is not None:
+                    # Ensure steps are available for role-policy refresh.
+                    _ = list(getattr(workflow, "steps", None) or [])
+                revised, revision = consume_step_replan(
+                    plan,
+                    step_id=int(step_id),
+                    run_data=run_data,
+                    settings=load_settings_from_db(),
+                    workflow=workflow,
+                )
+                if not revision:
+                    return
+                run_data["coordination_plan"] = revised
+                step_routes, role_routes = coordination_plan_routes(revised)
+                run_data["step_routes"] = step_routes
+                run_data["step_role_routes"] = role_routes
+                new_route = dict(revision.get("new_route") or {})
+                if new_route:
+                    current = (
+                        dict(run_data.get("execution_route") or {})
+                        if isinstance(run_data.get("execution_route"), dict)
+                        else {}
+                    )
+                    run_data["execution_route"] = {**current, **new_route}
+                run.run_data = json.dumps(run_data)
+                workflow_id = run.workflow_id
+                ticket_id = getattr(run, "ticket_id", None)
+                board_id = getattr(run, "board_id", None)
+                project_id = run_data.get("project_id")
+                db.commit()
+            try:
+                from distr.core.orchestration_events import emit_orchestration_event
+
+                emit_orchestration_event(
+                    source="orchestrator",
+                    event_type="coordination_plan_revised",
+                    status="ready",
+                    workflow_id=workflow_id,
+                    run_id=int(run_id),
+                    step_id=int(step_id),
+                    ticket_id=ticket_id,
+                    board_id=board_id,
+                    project_id=project_id,
+                    summary=(
+                        f"Dispatch reallocated step #{step_id}: "
+                        f"{revision.get('reason') or 'needs_replan consumed'}."
+                    ),
+                    payload={"revision": revision, "coordination_plan": revised},
+                )
+            except Exception:
+                logger.debug("Could not emit dispatch replan event", exc_info=True)
+        except Exception:
+            logger.debug("consume pending coordination replan failed", exc_info=True)
 
     # ── Validation ──────────────────────────────────────────────────
 

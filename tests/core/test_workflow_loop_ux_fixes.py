@@ -36,6 +36,8 @@ def test_run_verification_passes_ticket_context_to_llm_judgment():
         "Ticket brief is explicit.",
         standards_context="Keep diffs small.",
         ticket_context="Fix login bug",
+        validation_routes=None,
+        require_configured_validator=False,
         unavailable_fallback=True,
     )
 
@@ -91,7 +93,7 @@ def test_provider_failover_message_explains_the_change_and_required_action():
         fallback_backend="codex",
     )
 
-    assert "local model" in message.lower()
+    assert "selected model" in message.lower()
     assert "switched to Codex" in message
     assert "continued automatically" in message
     assert "don't need to do anything" in message

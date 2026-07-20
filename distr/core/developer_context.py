@@ -149,6 +149,8 @@ class DeveloperWorkContext:
     def to_prompt_text(self, max_chars: int = 4000) -> str:
         """Render compact, stable context for agent prompts."""
         lines: list[str] = ["Developer workflow context:"]
+        if self.runtime.captured_at:
+            lines.append(f"- now: {self.runtime.captured_at}")
         lines.append(f"- cwd: {self.runtime.cwd}")
         if self.runtime.current_chat_id:
             lines.append(f"- current_chat_id: {self.runtime.current_chat_id}")

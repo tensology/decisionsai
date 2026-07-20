@@ -5,7 +5,133 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from distr.core.workflow.router import StepRouter
+from distr.core.workflow.router import (
+    StepRouter,
+    _inspection_budget_violation,
+    _effective_wait_prompt,
+    _missing_expected_outputs,
+    _protected_scope_conflicts,
+)
+
+
+def test_inspection_budget_is_a_deterministic_validation_gate():
+    config = {"inspection_budget": {"max_tool_calls": 12}}
+
+    assert _inspection_budget_violation(config, 12) == {}
+    assert _inspection_budget_violation(config, 13) == {
+        "observed_tool_calls": 13,
+        "max_tool_calls": 12,
+    }
+
+
+def test_inspection_budget_scales_for_high_complexity_recovery_work():
+    config = {
+        "inspection_budget": {
+            "max_tool_calls": 12,
+            "max_tool_calls_by_complexity": {"low": 10, "medium": 18, "high": 30},
+        }
+    }
+
+    assert _inspection_budget_violation(config, 13, complexity="high") == {}
+    assert _inspection_budget_violation(config, 31, complexity="high") == {
+        "observed_tool_calls": 31,
+        "max_tool_calls": 30,
+    }
+
+
+def test_soft_inspection_budget_allows_a_bounded_finish_but_keeps_a_hard_ceiling():
+    config = {
+        "inspection_budget": {
+            "max_tool_calls": 8,
+            "hard_max_tool_calls": 12,
+            "enforcement": "soft",
+        }
+    }
+
+    assert _inspection_budget_violation(config, 9) == {}
+    assert _inspection_budget_violation(config, 12) == {}
+    assert _inspection_budget_violation(config, 13) == {
+        "observed_tool_calls": 13,
+        "max_tool_calls": 8,
+        "hard_max_tool_calls": 12,
+        "enforcement": "soft",
+    }
+
+
+def test_provider_wait_keeps_specific_model_decision_instead_of_generic_prompt():
+    specific = "The local model exceeded its budget. Use Codex as the paid fallback?"
+
+    assert _effective_wait_prompt(
+        {
+            "waiting_kind": "provider_preflight",
+            "provider_preflight_prompt": specific,
+        },
+        default_prompt="Reply with what should happen next.",
+        result="",
+    ) == specific
+
+
+def test_expected_output_contract_requires_named_compact_handoff_fields():
+    result = "execution_contract: copied backend\nreusable_artifacts: docs/research.md"
+
+    missing = _missing_expected_outputs(
+        result,
+        ["execution_contract", "dependency_status", "reusable_artifacts"],
+    )
+
+    assert missing == ["dependency_status"]
+
+
+def test_expected_output_contract_accepts_explicit_not_applicable_field():
+    result = "ui_acceptance_contract_if_applicable: N/A - backend-only ticket"
+
+    assert _missing_expected_outputs(
+        result,
+        ["ui_acceptance_contract_if_applicable"],
+    ) == []
+
+
+def test_expected_output_contract_accepts_human_markdown_heading_aliases():
+    result = """## Context Packet
+Ready for implementation.
+
+### Missing information (blockers)
+None.
+
+### Route recommendation
+Use the local worker.
+
+### Design direction
+Read docs/example-artist-design-direction.md.
+"""
+
+    assert _missing_expected_outputs(
+        result,
+        ["context_packet", "unknowns", "route_recommendation", "ui_design_read_if_applicable"],
+    ) == []
+
+
+def test_execution_contract_cannot_reverse_explicit_preservation_scope():
+    ticket = (
+        "A legacy commerce/ tree also exists; inventory it without deleting user work. "
+        "Do not modify commerce/."
+    )
+    result = (
+        "execution_contract: neutralize or remove the duplicate legacy "
+        "commerce/backend/webapp tree after inventory."
+    )
+
+    conflicts = _protected_scope_conflicts(ticket, result)
+
+    assert conflicts
+    assert conflicts[0]["target"] == "commerce/"
+
+
+def test_execution_contract_may_repeat_preservation_constraint():
+    ticket = "Inventory commerce/ without deleting user work."
+    result = "execution_contract: do not delete commerce/; inventory its risks only."
+
+    assert _protected_scope_conflicts(ticket, result) == []
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -25,6 +151,7 @@ def _make_step(**overrides):
     step.wait_before_next = overrides.get("wait_before_next", 0)
     step.wait_for_continue = overrides.get("wait_for_continue", False)
     step.require_approval = overrides.get("require_approval", False)
+    step.max_retries = overrides.get("max_retries", 0)
     step.validation_type = overrides.get("validation_type", "none")
     step.validation_prompt = overrides.get("validation_prompt", None)
     step.status = overrides.get("status", "running")
@@ -87,6 +214,49 @@ class TestStaticRoute:
         step = _make_step(on_pass_goto=-1, on_fail_goto=-1)
         assert StepRouter._static_route(db, step, passed=True) == -1
         assert StepRouter._static_route(db, step, passed=False) == -1
+
+
+def test_bounded_validation_retry_reuses_approved_route_and_compact_correction():
+    step = _make_step(id=7, max_retries=1)
+    run = _make_run(
+        current_step_id=7,
+        run_data=json.dumps(
+            {
+                "execution_route": {
+                    "backend": "codex",
+                    "model": "auto",
+                    "timeout_seconds": 180,
+                    "source": "orchestrator_override",
+                }
+            }
+        ),
+    )
+
+    decision = StepRouter._bounded_validation_retry(
+        step,
+        run,
+        verified_passed=False,
+        validation_snapshot={"correction_hint": "Preserve commerce/; inventory risks only."},
+    )
+
+    assert decision == {
+        "action": "next_step",
+        "step_id": 7,
+        "wait_before_next": 0,
+        "validation_retry": True,
+        "retry_attempt": 1,
+        "max_retries": 1,
+    }
+    data = json.loads(run.run_data)
+    assert data["step_retry_counts"] == {"7": 1}
+    assert data["approved_route_override"]["backend"] == "codex"
+    assert "Preserve commerce/" in data["feedback"]
+    assert StepRouter._bounded_validation_retry(
+        step,
+        run,
+        verified_passed=False,
+        validation_snapshot={"correction_hint": "Preserve commerce/."},
+    ) is None
 
 
 # ── Parse routing response tests ───────────────────────────────────

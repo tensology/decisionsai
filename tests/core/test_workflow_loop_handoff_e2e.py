@@ -159,7 +159,12 @@ def _seed_loop_workflow(factory, tmp_path):
 
         steps_data = [
             ("Review diff for slop", "send_to_project_cli", "Review diff and fix slop with minimal diffs.", {}),
-            ("Run lint and tests", "run_command", "echo 'lint ok && tests ok'", {"command": "echo 'lint ok && tests ok'"}),
+            (
+                "Run lint and tests",
+                "run_command",
+                "echo 'lint ok && typecheck ok && build ok && tests ok'",
+                {"command": "echo 'lint ok && typecheck ok && build ok && tests ok'"},
+            ),
             ("Evaluate loop exit", "agent_instruction", "Decide if exit condition is met from prior step results.", {"validation": "Exit condition met"}),
             ("Report outcome", "agent_instruction", "Give a short status: passed, max iterations, or blockers.", {"validation": "Loop pass complete"}),
         ]

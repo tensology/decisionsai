@@ -99,7 +99,7 @@ def test_append_ticket_group_extends_live_sequential_run_without_restarting(monk
         ticket_id=177,
         status="running",
         run_data=json.dumps({
-            "ticket_group_id": "kayla",
+            "ticket_group_id": "example-group",
             "ticket_group_index": 0,
             "ticket_group_size": 1,
             "ticket_group_items": [{"ticket_id": 177, "board_id": 12, "context": "First", "run_metadata": {}}],

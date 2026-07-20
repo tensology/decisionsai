@@ -49,7 +49,7 @@ def is_sidecar_reachable(timeout: float = 2.0) -> bool:
     return sidecar_health(timeout=timeout) is not None
 
 
-def call_sidecar_tool(tool: str, params: dict, *, timeout: int = 120) -> dict:
+def call_sidecar_tool(tool: str, params: dict, *, timeout: float = 120) -> dict:
     """
     ``POST /tool/{tool}`` with JSON body. Raises ``RuntimeError`` on connection errors or HTTP failures.
     """

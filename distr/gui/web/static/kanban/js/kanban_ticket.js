@@ -105,7 +105,10 @@
         }
 
         function buildSourceBadge(source) {
-            if (!source || source === "database") return "";
+            // Local board tickets are often tagged "manual"/"database" — skip those.
+            // Only show badges for external sources (jira, trello, whatsapp, …).
+            var src = String(source || "").toLowerCase();
+            if (!src || src === "database" || src === "manual") return "";
             return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300 font-medium">' + deps.esc(source) + "</span>";
         }
 

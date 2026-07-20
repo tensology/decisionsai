@@ -87,6 +87,18 @@ def test_extract_artifacts_from_step_result_classifies_evidence():
     assert artifacts["links"] == ["https://example.test/traces/42"]
 
 
+def test_extract_artifacts_ignores_callback_and_mcp_transport_urls():
+    artifacts = extract_artifacts_from_step_result(
+        """
+        api_base: http://127.0.0.1:8765
+        MCP startup failed at https://rube.app/mcp?agent=codex
+        Source: https://example.test/artist
+        """
+    )
+
+    assert artifacts["links"] == ["https://example.test/artist"]
+
+
 def test_append_workflow_step_to_packet_merges_artifacts_without_duplicates():
     packet = create_initial_result_packet_for_run(
         ticket_id="9",
@@ -373,6 +385,41 @@ def test_append_workflow_step_to_packet_stores_validation_snapshot():
     assert packet["execution"]["validation_snapshots"] == [snapshot]
 
 
+def test_validation_retry_with_new_correction_evidence_is_not_deduplicated():
+    packet = create_initial_result_packet_for_run(
+        ticket_id="9",
+        board_id="2",
+        board_name="Main",
+        project_id="4",
+        project_name="DecisionsAI",
+        execution_lane="workflow",
+    )
+    first = {
+        "step_id": 12,
+        "step_name": "Validate sources",
+        "validation_type": "llm_judgment",
+        "expected": "Browser evidence exists.",
+        "observed": "Browser evidence is N/A.",
+        "verdict": "fail",
+    }
+    second = {
+        **first,
+        "observed": "Only text capture notes exist.",
+        "correction_hint": "Capture the two required screenshots.",
+    }
+    for snapshot in (first, second):
+        packet = append_workflow_step_to_packet(
+            packet,
+            step_name="Validate sources",
+            step_status="failed",
+            step_result=snapshot["observed"],
+            run_status="running",
+            validation_snapshot=snapshot,
+        )
+
+    assert packet["execution"]["validation_snapshots"] == [first, second]
+
+
 def test_summarize_packet_for_step_context_contains_recent_changes():
     packet = build_result_packet(
         ticket_id="88",
@@ -400,6 +447,7 @@ def test_summarize_packet_for_step_context_contains_recent_changes():
                 "caller_passed": True,
                 "verified_passed": True,
                 "verdict": "pass",
+                "correction_hint": "Capture the missing mobile screenshot and report its exact path.",
             }
         ],
         final_verdict="cannot_determine",
@@ -413,3 +461,4 @@ def test_summarize_packet_for_step_context_contains_recent_changes():
     assert "log: /tmp/decisions/logs/workflow_88.log" in text
     assert "click: pressed submit -> Clicked at (0.80, 0.20): True" in text
     assert "pass (llm_judgment): Submission success message is visible." in text
+    assert "correction required: Capture the missing mobile screenshot" in text

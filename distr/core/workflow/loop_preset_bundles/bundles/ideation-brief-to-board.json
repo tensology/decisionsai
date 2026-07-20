@@ -97,7 +97,7 @@
     },
     {
       "name": "Create board, lanes, and tickets",
-      "instruction": "Create or update one product project and one product board using the product name. Create lanes Backlog, Ready, In Progress, Validation, and Complete. Create one ticket per development slice from the brief with description, acceptance criteria, priority, complexity, and project/workflow linkage. Do not duplicate boards or tickets if matching records already exist.",
+      "instruction": "Create or update one product project and one product board using the product name. Create exactly the canonical delivery lanes Backlog, In Progress, QA, and Complete. Create one ticket per development slice from the brief with description, acceptance criteria, priority, complexity, and project/workflow linkage. Automation may move tickets only from Backlog to In Progress and then to QA; only a human may move a QA ticket to Complete. Do not duplicate boards or tickets if matching records already exist.",
       "skills": [
         "product-lens",
         "executing-plans"

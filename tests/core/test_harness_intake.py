@@ -29,3 +29,19 @@ def test_detects_high_risk_cross_module_auth_migration():
     assert profile["complexity"] == "high"
     assert {"auth", "migration", "cross_module"}.issubset(set(profile["risk_flags"]))
     assert profile["route_pressure"] == "codex"
+
+
+def test_backend_ticket_preserving_frontend_is_not_ui_work():
+    profile = classify_intake(
+        "Verify the copied Django backend and its environment-backed settings. "
+        "Preserve the existing frontend and TrackPlayer work. The recovery note is authoritative."
+    )
+
+    assert profile["ui_heavy"] is False
+    assert "auth" not in profile["risk_flags"]
+
+
+def test_single_line_button_change_is_ui_work():
+    profile = classify_intake("Make the green button black.")
+
+    assert profile["ui_heavy"] is True

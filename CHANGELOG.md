@@ -64,6 +64,10 @@ Project memory now moves with the work instead of staying trapped in whichever w
 
 That means a project can move between a local model, OpenRouter, Codex, Cursor, Claude Code, Pi, or another worker without losing what was already learned. You should not have to keep re-explaining the same project context every time the work changes hands.
 
+### Awareness without slowing you down
+
+Initiative and chat can share a short sense of where you left off and what is on screen, without stuffing screenshots or full accessibility trees into every turn. Ambient desktop context is refreshed in the background, read from a small cache on the hot path, and expires so it does not rot the prompt or the chat feed. After a long idle, Initiative can prefer picking up from a project handoff instead of nagging about unrelated board noise.
+
 ---
 
 ## [2.8.0] - 2026-06-14

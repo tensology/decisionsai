@@ -65,6 +65,16 @@ def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch):
             {
                 "execution_route": {"backend": "codex", "model": "auto"},
                 "execution_session_id": 99,
+                "coordination_plan": {
+                    "assignments": {
+                        "10": {
+                            "step_id": 10,
+                            "position": 0,
+                            "primary_route": {"backend": "codex", "model": "auto"},
+                        }
+                    },
+                    "revisions": [],
+                },
             }
         ),
     )
@@ -84,11 +94,16 @@ def test_apply_run_harness_steer_persists_queue(tmp_path, monkeypatch):
     assert result["success"] is True
     assert result["delivered"] is False
     assert result["method"] == "queued"
+    assert result["steering_impact"] == "plan"
+    assert result["coordination_plan_revision"]["affected_step_ids"] == [10]
 
     session = factory()
     row = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
     data = json.loads(row.run_data or "{}")
     assert data["last_harness_steer"]["message"] == "Stop refactoring unrelated files"
+    assert data["coordination_plan"]["assignments"]["10"]["steering_constraints"] == [
+        "Stop refactoring unrelated files"
+    ]
     session.close()
 
 

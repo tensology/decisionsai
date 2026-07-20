@@ -164,7 +164,7 @@ def test_ticket_queue_loop_realtime_context_and_green_exit(
     expect(transcript).to_contain_text("Execution transcript")
     transcript.locator(":scope > summary").click()
     expect(transcript.locator(".wf-loop-transcript-record").first).to_be_visible(timeout=15000)
-    expect(transcript).to_contain_text("Raw event data")
+    expect(transcript).to_contain_text("Developer data (JSON)")
 
     runs_tab = page.locator("#wf-runs-tab-btn")
     expect(runs_tab).to_be_visible(timeout=20000)

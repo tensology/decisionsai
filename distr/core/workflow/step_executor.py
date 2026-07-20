@@ -23,6 +23,63 @@ from distr.core.kanban.result_packet import summarize_packet_for_step_context
 logger = logging.getLogger(__name__)
 
 
+def _exclude_failed_route_candidates(
+    candidates: Any,
+    *,
+    failed_model: str = "",
+    failed_models: Any = None,
+) -> list[dict[str, Any]]:
+    """Never recommend the same model that just failed readiness."""
+    failed = {
+        str(item or "").strip().lower()
+        for item in (failed_models if isinstance(failed_models, (list, tuple, set)) else [])
+        if str(item or "").strip()
+    }
+    if str(failed_model or "").strip():
+        failed.add(str(failed_model or "").strip().lower())
+    output: list[dict[str, Any]] = []
+    for item in candidates if isinstance(candidates, list) else []:
+        candidate = dict(item or {})
+        model = str(candidate.get("model") or "").strip().lower()
+        if not model or model in failed:
+            continue
+        output.append(candidate)
+    return output
+
+
+def _route_required_capabilities(
+    config: dict[str, Any],
+    route: dict[str, Any],
+    run_data: dict[str, Any] | None = None,
+) -> list[str]:
+    """Combine execution and evidence capabilities for provider discovery."""
+    configured = list(config.get("required_capabilities") or ["tools"])
+    evidence = list(route.get("evidence_capabilities") or [])
+    run_data = run_data if isinstance(run_data, dict) else {}
+    ticket_text = "\n".join(
+        str(run_data.get(key) or "")
+        for key in ("ticket_title", "ticket_workflow_brief")
+    )
+    step_role = str(
+        route.get("step_role") or config.get("step_role") or ""
+    ).strip().lower()
+    if step_role == "review" and ticket_text:
+        try:
+            from distr.core.workflow.ticket_contract import classify_ticket_execution
+
+            if classify_ticket_execution(ticket_text).get("ui_evidence_required"):
+                evidence.append("vision")
+        except Exception:
+            pass
+    return list(
+        dict.fromkeys(
+            str(item).strip().lower()
+            for item in [*configured, *evidence]
+            if str(item or "").strip()
+        )
+    )
+
+
 def capture_ui_screenshot(*, step_id: int, run_id: Optional[int], label: str) -> Optional[str]:
     """Capture a workflow UI screenshot to the local workflow screenshot folder."""
     # ponytail: macOS screencapture triggers Screen Recording permission spam (Cursor/Codex);
@@ -73,12 +130,80 @@ def _agent_result_passed(result_text: str) -> bool:
     return not any(marker in text for marker in failure_markers)
 
 
+def _workflow_run_cancelled(run_id: Optional[int]) -> bool:
+    """Read cancellation from durable state before launching another worker."""
+    if not run_id:
+        return False
+    try:
+        with get_session() as db:
+            status = db.query(AutoWorkflowRun.status).filter(
+                AutoWorkflowRun.id == int(run_id)
+            ).scalar()
+        return str(status or "").strip().lower() == "cancelled"
+    except Exception:
+        logger.debug("Could not refresh workflow cancellation state", exc_info=True)
+        return False
+
+
+def _paid_fallback_requires_approval(
+    route: dict[str, Any], fallback: dict[str, Any], config: dict[str, Any]
+) -> bool:
+    """Require consent before Auto crosses from free/local into paid work."""
+    if not fallback or bool(config.get("auto_approve_paid_failover")):
+        return False
+    current_provider = str(route.get("model_provider") or "").strip().lower()
+    current_model = str(route.get("model") or "").strip().lower()
+    current_is_free = current_provider in {"ollama", "local"} or current_model.endswith(":free")
+    if not current_is_free:
+        return False
+    fallback_backend = str(fallback.get("backend") or "").strip().lower()
+    fallback_provider = str(fallback.get("model_provider") or "").strip().lower()
+    fallback_model = str(fallback.get("model") or "auto").strip().lower()
+    fallback_is_free = fallback_provider in {"ollama", "local"} or fallback_model.endswith(":free")
+    fallback_is_paid = fallback_backend in {"codex", "claude_code", "cursor"} or (
+        fallback_provider == "openrouter" and not fallback_is_free
+    )
+    return fallback_is_paid and not fallback_is_free
+
+
+def _hosted_free_recommendation(candidate: dict[str, Any], *, complexity: str) -> str:
+    """Explain hosted Auto selection in operator language, not router jargon."""
+    name = str(candidate.get("name") or candidate.get("model") or "the next model").strip()
+    parameter_billions = candidate.get("parameter_billions")
+    try:
+        size = float(parameter_billions) if parameter_billions is not None else 0.0
+    except (TypeError, ValueError):
+        size = 0.0
+    details: list[str] = []
+    if size:
+        details.append(f"{size:g}B")
+    if candidate.get("supports_tools"):
+        details.append("tool-capable")
+    context = int(candidate.get("context_length") or 0)
+    if context:
+        details.append(f"{context // 1024}K context")
+    descriptor = f" ({', '.join(details)})" if details else ""
+    is_large_step = str(complexity or "medium").lower() in {"high", "complex", "critical"}
+    if is_large_step and size and size < 40:
+        return (
+            "The stronger compatible hosted free models are unavailable, so the best "
+            f"remaining free option is {name}{descriptor}."
+        )
+    return (
+        "This work runs on OpenRouter, so your Mac's memory is not the size limit. "
+        f"The strongest healthy compatible free option is {name}{descriptor}."
+    )
+
+
 class StepExecutorMixin:
     """Provides step execution logic: code, command, HTTP, agent, recording."""
 
     def _execute(self, step_data: Dict[str, Any], run_id: Optional[int]) -> Dict[str, Any]:
         """Route to the correct step-type handler."""
         step_data = self._apply_pending_correction_context(step_data, run_id)
+        blocked = self._power_budget_gate(run_id, step_data)
+        if blocked is not None:
+            return blocked
         action_type = step_data["action_type"]
         config = self._build_config(step_data)
         handlers = {
@@ -120,7 +245,152 @@ class StepExecutorMixin:
                 after_path=after_path,
                 config=config,
             )
+        if not result.get("async"):
+            self._consume_power_budget_after_step(run_id, step_data, result)
         return result
+
+    def _power_budget_gate(
+        self,
+        run_id: Optional[int],
+        step_data: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Stop-and-ask before a step when the run power budget is already exhausted."""
+        if run_id is None:
+            return None
+        try:
+            from distr.core.workflow.blueprint_adherence import (
+                default_run_power_budget,
+                ensure_run_blueprint_defaults,
+            )
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run:
+                    return None
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                complexity = str(
+                    ((run_data.get("execution_route") or {}) if isinstance(run_data.get("execution_route"), dict) else {}).get("complexity")
+                    or run_data.get("complexity")
+                    or "medium"
+                )
+                run_data = ensure_run_blueprint_defaults(run_data, complexity=complexity)
+                budget = dict(run_data.get("power_budget") or default_run_power_budget(complexity=complexity))
+                exhausted = bool(budget.get("exhausted")) or (
+                    int(budget.get("turns_used") or 0) >= int(budget.get("max_turns") or 0)
+                    or int(budget.get("tokens_used") or 0) >= int(budget.get("max_tokens") or 0)
+                )
+                if not exhausted:
+                    run.run_data = json.dumps(run_data, default=str)
+                    db.commit()
+                    return None
+                budget["exhausted"] = True
+                interrupt = {
+                    "should_interrupt": True,
+                    "reason": "The run power budget was exhausted.",
+                    "question": (
+                        f"This run used {budget.get('turns_used')}/{budget.get('max_turns')} turns and "
+                        f"{budget.get('tokens_used')}/{budget.get('max_tokens')} tokens "
+                        f"(~${float(budget.get('estimated_cost_usd') or 0):.4f}). "
+                        "Raise the budget, change approach, or stop?"
+                    ),
+                    "recommendation": "Raise the budget only if acceptance criteria still justify the spend.",
+                    "options": ["Raise budget", "Change approach", "Stop"],
+                }
+                run_data["power_budget"] = budget
+                run_data["power_budget_pending"] = True
+                run_data["waiting_kind"] = "control_interrupt"
+                run_data["waiting_prompt"] = interrupt["question"]
+                run_data["interrupt_context"] = interrupt
+                run_data["human_intervention_state"] = "needs_human_input"
+                run_data["next_action"] = "needs_human_input"
+                run.run_data = json.dumps(run_data, default=str)
+                db.commit()
+                return {
+                    "output": interrupt["question"],
+                    "passed": False,
+                    "power_budget_exhausted": True,
+                    "step_id": step_data.get("id"),
+                }
+        except Exception:
+            logger.debug("_power_budget_gate failed", exc_info=True)
+            return None
+
+    def _consume_power_budget_after_step(
+        self,
+        run_id: Optional[int],
+        step_data: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> None:
+        """Charge one turn + estimated tokens; emit cost into the execution transcript."""
+        if run_id is None:
+            return
+        try:
+            from distr.core.workflow.blueprint_adherence import consume_run_power_budget
+
+            output = str((result or {}).get("output") or "")
+            explicit_tokens = int((result or {}).get("tokens_used") or 0)
+            # ponytail: estimate tokens from output when providers omit usage;
+            # upgrade to provider usage fields when BackendTaskResult always carries them.
+            tokens = explicit_tokens or max(500, (len(output) // 4) + 800)
+            model_provider = str(
+                (result or {}).get("model_provider")
+                or (result or {}).get("provider")
+                or ""
+            )
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run:
+                    return
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                if not model_provider:
+                    route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+                    model_provider = str(route.get("model_provider") or route.get("provider") or "")
+                run_data, interrupt = consume_run_power_budget(
+                    run_data,
+                    turns=1,
+                    tokens=tokens,
+                    model_provider=model_provider,
+                )
+                budget = dict(run_data.get("power_budget") or {})
+                if interrupt:
+                    run_data["power_budget_pending"] = True
+                    run_data["waiting_kind"] = "control_interrupt"
+                    run_data["waiting_prompt"] = interrupt["question"]
+                    run_data["interrupt_context"] = interrupt
+                    run_data["human_intervention_state"] = "needs_human_input"
+                run.run_data = json.dumps(run_data, default=str)
+                db.commit()
+            try:
+                from distr.core.orchestration_events import emit_orchestration_event
+
+                emit_orchestration_event(
+                    source="workflow",
+                    event_type="power_budget_updated",
+                    status="ok" if not interrupt else "waiting",
+                    workflow_id=step_data.get("workflow_id"),
+                    run_id=int(run_id),
+                    step_id=int(step_data.get("id") or 0) or None,
+                    summary=(
+                        f"Power budget {budget.get('turns_used')}/{budget.get('max_turns')} turns, "
+                        f"{budget.get('tokens_used')}/{budget.get('max_tokens')} tokens, "
+                        f"~${float(budget.get('estimated_cost_usd') or 0):.4f}"
+                    ),
+                    payload={
+                        "power_budget": budget,
+                        "interrupt": interrupt,
+                        "version_pin": (run_data.get("version_pin") if isinstance(run_data.get("version_pin"), dict) else {}),
+                    },
+                )
+            except Exception:
+                logger.debug("Could not emit power_budget_updated", exc_info=True)
+        except Exception:
+            logger.debug("_consume_power_budget_after_step failed", exc_info=True)
 
     def _should_capture_ui_evidence(
         self,
@@ -341,7 +611,21 @@ class StepExecutorMixin:
         merged = dict(route or {})
         execution_route = config.get("execution_route") if isinstance(config.get("execution_route"), dict) else {}
         snapshot = execution_route.get("route_snapshot") if isinstance(execution_route.get("route_snapshot"), dict) else {}
-        if execution_route.get("enabled") and execution_route.get("mode") == "scoped" and snapshot:
+        model_policy = config.get("model_policy") if isinstance(config.get("model_policy"), dict) else {}
+        auto_route = (
+            str(model_policy.get("mode") or "").strip().lower() == "auto"
+            or bool(model_policy.get("auto_route_models"))
+        )
+        # The dropdown snapshot is the pin only while Auto is off.  Older
+        # workflow rows can retain a scoped snapshot after Auto is enabled;
+        # applying it here silently defeats the checkbox and pins a stale
+        # model forever.
+        if (
+            not auto_route
+            and execution_route.get("enabled")
+            and execution_route.get("mode") == "scoped"
+            and snapshot
+        ):
             backend_id = str(snapshot.get("backend_id") or "").strip()
             if backend_id:
                 merged["backend"] = normalize_backend_id(backend_id)
@@ -386,12 +670,25 @@ class StepExecutorMixin:
     @staticmethod
     def _step_execution_route_enabled(config: dict) -> bool:
         execution_route = config.get("execution_route") if isinstance(config.get("execution_route"), dict) else {}
+        model_policy = config.get("model_policy") if isinstance(config.get("model_policy"), dict) else {}
+        if (
+            str(model_policy.get("mode") or "").strip().lower() == "auto"
+            or bool(model_policy.get("auto_route_models"))
+        ):
+            return False
         return bool(
             execution_route.get("enabled")
             and execution_route.get("mode") == "scoped"
             and isinstance(execution_route.get("route_snapshot"), dict)
             and str(execution_route.get("scoped_model_key") or "").strip()
         )
+
+    @staticmethod
+    def _should_apply_runtime_auto_policy(
+        *, approved_override: dict, stored_step_route: dict, scoped_route_enabled: bool
+    ) -> bool:
+        """Return whether a fresh runtime Auto choice is still required."""
+        return not approved_override and not stored_step_route and not scoped_route_enabled
 
     @staticmethod
     def _active_run_execution_route(run_data: dict | None) -> dict[str, Any]:
@@ -407,18 +704,35 @@ class StepExecutorMixin:
         import subprocess
 
         from distr.core.rtk_support import run_shell_command
+        from distr.core.workflow.blueprint_adherence import format_tool_failure
 
         cmd = config.get("command", "")
         cwd = config.get("working_directory") or self._project_cwd_for_run(run_id)
         timeout = config.get("timeout_seconds", 60)
         try:
             proc = run_shell_command(cmd, timeout=timeout, cwd=cwd)
-            return {"output": (proc.stdout + proc.stderr).strip()[:2000],
-                    "passed": proc.returncode == 0}
+            output = (proc.stdout + proc.stderr).strip()[:2000]
+            if proc.returncode != 0:
+                output = format_tool_failure(
+                    tool_id="shell",
+                    error=output or f"exit {proc.returncode}",
+                    suggestion=f"Retry `{cmd}` once with a narrower scope, or inspect cwd `{cwd or '.'}`.",
+                )
+            return {"output": output, "passed": proc.returncode == 0}
         except subprocess.TimeoutExpired:
-            return {"output": f"Command timed out after {timeout}s", "passed": False}
+            return {
+                "output": format_tool_failure(
+                    tool_id="shell",
+                    error=f"Command timed out after {timeout}s",
+                    suggestion="Shorten the command or raise timeout_seconds once.",
+                ),
+                "passed": False,
+            }
         except Exception as e:
-            return {"output": f"Command execution error: {e}", "passed": False}
+            return {
+                "output": format_tool_failure(tool_id="shell", error=str(e)),
+                "passed": False,
+            }
 
     def _project_cwd_for_run(self, run_id: Optional[int]) -> Optional[str]:
         """Resolve the linked project folder for run-scoped command steps."""
@@ -455,6 +769,8 @@ class StepExecutorMixin:
 
     def _run_http(self, config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Make an HTTP request."""
+        from distr.core.workflow.blueprint_adherence import format_tool_failure
+
         url = config.get("url", "")
         method = config.get("method", "GET")
         headers = config.get("headers", {})
@@ -470,10 +786,20 @@ class StepExecutorMixin:
         try:
             import requests
             resp = requests.request(method, url, headers=headers, data=body, json=json_body, timeout=timeout)
-            return {"output": f"HTTP {resp.status_code}\n{resp.text[:1500]}",
-                    "passed": 200 <= resp.status_code < 400}
+            output = f"HTTP {resp.status_code}\n{resp.text[:1500]}"
+            passed = 200 <= resp.status_code < 400
+            if not passed:
+                output = format_tool_failure(
+                    tool_id="http",
+                    error=output,
+                    suggestion="Check credentials/URL, or ask for human input if auth is missing.",
+                )
+            return {"output": output, "passed": passed}
         except Exception as e:
-            return {"output": f"HTTP request failed: {e}", "passed": False}
+            return {
+                "output": format_tool_failure(tool_id="http", error=str(e)),
+                "passed": False,
+            }
 
     def _run_send_to_project_cli(
         self,
@@ -615,6 +941,12 @@ class StepExecutorMixin:
                         else None
                     )
                     run_data_local = json.loads(run_row.run_data or "{}") or {} if run_row else {}
+                    approved_override = run_data_local.get("approved_route_override")
+                    approved_override = (
+                        dict(approved_override)
+                        if isinstance(approved_override, dict) and approved_override
+                        else {}
+                    )
                     from distr.core.work_intake.execution_policy import apply_requested_step_policy
 
                     config_local, requested_step_role, requested_step_route = apply_requested_step_policy(
@@ -643,8 +975,27 @@ class StepExecutorMixin:
                                 if lane and getattr(lane, "board_id", None):
                                     board = db.query(KanbanBoard).filter(KanbanBoard.id == int(lane.board_id)).first()
                             if ticket:
-                                approved_override = run_data_local.get("approved_route_override")
-                                if self._step_execution_route_enabled(config_local):
+                                if approved_override:
+                                    from distr.core.project_cli_backends import normalize_backend_id
+
+                                    route = dict(approved_override)
+                                    route["backend"] = normalize_backend_id(
+                                        str(approved_override.get("backend") or "").strip() or "pi"
+                                    )
+                                    route["model"] = str(
+                                        approved_override.get("model") or "auto"
+                                    ).strip()
+                                    route["complexity"] = str(
+                                        approved_override.get("complexity")
+                                        or run_data_local.get("execution_route", {}).get("complexity")
+                                        or "medium"
+                                    )
+                                    route["source"] = "orchestrator_override"
+                                    route["rationale"] = str(
+                                        approved_override.get("rationale") or ""
+                                    ).strip()
+                                    route["requires_approval"] = False
+                                elif self._step_execution_route_enabled(config_local):
                                     route = self._apply_step_harness_overrides({}, config_local)
                                     route["complexity"] = str(
                                         route.get("complexity")
@@ -653,23 +1004,6 @@ class StepExecutorMixin:
                                         or "medium"
                                     ).strip().lower() or "medium"
                                     route.setdefault("source", "step_execution_route")
-                                elif approved_override and isinstance(approved_override, dict):
-                                    from distr.core.project_cli_backends import normalize_backend_id
-
-                                    route = {
-                                        "backend": normalize_backend_id(
-                                            str(approved_override.get("backend") or "").strip() or "pi"
-                                        ),
-                                        "model": str(approved_override.get("model") or "auto").strip(),
-                                        "complexity": str(
-                                            approved_override.get("complexity")
-                                            or run_data_local.get("execution_route", {}).get("complexity")
-                                            or "medium"
-                                        ),
-                                        "source": "orchestrator_override",
-                                        "rationale": str(approved_override.get("rationale") or "").strip(),
-                                        "requires_approval": False,
-                                    }
                                 elif stored_step_route:
                                     route = dict(stored_step_route)
                                     route.setdefault("source", "active_step_route")
@@ -730,7 +1064,9 @@ class StepExecutorMixin:
                                 route,
                                 exc_info=True,
                             )
-                    route = self._apply_step_harness_overrides(route, config_local)
+                    if not approved_override:
+                        route = self._apply_step_harness_overrides(route, config_local)
+                    routing_settings: dict[str, Any] = {}
                     try:
                         from distr.core.project_cli_backends.model_policy import (
                             apply_auto_step_role_policy,
@@ -739,7 +1075,18 @@ class StepExecutorMixin:
                         from distr.core.settings import load_settings_from_db
 
                         routing_settings = load_settings_from_db()
-                        if not self._step_execution_route_enabled(config_local):
+                        # A stored per-step route is the run coordination plan's
+                        # concrete decision. Reapplying the global Auto policy
+                        # here can silently replace that route (for example,
+                        # turning a Codex vision fallback back into text-only
+                        # HY3). Explicit approval, step pins, or a newly resolved
+                        # route may be enriched; a stored plan must execute as
+                        # planned and be reconciled afterward with actual route.
+                        if self._should_apply_runtime_auto_policy(
+                            approved_override=approved_override,
+                            stored_step_route=stored_step_route,
+                            scoped_route_enabled=self._step_execution_route_enabled(config_local),
+                        ):
                             route = apply_workflow_model_policy(
                                 route,
                                 workflow=wf,
@@ -798,6 +1145,48 @@ class StepExecutorMixin:
                         db.commit()
                     if (
                         provider_preflight is not None
+                        and provider_preflight.ready is True
+                        and str(route.get("model_provider") or "").strip().lower() == "openrouter"
+                        and str(route.get("model") or "").strip().lower().endswith(":free")
+                    ):
+                        # A readiness probe is only a point-in-time check. Keep
+                        # the current ranked free catalogue on the route so an
+                        # execution-time quota/rate-limit failure can offer the
+                        # next free model instead of jumping straight to Codex.
+                        try:
+                            from distr.core.project_cli_backends.provider_preflight import (
+                                rank_openrouter_free_models,
+                            )
+                            from distr.core.project_cli_backends.policy_manager import (
+                                _apply_recent_model_health,
+                            )
+
+                            free_retry_candidates = _exclude_failed_route_candidates(
+                                _apply_recent_model_health(
+                                    rank_openrouter_free_models(
+                                        api_key=str((routing_settings or {}).get("openrouter_key") or ""),
+                                        complexity=str(route.get("complexity") or "medium"),
+                                        required_capabilities=_route_required_capabilities(
+                                            config_local, route, run_data_local
+                                        ),
+                                        limit=8,
+                                    )
+                                ),
+                                failed_models=run_data_local.get("provider_failed_models") or [],
+                            )
+                            if free_retry_candidates:
+                                route["free_model_retry_candidates"] = free_retry_candidates
+                                route["paid_fallback_route"] = self._runtime_provider_fallback_route(
+                                    route,
+                                    config_local,
+                                )
+                        except Exception:
+                            logger.warning(
+                                "Could not prepare execution-time free-model alternatives",
+                                exc_info=True,
+                            )
+                    if (
+                        provider_preflight is not None
                         and provider_preflight.ready is False
                         and not bool(route.get("provider_preflight_override"))
                     ):
@@ -805,12 +1194,26 @@ class StepExecutorMixin:
                         if str(route.get("model_provider") or "").strip().lower() == "openrouter":
                             try:
                                 from distr.core.project_cli_backends.provider_preflight import rank_openrouter_free_models
+                                from distr.core.project_cli_backends.policy_manager import _apply_recent_model_health
 
-                                free_candidates = rank_openrouter_free_models(
-                                    api_key=str((routing_settings or {}).get("openrouter_key") or ""),
-                                    complexity=str(route.get("complexity") or "medium"),
-                                    required_capabilities=list(config.get("required_capabilities") or ["tools"]),
-                                    limit=3,
+                                previously_failed = list(run_data_local.get("provider_failed_models") or [])
+                                failed_model = str(route.get("model") or "")
+                                if failed_model and failed_model.lower() not in {
+                                    str(item or "").lower() for item in previously_failed
+                                }:
+                                    previously_failed.append(failed_model)
+                                free_candidates = _exclude_failed_route_candidates(
+                                    _apply_recent_model_health(
+                                        rank_openrouter_free_models(
+                                            api_key=str((routing_settings or {}).get("openrouter_key") or ""),
+                                            complexity=str(route.get("complexity") or "medium"),
+                                            required_capabilities=_route_required_capabilities(
+                                                config_local, route, run_data_local
+                                            ),
+                                            limit=6,
+                                        )
+                                    ),
+                                    failed_models=previously_failed,
                                 )
                             except Exception:
                                 logger.warning("Could not fetch ranked OpenRouter free candidates", exc_info=True)
@@ -843,29 +1246,34 @@ class StepExecutorMixin:
                                 str(proposed.get("model") or "auto"),
                             ) if part
                         )
-                        question = (
-                            f"I checked {current_label} before starting and cannot safely dispatch it. "
-                            f"{provider_preflight.message}"
-                        )
+                        failure_reason = str(provider_preflight.message or "Provider readiness failed.").strip()
                         if free_candidates:
-                            choices = " ".join(
-                                f"{item['rank']}. {item.get('name') or item.get('model')} — {item.get('reason')}"
-                                for item in free_candidates
+                            recommendation = _hosted_free_recommendation(
+                                proposed,
+                                complexity=str(route.get("complexity") or "medium"),
                             )
-                            question += (
-                                f" I found these current free coding candidates: {choices} "
-                                f"I recommend option 1. Which one would you like me to readiness-check and try?"
+                            question = (
+                                f"{current_label} failed its readiness check: {failure_reason} "
+                                f"{recommendation} "
+                                "Approve to readiness-check and try it, choose another model, or Stop."
                             )
                         elif fallback:
-                            question += f" I can switch to {proposed_label}. Would you like me to proceed?"
+                            question = (
+                                f"{current_label} failed its readiness check: {failure_reason} "
+                                f"I recommend {proposed_label}. Approve to use it, choose another model, or Stop."
+                            )
                         else:
-                            question += " Would you like me to proceed anyway?"
+                            question = (
+                                f"{current_label} failed its readiness check: {failure_reason} "
+                                "No verified alternative is available. Choose another model or Stop."
+                            )
                         if run_row:
                             latest = json.loads(run_row.run_data or "{}") or {}
                             latest["pending_route_approval"] = proposed
                             latest["provider_preflight_pending"] = True
                             latest["provider_preflight"] = provider_preflight.to_dict()
                             latest["provider_free_candidates"] = free_candidates
+                            latest["provider_failed_models"] = previously_failed
                             latest["provider_fallback_route"] = dict(fallback or {})
                             latest["provider_preflight_prompt"] = question
                             latest["waiting_prompt"] = question
@@ -1105,6 +1513,48 @@ class StepExecutorMixin:
                             final_instruction,
                             max_chars=12000,
                         )
+                    if run_row:
+                        # One-shot workers cannot consume a live steer after
+                        # their prompt has been sent. On the next dispatch the
+                        # steering log is part of the handoff packet; record that
+                        # distinction so the UI does not imply it reached the
+                        # terminated worker in real time.
+                        latest = json.loads(run_row.run_data or "{}") or {}
+                        pending_steers = latest.get("pending_harness_steers")
+                        pending_steers = pending_steers if isinstance(pending_steers, list) else []
+                        applied = False
+                        prompt_flat = " ".join(final_instruction.split())
+                        for entry in pending_steers:
+                            if not isinstance(entry, dict) or entry.get("delivered") or entry.get("applied_to_prompt"):
+                                continue
+                            message = " ".join(str(entry.get("message") or "").split())
+                            marker = message[:160]
+                            if not marker or marker not in prompt_flat:
+                                continue
+                            entry["applied_to_prompt"] = True
+                            entry["applied_step_id"] = step_data.get("id")
+                            entry["application_method"] = "next_dispatch_prompt"
+                            applied = True
+                        if applied:
+                            latest["pending_harness_steers"] = pending_steers[-20:]
+                            latest["human_intervention_state"] = "steer_applied_to_prompt"
+                            latest["next_action"] = "worker_continue"
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
+                    from distr.core.workflow.control_policy import resolve_inspection_budget
+
+                    ticket_budget_context = ""
+                    if ticket is not None:
+                        ticket_budget_context = "\n".join(
+                            str(value or "").strip()
+                            for value in (
+                                getattr(ticket, "title", ""),
+                                getattr(ticket, "description", ""),
+                                getattr(ticket, "context_notes", ""),
+                            )
+                            if str(value or "").strip()
+                        )
+
                     def _harness_context(
                         selected_backend: str,
                         selected_model: str,
@@ -1132,8 +1582,21 @@ class StepExecutorMixin:
                                     "model_provider": selected_provider,
                                     "quality_tier": config.get("quality_tier"),
                                     "latency_tier": config.get("latency_tier"),
-                                    "timeout_seconds": config.get("timeout_seconds"),
+                                    "timeout_seconds": (
+                                        route.get("timeout_seconds")
+                                        or config.get("timeout_seconds")
+                                    ),
                                     "provider_preflight_override": route.get("provider_preflight_override"),
+                                    "read_only_expected": bool(config.get("read_only")),
+                                    "disable_tools": bool(config.get("disable_tools")),
+                                    "step_role": requested_step_role,
+                                    "expected_outputs": list(config.get("expected_outputs") or []),
+                                    "inspection_budget": resolve_inspection_budget(
+                                        config.get("inspection_budget"),
+                                        complexity=str(route.get("complexity") or "medium"),
+                                        ticket_context=ticket_budget_context,
+                                        step_role=requested_step_role,
+                                    ),
                                 }.items() if value not in (None, "")
                             },
                         )
@@ -1146,12 +1609,58 @@ class StepExecutorMixin:
                         )
                     )
                     if handle.result is not None and not bool(handle.result.success):
+                        # Cancellation can arrive while a provider is unwinding.
+                        # Never interpret that failed/terminated worker as a
+                        # reason to launch a fresh fallback after the user has
+                        # already stopped the run.
+                        if _workflow_run_cancelled(run_id):
+                            return handle.result
                         free_retry_candidates = route.get("free_model_retry_candidates")
                         free_retry_candidates = (
                             list(free_retry_candidates)
                             if isinstance(free_retry_candidates, list)
                             else []
                         )
+                        # A local-first Auto route can fail after readiness too.
+                        # Discover hosted-free alternatives at that point so a
+                        # transient local inference failure does not jump
+                        # directly to paid Codex. Hosted selection is ranked by
+                        # capability/capacity because it is not constrained by
+                        # this machine's RAM.
+                        if not free_retry_candidates:
+                            try:
+                                from distr.core.project_cli_backends.policy_manager import (
+                                    _apply_recent_model_health,
+                                )
+                                from distr.core.project_cli_backends.provider_preflight import (
+                                    rank_openrouter_free_models,
+                                )
+
+                                free_retry_candidates = _exclude_failed_route_candidates(
+                                    _apply_recent_model_health(
+                                        rank_openrouter_free_models(
+                                            api_key=str((routing_settings or {}).get("openrouter_key") or ""),
+                                            complexity=str(route.get("complexity") or "medium"),
+                                            required_capabilities=_route_required_capabilities(
+                                                config_local, route, run_data_local
+                                            ),
+                                            limit=8,
+                                        )
+                                    ),
+                                    failed_model=str(route.get("model") or ""),
+                                    failed_models=run_data_local.get("provider_failed_models") or [],
+                                )
+                                if free_retry_candidates:
+                                    route["free_model_retry_candidates"] = free_retry_candidates
+                                    route["paid_fallback_route"] = self._runtime_provider_fallback_route(
+                                        route,
+                                        config_local,
+                                    )
+                            except Exception:
+                                logger.warning(
+                                    "Could not discover hosted-free alternatives after worker failure",
+                                    exc_info=True,
+                                )
                         if free_retry_candidates and run_row:
                             current_model = str(route.get("model") or "")
                             failed_text = str(
@@ -1159,24 +1668,39 @@ class StepExecutorMixin:
                                 or getattr(handle.result, "output", "")
                                 or "the model did not complete the work contract"
                             ).strip()
+                            latest = json.loads(run_row.run_data or "{}") or {}
+                            failed_models = {
+                                str(item or "").strip().lower()
+                                for item in (latest.get("provider_failed_models") or [])
+                                if str(item or "").strip()
+                            }
+                            failed_models.add(current_model.strip().lower())
                             remaining = []
                             for index, item in enumerate(free_retry_candidates):
                                 candidate = dict(item or {})
-                                if str(candidate.get("model") or "") == current_model:
+                                candidate_model = str(candidate.get("model") or "").strip()
+                                if candidate_model.lower() == current_model.strip().lower():
                                     candidate["readiness_failed"] = True
                                     candidate["execution_failed"] = True
                                     candidate["execution_failure"] = failed_text[:1000]
                                     free_retry_candidates[index] = candidate
-                                elif not candidate.get("readiness_failed") and not candidate.get("execution_failed"):
+                                elif (
+                                    candidate_model.lower() not in failed_models
+                                    and not candidate.get("readiness_failed")
+                                    and not candidate.get("execution_failed")
+                                ):
                                     remaining.append((index, candidate))
                             paid_fallback = dict(route.get("paid_fallback_route") or {})
                             if remaining:
                                 next_index, recommended = remaining[0]
                                 proposed_retry = dict(recommended)
+                                recommendation = _hosted_free_recommendation(
+                                    recommended,
+                                    complexity=str(route.get("complexity") or "medium"),
+                                )
                                 question = (
                                     f"{current_model} passed readiness but failed the actual work: {failed_text[:500]} "
-                                    f"I recommend option {next_index + 1}, "
-                                    f"{recommended.get('name') or recommended.get('model')}. "
+                                    f"{recommendation} It is option {next_index + 1}. "
                                     "Would you like me to readiness-check and try it?"
                                 )
                             elif paid_fallback:
@@ -1193,7 +1717,7 @@ class StepExecutorMixin:
                                     f"{current_model} failed the actual work: {failed_text[:500]} "
                                     "No ready candidate remains. Stop the run or change the route."
                                 )
-                            latest = json.loads(run_row.run_data or "{}") or {}
+                            latest["provider_failed_models"] = sorted(failed_models)
                             latest["provider_free_candidates"] = free_retry_candidates
                             latest["provider_preflight_prompt"] = question
                             latest["waiting_prompt"] = question
@@ -1210,6 +1734,54 @@ class StepExecutorMixin:
                             }
                         fallback = self._runtime_provider_fallback_route(route, config)
                         fallback_backend = str(fallback.get("backend") or "")
+                        if (
+                            fallback_backend
+                            and run_row
+                            and _paid_fallback_requires_approval(route, fallback, config)
+                        ):
+                            failed_label = " / ".join(
+                                part for part in (
+                                    str(route.get("backend") or "pi"),
+                                    str(route.get("model_provider") or ""),
+                                    str(route.get("model") or "auto"),
+                                ) if part
+                            )
+                            fallback_label = " / ".join(
+                                part for part in (
+                                    fallback_backend,
+                                    str(fallback.get("model_provider") or ""),
+                                    str(fallback.get("model") or "auto"),
+                                ) if part
+                            )
+                            failure_reason = str(
+                                getattr(handle.result, "error", "")
+                                or getattr(handle.result, "output", "")
+                                or "the free/local worker did not satisfy the step contract"
+                            ).strip()
+                            question = (
+                                f"The free/local route {failed_label} could not finish this step: "
+                                f"{failure_reason[:500]} I recommend {fallback_label} as the paid fallback. "
+                                "Would you like me to proceed?"
+                            )
+                            approved_fallback = dict(fallback)
+                            if bool(config.get("read_only")) and fallback_backend == "codex":
+                                configured_ceiling = int(config.get("timeout_seconds") or 180)
+                                approved_fallback["timeout_seconds"] = min(180, max(30, configured_ceiling))
+                                approved_fallback["codex_reasoning_effort"] = "low"
+                            latest = json.loads(run_row.run_data or "{}") or {}
+                            latest["pending_route_approval"] = approved_fallback
+                            latest["provider_fallback_route"] = approved_fallback
+                            latest["provider_preflight_prompt"] = question
+                            latest["waiting_prompt"] = question
+                            latest["provider_preflight_pending"] = True
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
+                            return {
+                                "output": question,
+                                "passed": True,
+                                "skip_wait": False,
+                                "provider_preflight_pending": True,
+                            }
                         if fallback_backend:
                             from distr.core.project_cli_backends import get_backend
                             from distr.core.project_cli_backends.ide_handoff import is_ide_backend
@@ -1304,6 +1876,8 @@ class StepExecutorMixin:
                                     run_data_local["step_routes"] = step_routes
                                     run_row.run_data = json.dumps(run_data_local)
                                     db.commit()
+                                if _workflow_run_cancelled(run_id):
+                                    return handle.result
                                 handle = await dispatch_harness_async(
                                     _harness_context(
                                         fallback_backend,
@@ -1418,6 +1992,14 @@ class StepExecutorMixin:
             passed = bool(getattr(result, "success", False))
             waits_for_human = bool(getattr(result, "waits_for_human", False))
             text = output or error or f"Sent to {backend_name}."
+            if not passed and not waits_for_human:
+                from distr.core.workflow.blueprint_adherence import format_tool_failure
+
+                text = format_tool_failure(
+                    tool_id="cli",
+                    error=text,
+                    suggestion="Narrow the diff, re-run the failing check, or report needs_input if blocked.",
+                )
             return {
                 "output": (
                     f"Project CLI backend: {backend_name}\n"
@@ -1429,7 +2011,12 @@ class StepExecutorMixin:
                 "skip_wait": not waits_for_human,
             }
         except Exception as e:
-            return {"output": f"Failed sending to project CLI: {e}", "passed": False}
+            from distr.core.workflow.blueprint_adherence import format_tool_failure
+
+            return {
+                "output": format_tool_failure(tool_id="cli", error=f"Failed sending to project CLI: {e}"),
+                "passed": False,
+            }
 
     def _run_recording(self, step_data: Dict[str, Any], config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Play a recorded action. Async — completes via signal callback.
@@ -1696,7 +2283,11 @@ class StepExecutorMixin:
             or self._is_computer_use_instruction(raw_instruction)
         )
 
-        if run_ctx is not None:
+        if (
+            run_ctx is not None
+            and run_ctx.workflow_agent is not None
+            and run_ctx.event_loop is not None
+        ):
             logger.info("_run_agent: using WorkflowAgent for step %s (run_id=%s, computer_use=%s)",
                         step_id, run_id, computer_use)
             if computer_use:
@@ -1831,16 +2422,30 @@ class StepExecutorMixin:
         if not explicit_fallback:
             chain = route.get("fallback_chain")
             chain = chain if isinstance(chain, list) else []
+            eligible = [
+                item for item in chain
+                if isinstance(item, dict)
+                and item.get("automatic", True) is not False
+                and str(item.get("backend") or "").strip()
+                and str(item.get("backend") or "").strip() != current_backend
+            ]
+            # Paid escalation order is explicit product policy: after local or
+            # provider workers are exhausted, use Codex before the final,
+            # more-expensive Claude tier. A stale/partial stored chain must not
+            # accidentally jump straight from Pi/OpenRouter to Claude.
             candidate = next(
-                (
-                    item for item in chain
-                    if isinstance(item, dict)
-                    and item.get("automatic", True) is not False
-                    and str(item.get("backend") or "").strip()
-                    and str(item.get("backend") or "").strip() != current_backend
-                ),
+                (item for item in eligible if str(item.get("backend") or "").strip() == "codex"),
                 None,
-            )
+            ) if current_backend == "pi" else None
+            if candidate is None and current_backend == "pi" and eligible:
+                candidate = next(
+                    (item for item in eligible if str(item.get("backend") or "").strip() != "claude_code"),
+                    None,
+                )
+            if candidate is None and current_backend == "pi" and eligible:
+                candidate = {"backend": "codex", "model": "auto"}
+            if candidate is None:
+                candidate = eligible[0] if eligible else None
             if candidate:
                 fallback_backend = str(candidate.get("backend") or "").strip()
                 fallback_model = str(candidate.get("model") or "auto").strip() or "auto"
@@ -1984,32 +2589,25 @@ class StepExecutorMixin:
                     _path_line("Workflow agents", str(root / AGENTS_FILE)),
                     _path_line("Workflow router", str(root / ROUTER_FILE)),
                     _path_line("Workflow context", str(root / CONTEXT_FILE)),
-                    _path_line("Workflow handoff", str(companion_memory_file("workflows", int(workflow_id), HANDOFF_FILE))),
-                    _path_line("Workflow active memory", str(companion_memory_file("workflows", int(workflow_id), ACTIVE_FILE))),
-                    _path_line("Workflow learned references", str(root / REFERENCES_DIRNAME)),
                 ])
             if project_id:
                 root = companion_root("projects", int(project_id))
                 context_paths.extend([
                     _path_line("Project agents", str(root / AGENTS_FILE)),
-                    _path_line("Project handoff", str(companion_memory_file("projects", int(project_id), HANDOFF_FILE))),
-                    _path_line("Project active memory", str(companion_memory_file("projects", int(project_id), ACTIVE_FILE))),
-                    _path_line("Project learned references", str(root / REFERENCES_DIRNAME)),
+                    _path_line("Project router", str(root / ROUTER_FILE)),
+                    _path_line("Project context", str(root / CONTEXT_FILE)),
                 ])
             if ticket_id:
                 root = companion_root("tickets", int(ticket_id))
                 context_paths.extend([
                     _path_line("Ticket agents", str(root / AGENTS_FILE)),
-                    _path_line("Ticket handoff", str(companion_memory_file("tickets", int(ticket_id), HANDOFF_FILE))),
-                    _path_line("Ticket active memory", str(companion_memory_file("tickets", int(ticket_id), ACTIVE_FILE))),
-                    _path_line("Ticket learned references", str(root / REFERENCES_DIRNAME)),
+                    _path_line("Ticket router", str(root / ROUTER_FILE)),
+                    _path_line("Ticket context", str(root / CONTEXT_FILE)),
                 ])
             if run_id:
                 root = companion_root("runs", int(run_id))
                 context_paths.extend([
                     _path_line("Run agents", str(root / AGENTS_FILE)),
-                    _path_line("Run handoff", str(companion_memory_file("runs", int(run_id), HANDOFF_FILE))),
-                    _path_line("Run active memory", str(companion_memory_file("runs", int(run_id), ACTIVE_FILE))),
                 ])
             if project_folder:
                 repo_root = Path(project_folder).expanduser()
@@ -2019,7 +2617,10 @@ class StepExecutorMixin:
                     _path_line("Repo AGENTS.md", str(repo_root / "AGENTS.md")),
                 ])
 
-            context_paths = [line for line in context_paths if line]
+            context_paths = [
+                line for line in context_paths
+                if line and Path(line.split(": ", 1)[-1]).is_file()
+            ]
             router_chain: list[str] = []
             for row in ctx.router_chain or []:
                 label = row.get("label") or row.get("entity_type") or "router"
@@ -2184,6 +2785,7 @@ class StepExecutorMixin:
                             entry: Dict[str, Any] = {
                                 "title": title,
                                 "result": truncated,
+                                "raw_result": result,
                                 "step_type": s.action_type if s else "agent_instruction",
                             }
                             if paths:
@@ -2246,10 +2848,19 @@ class StepExecutorMixin:
                                         workflow_input_context = ticket_ctx.strip()
                             except Exception as ce:
                                 logger.debug("_build_agent_prompt: ticket context assembly failed: %s", ce)
-                        packet_context = summarize_packet_for_step_context(
-                            run_data.get("result_packet") or {},
+                        result_packet = run_data.get("result_packet") or {}
+                        packet_context = summarize_packet_for_step_context(result_packet)
+                        packet_has_delta = bool(
+                            ((result_packet.get("changes") or {}).get("change_summary") or [])
+                            or ((result_packet.get("execution") or {}).get("action_trace") or [])
+                            or ((result_packet.get("execution") or {}).get("validation_snapshots") or [])
+                            or (result_packet.get("artifacts") or {})
+                            or str(result_packet.get("status") or "").lower()
+                            not in {"", "running", "queued"}
                         )
-                        if packet_context:
+                        # A fresh "workflow started" packet carries no delivery
+                        # state and only repeats identity on the first step.
+                        if packet_context and (step_index > 0 or packet_has_delta):
                             if workflow_input_context:
                                 workflow_input_context = (
                                     workflow_input_context + "\n\n" + packet_context
@@ -2263,9 +2874,13 @@ class StepExecutorMixin:
                                     format_developer_context_dict_for_prompt,
                                 )
 
-                                developer_context_text = format_developer_context_dict_for_prompt(
-                                    developer_context,
-                                    max_chars=2200,
+                                developer_context_text = (
+                                    format_developer_context_dict_for_prompt(
+                                        developer_context,
+                                        max_chars=900,
+                                    )
+                                    if step_index == 0
+                                    else ""
                                 )
                                 if developer_context_text:
                                     if workflow_input_context:
@@ -2328,7 +2943,11 @@ class StepExecutorMixin:
         if step_description:
             step_instruction = f"{step_description}\n\n{step_instruction}"
         if guardrail_text:
-            step_instruction = f"{step_instruction}\n\n[STEP GUARDRAILS]\n{guardrail_text}"
+            # Guardrails are more important than explanatory prose when the
+            # current-step section is compacted. Put them first so a cheaper
+            # worker cannot lose the artifact/security boundaries in the
+            # middle of a long instruction.
+            step_instruction = f"[STEP GUARDRAILS]\n{guardrail_text}\n\n{step_instruction}"
         failure_checklist = step_config.get("failure_checklist")
         if failure_checklist:
             if isinstance(failure_checklist, list):
@@ -2343,6 +2962,21 @@ class StepExecutorMixin:
                 step_instruction = (
                     f"{step_instruction}\n\n[VALIDATION FAILURE CHECKLIST]\n{checklist_text}"
                 )
+        expected_outputs = [
+            str(item).strip()
+            for item in (step_config.get("expected_outputs") or [])
+            if str(item).strip()
+        ]
+        if expected_outputs:
+            output_contract = "\n".join(
+                f"- {item}: <concise value, artifact reference, or N/A with a ticket-specific reason>"
+                for item in expected_outputs
+            )
+            step_instruction = (
+                f"{step_instruction}\n\n[EXPECTED OUTPUT CONTRACT]\n"
+                "Return every named field below. Keep raw logs at their artifact source; pass only decisions, evidence and references.\n"
+                f"{output_contract}"
+            )
         tools = step_config.get("tools") if isinstance(step_config.get("tools"), list) else []
         other_tool = str(step_config.get("other_tool") or "").strip()
         if other_tool and "other" in [str(t).lower() for t in tools]:
@@ -2399,21 +3033,45 @@ class StepExecutorMixin:
             run_id,
             workflow_id,
         )
-        from distr.core.workflow.handoff_packet import StepHandoffPacket, select_relevant_memory
+        from distr.core.workflow.handoff_packet import (
+            StepHandoffPacket,
+            extract_required_handoff_fields,
+            extract_source_urls,
+            extract_ticket_contract,
+            handoff_budget_for_role,
+            select_relevant_memory,
+        )
         from distr.core.workflow.step_iteration import HARNESS_REPORT_TEMPLATE
 
         objective_context = (
-            f"{workflow_description}\n\nWorkflow input:\n{workflow_input_context}".strip()
+            f"Primary ticket and acceptance criteria:\n{workflow_input_context}\n\nWorkflow frame (secondary):\n{workflow_description}".strip()
             if workflow_input_context
             else (workflow_description or "Complete the requested workflow.")
         )
         constraints = [
             context_rules,
             loop_context_summary,
-            steering_context,
             "Stay on the linked ticket and current workflow step. Use project-local rules before generic assumptions. "
             "If required files or attachments are missing, report needs_input. Keep changes minimal, evidence-backed, and reversible.",
         ]
+        try:
+            from distr.core.workflow.blueprint_adherence import render_tool_bay_docs
+            from distr.core.workflow.tools import normalize_tool_list
+
+            tool_ids = normalize_tool_list(
+                list(step_config.get("tools") or [])
+                + list(step_config.get("ui_tools") or [])
+            )
+            if not tool_ids:
+                tool_ids = ["cli", "playwright", "shell", "http"]
+            constraints.insert(0, render_tool_bay_docs(tool_ids=tool_ids))
+        except Exception:
+            logger.debug("_build_agent_prompt: tool bay docs failed", exc_info=True)
+        human_steering = "\n\n".join(
+            item
+            for item in (steering_context, continuation_input)
+            if str(item or "").strip()
+        )
         memory_candidates = [
             *list(execution_packet_context.get("memory_candidates") or []),
             context_rules,
@@ -2432,6 +3090,26 @@ class StepExecutorMixin:
                 "status": item.get("status") or "completed",
                 "summary": item.get("result") or "",
             })
+        required_context_names = [
+            str(item).strip()
+            for item in (step_config.get("required_context") or [])
+            if str(item).strip()
+        ]
+        required_context = "\n\n".join(
+            fragment
+            for fragment in (
+                extract_required_handoff_fields(
+                    item.get("raw_result") or item.get("result") or "",
+                    required_context_names,
+                )
+                for item in reversed(prior_results)
+            )
+            if fragment
+        )
+        artifact_refs.extend(
+            f"Ticket source URL: {url}"
+            for url in extract_source_urls(objective_context)
+        )
         packet = StepHandoffPacket(
             identity=dict(execution_packet_context.get("identity") or {
                 "workflow_id": workflow_id,
@@ -2441,6 +3119,15 @@ class StepExecutorMixin:
                 "position": f"{step_index + 1}/{total_steps}",
             }),
             objective=objective_context,
+            ticket_contract="\n\n".join(
+                item
+                for item in (
+                    extract_ticket_contract(workflow_input_context),
+                    applicability,
+                )
+                if str(item or "").strip()
+            ),
+            required_context=required_context,
             current_step={"title": step_title, "instruction": step_instruction},
             workflow_map=coordination_map,
             constraints=[item for item in constraints if str(item or "").strip()],
@@ -2448,10 +3135,67 @@ class StepExecutorMixin:
             artifact_refs=artifact_refs,
             memory_refs=list(execution_packet_context.get("memory_refs") or []),
             memory_facts=memory_facts,
-            continuation=continuation_input,
+            continuation=human_steering,
             return_contract=HARNESS_REPORT_TEMPLATE,
         )
-        prompt, telemetry = packet.render(max_chars=8_000)
+        step_role = str(step_config.get("step_role") or "").strip().lower()
+        prompt, telemetry = packet.render(max_chars=handoff_budget_for_role(step_role))
+        telemetry["step_role"] = step_role or "unspecified"
+        if telemetry.get("compacted") and run_id is not None:
+            try:
+                from distr.core.workflow.blueprint_adherence import (
+                    compact_worker_context,
+                    record_memory_compaction_note,
+                )
+
+                pumped = compact_worker_context(
+                    role=step_role or "implementation",
+                    objective=objective_context,
+                    prior_text=prompt,
+                    references=artifact_refs,
+                    max_chars=handoff_budget_for_role(step_role),
+                )
+                if pumped.get("restart_context"):
+                    prompt = str(pumped["restart_context"])
+                note = str(
+                    pumped.get("note")
+                    or (
+                        f"Compacted handoff for '{step_title}': "
+                        f"{telemetry.get('raw_total_chars') or '?'} -> {len(prompt)} chars. "
+                        "Inspect workspace memory and artifact pointers for full evidence."
+                    )
+                )
+                telemetry["memory_pump"] = True
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(
+                        AutoWorkflowRun.id == int(run_id)
+                    ).first()
+                    if run:
+                        try:
+                            run_data = json.loads(run.run_data or "{}") or {}
+                        except Exception:
+                            run_data = {}
+                        run_data = record_memory_compaction_note(run_data, note)
+                        run.run_data = json.dumps(run_data, default=str)
+                        db.commit()
+                try:
+                    from distr.core.workspace_memory.pickup_handoff import append_ledger, write_active
+
+                    write_active("runs", int(run_id), note)
+                    append_ledger(
+                        "runs",
+                        int(run_id),
+                        event_type="memory_compaction",
+                        message=note,
+                        extra={
+                            "step_id": step_id,
+                            "pointers": list(pumped.get("references") or artifact_refs or [])[:8],
+                        },
+                    )
+                except Exception:
+                    logger.debug("_build_agent_prompt: workspace memory pump failed", exc_info=True)
+            except Exception:
+                logger.debug("_build_agent_prompt: memory pump failed", exc_info=True)
         self._record_context_telemetry(run_id, step_id, telemetry)
 
         logger.info(

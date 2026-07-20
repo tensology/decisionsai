@@ -5,6 +5,7 @@ Each module handles one concern; this file is the data layer.
 import json
 import logging
 import os
+import threading
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy import or_
@@ -199,6 +200,7 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "source_url": getattr(ticket, "source_url", None) if ticket else None,
         "execution_route": run_data.get("execution_route") or {},
         "pending_route_approval": run_data.get("pending_route_approval") or {},
+        "provider_free_candidates": (run_data.get("provider_free_candidates") or [])[:3],
         "provider_preflight": run_data.get("provider_preflight") or {},
         "provider_model_readiness": run_data.get("provider_model_readiness") or {},
         "execution_session_id": run_data.get("execution_session_id"),
@@ -213,6 +215,7 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "latest_backend_handoff": run_data.get("latest_backend_handoff") or {},
         "human_intervention_state": run_data.get("human_intervention_state") or "none",
         "worker_question": run_data.get("worker_question") or "",
+        "waiting_prompt": run_data.get("waiting_prompt") or "",
         "next_action": run_data.get("next_action") or decide_workflow_next_action(run_data=run_data).get("action"),
     }
 
@@ -251,12 +254,28 @@ def decide_workflow_next_action(
     validation_verdict = str(validation_data.get("verdict") or validation_data.get("status") or "").strip().lower()
     missing = validation_data.get("missing") if isinstance(validation_data.get("missing"), list) else []
 
-    if waiting_kind in {"needs_human_input", "worker_needs_input"} or human_state == "needs_human_input":
-        return {"action": "needs_human_input", "reason": "Worker is waiting for human input."}
-    if status in {"needs_input", "worker_needs_input", "codex_needs_input", "codex_waiting"}:
-        return {"action": "needs_human_input", "reason": "Worker reported that input is needed."}
-    if confidence is not None and confidence < 0.55:
-        return {"action": "needs_human_input", "reason": "Decision confidence is low."}
+    from distr.core.workflow.control_policy import decide_interruption
+
+    interruption = decide_interruption(
+        worker_status=("needs_input" if waiting_kind in {"needs_human_input", "worker_needs_input"} else status),
+        question=str(data.get("worker_question") or ""),
+        blockers=str((data.get("needs_input_context") or {}).get("blockers") or "")
+        if isinstance(data.get("needs_input_context"), dict)
+        else "",
+        confidence=confidence,
+        repeated_failures=int(data.get("consecutive_step_failures") or 0),
+        paid_escalation=bool(data.get("paid_escalation_pending")),
+        irreversible=bool(data.get("irreversible_action_pending")),
+    )
+
+    if interruption.should_interrupt or human_state == "needs_human_input":
+        return {
+            "action": "needs_human_input",
+            "reason": interruption.reason or "Worker is waiting for human input.",
+            "question": interruption.question,
+            "recommendation": interruption.recommendation,
+            "options": list(interruption.options),
+        }
     if risk_level in {"high", "critical"} and validation_verdict not in {"pass", "passed"}:
         return {"action": "validation_required", "reason": "High-risk work requires validation before continuing."}
     if validation_verdict in {"fail", "failed"}:
@@ -1187,6 +1206,18 @@ def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dic
             latest_data = _safe_json_loads(run.run_data) if run else {}
             retry_candidates = list((latest_data or {}).get("provider_free_candidates") or [])
             paid_fallback = dict((latest_data or {}).get("provider_fallback_route") or {})
+            current_route = dict((latest_data or {}).get("execution_route") or {})
+        for key in (
+            "complexity",
+            "step_role",
+            "task_profile",
+            "evidence_capabilities",
+            "required_capabilities",
+            "independent_from_role",
+            "independent_from_route",
+        ):
+            if key in current_route and key not in candidate:
+                candidate[key] = current_route[key]
         candidate.update({
             "provider_preflight_override": True,
             "source": "provider_preflight_verified_free_model",
@@ -1216,9 +1247,18 @@ def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dic
         failed["readiness_failed"] = True
         failed["readiness"] = readiness.to_dict()
         candidates[candidate_index] = failed
+        failed_models = {
+            str(item or "").strip().lower()
+            for item in (data.get("provider_failed_models") or [])
+            if str(item or "").strip()
+        }
+        if model:
+            failed_models.add(model.lower())
+        data["provider_failed_models"] = sorted(failed_models)
         remaining = [
             (index, item) for index, item in enumerate(candidates)
             if not (item or {}).get("readiness_failed")
+            and str((item or {}).get("model") or "").strip().lower() not in failed_models
         ]
         fallback = data.get("provider_fallback_route") or {}
         if remaining:
@@ -1299,6 +1339,22 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
             model = str(pending.get("model") or "auto").strip()
             rationale = str(pending.get("rationale") or "").strip()
             current_route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+            previous_backend = normalize_backend_id(str(current_route.get("backend") or "").strip() or "pi")
+            if previous_backend != backend_id:
+                # Provider-specific values belong to the route they came from.
+                # Carrying Ollama/OpenRouter metadata into a Codex or Cursor
+                # approval produces a syntactically valid but incoherent route.
+                current_route = dict(current_route)
+                for stale_key in (
+                    "model_provider",
+                    "provider",
+                    "base_url",
+                    "endpoint",
+                    "local",
+                    "free",
+                ):
+                    if stale_key not in pending:
+                        current_route.pop(stale_key, None)
             run_data["approved_route_override"] = dict(pending)
             run_data["execution_route"] = {
                 **current_route,
@@ -1327,8 +1383,19 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
         if was_waiting and step_id:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
             if step:
-                step.status = "running"
+                # run_in_workflow owns the transition to running. Marking it
+                # running here makes its idempotency guard suppress the very
+                # redispatch this approval is intended to trigger.
+                step.status = "pending"
             run.status = "running"
+            if run.ticket_id:
+                from distr.core.db.kanban import KanbanTicket
+
+                ticket = db.query(KanbanTicket).filter(
+                    KanbanTicket.id == int(run.ticket_id)
+                ).first()
+                if ticket:
+                    ticket.workflow_status = "running"
         db.commit()
 
     try:
@@ -1354,9 +1421,14 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
     redispatched = False
     if was_waiting and step_id:
         try:
-            from distr.core.workflow.dispatcher import StepDispatcher
+            from distr.core.workflow.dispatcher import _dispatch_workflow_step
 
-            StepDispatcher().run_in_workflow(int(step_id), int(run_id))
+            threading.Thread(
+                target=_dispatch_workflow_step,
+                args=(int(run_id), int(step_id)),
+                name=f"workflow-route-approval-{run_id}-{step_id}",
+                daemon=True,
+            ).start()
             redispatched = True
         except Exception:
             logger.exception("Failed to redispatch workflow step after route approval")
@@ -1378,6 +1450,10 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
     if not instruction:
         return {"error": "Steer message is required", "status_code": 400}
     steer_source = (source or "workflow_ui").strip() or "workflow_ui"
+    from distr.core.workflow.control_policy import classify_steering
+
+    steering_decision = classify_steering(instruction)
+    plan_revision: dict[str, Any] | None = None
 
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -1431,6 +1507,21 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
         run_data["last_harness_steer"] = steer_entry
         run_data["human_intervention_state"] = steer_entry["human_intervention_state"]
         run_data["next_action"] = "worker_continue"
+        plan = run_data.get("coordination_plan") if isinstance(run_data.get("coordination_plan"), dict) else {}
+        if plan:
+            from distr.core.workflow.coordination_plan import apply_steering_to_plan, coordination_plan_routes
+
+            revised_plan, plan_revision = apply_steering_to_plan(
+                plan,
+                current_step_id=run.current_step_id,
+                message=instruction,
+                impact=steering_decision.impact,
+                route_preference=steering_decision.route_preference,
+            )
+            run_data["coordination_plan"] = revised_plan
+            step_routes, role_routes = coordination_plan_routes(revised_plan)
+            run_data["step_routes"] = step_routes
+            run_data["step_role_routes"] = role_routes
         latest_handoff = run_data.get("latest_backend_handoff") if isinstance(run_data.get("latest_backend_handoff"), dict) else {}
         if latest_handoff:
             latest_handoff["human_intervention"] = {
@@ -1467,7 +1558,7 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
         logger.debug("Could not append harness steer execution event", exc_info=True)
 
     try:
-        from distr.core.orchestrator import emit_event, record_human_intervention_memory
+        from distr.core.orchestrator import emit_event
 
         emit_event(
             source="orchestrator",
@@ -1483,22 +1574,20 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
             summary=instruction[:240],
             payload=steer_entry,
         )
-        record_human_intervention_memory(
-            label="manual_fix_applied" if "fix" in instruction.lower() else "ignored_instruction",
-            message=instruction[:4000],
-            workflow_id=workflow_id,
-            run_id=run_id,
-            step_id=step_id,
-            ticket_id=ticket_id,
-            board_id=board_id,
-            project_id=int(project_id) if project_id else None,
-            execution_session_id=int(execution_session_id) if execution_session_id else None,
-            handoff_event_id=(
-                run_data.get("latest_backend_handoff", {}).get("handoff_event_id")
-                if isinstance(run_data.get("latest_backend_handoff"), dict)
-                else None
-            ),
-        )
+        if plan_revision:
+            emit_event(
+                source="orchestrator",
+                event_type="coordination_plan_revised",
+                status="revised",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=step_id,
+                ticket_id=ticket_id,
+                board_id=board_id,
+                project_id=int(project_id) if project_id else None,
+                summary=f"Active run plan revised: {steering_decision.reason}",
+                payload={"revision": plan_revision},
+            )
     except Exception:
         logger.debug("Could not emit harness_steer event", exc_info=True)
 
@@ -1518,14 +1607,6 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
     except Exception:
         logger.debug("Could not record harness steer in steering log", exc_info=True)
 
-    try:
-        from distr.core.workflow.standards_memory import capture_feedback_as_standard
-
-        if workflow_id:
-            capture_feedback_as_standard(int(workflow_id), instruction)
-    except Exception:
-        logger.debug("Could not capture steer as workflow standard", exc_info=True)
-
     increment_workflow_updated()
     return {
         "success": True,
@@ -1534,6 +1615,8 @@ def apply_run_harness_steer(run_id: int, message: str, *, source: str = "workflo
         "method": steer_result.get("method"),
         "backend_id": steer_result.get("backend_id") or backend_id,
         "steer": steer_entry,
+        "steering_impact": steering_decision.impact,
+        "coordination_plan_revision": plan_revision or {},
     }
 
 
@@ -1722,8 +1805,18 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "heartbeat_age_seconds": heartbeat_age_seconds,
                 "activity_state": activity_state,
                 "latest_context_telemetry": run_data.get("latest_context_telemetry") or {},
+                "blueprint": _run_blueprint_snapshot(run_data),
             })
         return results
+
+
+def _run_blueprint_snapshot(run_data: dict) -> dict:
+    try:
+        from distr.core.workflow.blueprint_adherence import build_run_blueprint_snapshot
+
+        return build_run_blueprint_snapshot(run_data if isinstance(run_data, dict) else {})
+    except Exception:
+        return {}
 
 
 def get_step_results(step_id: int, limit: int = 20) -> List[Dict[str, Any]]:
@@ -2311,17 +2404,3 @@ def _check_and_enter_wait(step_id: int, action_result: str, passed: bool):
             "action_result": action_result,
             "run_id": run_id,
         }
-
-
-def _speak_result(result: str):
-    """Legacy stub — speaks result via TTS if meaningful.
-    
-    This stub exists so tests can mock it.
-    """
-    if not result or not result.strip():
-        return
-    try:
-        from distr.core.signals import signal_manager
-        signal_manager.speak_text_directly.emit(result.strip()[:500])
-    except Exception:
-        pass

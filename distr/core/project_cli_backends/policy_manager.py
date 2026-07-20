@@ -8,7 +8,7 @@ auditable route for every workflow step before execution.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import re
 from typing import Any
@@ -56,6 +56,179 @@ def _route_key(route: dict[str, Any]) -> str:
         str(route.get(key) or "").strip().lower()
         for key in ("backend", "model_provider", "model")
     )
+
+
+def _recent_model_failure_counts(*, hours: int = 24, limit: int = 300) -> dict[str, int]:
+    """Return consecutive recent failures for each concrete model.
+
+    Auto routing must not repeatedly choose the leaderboard winner when live
+    executions show that it is rate-limited, timing out, or otherwise failing.
+    A later successful completion resets the model's failure streak.  This is
+    deliberately execution evidence, not a permanent blacklist; pinned routes
+    remain available and a model naturally becomes eligible again after a
+    successful retry.
+    """
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.kanban import ProjectExecutionSession
+
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=max(1, int(hours)))
+        with get_session() as db:
+            rows = (
+                db.query(ProjectExecutionSession)
+                .filter(ProjectExecutionSession.started_at >= cutoff)
+                .filter(ProjectExecutionSession.selected_model.isnot(None))
+                .order_by(ProjectExecutionSession.id.desc())
+                .limit(max(1, int(limit)))
+                .all()
+            )
+            failures: dict[str, int] = {}
+            resolved: set[str] = set()
+            for row in rows:
+                model = str(getattr(row, "selected_model", "") or "").strip().lower()
+                if not model or model == "auto" or model in resolved:
+                    continue
+                status = str(getattr(row, "status", "") or "").strip().lower()
+                if status == "completed":
+                    resolved.add(model)
+                elif status == "failed" and _counts_as_model_health_failure(
+                    str(getattr(row, "error", "") or "")
+                ):
+                    failures[model] = failures.get(model, 0) + 1
+            return failures
+    except Exception:
+        # Routing still works during database bootstrap.  It simply lacks the
+        # temporary health demotion until execution history becomes available.
+        return {}
+
+
+def _counts_as_model_health_failure(error: str) -> bool:
+    """Return whether an execution proves that a model route is unavailable.
+
+    Route health is deliberately narrower than workflow quality.  A worker can
+    produce an invalid handoff or use too many inspection calls while its model
+    endpoint is perfectly healthy.  Those failures remain visible to workflow
+    validation and learning, but must not make Auto silently remove the local
+    model from the next preflight.
+    """
+    lowered = str(error or "").strip().lower()
+    if not lowered:
+        return False
+    non_route_markers = (
+        "cancelled",
+        "canceled",
+        "code 143",
+        "sigterm",
+        "terminated by user",
+        "user stopped",
+        "outlived its terminal workflow run",
+        "inspection budget exceeded",
+        "required 'status: completed'",
+        "required status contract",
+        "completion report",
+        "result remains unverified",
+    )
+    if any(marker in lowered for marker in non_route_markers):
+        return False
+    route_failure_markers = (
+        "429",
+        "rate limit",
+        "quota",
+        "insufficient credit",
+        "payment required",
+        "timed out",
+        "timeout",
+        "connection refused",
+        "connection error",
+        "not support chat",
+        "model not found",
+        "provider unavailable",
+        "service unavailable",
+        "http 5",
+        "status code 5",
+    )
+    return any(marker in lowered for marker in route_failure_markers)
+
+
+def _openrouter_free_cooldown_active(*, minutes: int = 30) -> bool:
+    """Use recent real 429 evidence as a short provider-level circuit breaker."""
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.kanban import ProjectExecutionSession
+
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            minutes=max(1, int(minutes))
+        )
+        with get_session() as db:
+            return bool(
+                db.query(ProjectExecutionSession.id)
+                .filter(ProjectExecutionSession.started_at >= cutoff)
+                .filter(ProjectExecutionSession.selected_model.like("%:free"))
+                .filter(ProjectExecutionSession.error.ilike("%429%"))
+                .first()
+            )
+    except Exception:
+        return False
+
+
+def _apply_provider_health(
+    routes: list[dict[str, Any]], *, openrouter_free_cooldown: bool
+) -> list[dict[str, Any]]:
+    """Temporarily remove free OpenRouter routes after real rate-limit evidence."""
+    annotated: list[dict[str, Any]] = []
+    available: list[dict[str, Any]] = []
+    for raw in routes:
+        route = dict(raw)
+        is_openrouter_free = (
+            str(route.get("model_provider") or "").strip().lower() == "openrouter"
+            and str(route.get("model") or "").strip().lower().endswith(":free")
+        )
+        cooling_down = bool(openrouter_free_cooldown and is_openrouter_free)
+        route["provider_health"] = "rate_limit_cooldown" if cooling_down else "healthy"
+        annotated.append(route)
+        if not cooling_down:
+            available.append(route)
+    return available or annotated
+
+
+def _route_strength(route: dict[str, Any]) -> float:
+    if route.get("score") is not None:
+        try:
+            return float(route["score"])
+        except (TypeError, ValueError):
+            pass
+    match = re.search(
+        r"(?:^|[-_:])(\d+(?:\.\d+)?)b(?:$|[-_:])",
+        str(route.get("model") or "").lower(),
+    )
+    return float(match.group(1)) if match else 0.0
+
+
+def _apply_recent_model_health(
+    routes: list[dict[str, Any]],
+    failure_counts: dict[str, int] | None = None,
+    *,
+    failure_threshold: int = 2,
+) -> list[dict[str, Any]]:
+    """Annotate candidates and remove repeatedly failing models from Auto.
+
+    If every discovered route is unhealthy, return the annotated catalogue so
+    callers can still present an explicit choice instead of silently claiming
+    no provider exists.
+    """
+    counts = failure_counts if failure_counts is not None else _recent_model_failure_counts()
+    annotated: list[dict[str, Any]] = []
+    healthy: list[dict[str, Any]] = []
+    for raw in routes:
+        route = dict(raw)
+        model = str(route.get("model") or "").strip().lower()
+        failures = int(counts.get(model, 0) or 0)
+        route["recent_failures"] = failures
+        route["health_status"] = "demoted" if failures >= failure_threshold else "healthy"
+        annotated.append(route)
+        if failures < failure_threshold:
+            healthy.append(route)
+    return healthy or annotated
 
 
 def _step_role(step: Any) -> str:
@@ -126,15 +299,29 @@ def _discover_routes(settings: dict[str, Any], *, complexity: str) -> list[dict[
         ):
             routes.append({**row, "source": "live_openrouter_free_catalog", "free": True, "local": False})
     seen: set[str] = set()
-    return [route for route in routes if not (_route_key(route) in seen or seen.add(_route_key(route)))]
+    unique = [route for route in routes if not (_route_key(route) in seen or seen.add(_route_key(route)))]
+    model_healthy = _apply_recent_model_health(unique)
+    return _apply_provider_health(
+        model_healthy,
+        openrouter_free_cooldown=_openrouter_free_cooldown_active(),
+    )
 
 
-def _automatic_level_routes(settings: dict[str, Any], preference: str) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+def _automatic_level_routes(
+    settings: dict[str, Any],
+    preference: str,
+    *,
+    prefer_local: bool = False,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     candidates = _discover_routes(settings, complexity="high")
-    local = next((route for route in candidates if route.get("local")), None)
-    free = next((route for route in candidates if route.get("free") and not route.get("local")), None)
+    local = max((route for route in candidates if route.get("local")), key=_route_strength, default=None)
+    free = max(
+        (route for route in candidates if route.get("free") and not route.get("local")),
+        key=_route_strength,
+        default=None,
+    )
     economical = local or free
-    strongest_free = free or local
+    strongest_free = (local or free) if prefer_local else (free or local)
     codex = _normalise_route({"backend": "codex", "model": "auto", "provider": "openai"}, source="auto_policy")
     claude = _normalise_route({"backend": "claude_code", "model": "auto", "provider": "anthropic"}, source="auto_policy")
 
@@ -151,37 +338,36 @@ def _automatic_role_routes(
     levels: dict[str, dict[str, Any]],
     candidates: list[dict[str, Any]],
     preference: str,
+    *,
+    prefer_local: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    def strength(route: dict[str, Any]) -> float:
-        if route.get("score") is not None:
-            try:
-                return float(route["score"])
-            except (TypeError, ValueError):
-                pass
-        # Local catalogues do not expose benchmark scores. Model parameter
-        # size is a useful final fallback and prevents a 9B reviewer being
-        # preferred over an installed 35B model merely because it listed first.
-        match = re.search(r"(?:^|[-_:])(\d+(?:\.\d+)?)b(?:$|[-_:])", str(route.get("model") or "").lower())
-        return float(match.group(1)) if match else 0.0
-
     free_routes = sorted(
         (route for route in candidates if route.get("free")),
-        key=strength,
+        key=_route_strength,
         reverse=True,
     )
     local_routes = sorted(
         (route for route in candidates if route.get("local")),
-        key=strength,
+        key=_route_strength,
         reverse=True,
     )
     implementation = dict(local_routes[0]) if local_routes else dict(levels["medium"])
-    planning = dict(levels["high"] if preference != "free" else levels["medium"])
+    planning = (
+        dict(local_routes[0])
+        if prefer_local and local_routes
+        else dict(levels["high"] if preference != "free" else levels["medium"])
+    )
     review = next((dict(route) for route in free_routes if _route_key(route) != _route_key(implementation)), None)
     review = review or _normalise_route({"backend": "codex", "model": "auto"}, source="auto_policy")
     validation = next(
         (dict(route) for route in free_routes if _route_key(route) not in {_route_key(implementation), _route_key(review)}),
         None,
     ) or dict(review)
+    reporting = min(
+        (route for route in local_routes if _route_strength(route) >= 9.0),
+        key=_route_strength,
+        default=None,
+    )
     return {
         "planning": planning,
         "implementation": implementation,
@@ -191,7 +377,9 @@ def _automatic_role_routes(
             {"backend": "codex", "model": "auto", "provider": "openai"},
             source="auto_policy",
         ),
-        "reporting": dict(levels["low"]),
+        # Compact reporting does not need the largest local coder, but sub-8B
+        # models below roughly 9B are too unreliable for durable memory/result contracts.
+        "reporting": dict(reporting or levels["low"]),
     }
 
 
@@ -202,6 +390,7 @@ def build_model_policy_plan(
     mode: str = "auto",
     preference: str = "free",
     assignments: dict[str, Any] | None = None,
+    prefer_local: bool = False,
 ) -> dict[str, Any]:
     """Build a non-mutating, serialisable policy plan."""
     from distr.core.db import get_session
@@ -236,7 +425,11 @@ def build_model_policy_plan(
 
     settings = load_settings_from_db()
     supplied = assignments if isinstance(assignments, dict) else {}
-    auto_levels, candidates = _automatic_level_routes(settings, preference)
+    auto_levels, candidates = _automatic_level_routes(
+        settings,
+        preference,
+        prefer_local=prefer_local,
+    )
     if mode == "pinned":
         supplied_levels = supplied.get("complexity") if isinstance(supplied.get("complexity"), dict) else {}
         levels = {
@@ -252,7 +445,12 @@ def build_model_policy_plan(
     else:
         levels = auto_levels
 
-    roles = _automatic_role_routes(levels, candidates, preference)
+    roles = _automatic_role_routes(
+        levels,
+        candidates,
+        preference,
+        prefer_local=prefer_local,
+    )
     supplied_roles = supplied.get("roles") if isinstance(supplied.get("roles"), dict) else {}
     for role, route in supplied_roles.items():
         roles[str(role).strip().lower()] = _normalise_route(route, source="pinned_policy")
@@ -296,7 +494,11 @@ def build_model_policy_plan(
         "catalog": {
             "candidate_count": len(candidates),
             "candidates": [
-                {key: route.get(key) for key in ("backend", "model_provider", "model", "free", "local", "reason", "score")}
+                {key: route.get(key) for key in (
+                    "backend", "model_provider", "model", "free", "local", "reason", "score",
+                    "recent_failures", "health_status",
+                    "provider_health",
+                )}
                 for route in candidates[:8]
             ],
         },
@@ -407,10 +609,12 @@ def refresh_auto_model_policy_for_workflow(workflow_id: int) -> dict[str, Any] |
         if settings.get("model_policy_mode") != "auto":
             return None
         preference = str(settings.get("model_policy_preference") or "free")
+        prefer_local = bool(settings.get("prefer_local") or settings.get("prefer_free_local"))
     plan = build_model_policy_plan(
         scope="workflow",
         workflow_id=int(workflow_id),
         mode="auto",
         preference=preference,
+        prefer_local=prefer_local,
     )
     return {"plan": plan, "applied": apply_model_policy_plan(plan)}

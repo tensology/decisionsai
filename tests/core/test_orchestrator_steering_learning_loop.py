@@ -102,6 +102,16 @@ def test_steering_feedback_surfaces_in_next_route_learned_context(
             source="cursor",
             event_type="user_steer",
         )
+        # A preference becomes route context only after repeat evidence unless
+        # the user explicitly says always/never/remember this.
+        record_run_steering_feedback(
+            run_id=run_id,
+            message="Prefer Codex for backend fixes after browser validation fails.",
+            workflow_id=wf.id,
+            board_id=11,
+            source="cursor",
+            event_type="user_steer",
+        )
 
         resolve_execution_route(
             project=project,

@@ -23,7 +23,11 @@ from distr.core.db.workflow import (
     AutoWorkflowStepResult,
 )
 from distr.core.workflow.tools import normalize_tool_list, tools_for_action
-from distr.core.workflow.verification import _run_verification, build_validation_snapshot
+from distr.core.workflow.verification import (
+    _run_verification,
+    build_validation_snapshot,
+    ticket_acceptance_findings,
+)
 from distr.core.workflow.runtime_contract import emit_step_activity, should_pause_after_step
 from distr.core.kanban.result_packet import append_workflow_step_to_packet
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
@@ -32,6 +36,162 @@ from distr.gui.web.workflow_events import increment_workflow_updated
 from distr.gui.web.kanban_events import increment_kanban_updated
 
 logger = logging.getLogger(__name__)
+
+_EXPECTED_OUTPUT_ALIASES = {
+    "unknowns": ("missing information", "open questions", "unresolved questions"),
+    "ui_design_read_if_applicable": ("ui design read", "design direction"),
+    # Coding CLIs use their standard completion headings even when the workflow
+    # asks for equivalent snake_case fields. Preserve semantic contracts without
+    # spending another model call solely to reformat a valid review.
+    "review_findings": ("independent review findings", "summary"),
+    "project_release_findings": ("project release finding",),
+    "check_results": ("tests run", "checks run"),
+    "security_audit": ("security",),
+}
+
+
+def _has_expected_output(result: str, label: str) -> bool:
+    normalized_label = " ".join(re.sub(r"[^a-z0-9]+", " ", label.lower()).split())
+    normalized_result = " ".join(
+        re.sub(r"[^a-z0-9]+", " ", str(result or "").lower()).split()
+    )
+    if normalized_label and normalized_label in normalized_result:
+        return True
+    if label.lower() == "ship_verdict":
+        # A normal CLI completion packet can express the verdict through its
+        # terminal status plus an explicit blocker result instead of repeating
+        # a second ship_verdict field. Do not infer PASS when blockers remain.
+        terminal_completed = bool(re.search(r"(?im)^\s*status\s*:\s*completed\b", str(result or "")))
+        blocker_free = bool(re.search(r"(?im)^\s*blockers?\s*:\s*(?:none|n\s*/?\s*a)\b", str(result or "")))
+        if terminal_completed and blocker_free:
+            return True
+    aliases = _EXPECTED_OUTPUT_ALIASES.get(label.lower(), ())
+    if not aliases:
+        return False
+    for line in str(result or "").splitlines():
+        normalized_line = " ".join(
+            re.sub(r"[^a-z0-9]+", " ", line.lower()).split()
+        )
+        if any(
+            normalized_line == alias
+            or normalized_line.startswith(alias + " ")
+            or f" {alias} " in f" {normalized_line} "
+            for alias in aliases
+        ):
+            return True
+    return False
+
+
+def _missing_expected_outputs(result: str, expected_outputs: list[Any]) -> list[str]:
+    """Return named handoff fields absent from a worker's compact report."""
+    missing: list[str] = []
+    for raw in expected_outputs or []:
+        label = str(raw or "").strip()
+        if not label:
+            continue
+        if not _has_expected_output(result, label):
+            missing.append(label)
+    return missing
+
+
+_DESTRUCTIVE_SCOPE_RE = re.compile(
+    r"\b(?:delete|deleting|remove|removing|move|moving|modify|modifying|"
+    r"quarantine|quarantining|neutralize|neutralise|rename|renaming)\b",
+    re.IGNORECASE,
+)
+_PROTECTED_SCOPE_RE = re.compile(
+    r"\b(?:do not|don't|must not|never|without)\b[^.\n;]{0,120}"
+    r"\b(?:delete|deleting|remove|removing|move|moving|modify|modifying|"
+    r"quarantine|quarantining|neutralize|neutralise|rename|renaming)\b",
+    re.IGNORECASE,
+)
+_PATH_TOKEN_RE = re.compile(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]*")
+
+
+def _protected_scope_conflicts(ticket_context: str, result: str) -> list[dict[str, str]]:
+    """Detect a worker proposing destructive work the ticket explicitly forbids.
+
+    LLM validation is useful for judgment but must not approve an execution
+    contract that reverses an explicit preserve/do-not-delete instruction.
+    Path-shaped targets keep this deterministic and avoid guessing about prose.
+    """
+    protected: set[str] = set()
+    for line in str(ticket_context or "").splitlines():
+        if not _PROTECTED_SCOPE_RE.search(line):
+            continue
+        for match in _PATH_TOKEN_RE.finditer(line):
+            token = match.group(0).strip("`'\"").lower()
+            if token:
+                protected.add(token)
+                parts = [part for part in token.split("/") if part]
+                if parts:
+                    protected.add(parts[-1] + "/")
+
+    conflicts: list[dict[str, str]] = []
+    for clause in re.split(r"[.;\n]+", str(result or "")):
+        lowered = clause.lower()
+        if not _DESTRUCTIVE_SCOPE_RE.search(lowered):
+            continue
+        for target in sorted(protected, key=len, reverse=True):
+            if target not in lowered:
+                continue
+            escaped = re.escape(target)
+            explicitly_safe = bool(
+                re.search(rf"\b(?:do not|don't|must not|never)\b[^.;]{{0,100}}{escaped}", lowered)
+                or re.search(rf"{escaped}[^.;]{{0,100}}\b(?:without|must not|do not|don't|never)\b", lowered)
+                or re.search(rf"\b(?:preserve|retain|inventory only)\b\s+(?:the\s+)?{escaped}", lowered)
+            )
+            if explicitly_safe:
+                continue
+            conflicts.append({"target": target, "proposal": clause.strip()[:500]})
+            break
+    return conflicts[:10]
+
+
+def _inspection_budget_violation(
+    step_config: dict[str, Any], observed_tool_calls: int, *, complexity: str = "medium"
+) -> dict[str, Any]:
+    """Return deterministic evidence when a bounded inspection over-searches."""
+    from distr.core.workflow.control_policy import resolve_inspection_budget
+
+    budget = resolve_inspection_budget(
+        step_config.get("inspection_budget"),
+        complexity=complexity,
+    )
+    maximum = int(budget.get("max_tool_calls") or 0)
+    enforcement = str(budget.get("enforcement") or "hard")
+    enforced_maximum = (
+        int(budget.get("hard_max_tool_calls") or maximum)
+        if enforcement == "soft"
+        else maximum
+    )
+    observed = max(0, int(observed_tool_calls or 0))
+    if not enforced_maximum or observed <= enforced_maximum:
+        return {}
+    evidence: dict[str, Any] = {
+        "observed_tool_calls": observed,
+        "max_tool_calls": maximum,
+    }
+    if enforcement == "soft":
+        evidence.update({
+            "hard_max_tool_calls": enforced_maximum,
+            "enforcement": enforcement,
+        })
+    return evidence
+
+
+def _effective_wait_prompt(
+    run_data: dict[str, Any], *, default_prompt: str, result: str
+) -> str:
+    """Keep actionable provider/route questions instead of generic wait copy."""
+    kind = str(run_data.get("waiting_kind") or "").strip().lower()
+    if kind == "provider_preflight":
+        return str(
+            run_data.get("provider_preflight_prompt") or result or default_prompt
+        ).strip()
+    if kind == "route_approval":
+        return str(run_data.get("route_approval_prompt") or result or default_prompt).strip()
+    return str(default_prompt or result or "Workflow is waiting for input.").strip()
 
 
 class StepRouter:
@@ -87,13 +247,83 @@ class StepRouter:
                     run.run_data = json.dumps(run_data)
                     db.flush()
                     return self._enter_wait_state(db, step, run_id, result, passed)
-                if run_data.pop("route_approval_pending", False):
-                    run_data["waiting_kind"] = "route_approval"
+                if run_data.pop("power_budget_pending", False):
+                    interrupt = (
+                        run_data.get("interrupt_context")
+                        if isinstance(run_data.get("interrupt_context"), dict)
+                        else {}
+                    )
+                    question = str(
+                        interrupt.get("question")
+                        or run_data.get("waiting_prompt")
+                        or "The run power budget was exhausted. Raise the budget, change approach, or stop?"
+                    )
+                    recommendation = str(
+                        interrupt.get("recommendation")
+                        or "Raise the budget only if acceptance criteria still justify the spend."
+                    )
+                    run_data["waiting_kind"] = "control_interrupt"
+                    run_data["waiting_prompt"] = (
+                        f"{question} I recommend: {recommendation} "
+                        "Reply with a choice, steer the run, or stop it."
+                    )
+                    run_data["interrupt_context"] = {
+                        "should_interrupt": True,
+                        "reason": str(interrupt.get("reason") or "The run power budget was exhausted."),
+                        "question": question,
+                        "recommendation": recommendation,
+                        "options": list(interrupt.get("options") or ["Raise budget", "Change approach", "Stop"]),
+                        "can_continue_default": False,
+                    }
+                    run_data["human_intervention_state"] = "needs_human_input"
                     run.run_data = json.dumps(run_data)
                     db.flush()
-                    return self._enter_wait_state(db, step, run_id, result, passed)
+                    return self._enter_wait_state(db, step, run_id, run_data["waiting_prompt"], passed)
+                if run_data.pop("route_approval_pending", False):
+                    from distr.core.workflow.control_policy import decide_interruption
+
+                    pending = (
+                        run_data.get("pending_route_approval")
+                        if isinstance(run_data.get("pending_route_approval"), dict)
+                        else {}
+                    )
+                    provider = str(
+                        pending.get("model_provider")
+                        or pending.get("provider")
+                        or ""
+                    ).strip().lower()
+                    paid = provider not in {"", "ollama", "local"}
+                    run_data["paid_escalation_pending"] = paid
+                    interruption = decide_interruption(
+                        paid_escalation=True,
+                        question=str(
+                            run_data.get("route_approval_prompt")
+                            or f"Approve route to {pending.get('backend') or 'the recommended worker'}?"
+                        ),
+                    )
+                    run_data["waiting_kind"] = "route_approval"
+                    run_data["waiting_prompt"] = interruption.question
+                    run_data["interrupt_context"] = interruption.to_dict()
+                    run_data["human_intervention_state"] = "needs_human_input"
+                    run.run_data = json.dumps(run_data)
+                    db.flush()
+                    return self._enter_wait_state(db, step, run_id, interruption.question, passed)
                 if run_data.pop("provider_preflight_pending", False):
+                    from distr.core.workflow.control_policy import decide_interruption
+
+                    interruption = decide_interruption(
+                        paid_escalation=bool(run_data.get("paid_escalation_pending")),
+                        question=str(
+                            run_data.get("provider_preflight_prompt")
+                            or run_data.get("waiting_prompt")
+                            or result
+                            or ""
+                        ),
+                    )
                     run_data["waiting_kind"] = "provider_preflight"
+                    if interruption.should_interrupt:
+                        run_data["waiting_prompt"] = interruption.question
+                        run_data["interrupt_context"] = interruption.to_dict()
                     run.run_data = json.dumps(run_data)
                     db.flush()
                     return self._enter_wait_state(db, step, run_id, result, passed)
@@ -161,7 +391,65 @@ class StepRouter:
                 project_id=verify_project_id,
                 ticket_context=ticket_context,
                 standards_context=standards_context,
+                validation_routes=validation_routes,
             )
+            read_only_evidence: dict[str, Any] = {}
+            raw_step_config = getattr(step, "config", None)
+            if isinstance(raw_step_config, dict):
+                step_config = raw_step_config
+            elif isinstance(raw_step_config, str):
+                try:
+                    step_config = json.loads(raw_step_config or "{}") or {}
+                except Exception:
+                    step_config = {}
+            else:
+                step_config = {}
+            latest_execution = None
+            inspection_budget_evidence: dict[str, Any] = {}
+            if bool(step_config.get("read_only")) or isinstance(step_config.get("inspection_budget"), dict):
+                try:
+                    from sqlalchemy import func
+                    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+                    latest_execution = (
+                        db.query(ProjectExecutionSession)
+                        .filter(ProjectExecutionSession.run_id == int(run_id))
+                        .filter(ProjectExecutionSession.step_id == int(step_id))
+                        .order_by(ProjectExecutionSession.started_at.desc(), ProjectExecutionSession.id.desc())
+                        .first()
+                    )
+                    if latest_execution and bool(step_config.get("read_only")):
+                        execution_output = json.loads(latest_execution.output_packet or "{}") or {}
+                        if bool(execution_output.get("read_only_violation")):
+                            read_only_evidence = dict(execution_output.get("workspace_state_delta") or {})
+                    if latest_execution and isinstance(step_config.get("inspection_budget"), dict):
+                        observed_calls = int(
+                            db.query(func.count(ProjectExecutionEvent.id))
+                            .filter(ProjectExecutionEvent.session_id == int(latest_execution.id))
+                            .filter(ProjectExecutionEvent.event_type == "tool_execution_start")
+                            .scalar()
+                            or 0
+                        )
+                        inspection_budget_evidence = _inspection_budget_violation(
+                            step_config,
+                            observed_calls,
+                            complexity=str(latest_execution.complexity or "medium"),
+                        )
+                        if inspection_budget_evidence:
+                            inspection_budget_evidence["execution_session_id"] = int(latest_execution.id)
+                except Exception:
+                    logger.debug("Workflow evidence gates could not inspect execution evidence", exc_info=True)
+            missing_expected_outputs = _missing_expected_outputs(
+                result,
+                list(step_config.get("expected_outputs") or []),
+            )
+            acceptance_findings = ticket_acceptance_findings(
+                step,
+                result,
+                ticket_context,
+                project_id=verify_project_id,
+            )
+            protected_scope_conflicts = _protected_scope_conflicts(ticket_context, result)
             orchestrator_overlay = None
             try:
                 from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
@@ -179,9 +467,53 @@ class StepRouter:
             except Exception:
                 logger.debug("Orchestrator validator overlay skipped", exc_info=True)
 
+            # These are deterministic contract gates. An LLM validator may add
+            # useful judgment but cannot overrule file-system evidence or omit
+            # fields that downstream steps explicitly require.
+            if (
+                read_only_evidence
+                or inspection_budget_evidence
+                or missing_expected_outputs
+                or acceptance_findings
+                or protected_scope_conflicts
+            ):
+                verified_passed = False
+
             validation_snapshot = build_validation_snapshot(
                 step, result, passed, verified_passed, project_id=verify_project_id
             )
+            if read_only_evidence:
+                validation_snapshot["read_only_violation"] = read_only_evidence
+                validation_snapshot["correction_hint"] = (
+                    "This step is read-only but changed workspace files. Revert only the files listed in the read-only evidence, "
+                    "then rerun the step without writing project artifacts."
+                )
+            if inspection_budget_evidence:
+                validation_snapshot["inspection_budget_violation"] = inspection_budget_evidence
+                validation_snapshot["correction_hint"] = (
+                    "The model inspected too broadly. Reuse the existing context packet and inspect only "
+                    f"the files needed for this step within {inspection_budget_evidence['max_tool_calls']} tool calls."
+                )
+            if missing_expected_outputs:
+                validation_snapshot["missing_expected_outputs"] = missing_expected_outputs
+                validation_snapshot["correction_hint"] = (
+                    "Return the missing named handoff fields without repeating full logs: "
+                    + ", ".join(missing_expected_outputs)
+                    + ". Use N/A with a ticket-specific reason when a conditional field does not apply."
+                )
+            if acceptance_findings:
+                validation_snapshot["ticket_acceptance_findings"] = acceptance_findings
+                validation_snapshot["correction_hint"] = " ".join(
+                    item["correction_hint"] for item in acceptance_findings if item.get("correction_hint")
+                )
+            if protected_scope_conflicts:
+                validation_snapshot["protected_scope_conflicts"] = protected_scope_conflicts
+                validation_snapshot["correction_hint"] = (
+                    "The proposed handoff conflicts with an explicit ticket preservation constraint. "
+                    "Remove the destructive action and preserve/inventory these targets only: "
+                    + ", ".join(sorted({item["target"] for item in protected_scope_conflicts}))
+                    + "."
+                )
             if orchestrator_overlay:
                 validation_snapshot["orchestrator_validator"] = orchestrator_overlay
                 if not verified_passed:
@@ -221,6 +553,17 @@ class StepRouter:
             db.add(step_result_row)
             db.flush()
 
+            interrupt = self._maybe_enter_control_interrupt(
+                db,
+                run=run,
+                step=step,
+                run_id=run_id,
+                result=result,
+                verified_passed=bool(verified_passed),
+            )
+            if interrupt:
+                return interrupt
+
             run = db.query(AutoWorkflowRun).filter(
                 AutoWorkflowRun.id == run_id,
             ).first()
@@ -230,7 +573,14 @@ class StepRouter:
                 return {"action": "end_run", "status": status}
 
             # ── determine next step ──
-            decision = self._determine_next(db, step, run, verified_passed, result)
+            decision = self._determine_next(
+                db,
+                step,
+                run,
+                verified_passed,
+                result,
+                validation_snapshot=validation_snapshot,
+            )
             emit_step_activity(
                 run_id=run_id,
                 step_id=step_id,
@@ -272,6 +622,11 @@ class StepRouter:
                             or f"{step.name or f'Step {step_id}'} failed validation; use a different viable worker for correction."
                         ),
                         settings=load_settings_from_db(),
+                        actual_route=(
+                            dict(run_data.get("execution_route") or {})
+                            if isinstance(run_data.get("execution_route"), dict)
+                            else {}
+                        ),
                     )
                     run_data["coordination_plan"] = coordination_plan
                     planned_step_routes, planned_role_routes = coordination_plan_routes(coordination_plan)
@@ -565,11 +920,6 @@ class StepRouter:
                 # Persist feedback in run_data for downstream steps
                 run_data["feedback"] = feedback.strip()
                 run.run_data = json.dumps(run_data)
-                try:
-                    from distr.core.workflow.standards_memory import capture_feedback_as_standard
-                    capture_feedback_as_standard(run.workflow_id, feedback)
-                except Exception as exc:
-                    logger.debug("Could not capture workflow feedback as standard: %s", exc)
 
             # Transition back to running
             run.status = "running"
@@ -653,8 +1003,17 @@ class StepRouter:
         run: AutoWorkflowRun,
         verified_passed: bool,
         result: str,
+        validation_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Pick the next step based on routing_mode. Mutates run in-place."""
+        retry_decision = self._bounded_validation_retry(
+            step,
+            run,
+            verified_passed=verified_passed,
+            validation_snapshot=validation_snapshot or {},
+        )
+        if retry_decision:
+            return retry_decision
         routing_mode = (step.routing_mode or "static").strip().lower()
 
         if routing_mode == "agent_decision":
@@ -713,6 +1072,67 @@ class StepRouter:
         }
 
     @staticmethod
+    def _bounded_validation_retry(
+        step: AutoWorkflowStep,
+        run: AutoWorkflowRun,
+        *,
+        verified_passed: bool,
+        validation_snapshot: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Retry a correctable step with its compact validator finding.
+
+        This is deliberately bounded by the step's explicit ``max_retries``.
+        It is not a general autonomous correction loop and cannot silently
+        turn one rejected result into unlimited provider spend.
+        """
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        retry_counts = dict(run_data.get("step_retry_counts") or {})
+        key = str(step.id)
+        if verified_passed:
+            if key in retry_counts:
+                retry_counts.pop(key, None)
+                run_data["step_retry_counts"] = retry_counts
+                run.run_data = json.dumps(run_data)
+            return None
+        max_retries = max(0, int(getattr(step, "max_retries", 0) or 0))
+        used = max(0, int(retry_counts.get(key) or 0))
+        correction_hint = str(validation_snapshot.get("correction_hint") or "").strip()
+        if not correction_hint or used >= max_retries:
+            return None
+        retry_counts[key] = used + 1
+        run_data["step_retry_counts"] = retry_counts
+        run_data["feedback"] = (
+            "The previous result failed deterministic validation. Correct only this finding and "
+            "return the same compact expected-output contract; do not repeat the repository scan: "
+            + correction_hint
+        )
+        run_data["last_validation_correction"] = {
+            "step_id": int(step.id),
+            "attempt": used + 1,
+            "max_retries": max_retries,
+            "correction_hint": correction_hint,
+        }
+        current_route = run_data.get("execution_route")
+        if (
+            isinstance(current_route, dict)
+            and str(current_route.get("source") or "") == "orchestrator_override"
+        ):
+            run_data["approved_route_override"] = dict(current_route)
+        run.run_data = json.dumps(run_data)
+        run.current_step_id = int(step.id)
+        return {
+            "action": "next_step",
+            "step_id": int(step.id),
+            "wait_before_next": 0,
+            "validation_retry": True,
+            "retry_attempt": used + 1,
+            "max_retries": max_retries,
+        }
+
+    @staticmethod
     def _run_ticket_text(db, run: AutoWorkflowRun) -> str:
         parts: list[str] = []
         try:
@@ -763,14 +1183,24 @@ class StepRouter:
         if (
             not verified_passed
             and int(run_data.get("validation_stalled_step_id") or 0) == int(step.id)
+            and str(run_data.get("waiting_kind") or "") == "control_interrupt"
         ):
-            report_step = self._report_step(db, int(run.workflow_id))
+            # Control interrupt already paused the run for a human decision.
+            return next_step_id
+
+        if (
+            not verified_passed
+            and int(run_data.get("validation_stalled_step_id") or 0) == int(step.id)
+        ):
             run_data["forced_terminal_status"] = "failed"
             run_data["terminal_warning"] = (
                 "Validation repeated without a new actionable finding; the run stopped instead of looping again."
             )
             run.run_data = json.dumps(run_data)
-            return report_step.id if report_step and report_step.id != step.id else -1
+            # The canonical result packet and audit ledger already contain the
+            # failed attempts. Do not spend another model call asking a report
+            # worker to narrate a failure it cannot repair.
+            return -1
 
         ticket_text = self._run_ticket_text(db, run)
         profile = classify_ticket_execution(ticket_text)
@@ -823,17 +1253,114 @@ class StepRouter:
                 run_data.pop("validation_stalled_step_id", None)
         elif caller_passed:
             expected = " ".join(str(validation_snapshot.get("expected") or "").lower().split())
-            signature = hashlib.sha256(expected.encode("utf-8")).hexdigest()[:16]
+            correction = " ".join(
+                str(validation_snapshot.get("correction_hint") or "").lower().split()
+            )
+            finding_codes = ",".join(
+                sorted(
+                    str(item.get("code") or "")
+                    for item in (validation_snapshot.get("ticket_acceptance_findings") or [])
+                    if isinstance(item, dict) and item.get("code")
+                )
+            )
+            signature_basis = "\n".join((expected, correction, finding_codes))
+            signature = hashlib.sha256(signature_basis.encode("utf-8")).hexdigest()[:16]
             previous = dict(state.get(key) or {})
             count = int(previous.get("count") or 0) + 1 if previous.get("signature") == signature else 1
             state[key] = {"signature": signature, "count": count}
             if count >= 2:
                 run_data["validation_stalled_step_id"] = int(step.id)
                 run_data["validation_stall_count"] = count
+                run_data["consecutive_step_failures"] = max(
+                    int(run_data.get("consecutive_step_failures") or 0),
+                    count,
+                )
         else:
             state.pop(key, None)
+        if verified_passed:
+            run_data["consecutive_step_failures"] = 0
+        elif not caller_passed:
+            run_data["consecutive_step_failures"] = int(run_data.get("consecutive_step_failures") or 0) + 1
         run_data["validation_progress"] = state
         run.run_data = json.dumps(run_data)
+
+    def _maybe_enter_control_interrupt(
+        self,
+        db,
+        *,
+        run: AutoWorkflowRun | None,
+        step: AutoWorkflowStep,
+        run_id: int,
+        result: str,
+        verified_passed: bool,
+    ) -> Dict[str, Any] | None:
+        """Pause for Paul when automatic retries would only waste another loop."""
+        if not run or verified_passed:
+            return None
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        repeated = max(
+            int(run_data.get("consecutive_step_failures") or 0),
+            int(run_data.get("validation_stall_count") or 0),
+        )
+        stalled = int(run_data.get("validation_stalled_step_id") or 0) == int(step.id)
+        if repeated < 2 and not stalled:
+            return None
+        from distr.core.workflow.control_policy import decide_interruption
+
+        decision = decide_interruption(repeated_failures=max(repeated, 2 if stalled else repeated))
+        if not decision.should_interrupt:
+            return None
+        prompt = decision.question
+        if decision.recommendation:
+            prompt = (
+                f"{decision.question} I recommend: {decision.recommendation} "
+                "Reply with a choice, steer the run, or stop it."
+            ).strip()
+        run_data["waiting_kind"] = "control_interrupt"
+        run_data["waiting_prompt"] = prompt
+        run_data["waiting_result"] = result or ""
+        run_data["waiting_passed"] = False
+        run_data["interrupt_context"] = decision.to_dict()
+        run_data["human_intervention_state"] = "needs_human_input"
+        run_data["next_action"] = "needs_human_input"
+        run.run_data = json.dumps(run_data)
+        db.flush()
+        try:
+            from distr.core.orchestration_events import emit_orchestration_event
+
+            emit_orchestration_event(
+                source="workflow",
+                event_type="needs_input",
+                status="waiting",
+                workflow_id=run.workflow_id,
+                run_id=run_id,
+                step_id=int(step.id),
+                ticket_id=getattr(run, "ticket_id", None),
+                board_id=getattr(run, "board_id", None),
+                summary=decision.question,
+                payload={"interruption": decision.to_dict()},
+            )
+        except Exception:
+            logger.debug("Could not emit control interrupt event", exc_info=True)
+        try:
+            from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+
+            options = ", ".join(decision.options) if decision.options else "Steer, Stop"
+            notify_ticket_workflow_progress(
+                run_id=run_id,
+                step_id=int(step.id),
+                body=f"{prompt} Options: {options}.",
+                voice_body=decision.question,
+                state_fingerprint=f"control-interrupt:{run_id}:{step.id}:{repeated}",
+                priority="high",
+                requires_response=True,
+            )
+        except Exception:
+            logger.debug("Could not notify control interrupt", exc_info=True)
+        return self._enter_wait_state(db, step, run_id, prompt, False)
 
     # ── Static routing ──────────────────────────────────────────────
 
@@ -1112,9 +1639,27 @@ class StepRouter:
             run_data = json.loads(run.run_data or "{}")
             run_data["waiting_result"] = result
             run_data["waiting_passed"] = passed
-            run_data["waiting_prompt"] = handoff["prompt"]
             if not run_data.get("waiting_kind"):
                 run_data["waiting_kind"] = ""
+            run_data["waiting_prompt"] = _effective_wait_prompt(
+                run_data,
+                default_prompt=handoff["prompt"],
+                result=result,
+            )
+            waiting_kind = str(run_data.get("waiting_kind") or "").strip().lower()
+            if waiting_kind in {
+                "control_interrupt",
+                "route_approval",
+                "approval",
+                "provider_preflight",
+                "ide_handoff",
+            }:
+                try:
+                    from distr.core.workflow.blueprint_adherence import update_drift_metrics
+
+                    run_data = update_drift_metrics(run_data, human_takeover=True)
+                except Exception:
+                    logger.debug("Could not update drift metrics on wait", exc_info=True)
             run.run_data = json.dumps(run_data)
         db.add(AutoWorkflowStepResult(
             step_id=step_id,
@@ -1123,6 +1668,16 @@ class StepRouter:
             status="waiting",
         ))
         if run and getattr(run, "ticket_id", None):
+            try:
+                from distr.core.db.kanban import KanbanTicket
+
+                waiting_ticket = db.query(KanbanTicket).filter(
+                    KanbanTicket.id == int(run.ticket_id)
+                ).first()
+                if waiting_ticket:
+                    waiting_ticket.workflow_status = "waiting"
+            except Exception:
+                logger.debug("Could not align ticket waiting state", exc_info=True)
             append_ticket_audit_entry(
                 db,
                 ticket_id=int(run.ticket_id),
@@ -1156,8 +1711,19 @@ class StepRouter:
             step_name=step_name,
             summary=result or "Workflow is waiting for input.",
         )
-        self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
-        self._notify_main_agent(workflow_id, run_id, handoff, result_text=result)
+        waiting_kind = ""
+        if run:
+            try:
+                waiting_kind = str((json.loads(run.run_data or "{}") or {}).get("waiting_kind") or "")
+            except Exception:
+                waiting_kind = ""
+        # Provider decisions have a dedicated notification below containing the
+        # exact failure, recommendation, and actions. Emitting the generic wait
+        # signal first caused TTS to say only "needs your input" and hid the
+        # actual question behind a second message.
+        if waiting_kind != "provider_preflight":
+            self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
+            self._notify_main_agent(workflow_id, run_id, handoff, result_text=result)
         if run:
             try:
                 latest_data = json.loads(run.run_data or "{}") or {}
@@ -1173,7 +1739,7 @@ class StepRouter:
                     notify_ticket_workflow_progress(
                         run_id=run_id,
                         step_id=step_id,
-                        body=question + " Approve to proceed, or Stop to cancel.",
+                        body=question,
                         voice_body=question,
                         state_fingerprint=f"provider-preflight:{run_id}:{step_id}",
                         priority="high",
@@ -1338,13 +1904,22 @@ class StepRouter:
         """Mark run as completed and return end_run decision."""
         run.status = status
         run.completed_at = utc_now_naive()
+        try:
+            run_data = json.loads(run.run_data or "{}") or {}
+        except Exception:
+            run_data = {}
+        try:
+            from distr.core.workflow.blueprint_adherence import update_drift_metrics
+
+            run_data = update_drift_metrics(
+                run_data,
+                completed=(str(status or "").lower() == "completed"),
+            )
+        except Exception:
+            logger.debug("Could not update drift metrics on end_run", exc_info=True)
         if warning:
-            try:
-                run_data = json.loads(run.run_data or "{}") or {}
-            except Exception:
-                run_data = {}
             run_data["terminal_warning"] = warning
-            run.run_data = json.dumps(run_data)
+        run.run_data = json.dumps(run_data)
         decision: Dict[str, Any] = {
             "action": "end_run",
             "status": status,
@@ -1371,7 +1946,9 @@ class StepRouter:
         if not is_ide_handoff_result(result_text):
             try:
                 from distr.core.signals import speak_text_directly_event_queue
-                speak_text_directly_event_queue(handoff["tts"])
+                from distr.core.kanban.ticket_workflow_engagement import prepare_workflow_voice_text
+
+                speak_text_directly_event_queue(prepare_workflow_voice_text(handoff["tts"]))
             except Exception as e:
                 logger.debug("Could not speak wait notification: %s", e)
 

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from distr.core.kanban.ticket_workflow_engagement import (
     notify_ticket_workflow_progress,
+    prepare_workflow_voice_text,
     record_ticket_workflow_elapsed,
 )
 from distr.core.workflow.router import StepRouter
@@ -57,7 +58,7 @@ def test_research_completion_requires_artifacts_and_no_blockers():
     assert existing_work_satisfies_contract(
         screenshot_contract,
         COMPLETE_REPORT + "\nScreenshot: docs/evidence/home.png",
-    ) is True
+    ) is False
 
 
 def test_research_overlay_reframes_generic_implementation_step():
@@ -65,6 +66,17 @@ def test_research_overlay_reframes_generic_implementation_step():
 
     assert "explicit no-code contract" in overlay
     assert "research, documentation, and evidence" in overlay
+
+
+def test_research_overlay_makes_explicit_browser_evidence_non_optional():
+    ticket = RESEARCH_TICKET + "\nBrowser evidence required: screenshots of Spotify and YouTube."
+
+    review = step_scope_overlay("Independently review and validate", ticket)
+    ingest = step_scope_overlay("Understand ticket and acceptance criteria", ticket)
+
+    assert "screenshots/recordings are not N/A" in review
+    assert "single explicitly identified preservation surface" in ingest
+    assert "do not explore unrelated implementation components" in ingest
 
 
 def test_ingestion_short_circuits_existing_research_artifacts_to_report():
@@ -118,6 +130,62 @@ def test_repeated_validator_disagreement_stops_after_second_identical_gate():
     assert state["validation_stall_count"] == 2
 
 
+def test_new_actionable_validation_finding_does_not_count_as_identical_stall():
+    router = StepRouter()
+    run = SimpleNamespace(id=8, run_data="{}")
+    review = SimpleNamespace(id=40)
+
+    router._record_validation_progress(
+        run,
+        review,
+        caller_passed=True,
+        verified_passed=False,
+        validation_snapshot={"expected": "Acceptance criteria are covered."},
+    )
+    router._record_validation_progress(
+        run,
+        review,
+        caller_passed=True,
+        verified_passed=False,
+        validation_snapshot={
+            "expected": "Acceptance criteria are covered.",
+            "correction_hint": "Capture the missing Spotify and YouTube screenshots.",
+            "ticket_acceptance_findings": [{"code": "missing_browser_media"}],
+        },
+    )
+
+    state = json.loads(run.run_data)
+    assert "validation_stalled_step_id" not in state
+    assert state["validation_progress"]["40"]["count"] == 1
+
+
+def test_repeated_validator_disagreement_ends_without_spending_a_reporting_model_call():
+    router = StepRouter()
+    run = SimpleNamespace(
+        id=8,
+        workflow_id=3,
+        run_data=json.dumps({
+            "ticket_workflow_brief": RESEARCH_TICKET,
+            "validation_stalled_step_id": 40,
+        }),
+    )
+    step = SimpleNamespace(id=40, position=0, name="Understand ticket")
+
+    target = router._apply_ticket_contract_routing(
+        MagicMock(),
+        run,
+        step,
+        41,
+        verified_passed=False,
+        result="Status: completed\nSummary: malformed handoff",
+    )
+
+    assert target == -1
+    state = json.loads(run.run_data)
+    assert state["forced_terminal_status"] == "failed"
+    assert "stopped instead of looping" in state["terminal_warning"]
+
+
 def test_routine_workflow_progress_is_feed_only():
     with (
         patch(
@@ -139,6 +207,25 @@ def test_routine_workflow_progress_is_feed_only():
     chat_event.assert_called_once()
     ledger_event.assert_called_once()
     decide.assert_not_called()
+
+
+def test_workflow_voice_text_keeps_the_decision_and_drops_internal_telemetry():
+    spoken = prepare_workflow_voice_text(
+        "Workflow run #108 for ticket #178 reached step 3 of 7 at 2026-07-19 14:05. "
+        "I need your approval before switching to the recommended free model. "
+        "Elapsed 12m 4s. Details: /Users/paul/project/settings_local.py"
+    )
+
+    assert spoken == (
+        "This workflow for the ticket reached this phase. "
+        "I need your approval before switching to the recommended free model."
+    )
+    assert "108" not in spoken
+    assert "178" not in spoken
+    assert "2026" not in spoken
+    assert "14:05" not in spoken
+    assert "Elapsed" not in spoken
+    assert "/Users/" not in spoken
 
 
 def test_worker_session_lifecycle_is_not_an_audible_notification():

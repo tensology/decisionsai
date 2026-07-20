@@ -380,6 +380,8 @@ class InitiativeService:
         self._consecutive_cycle_failures: int = 0
         self._last_cycle_success_at: Optional[float] = None
         self._last_cycle_failure_at: Optional[float] = None
+        self._last_chat_stream_finished_at: Optional[float] = None
+        self._cycle_situational: dict = {}
         # Proposal dedup: track (action_type, payload_hash, timestamp) so the
         # same action is not repeatedly proposed within cooldown_seconds.
         self._recent_proposals: deque = deque()
@@ -510,6 +512,7 @@ class InitiativeService:
     def _reset_idle_timer(self, chat_id: int = 0) -> None:
         # This method can be called from worker threads (initiative cycle),
         # so marshal the timer mutation onto the Qt thread.
+        self._last_chat_stream_finished_at = time.time()
         self._qt_bridge.reset_idle_timer_requested.emit()
         logger.debug("InitiativeService: idle timer reset requested (chat_id=%s)", chat_id)
 
@@ -571,6 +574,16 @@ class InitiativeService:
             tick_sidecar_tool_availability()
         except Exception:
             logger.debug("tick_sidecar_tool_availability skipped", exc_info=True)
+        try:
+            from distr.core.desktop_awareness import (
+                purge_dead_desktop_awareness,
+                refresh_desktop_awareness_cache,
+            )
+
+            purge_dead_desktop_awareness()
+            refresh_desktop_awareness_cache()
+        except Exception:
+            logger.debug("desktop_awareness refresh skipped", exc_info=True)
         # R3: DB-backed proactive tasks (Morning Brief, planners, etc.)
         self._maybe_run_proactive_scheduler()
         try:
@@ -675,6 +688,24 @@ class InitiativeService:
         return build_initiative_boundaries(settings)
 
     @staticmethod
+    def _proposal_from_handoff_resume(bundle, level: str) -> ProposedAction | None:
+        """After long Decisions-chat idle, prefer resuming from handoff over work_scan."""
+        if level == "observe":
+            return None
+        from distr.core.initiative.situational import handoff_resume_proposal
+
+        raw = handoff_resume_proposal(getattr(bundle, "situational", None))
+        if not raw:
+            return None
+        return ProposedAction(
+            action_type=raw.get("action_type") or "suggestion",
+            description=raw.get("description") or "Resume from handoff.",
+            payload=raw.get("payload") if isinstance(raw.get("payload"), dict) else {},
+            draft=raw.get("draft") or "",
+            telegram_message=raw.get("telegram_message") or "",
+        )
+
+    @staticmethod
     def _proposal_from_work_scan(bundle, settings: dict, level: str) -> ProposedAction | None:
         if level == "observe":
             return None
@@ -737,10 +768,13 @@ class InitiativeService:
         logger.debug("InitiativeService: cycle started (trigger=%s)", trigger_source)
         cycle_ok = False
         try:
+            prev_cycle_at = self._last_cycle_success_at or self._last_cycle_at
             self._last_cycle_at = time.time()
             self._cycle_count += 1
+            self._cycle_situational = {}
             from distr.core.utils import load_settings_from_db
             from distr.core.initiative.policy import evaluate, migrate_initiative_level
+            from distr.core.initiative.situational import build_situational
 
             try:
                 settings = load_settings_from_db()
@@ -756,8 +790,20 @@ class InitiativeService:
 
             # Assemble context
             bundle = self._context_assembler.build(settings)
+            try:
+                bundle.situational = build_situational(
+                    active_project=bundle.active_project,
+                    developer_context=bundle.developer_context,
+                    last_cycle_at=prev_cycle_at,
+                    last_chat_stream_at=self._last_chat_stream_finished_at,
+                )
+            except Exception:
+                logger.warning("InitiativeService: situational enrich failed", exc_info=True)
+            self._cycle_situational = dict(bundle.situational or {})
 
-            action = self._proposal_from_work_scan(bundle, settings, level)
+            action = self._proposal_from_handoff_resume(bundle, level)
+            if action is None:
+                action = self._proposal_from_work_scan(bundle, settings, level)
             if action is None:
                 # Call LLM
                 try:
@@ -815,6 +861,7 @@ class InitiativeService:
                 self._record_cycle_success()
             else:
                 self._record_cycle_failure()
+            self._cycle_situational = {}
             with self._cycle_lock:
                 self._cycle_running = False
             logger.debug("InitiativeService: cycle finished (trigger=%s)", trigger_source)
@@ -1099,13 +1146,17 @@ class InitiativeService:
             "chat_history": bundle.chat_history,
             "active_project": bundle.active_project,
             "kanban_summary": bundle.kanban_summary,
+            "board_notes": (bundle.board_notes or [])[:12],
+            "scheduled_sessions": (bundle.scheduled_sessions or [])[:10],
             "stuck_tasks": bundle.stuck_tasks,
             "unfinished_workflows": bundle.unfinished_workflows,
             "available_tools": bundle.available_tools[:15],
             "skills": bundle.skills[:10],
             "recent_audit": bundle.recent_audit[:10],
+            "developer_context_text": getattr(bundle, "developer_context_text", "") or "",
             "developer_context": bundle.developer_context,
             "work_scan": bundle.work_scan,
+            "situational": getattr(bundle, "situational", None) or {},
             "memory_files_trimmed": {
                 "has_agent": bool(bundle.memory_agent),
                 "has_user": bool(bundle.memory_user),
@@ -1222,18 +1273,25 @@ class InitiativeService:
                 + "\n\n"
             )
 
+        from distr.core.initiative.situational import format_situational_prompt_block
+
+        situational_block = format_situational_prompt_block(getattr(bundle, "situational", None))
+
         return (
             f"You are an autonomous agent assistant. Initiative level: {level}.\n"
             f"Current datetime: {bundle.current_datetime}\n"
             f"Boundary settings: {boundary_info}\n\n"
+            f"{situational_block}"
             f"{role_instruction}\n\n"
             f"{memory_block}"
-            "Context available: active project, ticket boards and tickets, "
-            "workflows (stuck/unfinished), recent tool audit trail, available tools, "
-            "available skills, and trimmed AGENT/USER/MEMORY markdown files when present.\n\n"
+            "Context available: active project, ticket boards and tickets, board notes, "
+            "scheduled sessions, workflows (stuck/unfinished), recent tool audit trail, "
+            "available tools, available skills, developer_context_text, situational spine, "
+            "and trimmed AGENT/USER/MEMORY markdown files when present.\n\n"
             f"{rubric_help}"
             "Use work_scan when present. It contains read-only observations and candidate "
             "proposals from boards, workflows, WhatsApp, Telegram, and future email sources. "
+            "Respect situational idle/chat gaps and handoff_peek when proposing follow-ups. "
             "Based on the context, propose ONE action. "
             "Respond with a JSON object (no markdown fences) with fields:\n"
             "  action_type: suggestion | routine_task | board_triage | ticket_lane_move | "
@@ -1379,6 +1437,12 @@ class InitiativeService:
     # Delivery helpers
     # ------------------------------------------------------------------
 
+    def _situational_suffix(self) -> str:
+        from distr.core.initiative.situational import situational_one_liner
+
+        line = situational_one_liner(self._cycle_situational)
+        return f" [{line}]" if line else ""
+
     def _deliver_suggestion(
         self, action: ProposedAction, settings: dict, tier=None
     ) -> None:
@@ -1396,6 +1460,7 @@ class InitiativeService:
             tn = action.suggested_tool.get("name", "")
             if tn:
                 msg = f"{msg} (You can ask me to use the {tn} tool for this.)"
+        msg = f"{msg}{self._situational_suffix()}"
         self._log_to_chat(f"Suggestion: {msg}", settings)
         if action.action_type in ("board_triage", "message_triage", "email_triage") and not settings.get("initiative_telegram_notify_suggestions", False):
             logger.info(
@@ -1630,11 +1695,11 @@ class InitiativeService:
         entry = DraftEntry(
             id=str(uuid.uuid4()),
             action_type=action.action_type,
-            description=action.description,
+            description=f"{action.description}{self._situational_suffix()}".strip(),
             draft=action.draft or action.description,
             reason=reason,
             created_at=now.isoformat(),
-            expires_at=(now + timedelta(hours=48)).isoformat(),
+            expires_at=(now + timedelta(hours=24)).isoformat(),
             permission_tier=int(resolved_tier),
             execute_payload=(
                 {

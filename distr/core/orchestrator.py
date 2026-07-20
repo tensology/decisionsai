@@ -52,13 +52,25 @@ _HANDOFF_SECRET_KEY_RE = re.compile(
     r"(api[_-]?key|token|secret|password|authorization|bearer|credential|client[_-]?secret)",
     re.IGNORECASE,
 )
+_HANDOFF_SAFE_TOKEN_METRIC_KEY_RE = re.compile(
+    r"(?:^|_)(?:input|output|total|cached?|cache[_-]?(?:read|write))?[_-]?tokens?(?:[_-]?(?:count|used))?$",
+    re.IGNORECASE,
+)
 _HANDOFF_SECRET_VALUE_RE = re.compile(
-    r"(?i)((?:internal_token|api[_-]?key|token|secret|password)=)[^&\s\"']+|(bearer\s+)[a-z0-9._\-+/=]{12,}|(sk-[a-z0-9_\-]{12,})|(?<![/\w.-])([a-z0-9_\-]{32,})(?![/\w.-])"
+    r"(?i)((?:internal_token|api[_-]?key|token|secret|password)=)[^&\s\"']+|(bearer\s+)[a-z0-9._\-+/=]{12,}|(sk-[a-z0-9_\-]{12,})"
+)
+_HANDOFF_NAMED_SECRET_RE = re.compile(
+    r"(?ix)"
+    r"(`?\b(?:django[_-]?)?(?:secret[_-]?key|api[_-]?key|access[_-]?token|token|secret|password|credential)\b`?"
+    r"(?:\s+(?:was|is)\s+(?:an?\s+)?(?:hard[- ]coded\s+)?(?:real\s+)?value)?"
+    r"\s*(?:[:=]\s*|\(\s*)?`?)"
+    r"(['\"])[^'\"\r\n]{6,}\2"
 )
 
 
 def _redact_handoff_text(value: str) -> str:
-    return _HANDOFF_SECRET_VALUE_RE.sub(lambda m: (m.group(1) or m.group(2) or "") + "[redacted]", value or "")
+    text = _HANDOFF_NAMED_SECRET_RE.sub(lambda m: f"{m.group(1)}[redacted]", value or "")
+    return _HANDOFF_SECRET_VALUE_RE.sub(lambda m: (m.group(1) or m.group(2) or "") + "[redacted]", text)
 
 
 def redact_handoff_payload(value: Any) -> Any:
@@ -67,7 +79,8 @@ def redact_handoff_payload(value: Any) -> Any:
         redacted: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
-            if _HANDOFF_SECRET_KEY_RE.search(key_text):
+            metric_key = re.sub(r"(?<!^)(?=[A-Z])", "_", key_text).lower()
+            if _HANDOFF_SECRET_KEY_RE.search(key_text) and not _HANDOFF_SAFE_TOKEN_METRIC_KEY_RE.fullmatch(metric_key):
                 redacted[key_text] = "[redacted]"
             else:
                 redacted[key_text] = redact_handoff_payload(item)
@@ -203,6 +216,8 @@ def record_human_intervention_memory(
     project_id: int | None = None,
     execution_session_id: int | None = None,
     handoff_event_id: int | None = None,
+    learning_enabled: bool | None = None,
+    promote_after: int = 2,
 ) -> int | None:
     """Persist user steering or corrections as durable mistake memory."""
     normalized = normalize_mistake_label(label)
@@ -235,6 +250,8 @@ def record_human_intervention_memory(
         rule_type="human_intervention",
         summary=summary,
         payload=payload,
+        enabled=learning_enabled,
+        promote_after=promote_after,
     )
     return event_id
 
@@ -1070,8 +1087,15 @@ def record_learning_signal(
     rule_type: str = "validation_failure",
     summary: str = "",
     payload: dict[str, Any] | None = None,
+    enabled: bool | None = None,
+    promote_after: int = 1,
 ) -> int | None:
-    """Upsert a lightweight learned rule from validation or IDE iteration."""
+    """Upsert a learned rule, optionally keeping it disabled until repeated.
+
+    Existing callers keep their historical immediate-promotion behaviour. New
+    workflow feedback paths pass ``enabled=False`` and ``promote_after=2`` so a
+    single steer remains evidence rather than silently becoming policy.
+    """
     text = (summary or "").strip()
     if not text:
         return None
@@ -1081,6 +1105,7 @@ def record_learning_signal(
     if normalized_scope not in {"global", "board", "project"}:
         normalized_scope = "board"
     rule_key = text[:500]
+    threshold = max(1, min(int(promote_after or 1), 20))
 
     with get_session() as session:
         query = (
@@ -1098,7 +1123,14 @@ def record_learning_signal(
         if row:
             row.evidence_count = int(row.evidence_count or 0) + 1
             row.confidence = min(0.95, float(row.confidence or 0.5) + 0.05)
-            row.payload = _json_dumps({"latest": payload or {}, "merged": _json_loads(row.payload) or {}})
+            prior_payload = _json_loads(row.payload) or {}
+            row.payload = _json_dumps({
+                "latest": payload or {},
+                "merged": prior_payload,
+                "promotion_threshold": threshold,
+            })
+            if enabled is True or int(row.evidence_count or 0) >= threshold:
+                row.enabled = 1
             row.updated_at = now
         else:
             row = OrchestratorLearnedRule(
@@ -1106,22 +1138,27 @@ def record_learning_signal(
                 scope_id=int(scope_id) if scope_id is not None else None,
                 rule_type=(rule_type or "validation_failure").strip() or "validation_failure",
                 summary=rule_key,
-                payload=_json_dumps(payload or {}),
+                payload=_json_dumps({
+                    **(payload or {}),
+                    "promotion_threshold": threshold,
+                }),
                 confidence=0.5,
                 evidence_count=1,
-                enabled=1,
+                enabled=1 if enabled is not False and threshold <= 1 else 0,
                 created_at=now,
                 updated_at=now,
             )
             session.add(row)
         session.commit()
         rule_id = int(row.id)
+        evidence_count = int(row.evidence_count or 0)
+        is_enabled = bool(row.enabled)
 
     try:
         emit_event(
             source="orchestrator_learning",
             event_type="learned_rule_updated",
-            status="recorded",
+            status="promoted" if is_enabled else "candidate",
             board_id=scope_id if normalized_scope == "board" else None,
             project_id=scope_id if normalized_scope == "project" else None,
             summary=f"Learned rule updated: {rule_key[:180]}",
@@ -1130,7 +1167,9 @@ def record_learning_signal(
                 "scope": normalized_scope,
                 "scope_id": scope_id,
                 "rule_type": rule_type,
-                "evidence_count": row.evidence_count,
+                "evidence_count": evidence_count,
+                "enabled": is_enabled,
+                "promotion_threshold": threshold,
             },
         )
     except Exception:

@@ -29,6 +29,21 @@ def test_infer_skills_for_ticket_gemini():
     assert "gemini-api" in skills
 
 
+def test_preserved_frontend_does_not_provision_frontend_skills():
+    skills = infer_skills_for_ticket(
+        "Verify the Django backend. Preserve the existing frontend and TrackPlayer work."
+    )
+
+    assert "frontend-design" not in skills
+    assert "webapp-testing" not in skills
+
+
+def test_explicit_ui_change_still_provisions_frontend_skills():
+    skills = infer_skills_for_ticket("Redesign the responsive React homepage layout.")
+
+    assert "frontend-design" in skills
+
+
 def test_filter_known_skill_ids_drops_unknown():
     known = filter_known_skill_ids(["gemini-api", "not-a-real-skill", "bigquery-basics"])
     assert known == ["gemini-api", "bigquery-basics"]

@@ -191,12 +191,16 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
     steps = planned["steps"]
     assert len(steps) == 7
     assert steps[0]["title"] == "Understand ticket and acceptance criteria"
-    assert steps[1]["title"] == "Create the implementation plan"
+    assert steps[1]["title"] == "Confirm ticket execution contract"
     assert steps[2]["title"] == "Implement the planned change"
     assert steps[3]["title"] == "Independently review and validate the change"
     assert steps[4]["title"] == "Correct defects found by validation"
     assert steps[5]["title"] == "Final production polish and ship audit"
     assert steps[-1]["title"] == "Report, update ticket, and compact memory"
+    assert "not another validation pass" in steps[-1]["instruction"]
+    assert "Do not create or edit project files during reporting" in steps[-1]["config"]["guardrail"]
+    assert "ticket_result_packet" in steps[-1]["instruction"]
+    assert steps[-1]["config"]["read_only"] is True
     assert any(step["action_type"] == "send_to_project_cli" for step in steps)
     assert any("playwright" in ((step.get("config") or {}).get("tools") or []) for step in steps)
     assert steps[3].get("on_fail_goto_position") == 4
@@ -210,7 +214,37 @@ def test_plan_steps_from_bundle_has_development_loop_contract():
         "final_polish",
         "reporting",
     ]
-    assert "plan.md" in (planned["loop_contract"].get("exit_when") or "")
+    assert "execution contract" in (planned["loop_contract"].get("exit_when") or "")
+    assert "plan.md" not in (planned["loop_contract"].get("exit_when") or "")
+    assert steps[1]["config"]["expected_outputs"][0] == "execution_contract"
+    assert steps[1]["config"]["review_mode"] == "independent"
+    assert steps[1]["config"]["disable_tools"] is True
+    assert steps[1]["config"]["required_context"] == [
+        "context_packet",
+        "unknowns",
+        "route_recommendation",
+        "ui_design_read_if_applicable",
+    ]
+    assert steps[0]["max_retries"] == 1
+    assert steps[1]["max_retries"] == 1
+    assert "ui_design_read_if_applicable" in steps[0]["config"]["expected_outputs"]
+    assert "observable visual claims" in steps[1]["instruction"]
+    assert "desktop and mobile viewports" in steps[3]["instruction"]
+    assert "visual_claim_verdicts" in steps[3]["config"]["expected_outputs"]
+    assert "senior product designer" in steps[5]["instruction"]
+    assert "visual_quality_verdict" in steps[5]["config"]["expected_outputs"]
+    assert steps[0]["config"]["read_only"] is True
+    assert steps[1]["config"]["read_only"] is True
+    assert steps[3]["config"]["read_only"] is True
+    assert steps[2]["config"]["required_context"] == [
+        "execution_contract",
+        "dependency_status",
+        "reusable_artifacts",
+        "copy_manifest_if_applicable",
+        "ui_acceptance_contract_if_applicable",
+    ]
+    assert "Reuse each named existing artifact" in steps[2]["instruction"]
+    assert "Never install a dependency or browser tool solely" in steps[2]["config"]["guardrail"]
 
 
 def test_consolidation_leaves_one_development_workflow_and_preserves_history(
@@ -301,7 +335,7 @@ def test_consolidation_leaves_one_development_workflow_and_preserves_history(
         settings = json.loads(canonical.run_settings or "{}")
         assert settings["memory_enabled"] is True
         assert settings["capture_failures_and_lessons"] is True
-        assert settings["canonical_workflow_version"] == 4
+        assert settings["canonical_workflow_version"] == 12
         history = db.query(AutoWorkflow).filter(
             AutoWorkflow.id == result["historical_workflow_id"]
         ).one()

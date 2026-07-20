@@ -16,6 +16,10 @@
     var wsReconnectTimer = null;
     var wsReconnectDelay = 5000;
     var wsConnectFailedLogged = false;
+    var workflowWsRefreshTimer = null;
+    var workflowWsRefreshInFlight = false;
+    var workflowWsRefreshQueued = false;
+    var workflowWsListRefreshedAt = 0;
     var activeRunsScope = "all";
     var workflowRunsSubtab = "active";
     var workflowMemoryRunId = null;
@@ -35,6 +39,7 @@
     var latestLoopFeedItems = [];
     var loopFeedScrollPinned = true;
     var loopTranscriptEventsByRun = {};
+    var loopTranscriptBlueprintByRun = {};
     var loopTranscriptLoadedAtByRun = {};
     var loopTranscriptLoadingByRun = {};
     var loopTranscriptOpenByRun = {};
@@ -5344,7 +5349,7 @@
     }
 
     function loadList() {
-        api("GET", "/workflows?limit=50")
+        return api("GET", "/workflows?limit=50")
             .then(function (data) {
                 var el = document.getElementById("wf-list");
                 if (!data.length) {
@@ -6189,6 +6194,18 @@
         });
     }
 
+    function workflowBoardExecutionOrderCompare(a, b) {
+        var rawQueueA = a && a.workflow_queue_position;
+        var rawQueueB = b && b.workflow_queue_position;
+        var queueA = rawQueueA !== null && rawQueueA !== undefined && Number.isFinite(Number(rawQueueA)) ? Number(rawQueueA) : null;
+        var queueB = rawQueueB !== null && rawQueueB !== undefined && Number.isFinite(Number(rawQueueB)) ? Number(rawQueueB) : null;
+        if (queueA !== null && queueB !== null && queueA !== queueB) return queueA - queueB;
+        var posA = Number.isFinite(Number(a && a.position)) ? Number(a.position) : 0;
+        var posB = Number.isFinite(Number(b && b.position)) ? Number(b.position) : 0;
+        if (posA !== posB) return posA - posB;
+        return Number(a && a.id || 0) - Number(b && b.id || 0);
+    }
+
     function renderWorkflowBoardTickets(board, selected, message) {
         var list = document.getElementById("wf-board-ticket-list");
         if (!list) return;
@@ -6229,9 +6246,11 @@
 
         lanes.forEach(function (lane) {
             var tickets = Array.isArray(lane.tickets) ? lane.tickets : [];
-            if (window.KanbanTicketUi && window.KanbanTicketUi.compareTicketsForListView) {
-                tickets = tickets.slice().sort(window.KanbanTicketUi.compareTicketsForListView);
-            }
+            // Mission Control is an execution surface. Preserve the board's
+            // explicit lane order here so the list agrees with the workflow
+            // queue and auto-advance order. The ticket-board page can still
+            // use its complexity-first triage sort.
+            tickets = tickets.slice().sort(workflowBoardExecutionOrderCompare);
             var laneId = lane.id != null ? String(lane.id) : "";
             var isExpanded = expandedLaneId && laneId === String(expandedLaneId);
             var section = document.createElement("section");
@@ -6297,8 +6316,8 @@
 
     // Soft refresh — only update step statuses/results without rebuilding DOM
     function softRefresh() {
-        if (!currentWorkflowId) return;
-        api("GET", "/workflows/" + currentWorkflowId).then(function (data) {
+        if (!currentWorkflowId) return Promise.resolve();
+        return api("GET", "/workflows/" + currentWorkflowId).then(function (data) {
             currentWorkflow = data;
             var steps = data.steps || [];
             var preserveOpenEditor = isStepEditorInteractionActive();
@@ -6313,14 +6332,37 @@
                 if (!card) return;
                 // Refresh history tab if it's currently visible
             });
-            loadActiveRuns();
-            if (workflowRunsSubtab === "timeline") {
-                loadOrchestratorTimeline({ quiet: true });
-            }
-            if (isLoopTabVisible()) {
-                loadLoopActivityFeed({ quiet: true });
-            }
+            // loadActiveRuns owns the command-center, timeline, memory and
+            // activity-feed refresh. Calling those again here doubled every
+            // request during live execution and made event bursts freeze the UI.
+            return loadActiveRuns();
         }).catch(function () {});
+    }
+
+    function scheduleWorkflowLiveRefresh() {
+        workflowWsRefreshQueued = true;
+        if (workflowWsRefreshTimer || workflowWsRefreshInFlight) return;
+        workflowWsRefreshTimer = setTimeout(function flushWorkflowLiveRefresh() {
+            workflowWsRefreshTimer = null;
+            workflowWsRefreshQueued = false;
+            workflowWsRefreshInFlight = true;
+
+            var requests = [];
+            if (currentWorkflowId) requests.push(softRefresh());
+            else requests.push(loadList());
+
+            // Workflow names/order change rarely. Keep the tabs fresh without
+            // rebuilding them for every model token, tool call and heartbeat.
+            if (Date.now() - workflowWsListRefreshedAt >= 5000) {
+                workflowWsListRefreshedAt = Date.now();
+                if (currentWorkflowId) requests.push(loadList());
+            }
+
+            Promise.allSettled(requests).finally(function () {
+                workflowWsRefreshInFlight = false;
+                if (workflowWsRefreshQueued) scheduleWorkflowLiveRefresh();
+            });
+        }, 250);
     }
 
     function formatElapsed(seconds) {
@@ -7847,6 +7889,35 @@
         }
     }
 
+    function renderBlueprintAdherencePanel(blueprint) {
+        blueprint = blueprint && typeof blueprint === "object" ? blueprint : {};
+        var power = blueprint.power_budget || {};
+        var interrupt = blueprint.interrupt_line || {};
+        var drift = blueprint.drift || {};
+        var versionPin = blueprint.version_pin || {};
+        var reviewModes = Array.isArray(blueprint.review_modes) ? blueprint.review_modes.filter(Boolean) : [];
+        var turns = (power.turns_used || 0) + "/" + (power.max_turns || 0);
+        var tokens = (power.tokens_used || 0) + "/" + (power.max_tokens || 0);
+        var cost = typeof power.estimated_cost_usd === "number" ? power.estimated_cost_usd.toFixed(4) : "0.0000";
+        var interruptText = interrupt.question || interrupt.reason || "";
+        return '<div class="mt-3 rounded border border-sky-500/25 bg-sky-500/5 p-3">' +
+            '<p class="text-xs text-sky-100 font-medium">Blueprint adherence</p>' +
+            '<p class="mt-1 text-[11px] text-gray-300">Pattern: <span class="font-mono">' + esc(blueprint.orchestration_strategy || "single") + '</span>' +
+                (reviewModes.length ? ' · review: <span class="font-mono">' + esc(reviewModes.join(", ")) + '</span>' : '') +
+                '</p>' +
+            '<p class="mt-1 text-[11px] text-gray-400">Budget: ' + esc(turns) + ' turns · ' + esc(tokens) + ' tokens · ~$' + esc(cost) +
+                (power.exhausted ? ' · <span class="text-amber-300">exhausted</span>' : '') + '</p>' +
+            '<p class="mt-1 text-[11px] text-gray-400">Drift: takeovers ' + esc(drift.human_takeovers || 0) +
+                (drift.task_success === true ? ' · success' : (drift.task_success === false ? ' · failed' : '')) +
+                ' · cost/task ~$' + esc(typeof drift.cost_per_task_usd === "number" ? drift.cost_per_task_usd.toFixed(4) : cost) + '</p>' +
+            (interruptText ? '<p class="mt-1 text-[11px] text-amber-200">Interrupt: ' + esc(String(interruptText).slice(0, 220)) +
+                (interrupt.recommendation ? ' · Recommend: ' + esc(String(interrupt.recommendation).slice(0, 120)) : '') + '</p>' : '') +
+            '<p class="mt-1 text-[11px] text-gray-500">Memory notes: ' + esc(blueprint.memory_notes_written || 0) +
+                (versionPin.manifest_hash ? ' · pin ' + esc(versionPin.manifest_hash) : '') +
+                (versionPin.tool_bay_version ? ' · tools v' + esc(versionPin.tool_bay_version) : '') + '</p>' +
+        '</div>';
+    }
+
     function renderRunCommandCenter(runs) {
         var el = document.getElementById("wf-run-command-center");
         if (!el) return;
@@ -7866,6 +7937,7 @@
         var pendingBackend = hasPendingRoute ? (pending.backend || "auto") : "";
         var pendingModel = hasPendingRoute ? (pending.model || "auto") : "";
         var pendingRationale = hasPendingRoute ? (pending.rationale || "") : "";
+        var providerCandidates = Array.isArray(run.provider_free_candidates) ? run.provider_free_candidates : [];
         var runtimeHtml = "";
         if (run.project_id) {
             runtimeHtml = '<p class="text-[11px] text-gray-500 mt-2">Project #' + esc(run.project_id) + (run.project_name ? " · " + esc(run.project_name) : "") + '</p>';
@@ -7896,7 +7968,19 @@
                 '</div>' +
             '</div>';
         }
-        if (hasPendingRoute && (run.waiting_kind === "route_approval" || run.status === "waiting")) {
+        if (hasPendingRoute && run.waiting_kind === "provider_preflight") {
+            var candidateButtons = providerCandidates.map(function (candidate, index) {
+                if (candidate && candidate.readiness_failed) return "";
+                var name = (candidate && (candidate.name || candidate.model)) || ("Option " + (index + 1));
+                return '<button type="button" class="wf-provider-model-select px-2 py-1 rounded border border-amber-400/40 bg-amber-500/10 text-amber-100 text-xs hover:bg-amber-500/20" data-candidate-index="' + index + '" data-run-id="' + esc(run.id) + '" data-workflow-id="' + esc(run.workflow_id) + '">' + esc(name) + '</button>';
+            }).join("");
+            approvalHtml = '<div class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3">' +
+                '<p class="text-xs text-amber-200 font-medium">Choose the retry model</p>' +
+                '<p class="mt-1 text-[11px] text-gray-300">The selected model is readiness-checked before this step retries. No work is sent if readiness fails.</p>' +
+                (run.waiting_prompt ? '<p class="mt-2 text-[11px] text-gray-400">' + esc(run.waiting_prompt) + '</p>' : '') +
+                '<div class="mt-2 flex flex-wrap gap-2">' + candidateButtons + '</div>' +
+            '</div>';
+        } else if (hasPendingRoute && run.waiting_kind === "route_approval") {
             approvalHtml = '<div class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3">' +
                 '<p class="text-xs text-amber-200 font-medium">Route override pending approval</p>' +
                 '<p class="mt-1 text-[11px] text-gray-300">Suggested: <span class="font-mono">' + esc(pendingBackend) + '</span>' +
@@ -7933,6 +8017,7 @@
                 (handoff.backend_id ? '<p class="mt-1 text-[11px] text-gray-500">Handoff: ' + esc(handoff.backend_id || "") + (handoff.model ? " / " + esc(handoff.model) : "") + (handoff.handoff_event_id ? " · event #" + esc(handoff.handoff_event_id) : "") + '</p>' : '') +
             '</div>';
         }
+        var blueprintHtml = renderBlueprintAdherencePanel(run.blueprint || {});
         el.innerHTML = '<div class="flex items-start justify-between gap-3 mb-2">' +
                 '<div><p class="text-sm font-semibold text-white">Run command center</p>' +
                 '<p class="text-xs text-gray-400">Run #' + esc(run.id) + ' · ' + esc(run.status || "running") +
@@ -7953,6 +8038,7 @@
                     .concat(workflowCleanStringList(route.context))
                     .concat(workflowCleanStringList(run.recent_step_context))
             }) +
+            blueprintHtml +
             approvalHtml +
             humanHtml +
             steerHtml +
@@ -7965,6 +8051,15 @@
         el.querySelectorAll(".wf-route-reject").forEach(function (btn) {
             btn.addEventListener("click", function () {
                 submitRouteApproval(btn.dataset.workflowId, btn.dataset.runId, false);
+            });
+        });
+        el.querySelectorAll(".wf-provider-model-select").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                submitProviderModelSelection(
+                    btn.dataset.workflowId,
+                    btn.dataset.runId,
+                    Number(btn.dataset.candidateIndex || 0)
+                );
             });
         });
         el.querySelectorAll(".wf-run-steer-send").forEach(function (btn) {
@@ -8018,6 +8113,20 @@
             loadOrchestratorTimeline({ quiet: true });
         }).catch(function (e) {
             snack(e.message || "Failed to update route approval", "error");
+        });
+    }
+
+    function submitProviderModelSelection(workflowId, runId, candidateIndex) {
+        if (!workflowId || !runId) return;
+        api("POST", "/workflows/" + encodeURIComponent(workflowId) + "/runs/" + encodeURIComponent(runId) + "/provider-model-selection", {
+            candidate_index: Number(candidateIndex || 0)
+        }).then(function (resp) {
+            snack(resp.status === "waiting" ? "That model was unavailable; choose the next recommendation" : "Model ready; retrying this step", resp.status === "waiting" ? "error" : "success");
+            loadActiveRuns();
+            if (currentWorkflowId) loadDetail(currentWorkflowId);
+            loadOrchestratorTimeline({ quiet: true });
+        }).catch(function (e) {
+            snack(e.message || "Failed to readiness-check that model", "error");
         });
     }
 
@@ -8436,8 +8545,6 @@
         if (!row) return;
         var body = row.closest(".kb-ticket-list-section-body");
         if (!body) return;
-        var compare = window.KanbanTicketUi && window.KanbanTicketUi.compareTicketsForListView;
-        if (!compare) return;
         var rows = Array.prototype.slice.call(body.querySelectorAll(".wf-board-ticket-row"));
         if (rows.length < 2) return;
         var entries = rows.map(function (entryRow) {
@@ -8445,7 +8552,7 @@
             var item = workflowBoardTicketByKey[key];
             return { key: key, row: entryRow, ticket: item && item.ticket };
         }).filter(function (entry) { return entry.ticket; });
-        entries.sort(function (a, b) { return compare(a.ticket, b.ticket); });
+        entries.sort(function (a, b) { return workflowBoardExecutionOrderCompare(a.ticket, b.ticket); });
         entries.forEach(function (entry) { body.appendChild(entry.row); });
     }
 
@@ -10590,7 +10697,7 @@
         var count = Array.isArray(steps) ? steps.length : 0;
         var atMax = count >= WORKFLOW_LOOP_MAX_STEPS;
         var runLocked = workflowHasActiveRuns();
-        if (countEl) countEl.textContent = count + " / " + WORKFLOW_LOOP_MAX_STEPS + " steps";
+        if (countEl) countEl.textContent = count + (count === 1 ? " phase" : " phases");
         if (!btn) return;
         btn.disabled = atMax || runLocked;
         btn.title = runLocked
@@ -10727,12 +10834,12 @@
     function loopStepContextSummary(run) {
         var telemetry = run && run.latest_context_telemetry && typeof run.latest_context_telemetry === "object" ? run.latest_context_telemetry : {};
         var parts = [];
-        if (telemetry.prior_outcome_count != null) parts.push(telemetry.prior_outcome_count + " prior step outcomes");
-        if (telemetry.memory_fact_count != null) parts.push(telemetry.memory_fact_count + " memory facts");
-        if (telemetry.reference_count != null) parts.push(telemetry.reference_count + " references");
-        if (telemetry.total_chars && telemetry.max_chars) {
-            var ratio = Math.round((telemetry.total_chars / telemetry.max_chars) * 100);
-            parts.push("context " + ratio + "% of budget");
+        if (telemetry.prior_outcome_count) parts.push(telemetry.prior_outcome_count + " prior outcomes");
+        if (telemetry.memory_fact_count) parts.push(telemetry.memory_fact_count + " memory facts");
+        if (telemetry.reference_count) parts.push(telemetry.reference_count + " evidence refs");
+        if (telemetry.estimated_input_tokens) {
+            var tokenCount = parseInt(telemetry.estimated_input_tokens, 10) || 0;
+            parts.push("~" + tokenCount.toLocaleString() + " input tokens" + (telemetry.compacted ? ", compacted" : ""));
         }
         return parts.join(" · ");
     }
@@ -10911,9 +11018,7 @@
             try {
                 var msg = JSON.parse(evt.data);
                 if (msg.type === "workflow_updated") {
-                    loadList();
-                    if (currentWorkflowId) softRefresh();
-                    if (isLoopTabVisible()) loadLoopActivityFeed({ quiet: true });
+                    scheduleWorkflowLiveRefresh();
                 }
             } catch (e) {
                 console.warn("Workflow WS: bad message", e);
@@ -12070,7 +12175,13 @@
     }
 
     function switchRunsSubtab(tab) {
-        workflowRunsSubtab = tab === "sessions" || tab === "timeline" || tab === "memory" || tab === "history" ? tab : "active";
+        workflowRunsSubtab = (
+            tab === "sessions"
+            || tab === "timeline"
+            || tab === "memory"
+            || tab === "history"
+            || tab === "inbox"
+        ) ? tab : "active";
         document.querySelectorAll(".wf-runs-subtab").forEach(function (btn) {
             var active = (btn.dataset.runsTab || "active") === workflowRunsSubtab;
             btn.classList.toggle("text-white", active);
@@ -12085,6 +12196,99 @@
         if (workflowRunsSubtab === "timeline") loadOrchestratorTimeline({ quiet: true });
         if (workflowRunsSubtab === "memory") loadWorkflowSteeringMemory({ quiet: true });
         if (workflowRunsSubtab === "history") loadWorkflowRunHistory({ quiet: true });
+        if (workflowRunsSubtab === "inbox") loadWorkIntakeInbox({ quiet: true });
+    }
+
+    function loadWorkIntakeInbox(opts) {
+        opts = opts || {};
+        var list = document.getElementById("wf-intake-inbox-list");
+        var empty = document.getElementById("wf-intake-inbox-empty");
+        if (!list) return;
+        fetch("/api/settings/workflows/intake/inbox?limit=40")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var items = (data && data.items) || [];
+                list.innerHTML = items.map(function (item) {
+                    var eventId = item.event_id;
+                    var text = esc(item.text || item.response_text || "");
+                    var meta = esc([item.source, item.action, item.status].filter(Boolean).join(" · "));
+                    var ticket = item.ticket_id ? ("#" + item.ticket_id) : "";
+                    var run = item.workflow_run_id ? ("run #" + item.workflow_run_id) : "";
+                    return (
+                        '<div class="rounded border border-white/10 bg-[#12183a]/70 p-3" data-event-id="' + esc(eventId) + '">' +
+                        '<div class="flex items-start justify-between gap-2">' +
+                        '<div class="min-w-0">' +
+                        '<p class="text-xs text-gray-300 break-words">' + text + '</p>' +
+                        '<p class="mt-1 text-[11px] text-gray-500">' + meta + (ticket || run ? " · " + esc([ticket, run].filter(Boolean).join(" · ")) : "") + '</p>' +
+                        '</div>' +
+                        '</div>' +
+                        '<div class="mt-2 flex flex-wrap gap-1">' +
+                        '<button type="button" class="wf-inbox-action px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-action="push">Push to Loop</button>' +
+                        '<button type="button" class="wf-inbox-action px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-action="continue">Continue</button>' +
+                        '<button type="button" class="wf-inbox-action px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-action="steer">Steer</button>' +
+                        '<button type="button" class="wf-inbox-action px-2 py-1 rounded border border-red-500/40 text-red-300 text-[11px] hover:bg-red-500/10" data-action="stop">Stop</button>' +
+                        '<button type="button" class="wf-inbox-action px-2 py-1 rounded border border-white/20 text-gray-400 text-[11px] hover:bg-white/10" data-action="dismiss">Dismiss</button>' +
+                        '</div>' +
+                        '</div>'
+                    );
+                }).join("");
+                if (empty) empty.classList.toggle("hidden", items.length > 0);
+                list.querySelectorAll(".wf-inbox-action").forEach(function (btn) {
+                    btn.addEventListener("click", function () {
+                        var card = btn.closest("[data-event-id]");
+                        var eventId = card && card.getAttribute("data-event-id");
+                        var action = btn.getAttribute("data-action") || "";
+                        if (!eventId || !action) return;
+                        var message = "";
+                        if (action === "steer") {
+                            message = window.prompt("Steer this run:") || "";
+                            if (!message.trim()) return;
+                        }
+                        fetch("/api/settings/workflows/intake/inbox/" + encodeURIComponent(eventId) + "/action", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: action, message: message })
+                        }).then(function (r) { return r.json(); }).then(function (result) {
+                            if (result && result.success === false) {
+                                snack(result.error || "Inbox action failed", "error");
+                                return;
+                            }
+                            snack("Inbox: " + action, "success");
+                            loadWorkIntakeInbox({ quiet: true });
+                            loadActiveRuns();
+                        }).catch(function () {
+                            snack("Inbox action failed", "error");
+                        });
+                    });
+                });
+            })
+            .catch(function () {
+                if (!opts.quiet) snack("Could not load intake inbox", "error");
+            });
+    }
+
+    function submitWorkIntakeCompose() {
+        var input = document.getElementById("wf-intake-compose");
+        if (!input) return;
+        var text = String(input.value || "").trim();
+        if (!text) return;
+        fetch("/api/settings/workflows/intake/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source: "web", user_text: text })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            if (!data || data.success === false) {
+                snack((data && data.error) || "Intake failed", "error");
+                return;
+            }
+            input.value = "";
+            var decision = (data && data.decision) || {};
+            snack(decision.response_text || ("Intake: " + (decision.action || "ok")), "success");
+            loadWorkIntakeInbox({ quiet: true });
+            loadActiveRuns();
+        }).catch(function () {
+            snack("Intake failed", "error");
+        });
     }
 
     function loopFeedSelectableRuns() {
@@ -12667,6 +12871,10 @@
             var key = item && item.step_id != null ? String(item.step_id) : "run";
             var group = byKey[key];
             if (!group) {
+                // Run-level lifecycle events belong in the summary/transcript,
+                // not in the phase rail. Creating a synthetic "Run activity"
+                // phase made a seven-step workflow appear to have eight steps.
+                if (key === "run" && workflowSteps.length) return;
                 group = {
                     key: key,
                     step_id: key === "run" ? null : item.step_id,
@@ -12699,6 +12907,46 @@
         return '<div class="wf-loop-feed-msg wf-loop-feed-msg--' + esc(item.kind || "event") + '">' +
             '<div class="wf-loop-feed-msg-meta">' + esc(item.title || "Update") + (when ? " · " + esc(when) : "") + "</div>" +
             '<div class="wf-loop-feed-msg-bubble">' + esc(item.body || "") + detailHtml + "</div>" +
+        "</div>";
+    }
+
+    function loopFeedStepGroupHtml(group, run) {
+        var state = group.state || "pending";
+        var seen = {};
+        var useful = (group.items || []).filter(function (item) {
+            if (loopFeedItemIsNoise(item)) return false;
+            var key = [item.title || "", item.body || "", (item.detail || []).join("|")].join("::");
+            if (seen[key]) return false;
+            seen[key] = true;
+            return true;
+        });
+        // A phase should explain its decisions and outcome without becoming a
+        // second terminal. Older diagnostics remain available in the transcript.
+        useful = useful.slice(-6);
+        var body = useful.length
+            ? useful.map(loopFeedRenderItem).join("")
+            : '<p class="wf-loop-feed-step-empty">' +
+                (state === "pending" ? "Waiting for the previous phase to pass." : "Waiting for a meaningful worker update.") +
+              "</p>";
+        var open = state === "running" || state === "waiting";
+        return '<details class="wf-loop-feed-step wf-loop-feed-step--' + esc(state) + '" data-step-id="' + esc(group.step_id || "") + '"' + (open ? " open" : "") + '>' +
+            '<summary class="wf-loop-feed-step-summary">' +
+                '<span class="wf-loop-feed-step-index">' + esc(group.index || "") + "</span>" +
+                '<span class="wf-loop-feed-step-title" title="' + esc(group.title || "") + '">' + esc(group.title || "Workflow phase") + "</span>" +
+                '<span class="wf-loop-feed-step-state">' + esc(loopStepStatusLabel(state)) + "</span>" +
+            "</summary>" +
+            '<div class="wf-loop-feed-step-body">' + body + "</div>" +
+        "</details>";
+    }
+
+    function loopFeedProgressRailHtml(groups) {
+        return '<div class="wf-loop-feed-progress-rail" aria-label="Workflow phase status">' +
+            (groups || []).map(function (group) {
+                var state = group.state || "pending";
+                return '<span class="wf-loop-feed-progress-dot wf-loop-feed-progress-dot--' + esc(state) + '" title="' +
+                    esc((group.index || "") + ". " + (group.title || "Workflow phase") + " — " + loopStepStatusLabel(state)) + '">' +
+                    esc(group.index || "") + "</span>";
+            }).join("") +
         "</div>";
     }
 
@@ -12735,10 +12983,29 @@
         return null;
     }
 
-    function loopTranscriptText(value) {
+    function loopTranscriptLabel(value) {
+        return String(value || "")
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, function (char) { return char.toUpperCase(); });
+    }
+
+    function loopTranscriptText(value, depth) {
+        depth = depth || 0;
         if (value === null || value === undefined || value === "") return "";
         if (typeof value === "string") return value;
-        try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
+        if (typeof value !== "object") return String(value);
+        if (depth > 3) return "More detail is available in developer data.";
+        if (Array.isArray(value)) {
+            return value.map(function (item) {
+                var rendered = loopTranscriptText(item, depth + 1);
+                return rendered ? "• " + rendered.replace(/\n/g, "\n  ") : "";
+            }).filter(Boolean).join("\n");
+        }
+        return Object.keys(value).map(function (key) {
+            var rendered = loopTranscriptText(value[key], depth + 1);
+            if (!rendered) return "";
+            return loopTranscriptLabel(key) + ": " + rendered.replace(/\n/g, "\n  ");
+        }).filter(Boolean).join("\n");
     }
 
     function loopTranscriptBlock(label, value) {
@@ -12751,7 +13018,7 @@
         var payload = event && event.payload && typeof event.payload === "object" ? event.payload : {};
         var evidence = event && event.evidence && typeof event.evidence === "object" ? event.evidence : {};
         var kind = loopTranscriptKind(event);
-        var subtype = loopTranscriptSubtype(event).replace(/_/g, " ");
+        var subtype = loopTranscriptLabel(loopTranscriptSubtype(event));
         var when = event && event.created_at ? new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
         var prompt = loopTranscriptFind(payload, ["instruction", "prompt", "user_text", "request_text"], 0);
         var command = loopTranscriptFind(payload, ["command", "argv", "tool_call"], 0);
@@ -12778,12 +13045,21 @@
         blocks += loopTranscriptBlock("Validation", validation);
         blocks += loopTranscriptBlock("Whole-run allocation", coordinationPlan);
         blocks += loopTranscriptBlock("Plan revision", coordinationRevision);
+        if (payload.version_pin || payload.blueprint || payload.power_budget) {
+            blocks += loopTranscriptBlock("Version pin / blueprint", {
+                version_pin: payload.version_pin || null,
+                blueprint: payload.blueprint || null,
+                power_budget: payload.power_budget || null,
+                interrupt: payload.interrupt || null
+            });
+        }
+        var kindLabels = { prompt: "Input", route: "Route", tool: "Tool", output: "Output", check: "Check", retry: "Retry", event: "Event" };
         return '<details class="wf-loop-transcript-record wf-loop-transcript-record--' + esc(kind) + '" data-record-key="' + esc(recordKey) + '"' + (recordOpen ? " open" : "") + '>' +
-            '<summary><span class="wf-loop-transcript-seq">' + esc(index + 1) + '</span><b>' + esc(kind) + '</b><span class="wf-loop-transcript-event">' + esc(subtype) + '</span><time>' + esc(when) + '</time></summary>' +
+            '<summary><span class="wf-loop-transcript-seq">' + esc(index + 1) + '</span><b>' + esc(kindLabels[kind] || "Event") + '</b><span class="wf-loop-transcript-event">' + esc(subtype) + '</span><time>' + esc(when) + '</time></summary>' +
             '<div class="wf-loop-transcript-record-body">' +
                 (event.summary ? '<p class="wf-loop-transcript-summary">' + esc(event.summary) + '</p>' : '') +
                 blocks +
-                '<details class="wf-loop-transcript-raw"><summary>Raw event data</summary><pre>' + esc(JSON.stringify(raw, null, 2)) + '</pre></details>' +
+                '<details class="wf-loop-transcript-raw"><summary>Developer data (JSON)</summary><pre>' + esc(JSON.stringify(raw, null, 2)) + '</pre></details>' +
             '</div>' +
         '</details>';
     }
@@ -12795,8 +13071,13 @@
         var open = !!loopTranscriptOpenByRun[key];
         var loading = !!loopTranscriptLoadingByRun[key];
         var label = events ? (events.length + " events") : (loading ? "Loading…" : "Prompt, tools, commands and output");
+        var blueprintStrip = "";
+        var blueprint = loopTranscriptBlueprintByRun[key] || run.blueprint || {};
+        if (blueprint && (blueprint.orchestration_strategy || blueprint.version_pin || blueprint.power_budget || blueprint.drift)) {
+            blueprintStrip = '<div class="wf-loop-transcript-blueprint">' + renderBlueprintAdherencePanel(blueprint) + '</div>';
+        }
         var body = events
-            ? (events.length ? events.map(loopTranscriptRecordHtml).join("") : '<p class="wf-loop-transcript-empty">No execution events have been recorded yet.</p>')
+            ? (events.length ? blueprintStrip + events.map(loopTranscriptRecordHtml).join("") : blueprintStrip + '<p class="wf-loop-transcript-empty">No execution events have been recorded yet.</p>')
             : '<p class="wf-loop-transcript-empty">Open this transcript to load the complete, secret-redacted execution trail.</p>';
         return '<details class="wf-loop-transcript" data-run-id="' + esc(key) + '"' + (open ? " open" : "") + '>' +
             '<summary><span><b>Execution transcript</b><small>' + esc(label) + '</small></span><span class="wf-loop-transcript-cli">CLI detail</span></summary>' +
@@ -12834,6 +13115,9 @@
             .then(function (resp) {
                 var events = resp && Array.isArray(resp.events) ? resp.events : [];
                 loopTranscriptEventsByRun[key] = events;
+                if (resp && resp.blueprint && typeof resp.blueprint === "object") {
+                    loopTranscriptBlueprintByRun[key] = resp.blueprint;
+                }
                 loopTranscriptLoadedAtByRun[key] = Date.now();
                 return events;
             })
@@ -12875,35 +13159,25 @@
         // feed shows decisions and outcomes instead of transport plumbing.
         if (title === "execution message start" || title === "execution message end" ||
             title === "execution command start" || title === "execution heartbeat") return true;
-        if (title === "execution message update") {
-            if (!body || body === "start" || body === "text_start" || body === "apply patch") return true;
-            if (/^(worker is (processing|updating)|worker ran|worker loaded)/.test(body)) return true;
-            if (/openai codex v|authrequired|rmcp::|codex_rmcp|codex_otel|codex_core_skills|interface\.icon|callback_url|execution packet|skill descriptions were shortened/.test(body)) return true;
-            if (body === "work continues." || body === "backend_finished" || body === "agent_end") return true;
-            if (/^\{['\"]role['\"]:\s*['\"]user/.test(body)) return true;
-        }
+        if (title === "execution message update" || title === "execution turn start" ||
+            title === "execution turn end" || title === "execution tool execution start" ||
+            title === "execution tool execution end") return true;
         return false;
     }
 
-    function loopFeedItemBelongsToActiveStep(item, run) {
-        if (!item || loopFeedItemIsNoise(item)) return false;
-        if (!run || !run.current_step_id) return true;
-        if (item.optimistic) return true;
-        if (item.step_id != null) return String(item.step_id) === String(run.current_step_id);
-        var type = String(item.event_type || "").toLowerCase();
-        var title = String(item.title || "").toLowerCase();
-        return type.indexOf("route") >= 0 ||
-            type.indexOf("preflight") >= 0 ||
-            type.indexOf("execution") >= 0 ||
-            type.indexOf("worker") >= 0 ||
-            type.indexOf("handoff") >= 0 ||
-            type.indexOf("cli") >= 0 ||
-            title.indexOf("route") >= 0 ||
-            title.indexOf("preflight") >= 0 ||
-            title.indexOf("execution") >= 0 ||
-            title.indexOf("worker") >= 0 ||
-            title.indexOf("handoff") >= 0 ||
-            title.indexOf("cli") >= 0;
+    function loopFeedHumanActivity(run) {
+        var lastActivity = run && run.last_activity ? run.last_activity : {};
+        var type = String(lastActivity.event_type || lastActivity.type || "").toLowerCase();
+        var message = String(lastActivity.message || "").trim();
+        if (type.indexOf("tool_execution") >= 0) return "The worker is inspecting project evidence with its tools.";
+        if (type.indexOf("turn_") >= 0 || type.indexOf("message_") >= 0) {
+            return "The worker is reasoning over the ticket, project files, and prior evidence.";
+        }
+        if (!message) return "Waiting for the first worker update.";
+        var looksStructured = /^\s*[\[{]/.test(message) ||
+            /thinkingSignature|reasoning_details|toolCall|['\"]role['\"]\s*:/.test(message);
+        if (looksStructured) return "The worker is reasoning over the ticket, project files, and prior evidence.";
+        return message;
     }
 
     function loopFeedActiveStepMeta(run) {
@@ -12932,14 +13206,14 @@
         var route = (run && run.execution_route) || {};
         var worker = [route.backend, route.model_provider, route.model].filter(Boolean).join(" / ") || "the selected worker";
         var heartbeatAge = run && run.heartbeat_age_seconds != null ? Math.max(0, parseInt(run.heartbeat_age_seconds, 10) || 0) : null;
-        var activity = run && run.last_activity && run.last_activity.message ? run.last_activity.message : "Waiting for the first worker update.";
+        var activity = loopFeedHumanActivity(run);
         var nextStep = "";
         var steps = currentWorkflow && Array.isArray(currentWorkflow.steps) ? currentWorkflow.steps : [];
         if (meta.index && steps[meta.index]) nextStep = steps[meta.index].name || "the next step";
         if (status === "waiting") {
             return {
                 headline: "Your decision is needed before the workflow can continue.",
-                now: run.worker_question || "Review the request below and choose how the workflow should proceed.",
+                now: run.waiting_prompt || run.worker_question || "Review the request below and choose how the workflow should proceed.",
                 next: "After your response, the same run continues with its existing ticket and memory.",
                 action: "Decision required"
             };
@@ -12986,23 +13260,13 @@
         else if (runStatus === "failed" || runStatus === "error") state = "failed";
         else if (runStatus === "completed" || runStatus === "done" || runStatus === "passed") state = "passed";
         else if (runStatus === "cancelled") state = "failed";
-        var meaningfulItems = items.filter(function (item) {
-            return loopFeedItemBelongsToActiveStep(item, run);
-        });
-        var route = run.execution_route || {};
-        if (!meaningfulItems.length && route.backend) {
-            meaningfulItems.push({
-                id: "active-route-" + String(run.id || ""),
-                kind: "event",
-                title: "Route",
-                body: "Using " + route.backend + (route.model ? " / " + route.model : "") + ".",
-                detail: workflowCleanStringList(route.skills).length ? ["Skills: " + workflowCleanStringList(route.skills).join(", ")] : [],
-                ts: 0
-            });
-        }
-        var body = meaningfulItems.length
-            ? meaningfulItems.map(loopFeedRenderItem).join("")
-            : '<p class="wf-loop-feed-step-empty">Waiting for activity from this step.</p>';
+        var stepGroups = loopFeedBuildStepGroups(items);
+        var currentGroup = stepGroups.filter(function (group) {
+            return run.current_step_id != null && String(group.step_id) === String(run.current_step_id);
+        })[0] || stepGroups[0];
+        var currentPhase = currentGroup
+            ? loopFeedStepGroupHtml(currentGroup, run)
+            : '<p class="wf-loop-feed-step-empty">The workflow has no configured phases.</p>';
         list.innerHTML =
             '<section class="wf-loop-decision-summary wf-loop-decision-summary--' + esc(state) + '">' +
                 '<div class="wf-loop-decision-summary-head"><span>What is happening</span><b>' + esc(humanState.action) + '</b></div>' +
@@ -13012,15 +13276,12 @@
                     '<div><dt>Next</dt><dd>' + esc(humanState.next) + '</dd></div>' +
                 '</dl>' +
             '</section>' +
-            renderLoopExecutionTranscript(run) +
-            '<section class="wf-loop-feed-step wf-loop-feed-step--' + esc(state) + '" data-step-id="' + esc(run.current_step_id || "") + '">' +
-                '<div class="wf-loop-feed-step-summary">' +
-                    '<span class="wf-loop-feed-step-index">' + esc(meta.index) + '</span>' +
-                    '<span class="wf-loop-feed-step-title" title="' + esc(meta.title) + '">' + esc(meta.title) + '</span>' +
-                    '<span class="wf-loop-feed-step-state">' + esc(loopStepStatusLabel(state)) + '</span>' +
-                '</div>' +
-                '<div class="wf-loop-feed-step-body">' + body + '</div>' +
-            '</section>';
+            '<section class="wf-loop-feed-progress" aria-label="Workflow phase progress">' +
+                '<div class="wf-loop-feed-progress-head"><span>Workflow progress</span><b>' + esc(meta.index ? ("Phase " + meta.index + " of " + stepGroups.length) : "Preparing") + '</b></div>' +
+                loopFeedProgressRailHtml(stepGroups) +
+                currentPhase +
+            '</section>' +
+            renderLoopExecutionTranscript(run);
         bindLoopExecutionTranscript(run);
         if (loopTranscriptOpenByRun[String(run.id)] && loopTranscriptEventsByRun[String(run.id)]) {
             loadLoopExecutionTranscript(run.id, { quiet: true });
@@ -13642,6 +13903,25 @@
             refreshActiveRuns.addEventListener("click", function () {
                 loadActiveRuns();
                 loadWorkflowExecutionSessions();
+            });
+        }
+        var refreshIntakeInbox = document.getElementById("wf-refresh-intake-inbox");
+        if (refreshIntakeInbox) {
+            refreshIntakeInbox.addEventListener("click", function () {
+                loadWorkIntakeInbox();
+            });
+        }
+        var intakeSubmit = document.getElementById("wf-intake-submit");
+        if (intakeSubmit) {
+            intakeSubmit.addEventListener("click", submitWorkIntakeCompose);
+        }
+        var intakeCompose = document.getElementById("wf-intake-compose");
+        if (intakeCompose) {
+            intakeCompose.addEventListener("keydown", function (evt) {
+                if (evt.key === "Enter") {
+                    evt.preventDefault();
+                    submitWorkIntakeCompose();
+                }
             });
         }
         var workflowExecutionRefresh = document.getElementById("wf-refresh-execution-sessions");

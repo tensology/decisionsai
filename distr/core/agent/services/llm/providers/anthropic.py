@@ -147,6 +147,20 @@ class AnthropicLLMService(BaseLLMService):
         except Exception:
             logger.warning("Could not build developer workflow context", exc_info=True)
 
+        try:
+            from distr.core.desktop_awareness import get_desktop_inject_block
+
+            desktop_inject = get_desktop_inject_block(mark_injected=True) or ""
+            if desktop_inject:
+                template += (
+                    "\n\nAmbient desktop (cached accessibility summary; may be seconds old; "
+                    "not a live feed). For targeting use get_window_tree / find_element / "
+                    "get_desktop_snapshot:\n"
+                    f"{desktop_inject}"
+                )
+        except Exception:
+            pass
+
         self.default_template = template
         self._persona = system_prompt if system_prompt else None
         self._system_prompt = f"{system_prompt}\n\n{template}" if system_prompt else template

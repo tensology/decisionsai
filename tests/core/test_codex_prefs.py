@@ -71,6 +71,44 @@ def test_codex_build_command_allows_sandbox_override(monkeypatch):
     assert "danger-full-access" in cmd
 
 
+def test_codex_read_only_workflow_step_overrides_mutable_sandbox(monkeypatch):
+    monkeypatch.setenv("DECISIONSAI_CODEX_SANDBOX", "danger-full-access")
+    backend = CodexBackend()
+    task = ProjectTask(
+        project_id=1,
+        project_name="demo",
+        folder="/tmp",
+        instruction="Inspect the ticket without editing files.",
+        adapter_options={"read_only_expected": True},
+    )
+
+    cmd = backend._build_command("codex", task)
+
+    sandbox_index = cmd.index("--sandbox")
+    assert cmd[sandbox_index + 1] == "read-only"
+    assert "danger-full-access" not in cmd
+
+
+def test_codex_result_handoff_keeps_final_contract_without_cli_noise():
+    backend = CodexBackend()
+    raw = (
+        "OpenAI Codex v1\nMCP warning\nuser prompt with Status: example\n"
+        "tokens used\n105440\n"
+        "Status: completed\n"
+        "Summary: Scoped the ticket.\n"
+        "context_packet: concise evidence\n"
+        "Files changed: none\n"
+        "Blockers: none\n"
+    )
+
+    result = backend._result_output(raw)
+
+    assert result.startswith("Status: completed")
+    assert "context_packet: concise evidence" in result
+    assert "OpenAI Codex" not in result
+    assert "105440" not in result
+
+
 def test_codex_build_command_embeds_decisions_callback(monkeypatch):
     monkeypatch.setenv("DECISIONS_API_BASE", "http://127.0.0.1:8765")
     monkeypatch.setenv("DECISIONSAI_INTERNAL_API_TOKEN", "test-internal-token")

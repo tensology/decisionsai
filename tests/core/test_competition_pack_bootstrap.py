@@ -37,6 +37,9 @@ def test_competition_pack_bootstrap_projects_skills(tmp_path, monkeypatch):
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "ponytail" / "SKILL.md").exists()
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "fallow" / "SKILL.md").exists()
     assert (tmp_path / ".cursor" / "rules" / "decisions-ponytail.mdc").exists()
+    assert (tmp_path / ".cursor" / "skills" / "ponytail" / "SKILL.md").exists()
+    assert (tmp_path / ".cursor" / "skills" / "fallow" / "SKILL.md").exists()
+    assert (tmp_path / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md").exists()
 
 
 def test_merge_competition_pre_chain_adds_fallow_for_js_projects(tmp_path):

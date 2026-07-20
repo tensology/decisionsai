@@ -72,6 +72,15 @@ def test_ticket_lane_move_message_uses_clean_plural_wording():
     assert "ticket(s)" not in _moved_tickets_message(2, "Current")
 
 
+def test_initiative_cannot_complete_a_ticket_for_the_human():
+    from distr.core.initiative.action_handlers import move_tickets
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Only a human"):
+        move_tickets({"board_id": 1, "ticket_ids": [1], "target_lane": "Complete"})
+
+
 def test_telegram_continue_phrase_approves_pending_draft():
     assert match_draft_decision("yes continue") == "approve"
     assert match_draft_decision("go ahead and continue") == "approve"

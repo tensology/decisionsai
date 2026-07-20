@@ -256,7 +256,17 @@ def test_explicit_multi_ticket_workflow_request_creates_and_runs_each_item(intak
         "mobile performance",
     ]
     assert all(ticket.linked_project_id == ids["pizza_project"] for ticket in tickets)
-    assert all("Original request:" in ticket.description for ticket in tickets)
+    assert [ticket.description for ticket in tickets] == [
+        "menu redesign",
+        "checkout bug",
+        "mobile performance",
+    ]
+    assert all(ticket.source_provider == "telegram" for ticket in tickets)
+    assert [ticket.source_external_id for ticket in tickets] == [
+        "tg-pizza-batch-1::item:1",
+        "tg-pizza-batch-1::item:2",
+        "tg-pizza-batch-1::item:3",
+    ]
     for call in start.call_args_list:
         policy = call.kwargs["run_metadata"]["requested_execution_policy"]
         assert policy["roles"]["planning"]["free_only"] is True

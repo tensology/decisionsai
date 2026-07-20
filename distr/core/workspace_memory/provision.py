@@ -344,7 +344,11 @@ def _workflow_agent_context_sections(workflow_id: int) -> list[tuple[str, str]]:
             .order_by(AutoWorkflowVariable.id)
             .all()
         )
-    return [(row.name or "Context", row.default_value or "") for row in rows]
+        # Materialize scalar values before SessionContext commits/closes. The
+        # commit expires ORM attributes, so reading row.name afterwards raises
+        # DetachedInstanceError and silently removes workflow memory from the
+        # developer context assembled for every step.
+        return [(row.name or "Context", row.default_value or "") for row in rows]
 
 
 def _workflow_board_id(workflow_id: int) -> int | None:

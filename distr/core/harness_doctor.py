@@ -186,13 +186,13 @@ def _projection_rows(home: Path, harness_id: str, detected: dict[str, bool]) -> 
         "ecc": {
             "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "ecc-harness-pack" / "SKILL.md",
             "claude": home / ".claude" / "skills" / "decisions-ecc-harness" / "SKILL.md",
-            "cursor": home / ".cursor" / "decisions-ecc-harness.md",
+            "cursor": home / ".cursor" / "skills" / "decisions-ecc-harness" / "SKILL.md",
             "pi": home / ".pi" / "skills" / "decisions-ecc-harness" / "SKILL.md",
         },
         "competition": {
             "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / "decisions-competition-harness" / "SKILL.md",
             "claude": home / ".claude" / "skills" / "decisions-competition-harness" / "SKILL.md",
-            "cursor": home / ".cursor" / "decisions-competition-harness.md",
+            "cursor": home / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md",
             "pi": home / ".pi" / "skills" / "decisions-competition-harness" / "SKILL.md",
         },
     }

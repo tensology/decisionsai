@@ -20,8 +20,12 @@ def append_ticket_audit_entry(
     details: str = "",
 ) -> None:
     try:
-        bind = getattr(db, "bind", None)
+        bind = db.connection() if hasattr(db, "connection") else getattr(db, "bind", None)
         if bind is not None:
+            # Inspect through the session's current connection. Opening and
+            # closing a second Engine connection can roll back the caller's
+            # transaction with SQLite StaticPool (and made a freshly flushed
+            # workflow run disappear in the end-to-end test).
             if not inspect(bind).has_table("kanban_ticket_audit_entries"):
                 return
     except Exception:

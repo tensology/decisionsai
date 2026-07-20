@@ -249,7 +249,14 @@ def test_loop_mission_control_keeps_tickets_visible_but_binds_execution_to_activ
     assert "Execution transcript" in js
     assert "Prompt / handoff" in js
     assert "Command / tool call" in js
-    assert "Raw event data" in js
+    assert "Developer data (JSON)" in js
+    assert "Workflow progress" in js
+    assert "wf-loop-feed-progress-rail" in js
+    assert 'if (key === "run" && workflowSteps.length) return;' in js
+    assert "run.waiting_prompt || run.worker_question" in js
+    assert 'title === "execution message update" || title === "execution turn start"' in js
+    assert 'title === "execution turn end" || title === "execution tool execution start"' in js
+    assert ".wf-loop-feed-progress-dot--waiting" in html
     assert "Whole-run allocation" in js
     assert "Plan revision" in js
     assert 'detail=true' in js

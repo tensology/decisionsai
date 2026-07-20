@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
-from distr.core.db.orchestrator import OrchestratorEvent
+from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorLearnedRule
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep, AutoWorkflowVariable
 from distr.gui.web.routes.settings.workflows import register_routes
 
@@ -127,7 +127,7 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
     assert body["success"] is True
     assert body["event_type"] == "needs_input"
     assert body["legacy_event_type"] == "user_steer"
-    assert body["captured_standard"] is True
+    assert body["captured_standard"] is False
 
     append_execution_event.assert_called_once()
     assert append_execution_event.call_args.args[:2] == (56, "user_steer")
@@ -153,13 +153,16 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
         payload = json.loads(event.payload or "{}")
         assert payload["orchestration"]["legacy_event_type"] == "user_steer"
 
-        adaptive = (
+        assert (
             session.query(AutoWorkflowVariable)
             .filter(AutoWorkflowVariable.workflow_id == workflow_id)
             .filter(AutoWorkflowVariable.name == "Adaptive Quality Memory")
-            .one()
-        )
-        assert "browser validation evidence" in adaptive.default_value
+            .count()
+        ) == 0
+        candidate = session.query(OrchestratorLearnedRule).one()
+        assert candidate.enabled == 0
+        assert candidate.evidence_count == 1
+        assert "browser validation evidence" in candidate.summary
 
     timeline = client.get(f"/api/workflows/{workflow_id}/runs/{run_id}/timeline")
     assert timeline.status_code == 200

@@ -15,7 +15,12 @@ def _free_eligible_model(
     from distr.core.project_cli_backends.models_catalog import pi_cli_models, recommend_cli_model
 
     settings = settings or {}
-    models = pi_cli_models(settings)
+    cached_models = settings.get("_pi_cli_models_cache")
+    models = (
+        list(cached_models)
+        if isinstance(cached_models, list)
+        else pi_cli_models(settings)
+    )
     selected = recommend_cli_model(
         models,
         prefer_free=True,
@@ -24,6 +29,8 @@ def _free_eligible_model(
         complexity=complexity,
     )
     if prefer_local:
+        from distr.core.project_cli_backends.models_catalog import enrich_model_entry
+
         configured_provider = str(
             settings.get("coding_llm_provider") or settings.get("code_provider") or ""
         ).strip().lower()
@@ -39,7 +46,22 @@ def _free_eligible_model(
             ),
             None,
         )
-        if configured:
+        complexity_id = str(complexity or "medium").strip().lower()
+        configured_tier = (
+            str(enrich_model_entry(configured).get("tier") or "standard").lower()
+            if configured
+            else ""
+        )
+        # In Auto, a configured 9B conversational/coding default is a
+        # preference, not a complexity-blind pin. High-complexity work must use
+        # the strongest eligible installed local model (for example Ornith
+        # 35B) when the configured default is below the high tier. Manual mode
+        # and the step dropdown remain the actual pinning mechanisms.
+        configured_is_sufficient = (
+            complexity_id not in {"high", "complex", "critical"}
+            or configured_tier == "high"
+        )
+        if configured and configured_is_sufficient:
             selected = {
                 "id": configured_model,
                 "provider": "ollama",
@@ -95,22 +117,6 @@ def build_auto_fallback_chain(
         return []
 
     candidates: list[dict[str, Any]] = []
-    if current_backend == "pi" and not (
-        current_provider == "openrouter" and current_model == "tencent/hy3-preview"
-    ):
-        candidates.append({
-            "backend": "codex",
-            "model": "auto",
-            "automatic": True,
-            "reason": "Escalate from a local/free worker after a failed completion contract.",
-        })
-    if current_backend in {"pi", "codex"}:
-        candidates.append({
-            "backend": "cursor",
-            "model": "auto",
-            "automatic": False,
-            "reason": "Cursor is available as an interactive IDE handoff, not a silent background retry.",
-        })
     hy3 = _openrouter_hy3_route(settings)
     if hy3 and not (
         current_backend == "pi"
@@ -120,7 +126,23 @@ def build_auto_fallback_chain(
         candidates.append({
             **hy3,
             "automatic": True,
-            "reason": "Use the lower-cost OpenRouter cloud tier after Codex/Cursor.",
+            "reason": "Try the lower-cost OpenRouter cloud tier before paid coding agents.",
+        })
+    if current_backend == "pi" and not (
+        current_provider == "openrouter" and current_model == "tencent/hy3-preview"
+    ):
+        candidates.append({
+            "backend": "codex",
+            "model": "auto",
+            "automatic": True,
+            "reason": "Escalate from free workers after their completion contracts fail.",
+        })
+    if current_backend in {"pi", "codex"}:
+        candidates.append({
+            "backend": "cursor",
+            "model": "auto",
+            "automatic": False,
+            "reason": "Cursor is available as an interactive IDE handoff, not a silent background retry.",
         })
     candidates.append({
         "backend": "claude_code",
@@ -179,7 +201,13 @@ def apply_auto_step_role_policy(
     role = str(step_role or "execution").strip().lower()
     complexity = str(merged.get("complexity") or policy.get("complexity") or "medium").strip().lower()
     task_profile = merged.get("task_profile")
-    task_profile = task_profile if isinstance(task_profile, dict) else {}
+    task_profile = dict(task_profile) if isinstance(task_profile, dict) else {}
+    # The baseline route is inferred from the original request, so its intent
+    # can still say ``planning`` while this function is allocating an
+    # implementation or review step. The run-scoped role is more specific and
+    # must win or every assignment inherits planning-oriented behavior.
+    task_profile["intent"] = role
+    merged["task_profile"] = task_profile
     risk_flags = {
         str(item).strip().lower()
         for item in (task_profile.get("risk_flags") or [])
@@ -188,19 +216,35 @@ def apply_auto_step_role_policy(
     high_consequence = bool(
         risk_flags.intersection({"auth", "payments", "migration", "cross_module", "ui_critical"})
     )
+    prefer_free_local = bool(
+        policy.get("prefer_free_local")
+        or policy.get("prefer_local")
+        or str(policy.get("preference") or policy.get("model_policy_preference") or "").strip().lower()
+        in {"free", "local", "free_local"}
+    )
     selected: dict[str, Any]
     rationale: str
 
     if role == "final_polish":
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = "The final production polish uses Codex after cheaper implementation and independent review complete."
-    elif role == "planning" and complexity in {"medium", "high"}:
+    elif role == "planning" and complexity in {"medium", "high"} and not prefer_free_local:
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = (
             f"{complexity.title()}-complexity planning benefits from a stronger independent "
             "reasoning pass, so Auto selected Codex before implementation."
         )
-    elif role == "implementation" and high_consequence:
+    elif role == "planning":
+        selected = _free_eligible_model(
+            settings,
+            complexity=complexity,
+            prefer_local=prefer_free_local,
+        )
+        rationale = (
+            f"Auto honored the workflow free/local preference and selected a free planning model "
+            f"for {complexity} complexity."
+        )
+    elif role == "implementation" and high_consequence and not prefer_free_local:
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = (
             "Implementation touches a high-consequence boundary, so Auto selected Codex "
@@ -221,7 +265,8 @@ def apply_auto_step_role_policy(
     else:
         selected = _free_eligible_model(settings, complexity=complexity, prefer_local=True)
         rationale = (
-            f"Auto selected the configured local/free model for {role} at {complexity} complexity."
+            f"Auto selected the configured local/free model for {role} at {complexity} complexity"
+            + (", honoring the workflow preference before paid escalation." if prefer_free_local else ".")
         )
 
     selected = dict(selected)

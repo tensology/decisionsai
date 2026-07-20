@@ -31,3 +31,14 @@ def test_validation_rules_include_ui_quality_for_product_signals():
     joined = " ".join(rules).lower()
     assert "visually consistent" in joined
     assert "interaction flow" in joined
+
+
+def test_backend_copy_and_authoritative_language_do_not_invent_ui_or_auth_risk():
+    profile = infer_risk_profile(
+        "Copy-first backend foundation. The recovery note is authoritative. Preserve the frontend."
+    )
+
+    assert "auth" not in profile["signals"]
+    assert "copy" not in profile["signals"]
+    rules = validation_rules_for_risk(profile["level"], profile["signals"])
+    assert not any("UI remains" in rule for rule in rules)

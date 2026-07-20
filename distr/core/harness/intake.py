@@ -25,6 +25,43 @@ UI_TERMS = (
     "redesign",
 )
 
+UI_ACTION_TERMS = (
+    "add",
+    "build",
+    "change",
+    "create",
+    "design",
+    "fix",
+    "implement",
+    "improve",
+    "make",
+    "optimize",
+    "polish",
+    "redesign",
+    "refactor",
+    "rename",
+    "remove",
+    "restyle",
+    "style",
+    "tighten",
+    "tweak",
+    "update",
+)
+
+UI_PRESERVATION_TERMS = (
+    "do not change",
+    "do not modify",
+    "do not touch",
+    "don't change",
+    "don't modify",
+    "don't touch",
+    "keep intact",
+    "leave unchanged",
+    "preserve",
+    "without changing",
+    "without modifying",
+)
+
 HIGH_RISK_TERMS = {
     "auth": ("auth", "login", "permission", "role"),
     "payments": ("payment", "payments", "billing", "stripe", "invoice"),
@@ -34,8 +71,31 @@ HIGH_RISK_TERMS = {
 }
 
 
+def _has_term(text: str, term: str) -> bool:
+    """Match intent terms as words/phrases, never arbitrary substrings.
+
+    Short markers such as ``ui`` and ``auth`` previously matched words like
+    ``build`` and ``authoritative``, silently promoting unrelated backend work.
+    """
+    phrase = r"\s+".join(re.escape(part) for part in str(term or "").split())
+    return bool(phrase and re.search(rf"(?<!\w){phrase}(?!\w)", text, re.IGNORECASE))
+
+
 def _has_any(text: str, terms: tuple[str, ...]) -> bool:
-    return any(term in text for term in terms)
+    return any(_has_term(text, term) for term in terms)
+
+
+def _has_ui_work_intent(text: str) -> bool:
+    """Distinguish requested UI work from constraints that merely mention UI."""
+    for segment in re.split(r"[\n.!?;]+", text or ""):
+        segment = segment.strip()
+        if not segment or not _has_any(segment, UI_TERMS):
+            continue
+        if _has_any(segment, UI_PRESERVATION_TERMS):
+            continue
+        if _has_any(segment, UI_ACTION_TERMS) or _has_term(segment, "ui critical"):
+            return True
+    return False
 
 
 def _detect_override(text: str) -> str:
@@ -53,7 +113,7 @@ def classify_intake(text: str, *, file_count: int = 0, todo_count: int = 0) -> d
     raw = text or ""
     lowered = raw.lower()
     words = re.findall(r"\w+", lowered)
-    ui_heavy = _has_any(lowered, UI_TERMS)
+    ui_heavy = _has_ui_work_intent(lowered)
     risk_flags: list[str] = []
     reasons: list[str] = []
 

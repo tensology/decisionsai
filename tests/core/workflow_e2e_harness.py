@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,12 @@ class MatrixFakeBackend(ProjectCliBackend):
         type(self).last_loop_context = bool(loop_ctx)
         if on_event:
             on_event({"type": "executor_message", "message": "matrix fake accepted task"})
+        instruction = str(getattr(task, "instruction", "") or "")
+        expected_section = instruction.partition("[EXPECTED OUTPUT CONTRACT]")[2]
+        expected_fields = re.findall(r"(?m)^- ([a-zA-Z0-9_]+):", expected_section)
+        contract_evidence = "\n".join(
+            f"{field}: matrix evidence" for field in expected_fields
+        )
         return BackendTaskResult(
             success=True,
             backend_id=self.id,
@@ -112,7 +119,8 @@ class MatrixFakeBackend(ProjectCliBackend):
                 "Matrix fake executor completed with evidence.\n"
                 f"Ticket: {task.ticket_id}\n"
                 f"Step: {task.step_id}\n"
-                f"Loop context present: {bool(loop_ctx)}"
+                f"Loop context present: {bool(loop_ctx)}\n"
+                f"{contract_evidence}"
             ),
             session_id=task.audit_id,
         )
@@ -132,6 +140,31 @@ class MatrixFakeWorkflowAgent:
 
     def shutdown(self) -> None:
         return None
+
+
+def matrix_cli_step_result(self, step_data, config, run_id=None) -> dict[str, Any]:
+    """Return deterministic evidence that still honours each step's output contract."""
+    MatrixFakeBackend.last_loop_context = True
+    step_config = step_data.get("config") if isinstance(step_data, dict) else {}
+    if isinstance(step_config, str):
+        try:
+            step_config = json.loads(step_config)
+        except (TypeError, ValueError):
+            step_config = {}
+    expected_outputs = (
+        step_config.get("expected_outputs")
+        if isinstance(step_config, dict)
+        else []
+    ) or []
+    evidence = "\n".join(
+        f"{field}: matrix evidence"
+        for field in expected_outputs
+        if str(field).strip()
+    )
+    return {
+        "output": "Matrix fake CLI completed with evidence.\n" + evidence,
+        "passed": True,
+    }
 
 
 def default_settings_patch() -> dict[str, Any]:
@@ -209,10 +242,7 @@ def workflow_patch_stack(factory, tmp_path):
         ),
         patch(
             "distr.core.workflow.step_executor.StepExecutorMixin._run_send_to_project_cli",
-            lambda self, step_data, config, run_id=None: setattr(MatrixFakeBackend, "last_loop_context", True) or {
-                "output": "Matrix fake CLI completed with evidence.",
-                "passed": True,
-            },
+            matrix_cli_step_result,
         ),
         patch(
             "distr.core.workflow.step_executor.StepExecutorMixin._run_command",

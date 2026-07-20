@@ -40,7 +40,7 @@ def test_ticket_batch_is_atomic_linked_and_retry_safe(monkeypatch):
     get_session = _memory_session(monkeypatch)
     with get_session() as session:
         board = KanbanBoard(
-            name="Kayla the Crow",
+            name="Example Artist",
             agent_source_lane="Backlog",
             default_project_id=16,
             default_workflow_id=369,
@@ -83,7 +83,7 @@ def test_run_workflow_hands_ordered_ticket_group_to_dispatcher():
         {"ticket_id": 178, "board_id": 12, "context": "Second", "run_metadata": {}},
     ]
     result = {
-        "group_id": "kayla-group",
+        "group_id": "example-group",
         "started": [{"ticket_id": 177, "run_id": 900}],
         "queued_count": 1,
     }
@@ -94,7 +94,7 @@ def test_run_workflow_hands_ordered_ticket_group_to_dispatcher():
 
     assert "first of 2 selected tickets" in message
     assert "remaining 1" in message
-    assert "group_id=kayla-group" in message
+    assert "group_id=example-group" in message
     assert [call.args[0] for call in build.call_args_list] == [177, 178]
     assert start.call_args.args[1] == built
     assert start.call_args.kwargs["dispatch_async"] is True

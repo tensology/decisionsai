@@ -194,6 +194,16 @@ def test_mission_control_timeline_keeps_all_step_outcomes_without_heartbeat_bloa
             "payload": {},
             "evidence": {},
         },
+        {
+            "id": 5,
+            "step_id": 20,
+            "subtype": "execution_message_update",
+            "status": "running",
+            "created_at": "2026-01-01T00:03:01Z",
+            "summary": "A growing token-by-token worker response",
+            "payload": {"message": "raw model transport"},
+            "evidence": {},
+        },
     ]
 
     compact = mission_control_timeline(events, current_step_id=20)
@@ -227,3 +237,18 @@ def test_detailed_execution_timeline_keeps_prompt_tools_output_and_redacts_secre
     assert transcript[0]["evidence"]["output"] == "Tests passed."
     assert transcript[0]["payload"]["authorization"] == "[redacted]"
     assert transcript[0]["evidence"]["api_key"] == "[redacted]"
+
+
+def test_detailed_execution_timeline_folds_contiguous_streaming_deltas():
+    from distr.core.workflow.runtime_contract import detailed_execution_timeline
+
+    events = [
+        {"id": 1, "subtype": "execution_message_update", "summary": "W"},
+        {"id": 2, "subtype": "execution_message_update", "summary": "Wo"},
+        {"id": 3, "subtype": "execution_tool_completed", "summary": "Opened settings.py"},
+        {"id": 4, "subtype": "execution_message_update", "summary": "Work complete"},
+    ]
+
+    transcript = detailed_execution_timeline(events)
+
+    assert [event["id"] for event in transcript] == [2, 3, 4]

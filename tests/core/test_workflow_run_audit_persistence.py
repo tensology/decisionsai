@@ -122,8 +122,9 @@ def _seed_terminal_run(factory):
 
 
 def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
-    from distr.core.db.kanban import KanbanTicket, KanbanTicketAuditEntry
+    from distr.core.db.kanban import KanbanLane, KanbanTicket, KanbanTicketAuditEntry
     from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
     from distr.core.workflow.dispatcher import complete_run
 
     factory = _make_factory()
@@ -131,6 +132,11 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
 
     def get_session():
         return _session_ctx(factory)
+
+    # Starting a real workflow advances Backlog to In Progress. A successful
+    # terminal result may then advance In Progress to QA, but never to Complete.
+    with get_session() as session:
+        move_ticket_to_delivery_lane(session, ids["ticket_id"], "In Progress")
 
     with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
         "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
@@ -159,6 +165,7 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
         assert f"workflow_run:{ids['run_id']}" in packet["artifacts"]["logs"]
 
         assert ticket.workflow_status == "completed"
+        assert session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).one().name == "QA"
         # The ticket brief stays stable. Terminal evidence belongs to the
         # durable run receipt and audit ledger, not duplicated description text.
         assert ticket.description == "Original ticket body."
@@ -168,6 +175,100 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
         assert terminal.run_id == ids["run_id"]
         assert terminal.status == "completed"
         assert terminal.final_verdict == "pass"
+
+
+def test_failed_run_stays_in_progress_for_retry_or_human_direction():
+    from distr.core.db.kanban import KanbanLane, KanbanTicket
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.kanban.lifecycle import ensure_delivery_lanes, move_ticket_to_delivery_lane
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        ticket = session.query(KanbanTicket).filter(KanbanTicket.id == ids["ticket_id"]).one()
+        current_lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).one()
+        ensure_delivery_lanes(
+            session,
+            current_lane.board_id,
+            legacy_source_names=("Current",),
+        )
+        move_ticket_to_delivery_lane(session, ticket.id, "In Progress")
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()):
+        assert complete_run(ids["run_id"], "failed") is True
+
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        ticket = session.query(KanbanTicket).filter(KanbanTicket.id == ids["ticket_id"]).one()
+        lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).one()
+
+        assert run.status == "failed"
+        assert ticket.workflow_status == "failed"
+        assert lane.name == "In Progress"
+
+
+def test_research_screenshots_do_not_trigger_terminal_product_ui_gate():
+    from distr.core.db.kanban import KanbanLane, KanbanTicket
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        move_ticket_to_delivery_lane(session, ids["ticket_id"], "In Progress")
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_data = json.loads(run.run_data or "{}")
+        run_data["ticket_execution_profile"] = {
+            "kind": "research_documentation",
+            "research_only": True,
+            "implementation_required": False,
+            "ui_evidence_required": True,
+            "explicit_no_code": True,
+        }
+        run_data["waiting_kind"] = "provider_preflight"
+        run_data["waiting_prompt"] = "Choose another model."
+        run_data["waiting_result"] = "A superseded worker failed."
+        run_data["waiting_passed"] = False
+        run_data["result_packet"]["artifacts"]["ui_quality"] = {
+            "after_screenshot": "/tmp/source-evidence.png",
+        }
+        run.run_data = json.dumps(run_data)
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher._record_packet_ui_quality_validation"
+    ) as record_ui, patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()):
+        assert complete_run(ids["run_id"], "completed") is True
+
+    record_ui.assert_not_called()
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        ticket = session.query(KanbanTicket).filter(KanbanTicket.id == ids["ticket_id"]).one()
+        lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).one()
+        assert run.status == "completed"
+        terminal_data = json.loads(run.run_data or "{}")
+        assert "waiting_kind" not in terminal_data
+        assert "waiting_prompt" not in terminal_data
+        assert "waiting_result" not in terminal_data
+        assert ticket.workflow_status == "completed"
+        assert lane.name == "QA"
 
 
 def test_complete_run_allows_ui_heavy_packet_with_taste_aware_validation():

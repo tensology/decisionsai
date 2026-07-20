@@ -20,9 +20,11 @@ class ContextBundle:
     skills: list = field(default_factory=list)
     recent_audit: list = field(default_factory=list)
     developer_context: dict = field(default_factory=dict)
+    developer_context_text: str = ""
     work_scan: dict = field(default_factory=dict)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
+    situational: dict = field(default_factory=dict)
     # R8 memory files — trimmed for LLM (not full AGENT/USER/MEMORY bodies)
     memory_agent: str = ""
     memory_user: str = ""
@@ -108,10 +110,13 @@ class ContextAssembler:
             logger.warning("ContextAssembler: failed to fetch recent audit", exc_info=True)
 
         developer_context = {}
+        developer_context_text = ""
         try:
             from distr.core.developer_context import build_developer_context
 
-            developer_context = build_developer_context(settings=settings).to_dict()
+            work_ctx = build_developer_context(settings=settings)
+            developer_context = work_ctx.to_dict()
+            developer_context_text = work_ctx.to_prompt_text(max_chars=2200)
         except Exception:
             logger.warning("ContextAssembler: failed to fetch developer workflow context", exc_info=True)
 
@@ -139,6 +144,17 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to load memory file snippets", exc_info=True)
 
+        situational: dict = {}
+        try:
+            from distr.core.initiative.situational import build_situational
+
+            situational = build_situational(
+                active_project=active_project,
+                developer_context=developer_context,
+            )
+        except Exception:
+            logger.warning("ContextAssembler: failed to build situational spine", exc_info=True)
+
         return ContextBundle(
             chat_history=chat_history,
             scheduled_sessions=scheduled_sessions,
@@ -151,9 +167,11 @@ class ContextAssembler:
             skills=skills,
             recent_audit=recent_audit,
             developer_context=developer_context,
+            developer_context_text=developer_context_text,
             work_scan=work_scan,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
+            situational=situational,
             memory_agent=memory_agent,
             memory_user=memory_user,
             memory_long_term=memory_long_term,

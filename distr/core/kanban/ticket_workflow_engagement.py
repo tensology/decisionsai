@@ -70,6 +70,41 @@ def _ticket_subject(ticket_title: str, fallback: str = "the ticket") -> str:
     return clean or fallback
 
 
+def prepare_workflow_voice_text(value: str, *, max_chars: int = 320) -> str:
+    """Turn a useful workflow update into speech without reading telemetry aloud.
+
+    The complete message remains in Mission Control and the activity feed. Voice
+    is intentionally a compact human interruption layer, so run/ticket/step IDs,
+    timestamps, elapsed-time bookkeeping, URLs, paths and Markdown are removed.
+    """
+    text = re.sub(r"[`*_#]+", "", str(value or ""))
+    text = re.sub(r"https?://\S+", "the link in Mission Control", text, flags=re.I)
+    text = re.sub(r"\b(?:workflow\s+)?run\s*#?\d+\b", "this workflow", text, flags=re.I)
+    text = re.sub(r"\bticket\s*#?\d+\b", "the ticket", text, flags=re.I)
+    text = re.sub(r"\bstep\s+\d+(?:\s+of\s+\d+)?\b", "this phase", text, flags=re.I)
+    text = re.sub(r"\b(?:run|ticket|step|workflow)\s+id\s*[:#]?\s*\d+\b", "", text, flags=re.I)
+    text = re.sub(r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?Z?)?\b", "", text)
+    text = re.sub(r"\b(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\b", "", text)
+    text = re.sub(
+        r"(?i)\s*Elapsed\s+\d+(?:\.\d+)?(?:h|m|s|hours?|minutes?|seconds?)(?:\s+\d+(?:\.\d+)?(?:h|m|s))?\.?",
+        "",
+        text,
+    )
+    # Absolute paths and command-like internals are visible in the side panel,
+    # where they are useful and copyable, but are noise when spoken.
+    text = re.sub(r"(?<!\w)(?:~?/|[A-Za-z]:\\)[^\s,;]+", "the linked file", text)
+    text = re.sub(r"\b(?:at|on)\s+(?=[.!?])", "", text, flags=re.I)
+    text = re.sub(r"\s+([,.!?])", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,;:-")
+    if text:
+        text = text[0].upper() + text[1:]
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    compact = " ".join(sentences[:2]) if sentences else text
+    if len(compact) > max_chars:
+        compact = compact[: max_chars - 1].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    return compact
+
+
 def _spoken_step_action(step_name: str) -> str:
     """Translate workflow labels into a useful spoken description of the work."""
     clean = re.sub(r"\s+", " ", (step_name or "").strip())
@@ -163,7 +198,10 @@ def build_provider_failover_message(
 ) -> str:
     """Explain an automatic provider change without exposing routing internals."""
     labels = {
-        "pi": "the local model",
+        # Pi is a CLI harness and may be using Ollama, OpenRouter, Kilo, or
+        # another provider. Calling every Pi failure "the local model" is
+        # misleading in the user feed.
+        "pi": "the selected model",
         "ollama": "the local model",
         "codex": "Codex",
         "claude_code": "Claude Code",
@@ -476,7 +514,7 @@ def notify_ticket_workflow_progress(
     text = (body or "").strip()
     if not text:
         return
-    spoken = (voice_body or text).strip()
+    spoken = prepare_workflow_voice_text(voice_body or text)
 
     ctx = _run_context(run_id)
     audible = bool(audible or requires_response)
@@ -570,7 +608,15 @@ def notify_ticket_workflow_progress(
         )
         return
 
-    outbound = decision.final_voice_text or decision.final_text or text
+    voice_delivery = decision.format in {"voice", "desktop_tts", "remote_audio"} or decision.channel in {
+        "desktop",
+        "remote",
+    }
+    outbound = (
+        prepare_workflow_voice_text(decision.final_voice_text or spoken)
+        if voice_delivery
+        else (decision.final_text or text)
+    )
     try:
         if decision.channel == "desktop":
             from distr.core.signals import speak_text_directly_event_queue

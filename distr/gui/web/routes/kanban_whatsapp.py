@@ -833,7 +833,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
 
     @router.post("/tickets/tickets/from-whatsapp/{message_id}")
     async def create_ticket_from_whatsapp(message_id: int, payload: dict):
-        """Create a Ticket Board ticket from a WhatsApp message."""
+        """Create a Ticket Board ticket from a WhatsApp message via shared WorkIntake."""
         with get_session() as s:
             msg = s.query(WhatsAppMessage).get(message_id)
             if not msg:
@@ -844,6 +844,64 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             board = s.query(KanbanBoard).get(board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
+            existing = s.query(KanbanTicket).filter_by(whatsapp_message_id=message_id).first()
+            if existing:
+                return JSONResponse({"success": True, "id": existing.id, "message": "Ticket already exists"})
+            sender = msg.sender_push_name or msg.sender_phone or msg.jid_phone or "Unknown"
+            sender_phone = str(msg.sender_phone or "")
+            jid_phone = str(msg.jid_phone or "")
+            body = (msg.text or msg.caption or "").strip()
+            title_seed = body[:120] if body else (msg.media_type or "message")
+            intake_text = f"Create a ticket: [WA] {sender}: {title_seed}"
+            if body and body != title_seed:
+                intake_text = f"{intake_text}\n\n{body}"
+            attachments = []
+            if msg.media_local_path:
+                attachments.append({
+                    "kind": str(msg.media_type or "file"),
+                    "path": msg.media_local_path,
+                    "name": msg.media_filename or "",
+                })
+        try:
+            from distr.core.work_intake import WorkIntake, WorkIntakeAttachment, get_work_intake_service
+
+            decision = get_work_intake_service().ingest(
+                WorkIntake(
+                    source="whatsapp",
+                    user_text=intake_text,
+                    board_hint=str(board_id),
+                    source_user_id=sender_phone or sender,
+                    source_thread_id=jid_phone,
+                    source_message_id=str(message_id),
+                    attachments=[
+                        WorkIntakeAttachment(**item) for item in attachments
+                    ],
+                    metadata={
+                        "whatsapp_message_id": int(message_id),
+                        "ticket_title": f"[WA] {sender}: {title_seed}",
+                    },
+                )
+            )
+            if decision.ticket_id:
+                with get_session() as s:
+                    ticket = s.query(KanbanTicket).filter(KanbanTicket.id == int(decision.ticket_id)).first()
+                    if ticket and not ticket.whatsapp_message_id:
+                        ticket.whatsapp_message_id = int(message_id)
+                        s.commit()
+                return JSONResponse({
+                    "success": True,
+                    "id": decision.ticket_id,
+                    "decision": decision.to_dict(),
+                })
+        except Exception:
+            logger.exception("WhatsApp WorkIntake create failed; falling back to direct ticket create")
+
+        with get_session() as s:
+            msg = s.query(WhatsAppMessage).get(message_id)
+            if not msg:
+                raise HTTPException(404, "WhatsApp message not found")
+            board_id = payload.get("board_id")
+            board = s.query(KanbanBoard).get(board_id)
             source_lane_name = getattr(board, "agent_source_lane", None) or ""
             if not source_lane_name:
                 try:

@@ -384,6 +384,7 @@ SIMPLE LISTS vs FILE OPERATIONS:
 For simple file listing operations, always use file_operations tool. For file creation and other file operations, use execute_code.
 
 MOUSE TARGETING — when the user asks to "move mouse to [a UI element]", "click on [button/icon/element]", or any request that references a named UI element on screen, use this priority order:
+  Ambient context: the system prompt may include a short cached desktop line (frontmost app/window). It may be seconds old. Call get_desktop_snapshot to refresh it. It is not a live feed and is not for clicking.
   OPTION A — Accessibility tree (preferred, fast, exact): If get_window_tree/find_element/move_to_element tools are available, use them:
     1. Call find_element(name="address bar", app_name="Brave") → returns element id
     2. Call move_to_element(element_id=<id>) → moves mouse exactly

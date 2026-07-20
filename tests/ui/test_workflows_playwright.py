@@ -42,6 +42,22 @@ def open_workflow_board_execution_tab(page):
     open_workflow_global_execution_tab(page)
 
 
+def delete_active_test_workflow(page, workflow_name):
+    """Remove a workflow created by this suite so live acceptance runs leave no residue."""
+    active_tab = page.locator(".wf-workflow-tab.active")
+    if not active_tab.count() or active_tab.inner_text().strip() != workflow_name:
+        return
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.locator("#wf-delete-btn").click()
+    page.wait_for_timeout(300)
+    confirm_ok = page.locator("#wf-confirm-modal .wf-confirm-ok")
+    if confirm_ok.is_visible():
+        confirm_ok.click()
+    expect(
+        page.locator(".wf-workflow-tab").filter(has_text=workflow_name)
+    ).to_have_count(0, timeout=5000)
+
+
 @pytest.fixture(scope="module")
 def browser_context(browser):
     """Shared context with console & network logging."""
@@ -210,6 +226,7 @@ class TestWorkflowsBasicLoad:
         print_diagnostics(cl, nl, "BASIC LOAD")
         page.close()
 
+
     def test_workflow_list_populates(self, browser_context):
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
@@ -240,6 +257,35 @@ class TestWorkflowsBasicLoad:
 
         print_diagnostics(cl, nl, "LIST POPULATE")
         page.close()
+
+
+class TestWorkflowMissionControlSidePanel:
+    """Non-mutating acceptance checks for a real active workflow run."""
+
+    def test_active_run_panel_is_human_readable(self, browser_context):
+        page = browser_context.new_page()
+        page.set_viewport_size({"width": 1920, "height": 1080})
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+        feed = page.locator("#wf-loop-feed-messages")
+        try:
+            expect(feed).to_be_visible(timeout=10000)
+            development = page.locator(".wf-workflow-tab", has_text="Development").first
+            if development.count() and development.is_visible():
+                development.click()
+            try:
+                expect(feed.locator(".wf-loop-feed-progress-rail")).to_be_visible(timeout=10000)
+            except Exception:
+                pytest.skip("No active workflow run is available for the live side-panel acceptance check")
+            expect(feed.locator(".wf-loop-decision-summary")).to_contain_text("What is happening")
+            expect(feed.locator(".wf-loop-decision-summary")).to_contain_text("Now")
+            expect(feed.locator(".wf-loop-decision-summary")).to_contain_text("Next")
+            expect(feed.locator(".wf-loop-feed-progress-dot")).to_have_count(7)
+            expect(feed.locator(".wf-loop-feed-step")).to_have_count(1)
+            expect(feed.locator(".wf-loop-transcript")).to_contain_text("Execution transcript")
+            assert "'thinkingSignature'" not in feed.inner_text()
+            assert '"payload": {' not in feed.inner_text()
+        finally:
+            page.close()
 
 
 class TestWorkflowsDetailPanel:
@@ -465,32 +511,37 @@ class TestWorkflowsCreateAndDelete:
     def test_create_workflow(self, browser_context):
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
+        created = False
+        try:
+            page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+            open_workflow_create_modal(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
-        open_workflow_create_modal(page)
+            # Enter a name
+            name_input = page.locator("#wf-new-name")
+            name_input.fill("PW Test Workflow")
 
-        # Enter a name
-        name_input = page.locator("#wf-new-name")
-        name_input.fill("PW Test Workflow")
+            # Click Create
+            create_btn = page.locator("#wf-create-btn")
+            create_btn.click()
+            page.wait_for_timeout(2000)
+            created = True
 
-        # Click Create
-        create_btn = page.locator("#wf-create-btn")
-        create_btn.click()
-        page.wait_for_timeout(2000)
+            # The name input should be cleared and the detail panel should show
+            assert name_input.input_value() == "", "Name input not cleared after create"
 
-        # The name input should be cleared and the detail panel should show
-        assert name_input.input_value() == "", "Name input not cleared after create"
+            detail = page.locator("#wf-detail")
+            assert not detail.is_hidden(), "Detail panel not visible after create"
 
-        detail = page.locator("#wf-detail")
-        assert not detail.is_hidden(), "Detail panel not visible after create"
+            # Active workflow tab should reflect the created name
+            active_tab = page.locator(".wf-workflow-tab.active")
+            assert active_tab.inner_text().strip() == "PW Test Workflow", f"Workflow name mismatch: {active_tab.inner_text()}"
 
-        # Active workflow tab should reflect the created name
-        active_tab = page.locator(".wf-workflow-tab.active")
-        assert active_tab.inner_text().strip() == "PW Test Workflow", f"Workflow name mismatch: {active_tab.inner_text()}"
-
-        print(f"\n✅ Workflow 'PW Test Workflow' created")
-        print_diagnostics(cl, nl, "CREATE WORKFLOW")
-        page.close()
+            print(f"\n✅ Workflow 'PW Test Workflow' created")
+            print_diagnostics(cl, nl, "CREATE WORKFLOW")
+        finally:
+            if created:
+                delete_active_test_workflow(page, "PW Test Workflow")
+            page.close()
 
     def test_delete_workflow(self, browser_context):
         page = browser_context.new_page()
@@ -519,6 +570,10 @@ class TestWorkflowsCreateAndDelete:
         if confirm_ok.is_visible():
             confirm_ok.click()
             page.wait_for_timeout(1500)
+
+        expect(
+            page.locator(".wf-workflow-tab").filter(has_text="PW Delete Target")
+        ).to_have_count(0, timeout=5000)
 
         # Empty state should show
         empty_panel = page.locator("#wf-empty")

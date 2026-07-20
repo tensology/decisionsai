@@ -311,6 +311,7 @@ def warm_tool_cache(
             ("FindElementTool",    ("input.accessibility_tree", "FindElementTool"),    {}),
             ("MoveToElementTool",  ("input.accessibility_tree", "MoveToElementTool"),  {}),
             ("ClickElementTool",   ("input.accessibility_tree", "ClickElementTool"),   {}),
+            ("GetDesktopSnapshotTool", ("input.accessibility_tree", "GetDesktopSnapshotTool"), {}),
         ]
         for tool_name, (submodule, class_name), kwargs in _accessibility_tools:
             try:
@@ -573,6 +574,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "TypeTextTool": "Type out text character by character into the currently focused input field or editor.",
     # input/accessibility_tree
     "GetWindowTreeTool": "Get the accessibility tree of the frontmost window to inspect UI elements, buttons, text fields, and their hierarchy.",
+    "GetDesktopSnapshotTool": "Refresh a compact ambient desktop summary (frontmost app and window title). Prefer this over screenshots for 'what am I looking at'; use get_window_tree for targeting.",
     "FindElementTool": "Find a specific UI element in the accessibility tree by role, title, or description.",
     "MoveToElementTool": "Move the mouse cursor to a specific UI element identified by its accessibility tree ID.",
     "ClickElementTool": "Click a specific UI element identified by its accessibility tree ID.",
@@ -825,6 +827,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
         ("FindElementTool",    ("input.accessibility_tree", "FindElementTool"),    {}),
         ("MoveToElementTool",  ("input.accessibility_tree", "MoveToElementTool"),  {}),
         ("ClickElementTool",   ("input.accessibility_tree", "ClickElementTool"),   {}),
+        ("GetDesktopSnapshotTool", ("input.accessibility_tree", "GetDesktopSnapshotTool"), {}),
     ]
     for tool_name, (submodule, class_name), kwargs in accessibility_tools:
         try:

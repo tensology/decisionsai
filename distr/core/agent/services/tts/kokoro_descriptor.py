@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import unicodedata
 from typing import Any, Optional
 
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
@@ -44,6 +45,15 @@ KOKORO_VOICE_BY_DISPLAY_NAME = {v: k for k, v in KOKORO_VOICES.items()}
 
 DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_KOKORO_AGENT = "Heart"
+
+
+def _phonemizer_safe_text(text: str) -> str:
+    """Collapse line/control characters that can desynchronise espeak output."""
+    cleaned = []
+    for char in str(text or ""):
+        category = unicodedata.category(char)
+        cleaned.append(" " if category in {"Cc", "Cf", "Zl", "Zp"} else char)
+    return re.sub(r"\s+", " ", "".join(cleaned)).strip()
 
 
 def _split_text_for_kokoro(text: str, max_chars: int = 390) -> list[str]:
@@ -224,19 +234,39 @@ class KokoroDescriptor(TTSProviderDescriptor):
         clamped_speed = max(0.5, min(2.0, speed))
 
         # Sanitize text — phonemizer/espeak chokes on embedded newlines
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = _phonemizer_safe_text(text)
 
         # Normalize smart quotes for correct pronunciation
         from distr.core.agent.services.tts.kokoro import _normalize_text_for_tts
-        text = _normalize_text_for_tts(text)
+        text = _phonemizer_safe_text(_normalize_text_for_tts(text))
 
         chunks = []
         sample_rate = None
         for chunk in _split_text_for_kokoro(text):
-            audio, sr = kokoro.create(chunk, voice=base_voice, speed=clamped_speed)
-            if audio is not None and len(audio) > 0:
-                chunks.append(audio)
-                sample_rate = sr
+            try:
+                audio, sr = kokoro.create(chunk, voice=base_voice, speed=clamped_speed)
+                generated = [(audio, sr)]
+            except RuntimeError as exc:
+                if "number of lines in input and output must be equal" not in str(exc).lower():
+                    raise
+                # Some espeak builds emit spurious line breaks for a long or
+                # punctuation-heavy notification. Retry smaller independent
+                # clauses so one bad chunk does not drop the Telegram reply.
+                retry_chunks = _split_text_for_kokoro(chunk, max_chars=140)
+                if retry_chunks == [chunk] and len(chunk) > 40:
+                    midpoint = len(chunk) // 2
+                    split_at = chunk.rfind(" ", 0, midpoint + 1)
+                    split_at = split_at if split_at > 0 else midpoint
+                    retry_chunks = [chunk[:split_at].strip(), chunk[split_at:].strip()]
+                generated = [
+                    kokoro.create(part, voice=base_voice, speed=clamped_speed)
+                    for part in retry_chunks
+                    if part
+                ]
+            for audio, sr in generated:
+                if audio is not None and len(audio) > 0:
+                    chunks.append(audio)
+                    sample_rate = sr
 
         if not chunks:
             raise ValueError("Kokoro returned no audio")

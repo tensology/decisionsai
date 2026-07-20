@@ -20,6 +20,13 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def _redact_persisted_execution_value(value: Any) -> Any:
+    """Redact worker-visible secrets before durable storage or event emission."""
+    from distr.core.orchestrator import redact_handoff_payload
+
+    return redact_handoff_payload(value)
+
+
 def ensure_project_execution_tables() -> None:
     # Import workflow models so ForeignKey targets are registered in metadata
     # when this helper is used before the full app startup path has run.
@@ -48,6 +55,7 @@ def create_execution_session(
     input_packet: dict[str, Any] | None = None,
 ) -> int:
     ensure_project_execution_tables()
+    safe_input_packet = _redact_persisted_execution_value(input_packet or {})
     with get_session() as session:
         row = ProjectExecutionSession(
             ticket_id=ticket_id,
@@ -63,7 +71,7 @@ def create_execution_session(
             complexity=complexity or "",
             origin=origin or "",
             status="queued",
-            input_packet=_json_dumps(input_packet or {}),
+            input_packet=_json_dumps(safe_input_packet),
         )
         session.add(row)
         session.flush()
@@ -72,7 +80,7 @@ def create_execution_session(
             event_type="session_created",
             status="queued",
             message="Project execution session created.",
-            payload=_json_dumps(input_packet or {}),
+            payload=_json_dumps(safe_input_packet),
         )
         session.add(event)
         session.commit()
@@ -99,7 +107,7 @@ def create_execution_session(
                     "complexity": complexity,
                     "origin": origin,
                     "selection_reason": selection_reason,
-                    "input_packet": input_packet or {},
+                    "input_packet": safe_input_packet,
                 },
             )
         except Exception:
@@ -124,6 +132,8 @@ def append_execution_event(
     if not session_id:
         return
     ensure_project_execution_tables()
+    safe_message = str(_redact_persisted_execution_value(message or ""))
+    safe_payload = _redact_persisted_execution_value(payload or {})
     with get_session() as session:
         row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
         if not row:
@@ -135,8 +145,8 @@ def append_execution_event(
             session_id=int(session_id),
             event_type=event_type,
             status=status,
-            message=message or "",
-            payload=_json_dumps(payload or {}),
+            message=safe_message,
+            payload=_json_dumps(safe_payload),
         ))
         session.commit()
         try:
@@ -152,8 +162,8 @@ def append_execution_event(
                 ticket_id=row.ticket_id,
                 project_id=row.project_id,
                 execution_session_id=row.id,
-                summary=message or "",
-                payload=payload or {},
+                summary=safe_message,
+                payload=safe_payload,
             )
         except Exception:
             pass
@@ -176,13 +186,15 @@ def complete_execution_session(
         return
     ensure_project_execution_tables()
     status = "completed" if success else "failed"
+    safe_output_packet = _redact_persisted_execution_value(output_packet or {})
+    safe_error = str(_redact_persisted_execution_value(error or ""))
     with get_session() as session:
         row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
         if not row:
             return
         row.status = status
-        row.output_packet = _json_dumps(output_packet or {})
-        row.error = error or ""
+        row.output_packet = _json_dumps(safe_output_packet)
+        row.error = safe_error
         row.completed_at = utc_now_naive()
         row.updated_at = utc_now_naive()
         session.add(ProjectExecutionEvent(
@@ -190,7 +202,7 @@ def complete_execution_session(
             event_type="session_completed",
             status=status,
             message="Project execution session completed." if success else "Project execution session failed.",
-            payload=_json_dumps(output_packet or {}),
+            payload=_json_dumps(safe_output_packet),
         ))
         session.commit()
         try:
@@ -207,8 +219,8 @@ def complete_execution_session(
                 project_id=row.project_id,
                 execution_session_id=row.id,
                 summary="Project execution session completed." if success else "Project execution session failed.",
-                payload=output_packet or {},
-                evidence={"error": error} if error else {},
+                payload=safe_output_packet,
+                evidence={"error": safe_error} if safe_error else {},
             )
         except Exception:
             pass
@@ -221,7 +233,7 @@ def complete_execution_session(
 
     if success:
         try:
-            packet = output_packet or {}
+            packet = safe_output_packet
             summary = str(packet.get("output") or "").strip()
             if summary:
                 from distr.core.workspace_memory.feedback_sync import persist_worker_feedback

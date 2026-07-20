@@ -645,9 +645,12 @@
     cursor: pointer;
 }
 .kb-ticket-list-row:hover { border-color: color-mix(in srgb, var(--kb-accent, #f97316) 60%, transparent); }
+/* Prefix holds drag + source/complexity/priority. Fixed 108px let longer
+   badge sets ("manual" + "critical") paint over the title/description. */
 .kb-ticket-list-prefix {
-    flex: 0 0 108px;
-    width: 108px;
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 72px;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -670,12 +673,15 @@
 }
 .kb-ticket-list-row.dragging .kb-ticket-list-drag-handle { cursor: grabbing; }
 .kb-ticket-list-badges {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
     display: inline-flex;
     align-items: center;
     justify-content: flex-start;
     gap: 4px;
+}
+.kb-ticket-list-badges .kb-card-action-tip {
+    flex: 0 0 auto;
 }
 .kb-ticket-list-badges .kb-metric-badge.kb-complexity-numeral {
     flex: 0 0 1.45rem;
@@ -684,11 +690,11 @@
     padding: 0;
 }
 .kb-ticket-list-badges .kb-metric-badge:not(.kb-complexity-numeral) {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-width: 0;
-    max-width: 3.4rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
 }
 .kb-ticket-list-content {
     flex: 1 1 auto;

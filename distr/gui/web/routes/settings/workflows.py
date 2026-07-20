@@ -1478,6 +1478,85 @@ def register_routes(router, templates):
             logger.error("Workflow active runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.get("/workflows/intake/inbox")
+    async def workflow_intake_inbox(limit: int = 40):
+        """Mission Control inbox for channel WorkIntake decisions."""
+        try:
+            from distr.core.work_intake import get_work_intake_service
+
+            items = await asyncio.to_thread(get_work_intake_service().list_inbox, limit=limit)
+            return JSONResponse({"items": items})
+        except Exception as e:
+            logger.error("Workflow intake inbox failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/blueprint/checklist")
+    async def workflow_blueprint_checklist():
+        """Return the durable agent-system blueprint adherence checklist."""
+        try:
+            from distr.core.workflow.blueprint_adherence import checklist_snapshot
+
+            return JSONResponse({"success": True, **checklist_snapshot()})
+        except Exception as e:
+            logger.error("Workflow blueprint checklist failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/blueprint/evals")
+    async def workflow_blueprint_evals():
+        """Run the standing outcome eval pack for Development."""
+        try:
+            from distr.core.workflow.blueprint_eval_pack import run_blueprint_eval_pack
+
+            return JSONResponse({"success": True, **await asyncio.to_thread(run_blueprint_eval_pack)})
+        except Exception as e:
+            logger.error("Workflow blueprint evals failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/intake/inbox/{event_id}/action")
+    async def workflow_intake_inbox_action(event_id: int, request: Request):
+        """Continue / stop / steer / push / dismiss an inbox item."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        action = str((body or {}).get("action") or "").strip()
+        message = str((body or {}).get("message") or "").strip()
+        try:
+            from distr.core.work_intake import get_work_intake_service
+
+            result = await asyncio.to_thread(
+                get_work_intake_service().resolve_inbox_item,
+                int(event_id),
+                action=action,
+                message=message,
+            )
+            status = 200 if result.get("success") else 400
+            return JSONResponse(result, status_code=status)
+        except Exception as e:
+            logger.error("Workflow intake inbox action failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.post("/workflows/intake/ingest")
+    async def workflow_intake_ingest(request: Request):
+        """Web Mission Control entry into the shared WorkIntake pipeline."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            from distr.core.work_intake import WorkIntake, get_work_intake_service
+
+            payload = dict(body or {})
+            payload.setdefault("source", "web")
+            decision = await asyncio.to_thread(
+                get_work_intake_service().ingest,
+                WorkIntake.from_payload(payload),
+            )
+            return JSONResponse({"success": True, "decision": decision.to_dict()})
+        except Exception as e:
+            logger.error("Workflow intake ingest failed: %s", e, exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
     @router.get("/workflows/{workflow_id}")
     async def workflow_get(workflow_id: int):
         try:
@@ -1960,6 +2039,31 @@ def register_routes(router, templates):
             logger.error("Workflow route approval failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/provider-model-selection")
+    async def workflow_provider_model_selection(workflow_id: int, run_id: int, request: Request):
+        """Readiness-check a selected free model before retrying a waiting step."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            candidate_index = int(body.get("candidate_index", 0))
+        except (TypeError, ValueError):
+            return JSONResponse({"detail": "candidate_index must be an integer"}, status_code=400)
+        try:
+            from distr.core.workflow.service import apply_run_provider_model_selection
+
+            result = apply_run_provider_model_selection(run_id, candidate_index)
+            if result.get("error"):
+                return JSONResponse(
+                    {"detail": result["error"]},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow provider model selection failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     @router.post("/workflows/{workflow_id}/runs/{run_id}/steer")
     async def workflow_harness_steer(workflow_id: int, run_id: int, request: Request):
         """Steer the active harness mid-flight without restarting the workflow step."""
@@ -2103,7 +2207,6 @@ def register_routes(router, templates):
             from distr.core.db import get_session
             from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
             from distr.core.kanban.project_execution import append_execution_event
-            from distr.core.workflow.standards_memory import capture_feedback_as_standard
             from distr.core.orchestrator import record_human_intervention_memory
             from distr.core.orchestration_events import (
                 emit_orchestration_event,
@@ -2322,29 +2425,40 @@ def register_routes(router, templates):
                 status=status,
             )
             captured_standard = False
-            if event_type in {"user_steer", "codex_interrupted", "codex_needs_input", "cursor_interrupted", "cursor_needs_input"} and message:
-                captured_standard = capture_feedback_as_standard(workflow_id, message)
-            if message:
+            if event_type in {
+                "user_steer",
+                "manual_fix",
+                "changes_requested",
+                "codex_interrupted",
+                "cursor_interrupted",
+            } and message:
                 try:
-                    from distr.core.workflow.steering_memory import append_run_steering_entry
+                    from distr.core.workflow.control_policy import classify_learning_signal
+                    from distr.core.workflow.steering_memory import record_run_steering_feedback
 
-                    append_run_steering_entry(
-                        run_id,
+                    learning = classify_learning_signal(message, event_type=event_type)
+                    record_run_steering_feedback(
+                        run_id=run_id,
                         source="cursor" if "cursor" in lower_event_type else "codex",
                         event_type=event_type,
                         message=message,
                         step_id=int(step_id) if step_id else None,
+                        workflow_id=workflow_id,
+                        board_id=int(board_id) if board_id else None,
+                        ticket_id=int(ticket_id) if ticket_id else None,
+                        project_id=int(project_id) if str(project_id or "").isdigit() else None,
                     )
+                    captured_standard = bool(learning.enabled)
                 except Exception:
-                    logger.debug("Could not append run steering entry", exc_info=True)
+                    logger.debug("Could not persist bridge steering", exc_info=True)
 
             mistake_event_id = None
             if message and (
                 event.mistake_label
-                or event_type in {"user_steer", "codex_interrupted", "codex_needs_input", "manual_fix", "changes_requested"}
+                or event_type in {"manual_fix", "changes_requested"}
             ):
                 mistake_event_id = record_human_intervention_memory(
-                    label=event.mistake_label or ("manual_fix_applied" if event_type == "manual_fix" else "ignored_instruction"),
+                    label=event.mistake_label or ("manual_fix_applied" if event_type == "manual_fix" else "missed_requirement"),
                     message=message,
                     workflow_id=workflow_id,
                     run_id=run_id,
@@ -2531,6 +2645,17 @@ def register_routes(router, templates):
                 # reading the detached row below used to turn that race into a
                 # stream of 500s in the Mission Control side panel.
                 current_step_id = int(run.current_step_id) if run.current_step_id else None
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+            blueprint = {}
+            try:
+                from distr.core.workflow.blueprint_adherence import build_run_blueprint_snapshot
+
+                blueprint = build_run_blueprint_snapshot(run_data if isinstance(run_data, dict) else {})
+            except Exception:
+                blueprint = {}
             if detail:
                 from distr.core.workflow.runtime_contract import detailed_execution_timeline
 
@@ -2558,6 +2683,7 @@ def register_routes(router, templates):
                 "workflow_id": workflow_id,
                 "run_id": run_id,
                 "events": events,
+                "blueprint": blueprint,
                 "mission_control": bool(mission_control),
                 "detail": bool(detail),
             })

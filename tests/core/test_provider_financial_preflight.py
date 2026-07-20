@@ -9,6 +9,7 @@ from distr.core.project_cli_backends.provider_preflight import (
     probe_openrouter_model_readiness,
     rank_openrouter_free_models,
 )
+from distr.core.workflow.step_executor import _hosted_free_recommendation
 
 
 class _Response:
@@ -220,6 +221,132 @@ def test_free_catalogue_ranks_tool_capable_coding_models_and_filters_unfit_model
     assert candidates[0]["rank"] == 1
     assert candidates[0]["coding_index"] == 50
     assert "tool calling" in candidates[0]["reason"]
+
+
+def test_free_catalogue_filters_text_only_models_for_visual_evidence(monkeypatch):
+    def model(model_id, inputs):
+        return {
+            "id": model_id,
+            "name": model_id,
+            "context_length": 262144,
+            "pricing": {"prompt": "0", "completion": "0", "request": "0"},
+            "supported_parameters": ["tools"],
+            "architecture": {
+                "output_modalities": ["text"],
+                "input_modalities": inputs,
+            },
+        }
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.provider_preflight.urlopen",
+        lambda *_args, **_kwargs: _Response({"data": [
+            model("vendor/text-120b:free", ["text"]),
+            model("vendor/vision-30b:free", ["text", "image"]),
+        ]}),
+    )
+
+    candidates = rank_openrouter_free_models(
+        api_key="k",
+        complexity="high",
+        required_capabilities=["tools", "vision"],
+    )
+
+    assert [item["model"] for item in candidates] == ["vendor/vision-30b:free"]
+    assert candidates[0]["input_modalities"] == ["image", "text"]
+
+
+def test_concrete_text_only_openrouter_model_is_blocked_before_visual_review(monkeypatch):
+    def respond(request, **_kwargs):
+        if "/models" in request.full_url:
+            return _Response({"data": [{
+                "id": "vendor/text-reviewer",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+            }]})
+        if request.full_url.endswith("/credits"):
+            return _Response({"data": {"total_credits": 10, "total_usage": 0}})
+        return _Response({"data": {"limit_remaining": 10}})
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.provider_preflight.urlopen",
+        respond,
+    )
+    route = _route("vendor/text-reviewer")
+    route["evidence_capabilities"] = ["vision"]
+
+    report = preflight_provider_route(
+        route,
+        settings={"openrouter_key": "k"},
+        complexity="high",
+    )
+
+    assert report.ready is False
+    assert report.status == "blocked"
+    assert "text-only" in report.message
+    assert "visual-evidence" in report.message
+
+
+def test_hosted_auto_prefers_stronger_capable_free_model_when_benchmarks_are_sparse(monkeypatch):
+    def model(model_id, name, *, context=131072):
+        return {
+            "id": model_id,
+            "name": name,
+            "context_length": context,
+            "pricing": {"prompt": "0", "completion": "0", "request": "0"},
+            "supported_parameters": ["tools"],
+            "architecture": {"output_modalities": ["text"], "input_modalities": ["text"]},
+        }
+
+    # Deliberately put the small model first, matching the failure mode where
+    # sparse OpenRouter metadata previously left selection to catalogue/id order.
+    payload = {"data": [
+        model("google/gemma-4-26b-it:free", "Gemma 4 26B"),
+        model("vendor/command-120b:free", "Command 120B"),
+        model("vendor/coder-70b:free", "Coder 70B"),
+    ]}
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.provider_preflight.urlopen",
+        lambda *_args, **_kwargs: _Response(payload),
+    )
+
+    candidates = rank_openrouter_free_models(
+        api_key="k", complexity="high", required_capabilities=["tools"], limit=3
+    )
+
+    assert [item["model"] for item in candidates] == [
+        "vendor/command-120b:free",
+        "vendor/coder-70b:free",
+        "google/gemma-4-26b-it:free",
+    ]
+    assert candidates[0]["deployment_scope"] == "hosted"
+    assert candidates[0]["capacity_policy"] == "prefer_strongest_capable"
+    assert "120B hosted capacity" in candidates[0]["reason"]
+
+
+def test_hosted_recommendation_explains_capacity_and_honestly_labels_small_fallback():
+    large = _hosted_free_recommendation(
+        {
+            "name": "Command 120B",
+            "parameter_billions": 120,
+            "supports_tools": True,
+            "context_length": 131072,
+        },
+        complexity="high",
+    )
+    last_resort = _hosted_free_recommendation(
+        {
+            "name": "Gemma 4 26B",
+            "parameter_billions": 26,
+            "supports_tools": True,
+            "context_length": 131072,
+        },
+        complexity="high",
+    )
+
+    assert "Mac's memory is not the size limit" in large
+    assert "strongest healthy compatible" in large
+    assert "120B" in large
+    assert "stronger compatible hosted free models are unavailable" in last_resort
+    assert "best remaining" in last_resort
 
 
 def test_selected_free_model_must_pass_minimal_readiness_request(monkeypatch):

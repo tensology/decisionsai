@@ -34,7 +34,7 @@ class CliModelsCatalogTests(unittest.TestCase):
         with patch(
             "distr.gui.utils.get_ollama_models.get_installed_ollama_models",
             return_value=installed,
-        ):
+        ), patch.object(catalog, "_ollama_model_chat_ready", return_value=True):
             models = catalog.installed_ollama_cli_models({"ollama_enabled": True})
 
         by_id = {model["id"]: catalog.enrich_model_entry(model) for model in models}
@@ -42,6 +42,23 @@ class CliModelsCatalogTests(unittest.TestCase):
         self.assertTrue(by_id["ornith:9b"]["free"])
         self.assertFalse(by_id["kimi-k2.7-code:cloud"]["local"])
         self.assertFalse(by_id["kimi-k2.7-code:cloud"]["free"])
+
+    def test_installed_ollama_catalog_skips_stale_local_manifest(self):
+        installed = [
+            {"id": "qwen3:8b", "name": "Qwen3 8B", "local": True},
+            {"id": "ornith:9b", "name": "Ornith 9B", "local": True},
+        ]
+        with patch(
+            "distr.gui.utils.get_ollama_models.get_installed_ollama_models",
+            return_value=installed,
+        ), patch.object(
+            catalog,
+            "_ollama_model_chat_ready",
+            side_effect=lambda model_id: model_id == "ornith:9b",
+        ):
+            models = catalog.installed_ollama_cli_models({"ollama_enabled": True})
+
+        self.assertEqual([model["id"] for model in models], ["ornith:9b"])
 
     def test_recommender_can_select_installed_ornith_for_local_policy(self):
         selected = catalog.recommend_cli_model(
@@ -59,6 +76,20 @@ class CliModelsCatalogTests(unittest.TestCase):
         )
         self.assertEqual(selected["id"], "ornith:9b")
         self.assertEqual(selected["provider"], "ollama")
+
+    def test_recommender_prefers_large_local_model_for_high_complexity(self):
+        selected = catalog.recommend_cli_model(
+            [
+                catalog.model_entry("codegemma:2b", "ollama", free=True, scope="scoped"),
+                catalog.model_entry("ornith:35b", "ollama", free=True, scope="scoped"),
+            ],
+            prefer_free=True,
+            prefer_local=True,
+            prefer_scoped=True,
+            complexity="high",
+        )
+
+        self.assertEqual(selected["id"], "ornith:35b")
 
     def test_opencode_backend_registered(self):
         from distr.core.project_cli_backends import get_backend, normalize_backend_id

@@ -2297,6 +2297,16 @@ class KanbanTicketTool(BaseTool):
                 "I need a ticket number to update that.",
                 "No ticket ID provided.",
             )
+        if lane_name:
+            from distr.core.kanban.lifecycle import require_automation_lane
+
+            try:
+                require_automation_lane(lane_name)
+            except ValueError:
+                return voice_then_reference(
+                    "That ticket is ready for your acceptance in QA.",
+                    "Only you can move a QA ticket to Complete. Open the board and make the final move there.",
+                )
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
@@ -2479,6 +2489,16 @@ class KanbanTicketTool(BaseTool):
                 "I need a ticket number to move that.",
                 "No ticket ID provided.",
             )
+        if lane_name:
+            from distr.core.kanban.lifecycle import require_automation_lane
+
+            try:
+                require_automation_lane(lane_name)
+            except ValueError:
+                return voice_then_reference(
+                    "That ticket is ready for your acceptance in QA.",
+                    "Only you can move a QA ticket to Complete. Open the board and make the final move there.",
+                )
         explicit_board_id = target_board_id or board_id
         explicit_board_name = (target_board_name or board_name or "").strip()
         from distr.core.db.kanban import KanbanTicket, KanbanLane

@@ -46,8 +46,7 @@ def test_ambient_harness_event_resolves_project_from_folder_and_records_notifica
     assert emitted[0]["payload"]["source"] == "ambient"
     assert notifications[0]["channel"] == "telegram"
     assert "Codex" in notifications[0]["text"]
-    assert learnings[0]["scope"] == "project"
-    assert learnings[0]["scope_id"] == 42
+    assert learnings == []
 
 
 def test_unattached_harness_event_records_global_ambient_event(monkeypatch):

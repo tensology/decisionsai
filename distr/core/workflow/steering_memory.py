@@ -76,7 +76,7 @@ def record_run_steering_feedback(
     capture_standard: bool = True,
     rule_type: str = "workflow_steering",
 ) -> None:
-    """Persist human steering to run log, learned rules, and workflow adaptive context."""
+    """Persist steering now; promote it only when evidence warrants reuse."""
     text = (message or "").strip()
     if not text:
         return
@@ -89,26 +89,36 @@ def record_run_steering_feedback(
         step_id=step_id,
     )
 
-    try:
-        from distr.core.orchestrator import record_learning_signal
+    from distr.core.workflow.control_policy import classify_learning_signal
 
-        record_learning_signal(
-            scope="board" if board_id else "project" if project_id else "global",
-            scope_id=board_id or project_id,
-            rule_type=rule_type,
-            summary=text[:500],
-            payload={
-                "run_id": run_id,
-                "step_id": step_id,
-                "workflow_id": workflow_id,
-                "source": source,
-                "event_type": event_type,
-            },
-        )
-    except Exception:
-        pass
+    learning = classify_learning_signal(text, event_type=event_type)
+    if learning.should_record:
+        try:
+            from distr.core.orchestrator import record_learning_signal
 
-    if capture_standard:
+            record_learning_signal(
+                scope="board" if board_id else "project" if project_id else "global",
+                scope_id=board_id or project_id,
+                rule_type=rule_type,
+                summary=text[:500],
+                payload={
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "workflow_id": workflow_id,
+                    "source": source,
+                    "event_type": event_type,
+                    "learning_disposition": learning.disposition,
+                    "learning_reason": learning.reason,
+                },
+                enabled=learning.enabled,
+                promote_after=learning.promote_after,
+            )
+        except Exception:
+            pass
+
+    # Adaptive/global standards are stronger than a learned-rule candidate.
+    # Only explicit durable instructions are allowed to enter those stores.
+    if capture_standard and learning.enabled:
         try:
             from distr.core.workflow.standards_memory import capture_feedback_as_memory
 
@@ -157,7 +167,11 @@ def build_steering_context_for_run_id(run_id: int | None, *, limit: int = 8) -> 
                 continue
             src = str(entry.get("source") or "workflow")
             evt = str(entry.get("event_type") or "feedback")
-            parts.append(f"- [{src}/{evt}] {msg[:280]}")
+            # Steering is compact, but truncating a path or final constraint can
+            # reverse its meaning (for example, "reuse X; do not recapture").
+            # Preserve enough of the latest instruction for the next one-shot
+            # worker to execute it exactly.
+            parts.append(f"- [{src}/{evt}] {msg[:600]}")
 
     feedback = str(run_data.get("feedback") or "").strip()
     if feedback and feedback not in "\n".join(parts):

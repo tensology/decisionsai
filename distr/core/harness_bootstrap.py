@@ -117,11 +117,15 @@ def write_projection_skill(path: Path, text: str) -> bool:
 
 
 def projection_paths(home: Path, detected: dict[str, bool], skill_name: str) -> dict[str, Path]:
-    """Standard Decisions projection filenames per harness."""
+    """Standard Decisions projection filenames per harness.
+
+    Cursor Agent Skills require ``~/.cursor/skills/<id>/SKILL.md`` (not a flat
+    ``~/.cursor/*.md`` stub — those are invisible to the agent skills loader).
+    """
     mapping = {
         "codex": home / "plugins" / CODEX_PLUGIN_NAME / "skills" / skill_name / "SKILL.md",
         "claude": home / ".claude" / "skills" / skill_name / "SKILL.md",
-        "cursor": home / ".cursor" / f"decisions-{skill_name}.md",
+        "cursor": home / ".cursor" / "skills" / skill_name / "SKILL.md",
         "pi": home / ".pi" / "skills" / skill_name / "SKILL.md",
         "cline": home / ".cline" / "skills" / skill_name / "SKILL.md",
     }

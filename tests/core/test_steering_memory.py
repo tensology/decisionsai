@@ -71,6 +71,47 @@ def test_steering_log_and_context(tmp_path):
     assert "header looks wrong" in context
 
 
+def test_steering_context_preserves_paths_and_final_constraint(tmp_path):
+    from unittest.mock import patch
+
+    from distr.core.workflow.steering_memory import (
+        append_run_steering_entry,
+        build_steering_context_for_run_id,
+    )
+
+    factory = _factory(tmp_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    message = (
+        "Reuse docs/evidence/source-a.png and docs/evidence/source-b.png. "
+        + "Keep the existing evidence; do not install another browser tool. " * 5
+        + "FINAL CONSTRAINT: make only the missing documentation change."
+    )
+    with patch("distr.core.workflow.steering_memory.get_session", get_session), patch(
+        "distr.core.db.get_session", get_session
+    ):
+        with get_session() as db:
+            wf = AutoWorkflow(name="W", description="", workflow_input="{}")
+            db.add(wf)
+            db.flush()
+            run = AutoWorkflowRun(workflow_id=wf.id, status="running", run_data="{}")
+            db.add(run)
+            db.flush()
+            run_id = run.id
+        append_run_steering_entry(
+            run_id,
+            source="workflow_ui",
+            event_type="user_steer",
+            message=message,
+        )
+        context = build_steering_context_for_run_id(run_id)
+
+    assert "docs/evidence/source-a.png" in context
+    assert "FINAL CONSTRAINT" in context
+
+
 def test_record_steering_writes_learned_rule(tmp_path):
     from unittest.mock import patch
 
@@ -106,6 +147,53 @@ def test_record_steering_writes_learned_rule(tmp_path):
         learned = build_learned_rules_context(9)
 
     assert "Playwright" in learned
+
+
+def test_quality_steering_requires_repeat_evidence_before_promotion(tmp_path):
+    from unittest.mock import patch
+
+    from distr.core.orchestrator import build_learned_rules_context, list_learned_rules
+    from distr.core.workflow.steering_memory import record_run_steering_feedback
+
+    factory = _factory(tmp_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with patch("distr.core.workflow.steering_memory.get_session", get_session), patch(
+        "distr.core.db.get_session", get_session
+    ), patch("distr.core.orchestrator.get_session", get_session):
+        with get_session() as db:
+            wf = AutoWorkflow(name="W", description="", workflow_input="{}")
+            db.add(wf)
+            db.flush()
+            run = AutoWorkflowRun(workflow_id=wf.id, board_id=7, status="waiting", run_data="{}")
+            db.add(run)
+            db.flush()
+            run_id = run.id
+
+        feedback = "Validate checkout with Playwright before marking the ticket complete."
+        record_run_steering_feedback(
+            run_id=run_id,
+            message=feedback,
+            workflow_id=wf.id,
+            board_id=7,
+            capture_standard=False,
+        )
+        assert "Playwright" not in build_learned_rules_context(7)
+        rules = list_learned_rules(board_id=7, enabled_only=False)
+        assert len(rules) == 1
+        assert rules[0]["enabled"] is False
+        assert rules[0]["evidence_count"] == 1
+
+        record_run_steering_feedback(
+            run_id=run_id,
+            message=feedback,
+            workflow_id=wf.id,
+            board_id=7,
+            capture_standard=False,
+        )
+        assert "Playwright" in build_learned_rules_context(7)
 
 
 def test_get_run_steering_snapshot(tmp_path):

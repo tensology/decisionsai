@@ -139,7 +139,34 @@ def _record_learning(payload: HarnessEventPayload, attachment: str, project_id: 
     text = (payload.message or payload.output or payload.input or "").strip()
     if not text:
         return
+    event_type = (payload.event_type or "").strip().lower().replace("-", "_")
+    # Progress and successful completion are evidence for the run ledger, not
+    # reusable rules. Only corrections/failures/questions enter the candidate
+    # pool, and promotion remains conservative.
+    learnable_events = {
+        "needs_input",
+        "codex_needs_input",
+        "cursor_needs_input",
+        "worker_failed",
+        "codex_failed",
+        "cursor_failed",
+        "codex_interrupted",
+        "cursor_interrupted",
+        "manual_fix",
+        "changes_requested",
+    }
+    if event_type not in learnable_events:
+        return
     try:
+        from distr.core.workflow.control_policy import classify_learning_signal
+
+        learning = classify_learning_signal(
+            text,
+            event_type=event_type,
+            trusted_failure=event_type.endswith("_failed"),
+        )
+        if not learning.should_record:
+            return
         record_learning_signal(
             scope="project" if project_id else "global",
             scope_id=project_id,
@@ -151,7 +178,10 @@ def _record_learning(payload: HarnessEventPayload, attachment: str, project_id: 
                 "attachment": attachment,
                 "thread_id": payload.thread_id,
                 "session_id": payload.session_id,
+                "learning_disposition": learning.disposition,
             },
+            enabled=learning.enabled,
+            promote_after=learning.promote_after,
         )
     except Exception:
         pass

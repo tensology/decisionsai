@@ -142,6 +142,54 @@ def test_project_execution_lifecycle_events_share_the_same_timeline(monkeypatch,
     assert all(item["execution_session_id"] == execution_session_id for item in timeline)
 
 
+def test_project_execution_redacts_worker_quoted_secrets_before_persistence(monkeypatch, tmp_path):
+    from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+    from distr.core.kanban.project_execution import (
+        append_execution_event,
+        complete_execution_session,
+        create_execution_session,
+    )
+
+    factory = _factory()
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.kanban.project_execution.get_session", lambda: _session_ctx(factory))
+
+    with _session_ctx(factory) as session:
+        project = Project(name="Secret redaction", folder_location=str(tmp_path), coding_backend="pi")
+        session.add(project)
+        session.flush()
+        project_id = project.id
+
+    execution_session_id = create_execution_session(
+        project_id=project_id,
+        route_backend="pi",
+        input_packet={"instruction": "Inspect SECRET_KEY='never-store-this-input' safely."},
+    )
+    append_execution_event(
+        execution_session_id,
+        "message_update",
+        message="SECRET_KEY was a hard-coded real value ('never-store-this-event').",
+        payload={"output": "api_key='never-store-this-payload'"},
+    )
+    complete_execution_session(
+        execution_session_id,
+        success=False,
+        output_packet={"output": "password='never-store-this-output'"},
+        error="token='never-store-this-error'",
+    )
+
+    with _session_ctx(factory) as session:
+        row = session.query(ProjectExecutionSession).filter_by(id=execution_session_id).one()
+        events = session.query(ProjectExecutionEvent).filter_by(session_id=execution_session_id).all()
+        persisted = "\n".join(
+            [row.input_packet or "", row.output_packet or "", row.error or ""]
+            + [f"{event.message}\n{event.payload}" for event in events]
+        )
+
+    assert "never-store" not in persisted
+    assert "[redacted]" in persisted
+
+
 def test_user_notification_event_is_recorded_without_internal_branding(monkeypatch):
     from distr.core.orchestration_events import emit_user_notification, list_orchestration_timeline
 

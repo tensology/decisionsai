@@ -5249,19 +5249,8 @@ source: kanban_ticket_{t.id}
                     if project_for_route:
                         project_name_value = project_for_route.name
                         project_folder_value = project_for_route.folder_location
-                        from distr.core.orchestrator_routing import resolve_execution_route
-
-                        decision = resolve_execution_route(
-                            project=project_for_route,
-                            ticket=t,
-                            board=board,
-                            complexity=normalize_ticket_complexity(t.complexity),
-                            emit_event=False,
-                            allow_orchestrator_override=False,
-                        )
-                        execution_route = decision.to_route_dict()
                 except Exception:
-                    logger.debug("send-to-workflow: route resolution failed", exc_info=True)
+                    logger.debug("send-to-workflow: project context resolution failed", exc_info=True)
             context = f"Ticket: {t.title}"
             workflow_brief = None
             try:
@@ -5312,28 +5301,9 @@ source: kanban_ticket_{t.id}
         )
         if "error" in run_result:
             raise HTTPException(400, run_result["error"])
-        if execution_route:
-            try:
-                from distr.core.orchestrator import emit_event
-
-                emit_event(
-                    source="orchestrator",
-                    event_type="route_decided",
-                    status="selected",
-                    workflow_id=workflow_id,
-                    run_id=run_result.get("run_id"),
-                    ticket_id=ticket_id,
-                    board_id=board_id_value,
-                    project_id=int(project_id_value) if project_id_value else None,
-                    summary=(
-                        "Route selected: "
-                        f"{execution_route.get('backend') or execution_route.get('backend_id') or 'auto'}"
-                        f" / {execution_route.get('model') or 'auto'}"
-                    ),
-                    payload={"decision": execution_route},
-                )
-            except Exception:
-                logger.debug("send-to-workflow: route_decided event failed", exc_info=True)
+        # The intake route is only a starting hint. Each Development step may
+        # select a scoped provider/model after preflight, so announcing this as
+        # the final route produces contradictory Mission Control and TTS events.
         return JSONResponse({
             "success": True,
             "message": f"Ticket #{ticket_id} sent to workflow.",

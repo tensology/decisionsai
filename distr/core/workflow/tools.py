@@ -81,3 +81,10 @@ def normalize_tool_list(tools: object) -> list[str]:
 def tools_for_action(action_type: str) -> list[str]:
     action = str(action_type or "").strip()
     return list(_ACTION_TOOLS.get(action, ()))
+
+
+def format_tool_error(tool_id: str, error: str, suggestion: str = "") -> str:
+    """Normalize tool failures for worker consumption (ACI recovery text)."""
+    from distr.core.workflow.blueprint_adherence import format_tool_failure
+
+    return format_tool_failure(tool_id=tool_id, error=error, suggestion=suggestion)

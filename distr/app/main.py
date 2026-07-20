@@ -52,6 +52,12 @@ import json
 import subprocess
 import threading
 
+# Large local speech/model graphs make a generation-2 cyclic-GC scan visible
+# as a frozen desktop. Reference counting still releases normal short-lived
+# objects, and shutdown already performs an explicit full collection. Keep
+# automatic collections cheap during interactive operation.
+gc.set_threshold(5_000, 50, 1_000)
+
 # ===========================================
 # 2. Third Party Imports
 # ===========================================

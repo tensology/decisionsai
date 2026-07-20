@@ -47,10 +47,13 @@ def move_tickets(payload: dict[str, Any]) -> dict[str, Any]:
 
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanLane, KanbanTicket
+    from distr.core.kanban.lifecycle import require_automation_lane
     from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 
     board_id = int(payload.get("board_id") or 0)
-    target_lane_name = (payload.get("target_lane") or payload.get("lane") or "Current").strip()
+    target_lane_name = require_automation_lane(
+        payload.get("target_lane") or payload.get("lane") or "Current"
+    )
     ticket_ids = _ticket_ids(payload)
     if not board_id or not target_lane_name or not ticket_ids:
         raise ValueError("ticket lane move requires board_id, target_lane, and ticket_ids")

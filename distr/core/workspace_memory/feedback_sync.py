@@ -150,12 +150,12 @@ def persist_worker_feedback(
         except Exception:
             logger.debug("persist_worker_feedback: steering log failed", exc_info=True)
 
-    if steer and (mistake_label or low in _STEER_EVENT_TYPES) and not skip_human_intervention:
+    if steer and (mistake_label or low in {"manual_fix", "changes_requested"}) and not skip_human_intervention:
         try:
             from distr.core.orchestrator import record_human_intervention_memory
 
             record_human_intervention_memory(
-                label=mistake_label or ("manual_fix_applied" if low == "manual_fix" else "ignored_instruction"),
+                label=mistake_label or ("manual_fix_applied" if low == "manual_fix" else "missed_requirement"),
                 message=text,
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -169,17 +169,21 @@ def persist_worker_feedback(
         except Exception:
             logger.debug("persist_worker_feedback: human intervention failed", exc_info=True)
 
-    if steer or terminal:
+    if steer:
         try:
+            from distr.core.workflow.control_policy import classify_learning_signal
             from distr.core.workflow.standards_memory import capture_feedback_as_memory
 
-            captured = capture_feedback_as_memory(
-                text,
-                workflow_id=workflow_id,
-                linked_workflow_id=linked_wf,
-                board_id=board_id,
-                project_id=project_id,
-            )
+            learning = classify_learning_signal(text, event_type=low)
+            captured = False
+            if learning.enabled:
+                captured = capture_feedback_as_memory(
+                    text,
+                    workflow_id=workflow_id,
+                    linked_workflow_id=linked_wf,
+                    board_id=board_id,
+                    project_id=project_id,
+                )
             result["captured_standard"] = bool(captured)
         except Exception:
             logger.debug("persist_worker_feedback: standards capture failed", exc_info=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from unittest.mock import MagicMock
 
 import distr.core.db.orchestrator  # noqa: F401
@@ -11,7 +12,7 @@ import distr.core.db.kanban  # noqa: F401
 import distr.core.db.projects  # noqa: F401
 import distr.core.db.workflow  # noqa: F401
 from distr.core.db import Base
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
 from distr.core.workflow.service import apply_run_route_approval
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -43,17 +44,31 @@ def test_apply_run_route_approval_approve_updates_execution_route(tmp_path, monk
         wf = AutoWorkflow(name="Route Approval WF")
         session.add(wf)
         session.flush()
+        step = AutoWorkflowStep(
+            workflow_id=wf.id,
+            name="Plan",
+            position=0,
+            status="waiting",
+        )
+        session.add(step)
+        session.flush()
         run = AutoWorkflowRun(
             workflow_id=wf.id,
             status="waiting",
+            current_step_id=step.id,
             run_data=json.dumps(
                 {
                     "waiting_kind": "route_approval",
-                    "execution_route": {"backend": "codex", "model": "auto", "source": "policy"},
-                    "pending_route_approval": {
+                    "execution_route": {
                         "backend": "pi",
+                        "model": "ornith:35b",
+                        "model_provider": "ollama",
+                        "source": "policy",
+                    },
+                    "pending_route_approval": {
+                        "backend": "codex",
                         "model": "auto",
-                        "rationale": "Small scoped edit",
+                        "rationale": "Bounded planning fallback",
                     },
                 }
             ),
@@ -64,22 +79,31 @@ def test_apply_run_route_approval_approve_updates_execution_route(tmp_path, monk
 
     monkeypatch.setattr("distr.core.workflow.service.get_session", lambda: _session_ctx(factory))
     monkeypatch.setattr("distr.core.db.get_session", lambda: _session_ctx(factory))
+    dispatch = MagicMock(return_value={"success": True})
     monkeypatch.setattr(
         "distr.core.workflow.dispatcher.StepDispatcher.run_in_workflow",
-        MagicMock(return_value={"success": True}),
+        dispatch,
     )
     monkeypatch.setattr("distr.core.workflow.service.increment_workflow_updated", MagicMock())
 
     result = apply_run_route_approval(run_id, approved=True)
     assert result["success"] is True
     assert result["approved"] is True
-    assert result["execution_route"]["backend"] == "pi"
+    assert result["execution_route"]["backend"] == "codex"
+    assert "model_provider" not in result["execution_route"]
+    assert result["redispatched"] is True
+    deadline = time.monotonic() + 1
+    while not dispatch.called and time.monotonic() < deadline:
+        time.sleep(0.01)
+    dispatch.assert_called_once_with(step.id, run_id)
 
     with _session_ctx(factory) as session:
         row = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         data = json.loads(row.run_data or "{}")
         assert not data.get("pending_route_approval")
-        assert data.get("approved_route_override", {}).get("backend") == "pi"
+        assert data.get("approved_route_override", {}).get("backend") == "codex"
+        step_row = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == row.current_step_id).one()
+        assert step_row.status == "pending"
 
 
 def test_apply_run_route_approval_reject_clears_pending(tmp_path, monkeypatch):

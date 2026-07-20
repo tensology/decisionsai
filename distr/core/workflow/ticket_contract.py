@@ -102,9 +102,10 @@ def existing_work_satisfies_contract(ticket_text: str, result: str) -> bool:
     lower = str(result or "").lower()
     if not result_reports_completion(result):
         return False
-    if profile.get("ui_evidence_required") and not re.search(
-        r"\.(?:png|jpe?g|webp|mp4|mov)\b", lower
-    ):
+    if profile.get("ui_evidence_required"):
+        # A planning/context report cannot prove that a named media path exists
+        # or that it depicts the required source. Keep the run on its normal
+        # implementation/review path where the evidence gate can inspect files.
         return False
     if profile.get("copy_first_required") and not any(
         token in lower for token in ("rsync ", "cp -a", "copied from", "copy manifest")
@@ -125,14 +126,33 @@ def step_scope_overlay(step_name: str, ticket_text: str) -> str:
         "requirements unless the ticket explicitly requires them. Validate the named documentary artifacts "
         "and citations against the ticket acceptance criteria."
     )
+    evidence_rule = ""
+    if profile.get("ui_evidence_required"):
+        evidence_rule = (
+            " This ticket explicitly requires browser media evidence, so browser screenshots/recordings are not N/A. "
+            "The run may pass only after the exact existing media artifact paths are reported and verified. "
+            "Verification means inspecting the actual image contents with a vision-capable tool/model and stating what "
+            "each artifact visibly proves against the ticket; file existence or dimensions alone are not visual evidence."
+        )
+    if any(word in name for word in ("understand", "context", "ingest")):
+        return (
+            base
+            + evidence_rule
+            + " Inspect the named documentation/evidence index and at most the single explicitly identified preservation surface; "
+            "do not explore unrelated implementation components or old ticket/session history. Stop as soon as the missing evidence is identified."
+        )
     if "implement" in name:
-        return base + " Produce only missing research, documentation, and evidence deliverables."
+        return base + evidence_rule + " Produce only missing research, documentation, and evidence deliverables."
     if "plan" in name:
-        return base + " Plan the research and evidence deliverables, not an implementation diff."
+        return base + evidence_rule + " Plan the research and evidence deliverables, not an implementation diff."
     if any(word in name for word in ("review", "validate", "quality")):
-        return base + " A documented N/A reason is sufficient for code and browser checks outside scope."
+        return (
+            base
+            + evidence_rule
+            + " A documented N/A reason is sufficient only for checks that the ticket does not explicitly require."
+        )
     if "correct" in name:
-        return base + " Correct only concrete documentary or evidence defects reported by review."
+        return base + evidence_rule + " Correct only concrete documentary or evidence defects reported by review."
     if any(word in name for word in ("polish", "ship")):
-        return base + " Do not run a code-production polish pass; preserve scope and prepare the evidence handoff."
-    return base
+        return base + evidence_rule + " Do not run a code-production polish pass; preserve scope and prepare the evidence handoff."
+    return base + evidence_rule

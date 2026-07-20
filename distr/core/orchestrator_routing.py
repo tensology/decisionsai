@@ -80,11 +80,18 @@ def _ticket_text(ticket: Any | None) -> str:
 
 def _infer_harness_category(text: str) -> str | None:
     lowered = (text or "").lower()
-    if any(term in lowered for term in ("frontend", "react", "vue", "css", "ui", "tailwind", "playwright")):
+    from distr.core.harness.intake import classify_intake
+
+    if classify_intake(lowered).get("ui_heavy"):
         return "frontend"
-    if any(term in lowered for term in ("api", "backend", "django", "postgres", "endpoint", "server")):
+
+    def has(term: str) -> bool:
+        phrase = r"\s+".join(re.escape(part) for part in term.split())
+        return bool(re.search(rf"(?<!\w){phrase}(?!\w)", lowered))
+
+    if any(has(term) for term in ("api", "backend", "django", "postgres", "endpoint", "server")):
         return "api"
-    if any(term in lowered for term in ("auth", "migration", "architecture", "refactor", "integration")):
+    if any(has(term) for term in ("auth", "migration", "architecture", "refactor", "integration")):
         return "fullstack"
     return None
 

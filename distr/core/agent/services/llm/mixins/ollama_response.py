@@ -119,9 +119,17 @@ class OllamaResponseMixin:
             except Exception:
                 logger.warning("Could not build developer workflow context", exc_info=True)
 
+            desktop_inject = ""
+            try:
+                from distr.core.desktop_awareness import get_desktop_inject_block
+
+                desktop_inject = get_desktop_inject_block(mark_injected=True) or ""
+            except Exception:
+                desktop_inject = ""
+
             # Include the tools flag in the cache key so switching between
             # tools-in-prompt vs tools-via-API correctly invalidates the cache.
-            ctx_hash = hash((dropped_files_context, developer_context_text, include_tools_description))
+            ctx_hash = hash((dropped_files_context, developer_context_text, desktop_inject, include_tools_description))
 
             if (hasattr(self, '_cached_prompt_hash')
                     and self._cached_prompt_hash == ctx_hash
@@ -165,6 +173,14 @@ class OllamaResponseMixin:
 
             if developer_context_text:
                 self.default_template += f"\n\n{developer_context_text}"
+
+            if desktop_inject:
+                self.default_template += (
+                    "\n\nAmbient desktop (cached accessibility summary; may be seconds old; "
+                    "not a live feed). For targeting use get_window_tree / find_element / "
+                    "get_desktop_snapshot:\n"
+                    f"{desktop_inject}"
+                )
 
             self._cached_prompt_hash = ctx_hash
 

@@ -99,8 +99,14 @@ def test_current_development_bundle_preserves_nested_model_and_output_contracts(
     steps = normalize_bundle_steps(bundle)
     assert steps
     first = steps[0]["config"]
-    assert first["model_policy"] == {"mode": "auto", "free_only": True, "prefer_local": False}
+    assert first["model_policy"] == {"mode": "auto", "free_only": True, "prefer_local": True}
     assert first["required_context"] == [
         "ticket", "board", "project", "workflow_memory", "project_memory", "linked_attachments"
     ]
-    assert first["expected_outputs"] == ["context_packet", "unknowns", "route_recommendation"]
+    assert first["expected_outputs"] == [
+        "context_packet", "unknowns", "route_recommendation", "ui_design_read_if_applicable"
+    ]
+
+    review = next(step for step in steps if step["title"] == "Independently review and validate the change")
+    assert "project_release_findings" in review["config"]["expected_outputs"]
+    assert "ship_verdict applies only to the linked ticket" in review["instruction"]

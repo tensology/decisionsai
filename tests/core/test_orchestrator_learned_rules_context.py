@@ -165,6 +165,49 @@ def test_backend_handoff_redacts_secrets_and_records_memory(tmp_path):
     assert "visual check" in learned.summary
 
 
+def test_handoff_text_redacts_named_secret_values_quoted_by_workers():
+    from distr.core.orchestrator import redact_handoff_payload
+
+    text = (
+        "The source `SECRET_KEY` was a hard-coded real value "
+        "(`'django-insecure-do-not-persist-this-value'); replace it with an env var."
+    )
+
+    redacted = redact_handoff_payload(text)
+
+    assert "do-not-persist" not in redacted
+    assert "SECRET_KEY" in redacted
+    assert "[redacted]" in redacted
+
+
+def test_handoff_redaction_preserves_token_usage_metrics():
+    from distr.core.orchestrator import redact_handoff_payload
+
+    redacted = redact_handoff_payload({
+        "totalTokens": 4200,
+        "input_tokens": 4000,
+        "output_token_count": 200,
+        "access_token": "must-hide",
+    })
+
+    assert redacted["totalTokens"] == 4200
+    assert redacted["input_tokens"] == 4000
+    assert redacted["output_token_count"] == 200
+    assert redacted["access_token"] == "[redacted]"
+
+
+def test_handoff_redaction_preserves_contract_labels_and_runtime_ids():
+    from distr.core.orchestrator import redact_handoff_payload
+
+    redacted = redact_handoff_payload({
+        "contract": "ui_acceptance_contract_if_applicable: N/A",
+        "request_uid": "f66c49834e3b4d8b826a89a6904f18dd",
+    })
+
+    assert redacted["contract"] == "ui_acceptance_contract_if_applicable: N/A"
+    assert redacted["request_uid"] == "f66c49834e3b4d8b826a89a6904f18dd"
+
+
 def test_build_standards_context_appends_board_rules(tmp_path):
     from distr.core.orchestrator import record_learning_signal
     from distr.core.workflow.standards_memory import build_standards_context

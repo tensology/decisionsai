@@ -45,6 +45,14 @@ def _backend_ready(backend_id: str):
     return backend
 
 
+def test_harness_category_treats_preserved_frontend_as_backend_constraint():
+    from distr.core.orchestrator_routing import _infer_harness_category
+
+    assert _infer_harness_category(
+        "Verify the Django backend. Preserve the existing frontend and TrackPlayer."
+    ) == "api"
+
+
 @patch("distr.core.orchestrator.emit_event")
 @patch("distr.core.orchestrator_routing._call_orchestrator_llm", return_value=None)
 @patch("distr.core.project_cli_backends.get_backend")

@@ -100,23 +100,23 @@ def _merge_action_trace(existing: List[Dict[str, Any]], found: List[Dict[str, An
 
 
 def _merge_validation_snapshots(existing: List[Dict[str, Any]], found: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def identity(item: Dict[str, Any]) -> tuple[str, ...]:
+        # Identical retries are noise, but a new observation or actionable
+        # correction is evidence and must survive into the next-step handoff.
+        return (
+            str(item.get("step_id", "")),
+            str(item.get("step_name", "")),
+            str(item.get("validation_type", "")),
+            str(item.get("verdict", "")),
+            str(item.get("expected", "")),
+            str(item.get("observed", "")),
+            str(item.get("correction_hint", "")),
+        )
+
     snapshots = list(existing or [])
-    seen = {
-        (
-            str(item.get("step_name", "")),
-            str(item.get("validation_type", "")),
-            str(item.get("verdict", "")),
-            str(item.get("expected", "")),
-        )
-        for item in snapshots
-    }
+    seen = {identity(item) for item in snapshots}
     for item in found:
-        key = (
-            str(item.get("step_name", "")),
-            str(item.get("validation_type", "")),
-            str(item.get("verdict", "")),
-            str(item.get("expected", "")),
-        )
+        key = identity(item)
         if key in seen:
             continue
         seen.add(key)
@@ -137,7 +137,22 @@ def extract_artifacts_from_step_result(step_result: str) -> Dict[str, List[str]]
     }
 
     for match in _URL_RE.finditer(text):
-        _append_unique(found["links"], match.group(0))
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        line_end = text.find("\n", match.end())
+        line = text[line_start:(line_end if line_end >= 0 else len(text))]
+        lowered = line.lower()
+        # Raw CLI streams contain callback URLs, MCP endpoints, and auth
+        # warnings. They belong in the event trace, not the result packet.
+        noisy = any(
+            marker in lowered
+            for marker in ("callback", "api_base", "reporter", "mcp", "initialize request", "auth required")
+        )
+        explicitly_referenced = bool(
+            re.search(r"\b(?:source|evidence|link|artifact|report|browser(?:\s+trace)?|trace|screenshot|reference)\s*:", line, re.I)
+            or re.search(r"\[[^\]]+\]\([^)]*https?://", line)
+        )
+        if not noisy and explicitly_referenced:
+            _append_unique(found["links"], match.group(0))
 
     for regex in (_PATH_RE, _REL_PATH_RE):
         for match in regex.finditer(text):
@@ -472,6 +487,37 @@ def append_workflow_step_to_packet(
         execution["validation_snapshots"] = list(execution.get("validation_snapshots") or [])
     updated["execution"] = execution
 
+    # Promote explicit deterministic-check evidence into the canonical packet.
+    # Terminal gates read this structured list; leaving it buried in prose made
+    # a genuinely green workflow look unvalidated.
+    checks = dict(updated.get("tests_and_checks") or {})
+    tests_run = list(checks.get("tests_run") or [])
+    results = list(checks.get("results") or [])
+    evidence_text = trimmed_result.lower()
+    try:
+        from distr.core.workflow.step_iteration import parse_harness_step_report
+
+        parsed_report = parse_harness_step_report(trimmed_result)
+        evidence_text = " ".join(
+            value for value in (
+                evidence_text,
+                str(parsed_report.get("tests_run") or "").lower(),
+            ) if value
+        )
+    except Exception:
+        pass
+    for check_name in ("lint", "typecheck", "build", "tests"):
+        pattern = r"\b" + re.escape(check_name) + r"\b"
+        if re.search(pattern, evidence_text) and check_name not in {
+            str(item).strip().lower() for item in tests_run
+        }:
+            tests_run.append(check_name)
+    if tests_run and snippet and snippet not in results:
+        results.append(snippet)
+    checks["tests_run"] = tests_run[-20:]
+    checks["results"] = results[-20:]
+    updated["tests_and_checks"] = checks
+
     updated["status"] = run_status or updated.get("status") or "running"
     updated["summary"] = f"{len(change_summary)} step result(s) recorded in this run."
     updated["audit"] = dict(updated.get("audit") or {})
@@ -537,4 +583,7 @@ def summarize_packet_for_step_context(packet: Dict[str, Any], *, max_lines: int 
             if expected:
                 line += f": {expected[:160]}"
             lines.append(f"- {line}")
+            correction_hint = (item.get("correction_hint") or "").strip()
+            if correction_hint:
+                lines.append(f"  correction required: {correction_hint[:420]}")
     return "\n".join(lines).strip()

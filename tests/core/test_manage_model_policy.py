@@ -12,10 +12,65 @@ import distr.core.db.workflow  # noqa: F401
 from distr.core.db import Base
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
 from distr.core.project_cli_backends.policy_manager import (
+    _apply_recent_model_health,
+    _apply_provider_health,
+    _counts_as_model_health_failure,
     apply_model_policy_plan,
     build_model_policy_plan,
     refresh_auto_model_policy_for_workflow,
 )
+
+
+def test_auto_health_demotes_repeatedly_failing_leaderboard_model():
+    routes = [
+        {"backend": "pi", "model_provider": "openrouter", "model": "leader:free", "score": 100},
+        {"backend": "pi", "model_provider": "openrouter", "model": "runner-up:free", "score": 90},
+    ]
+
+    healthy = _apply_recent_model_health(routes, {"leader:free": 3})
+
+    assert [route["model"] for route in healthy] == ["runner-up:free"]
+    assert healthy[0]["health_status"] == "healthy"
+
+
+def test_auto_health_keeps_catalogue_when_every_model_is_temporarily_unhealthy():
+    routes = [{"model": "only:free"}]
+
+    annotated = _apply_recent_model_health(routes, {"only:free": 2})
+
+    assert annotated[0]["model"] == "only:free"
+    assert annotated[0]["recent_failures"] == 2
+    assert annotated[0]["health_status"] == "demoted"
+
+
+@pytest.mark.parametrize("error", [
+    "Pi exited with code 143.",
+    "Pi execution cancelled.",
+    "Provider session outlived its terminal workflow run.",
+])
+def test_auto_health_does_not_blame_model_for_cancelled_work(error):
+    assert _counts_as_model_health_failure(error) is False
+
+
+def test_auto_health_counts_only_route_readiness_failures():
+    assert _counts_as_model_health_failure("429 Rate limit exceeded") is True
+    assert _counts_as_model_health_failure("Provider unavailable: HTTP 503") is True
+    assert _counts_as_model_health_failure("Missing required Status contract") is False
+    assert _counts_as_model_health_failure(
+        "Inspection budget exceeded: model used 13 tool calls; this step allows 12."
+    ) is False
+
+
+def test_openrouter_rate_limit_cooldown_prefers_available_local_route():
+    routes = [
+        {"model_provider": "openrouter", "model": "cloud:free"},
+        {"model_provider": "ollama", "model": "ornith:35b", "local": True},
+    ]
+
+    available = _apply_provider_health(routes, openrouter_free_cooldown=True)
+
+    assert [route["model"] for route in available] == ["ornith:35b"]
+    assert available[0]["provider_health"] == "healthy"
 
 
 @pytest.fixture()
@@ -117,6 +172,21 @@ def test_auto_preview_resolves_every_step_without_mutating(policy_db):
         workflow = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).one()
         assert "resolved_model_plan" not in json.loads(workflow.run_settings)
         assert all(not step.config for step in workflow.steps)
+
+
+def test_auto_preview_can_prefer_local_planning_before_remote_free(policy_db):
+    _factory, workflow_id = policy_db
+
+    plan = build_model_policy_plan(
+        workflow_id=workflow_id,
+        mode="auto",
+        preference="free",
+        prefer_local=True,
+    )
+
+    assert plan["role_routes"]["planning"]["model"] == "ornith:35b"
+    assert plan["role_routes"]["implementation"]["model"] == "ornith:35b"
+    assert plan["role_routes"]["review"]["model_provider"] == "openrouter"
 
 
 def test_apply_auto_policy_persists_auditable_scoped_routes(policy_db):

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from dataclasses import asdict, replace
+from typing import Any
 
 from distr.core.db import get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
@@ -130,15 +132,17 @@ class OrchestratorIntakeService:
         workflow_run_ids: list[int] = []
         duplicate_ticket_ids: list[int] = []
         first: WorkIntakeDecision | None = None
-        original_text = intake.text
-
         for index, item in enumerate(items, start=1):
             child_metadata = dict(intake.metadata or {})
             child_metadata.update({
                 "batch_index": index,
                 "batch_count": len(items),
                 "ticket_title": item,
-                "ticket_description": f"{item}\n\nOriginal request:\n{original_text}",
+                # The inbound request and the executable ticket are separate
+                # concepts.  The channel/message identifiers below preserve the
+                # source trace; repeating the whole request in every ticket makes
+                # each worker re-plan the batch and bloats every model handoff.
+                "ticket_description": item,
             })
             child = replace(
                 intake,
@@ -444,6 +448,226 @@ class OrchestratorIntakeService:
             decision.ticket_id,
             decision.workflow_run_id,
         )
+        try:
+            from distr.core.orchestrator import emit_event
+
+            needs_attention = decision.action in {
+                WorkIntakeAction.ASK_MISSING_INFO,
+                WorkIntakeAction.REQUEST_APPROVAL,
+            } or decision.status in {"needs_info", "failed"}
+            emit_event(
+                source=str(intake.source.value or "unknown"),
+                event_type="work_intake_decision",
+                status=("needs_attention" if needs_attention else decision.status or "triaged"),
+                ticket_id=decision.ticket_id,
+                board_id=decision.board_id,
+                project_id=decision.project_id,
+                workflow_id=decision.workflow_id,
+                run_id=decision.workflow_run_id,
+                summary=(
+                    decision.response_text
+                    or f"{decision.action.value}: {(intake.text or '')[:180]}"
+                ),
+                payload={
+                    "intake": intake.to_dict(),
+                    "decision": decision.to_dict(),
+                    "needs_attention": needs_attention,
+                },
+            )
+        except Exception:
+            logger.debug("Could not persist work intake decision event", exc_info=True)
+
+    def list_inbox(self, *, limit: int = 40) -> list[dict[str, Any]]:
+        """Return recent intake items that still need Mission Control attention."""
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.orchestrator import OrchestratorEvent
+            from distr.core.orchestrator import ensure_orchestrator_tables, serialize_event
+
+            ensure_orchestrator_tables()
+            with get_session() as session:
+                rows = (
+                    session.query(OrchestratorEvent)
+                    .filter(OrchestratorEvent.event_type == "work_intake_decision")
+                    .order_by(OrchestratorEvent.created_at.desc(), OrchestratorEvent.id.desc())
+                    .limit(max(1, min(int(limit or 40), 100)))
+                    .all()
+                )
+                events = [serialize_event(row) for row in rows]
+        except Exception:
+            logger.debug("list_inbox failed", exc_info=True)
+            events = []
+        inbox: list[dict[str, Any]] = []
+        for event in events:
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload or "{}") or {}
+                except Exception:
+                    payload = {}
+            decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+            intake = payload.get("intake") if isinstance(payload.get("intake"), dict) else {}
+            status = str(event.get("status") or decision.get("status") or "").strip().lower()
+            action = str(decision.get("action") or "").strip().lower()
+            needs = bool(payload.get("needs_attention")) or status in {
+                "needs_attention",
+                "needs_info",
+                "failed",
+            } or action in {"ask_missing_info", "request_approval"}
+            if status in {"resolved", "dismissed", "handled"}:
+                continue
+            if not needs and action not in {
+                "create_ticket",
+                "run_workflow",
+                "steer_run",
+                "update_ticket",
+            }:
+                continue
+            inbox.append({
+                "event_id": event.get("id"),
+                "created_at": event.get("created_at"),
+                "source": intake.get("source") or event.get("source"),
+                "text": intake.get("user_text") or intake.get("transcript") or event.get("summary") or "",
+                "action": action,
+                "status": status or "triaged",
+                "response_text": decision.get("response_text") or event.get("summary") or "",
+                "ticket_id": decision.get("ticket_id") or event.get("ticket_id"),
+                "workflow_run_id": decision.get("workflow_run_id") or event.get("run_id"),
+                "workflow_id": decision.get("workflow_id") or event.get("workflow_id"),
+                "board_id": decision.get("board_id") or event.get("board_id"),
+                "project_id": decision.get("project_id") or event.get("project_id"),
+                "intake_uid": intake.get("intake_uid") or "",
+                "needs_attention": needs,
+            })
+        return inbox
+
+    def resolve_inbox_item(
+        self,
+        event_id: int,
+        *,
+        action: str,
+        message: str = "",
+    ) -> dict[str, Any]:
+        """Mirror Telegram continue/stop/steer/push actions from Mission Control."""
+        from distr.core.db import get_session
+        from distr.core.db.orchestrator import OrchestratorEvent
+        from distr.core.orchestrator import ensure_orchestrator_tables
+
+        ensure_orchestrator_tables()
+        clean_action = str(action or "").strip().lower()
+        clean_message = " ".join(str(message or "").split()).strip()
+        with get_session() as session:
+            row = session.query(OrchestratorEvent).filter(OrchestratorEvent.id == int(event_id)).first()
+            if not row:
+                return {"success": False, "error": "Inbox item not found"}
+            try:
+                payload = json.loads(row.payload or "{}") or {}
+            except Exception:
+                payload = {}
+            decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+            intake = payload.get("intake") if isinstance(payload.get("intake"), dict) else {}
+            ticket_id = decision.get("ticket_id") or row.ticket_id
+            run_id = decision.get("workflow_run_id") or row.run_id
+            result: dict[str, Any] = {"success": True, "action": clean_action}
+
+            if clean_action in {"dismiss", "resolve"}:
+                row.status = "resolved"
+                payload["needs_attention"] = False
+                payload["resolved_action"] = clean_action
+                row.payload = json.dumps(payload)
+                session.commit()
+                return result
+
+            if clean_action == "create_ticket":
+                child = WorkIntake.from_payload({
+                    **intake,
+                    "user_text": clean_message or intake.get("user_text") or intake.get("transcript") or "",
+                    "source": intake.get("source") or row.source or "web",
+                })
+                created = self.ingest(child)
+                result["decision"] = created.to_dict()
+                row.status = "resolved"
+                payload["needs_attention"] = False
+                payload["resolved_action"] = clean_action
+                row.payload = json.dumps(payload)
+                session.commit()
+                return result
+
+            if clean_action in {"push", "run", "push_to_loop"}:
+                if not ticket_id:
+                    return {"success": False, "error": "No ticket available to push into a loop"}
+                workflow_id = None
+                board_id = None
+                project_id = None
+                with get_session() as ticket_session:
+                    ticket = ticket_session.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                    if not ticket:
+                        return {"success": False, "error": f"Ticket #{ticket_id} was not found"}
+                    workflow_id = ticket.linked_workflow_id
+                    project_id = ticket.linked_project_id
+                    if ticket.lane_id:
+                        lane = ticket_session.query(KanbanLane).filter(KanbanLane.id == int(ticket.lane_id)).first()
+                        board_id = getattr(lane, "board_id", None) if lane else None
+                if not workflow_id:
+                    return {"success": False, "error": "Ticket has no linked workflow"}
+                push_decision = WorkIntakeDecision(
+                    WorkIntakeAction.RUN_WORKFLOW,
+                    "Mission Control push to Loop",
+                    ticket_id=int(ticket_id),
+                    board_id=int(board_id) if board_id else None,
+                    workflow_id=int(workflow_id),
+                    project_id=int(project_id) if project_id else None,
+                )
+                child = WorkIntake.from_payload({
+                    **intake,
+                    "user_text": clean_message or intake.get("user_text") or f"Push ticket #{ticket_id} into the workflow",
+                    "source": intake.get("source") or row.source or "web",
+                })
+                self._start_workflow(child, push_decision)
+                result["decision"] = push_decision.to_dict()
+                row.status = "resolved"
+                payload["needs_attention"] = False
+                payload["resolved_action"] = clean_action
+                row.payload = json.dumps(payload)
+                session.commit()
+                return result
+
+            if clean_action in {"stop", "cancel"} and run_id:
+                from distr.core.workflow.dispatcher import cancel_run
+
+                result["cancelled"] = bool(cancel_run(int(run_id)))
+                row.status = "resolved"
+                payload["needs_attention"] = False
+                payload["resolved_action"] = clean_action
+                row.payload = json.dumps(payload)
+                session.commit()
+                return result
+
+            if clean_action in {"continue", "resume"} and run_id:
+                from distr.core.workflow.dispatcher import continue_waiting_step
+
+                result["continue"] = continue_waiting_step(int(run_id), clean_message)
+                row.status = "resolved"
+                payload["needs_attention"] = False
+                payload["resolved_action"] = clean_action
+                row.payload = json.dumps(payload)
+                session.commit()
+                return result
+
+            if clean_action == "steer" and run_id:
+                from distr.core.workflow.service import apply_run_harness_steer
+
+                if not clean_message:
+                    return {"success": False, "error": "Steer requires a message"}
+                result["steer"] = apply_run_harness_steer(int(run_id), clean_message, source="mission_control")
+                row.status = "resolved"
+                payload["needs_attention"] = False
+                payload["resolved_action"] = clean_action
+                row.payload = json.dumps(payload)
+                session.commit()
+                return result
+
+            return {"success": False, "error": f"Unsupported inbox action: {clean_action}"}
 
 
 _service: OrchestratorIntakeService | None = None

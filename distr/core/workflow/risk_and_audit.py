@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Tuple
 
 
@@ -30,7 +31,10 @@ PRODUCT_RISK_TERMS = (
     "button",
     "navigation",
     "flow",
-    "copy",
+    "copywriting",
+    "website copy",
+    "button copy",
+    "marketing copy",
     "clarity",
     "onboarding",
     "conversion",
@@ -47,7 +51,7 @@ def validation_rules_for_risk(risk_level: str, signals: List[str]) -> List[str]:
         "Result packet fields are complete and internally consistent.",
         "No contradictory status/verdict across run, ticket, and audit notes.",
     ]
-    if any(s in PRODUCT_RISK_TERMS for s in signals) or risk_level in ("high", "medium"):
+    if any(s in PRODUCT_RISK_TERMS for s in signals):
         rules.extend(
             [
                 "UI remains visually consistent with existing design patterns.",
@@ -204,14 +208,18 @@ def infer_risk_profile(text: str) -> Dict[str, Any]:
             "risk_type": "research_documentation",
             "execution_profile": execution,
         }
-    system_matched = [term for term in HIGH_RISK_TERMS if term in lower]
-    product_matched = [term for term in PRODUCT_RISK_TERMS if term in lower]
+    def contains(term: str) -> bool:
+        phrase = r"\s+".join(re.escape(part) for part in term.split())
+        return bool(re.search(rf"(?<!\w){phrase}(?!\w)", lower))
+
+    system_matched = [term for term in HIGH_RISK_TERMS if contains(term)]
+    product_matched = [term for term in PRODUCT_RISK_TERMS if contains(term)]
     if system_matched:
         signals = system_matched + product_matched
         return {"level": "high", "signals": signals, "risk_type": "system_or_security"}
     if product_matched:
         return {"level": "high", "signals": product_matched, "risk_type": "product_conversion"}
-    if any(word in lower for word in ("db", "database", "api", "backend", "deploy")):
+    if any(contains(word) for word in ("db", "database", "api", "backend", "deploy")):
         return {"level": "medium", "signals": ["broad_system_touch"], "risk_type": "technical_scope"}
     return {"level": "low", "signals": [], "risk_type": "standard"}
 

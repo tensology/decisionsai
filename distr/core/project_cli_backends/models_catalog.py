@@ -5,11 +5,46 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_OLLAMA_SHOW_CACHE: dict[str, tuple[float, bool]] = {}
+_OLLAMA_SKIPPED_LOGGED: set[str] = set()
+
+
+def _ollama_model_chat_ready(model_id: str, *, ttl_seconds: int = 120) -> bool:
+    """Confirm an Ollama list entry can actually be opened for completion.
+
+    ``ollama list`` can retain a stale manifest after model cleanup. Pi then
+    reports a misleading "does not support chat" error. A cheap cached show
+    probe keeps those artifacts out of Auto routing.
+    """
+    key = str(model_id or "").strip()
+    if not key:
+        return False
+    now = time.monotonic()
+    cached = _OLLAMA_SHOW_CACHE.get(key)
+    if cached and now - cached[0] < ttl_seconds:
+        return cached[1]
+    try:
+        result = subprocess.run(
+            ["ollama", "show", key],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        ready = result.returncode == 0
+        if ready and "Capabilities" in (result.stdout or ""):
+            ready = "completion" in (result.stdout or "").lower()
+    except (OSError, subprocess.TimeoutExpired):
+        ready = False
+    _OLLAMA_SHOW_CACHE[key] = (now, ready)
+    return ready
 
 
 def model_entry(
@@ -55,9 +90,17 @@ def enrich_model_entry(item: dict[str, Any], *, default_free: bool | None = None
     if "free" not in out:
         out["free"] = provider in {"ollama", "local", "pi"} or model_id.endswith(":latest")
     if "tier" not in out or not out.get("tier"):
-        if any(token in model_id for token in ("pro", "opus", "max", "large", "70b")):
+        size_match = re.search(r"(?:^|[-_:])([0-9]+(?:\.[0-9]+)?)b(?:$|[-_:])", model_id)
+        parameter_billions = float(size_match.group(1)) if size_match else None
+        if (
+            any(token in model_id for token in ("pro", "opus", "max", "large", "70b"))
+            or (parameter_billions is not None and parameter_billions >= 30)
+        ):
             out["tier"] = "high"
-        elif any(token in model_id for token in ("mini", "nano", "fast", "small", "0.5b", "0.6b", "1.7b")):
+        elif (
+            any(token in model_id for token in ("mini", "nano", "fast", "small", "0.5b", "0.6b", "1.7b"))
+            or (parameter_billions is not None and parameter_billions <= 3)
+        ):
             out["tier"] = "low"
         else:
             out["tier"] = "standard"
@@ -278,6 +321,14 @@ def installed_ollama_cli_models(settings: dict) -> list[dict]:
         if not model_id:
             continue
         is_local = bool(item.get("local", True)) if isinstance(item, dict) else True
+        if is_local and not _ollama_model_chat_ready(model_id):
+            if model_id not in _OLLAMA_SKIPPED_LOGGED:
+                _OLLAMA_SKIPPED_LOGGED.add(model_id)
+                logger.warning(
+                    "Skipping stale or non-chat Ollama model from Auto catalog: %s",
+                    model_id,
+                )
+            continue
         row = model_entry(
             model_id,
             "ollama",

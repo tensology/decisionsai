@@ -205,6 +205,10 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 cfg["timeout_seconds"] = int(timeout_seconds)
             except (TypeError, ValueError):
                 pass
+        try:
+            max_retries = max(0, min(5, int(raw.get("max_retries") or 0)))
+        except (TypeError, ValueError):
+            max_retries = 0
 
         on_pass = _resolve_routing_action(
             raw, position=i, step_count=step_count, pass_key="validation_pass_action", goto_key="on_pass_goto_position"
@@ -225,6 +229,7 @@ def normalize_bundle_steps(bundle: dict[str, Any]) -> list[dict[str, Any]]:
                 "routing_mode": str(raw.get("routing_mode") or "static"),
                 "config": cfg,
                 "timeout_seconds": int(cfg.get("timeout_seconds") or raw.get("timeout_seconds") or 300),
+                "max_retries": max_retries,
                 "on_pass_goto_position": on_pass,
                 "on_fail_goto_position": on_fail,
             }

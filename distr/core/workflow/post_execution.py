@@ -276,6 +276,23 @@ class PostExecutionMixin:
                 return
             self._routed_steps.add(step_id)
 
+        # A worker's structured ``needs_input`` report is an enforced control
+        # state, not a failed result. Pause the current step and let the same
+        # step resume with the user's answer instead of routing onward.
+        if run_id is not None and self._enter_worker_needs_input_state(
+            step_id=step_id,
+            run_id=int(run_id),
+            result_text=result_text,
+        ):
+            self._persist_compact_step_memory(
+                step_id=step_id,
+                run_id=run_id,
+                result_text=result_text,
+                passed=False,
+            )
+            self._append_workflow_step_audit(step_id, int(run_id), result_text, False)
+            return
+
         # Route to the next step if we're in a workflow run.
         # NOTE: StepRouter.route() is the single writer for step results/status
         # in workflow mode to avoid duplicate result rows and duplicated context.
@@ -468,7 +485,9 @@ class PostExecutionMixin:
         # Notify main agent via TTS
         try:
             from distr.core.signals import speak_text_directly_event_queue
-            speak_text_directly_event_queue(handoff["tts"])
+            from distr.core.kanban.ticket_workflow_engagement import prepare_workflow_voice_text
+
+            speak_text_directly_event_queue(prepare_workflow_voice_text(handoff["tts"]))
         except Exception as e:
             logger.debug("Could not speak wait notification: %s", e)
         # Queue report for the main agent
@@ -480,6 +499,102 @@ class PostExecutionMixin:
             )
         except Exception as e:
             logger.debug("Could not queue wait report: %s", e)
+        return True
+
+    def _enter_worker_needs_input_state(
+        self,
+        *,
+        step_id: int,
+        run_id: int,
+        result_text: str,
+    ) -> bool:
+        """Pause any direct worker that returns the structured needs-input status."""
+        from distr.core.workflow.control_policy import decide_interruption
+        from distr.core.workflow.step_iteration import parse_harness_step_report
+
+        report = parse_harness_step_report(result_text or "")
+        status = str(report.get("status") or "").strip().lower().replace("-", "_")
+        decision = decide_interruption(
+            worker_status=status,
+            blockers=report.get("blockers", ""),
+        )
+        if not decision.should_interrupt or status != "needs_input":
+            return False
+
+        with get_session() as db:
+            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if not step or not run:
+                return False
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            step.status = "waiting"
+            run.status = "waiting"
+            run.current_step_id = int(step_id)
+            run_data["waiting_kind"] = "worker_needs_input"
+            run_data["waiting_result"] = result_text or ""
+            run_data["waiting_passed"] = False
+            run_data["waiting_prompt"] = decision.question
+            run_data["worker_question"] = decision.question
+            run_data["needs_input_context"] = {
+                "reason": decision.reason,
+                "recommendation": decision.recommendation,
+                "options": list(decision.options),
+                "blockers": report.get("blockers", ""),
+                "step_id": int(step_id),
+                "step_name": step.name or f"Step {step_id}",
+            }
+            run_data["human_intervention_state"] = "needs_human_input"
+            run_data["next_action"] = "needs_human_input"
+            run.run_data = json.dumps(run_data)
+            db.add(AutoWorkflowStepResult(
+                step_id=int(step_id),
+                run_id=int(run_id),
+                agent_response=result_text or decision.question,
+                status="waiting",
+            ))
+            workflow_id = run.workflow_id
+            ticket_id = run.ticket_id
+            board_id = run.board_id
+            db.commit()
+
+        increment_workflow_updated()
+        try:
+            from distr.core.orchestration_events import emit_orchestration_event
+
+            emit_orchestration_event(
+                source="workflow",
+                event_type="needs_input",
+                status="waiting",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=step_id,
+                ticket_id=ticket_id,
+                board_id=board_id,
+                summary=decision.question,
+                payload={"interruption": decision.to_dict(), "fields": report},
+            )
+        except Exception:
+            logger.debug("Could not emit direct worker needs-input event", exc_info=True)
+        try:
+            from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+
+            notify_ticket_workflow_progress(
+                run_id=run_id,
+                step_id=step_id,
+                body=(
+                    f"{decision.question} {decision.recommendation} "
+                    "Reply with the missing detail, steer the run, or stop it."
+                ).strip(),
+                voice_body=decision.question,
+                state_fingerprint=f"worker-needs-input:{run_id}:{step_id}",
+                priority="high",
+                requires_response=True,
+            )
+        except Exception:
+            logger.debug("Could not notify direct worker needs-input", exc_info=True)
         return True
 
     @staticmethod

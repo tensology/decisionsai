@@ -309,9 +309,24 @@ def infer_skills_for_ticket(text: str, *, limit: int = 5) -> list[str]:
     lowered = (text or "").lower()
     if not lowered.strip():
         return []
+    from distr.core.harness.intake import classify_intake
+
+    ui_work = bool(classify_intake(lowered).get("ui_heavy"))
+
+    def contains(keyword: str) -> bool:
+        phrase = r"\s+".join(re.escape(part) for part in str(keyword or "").split())
+        return bool(phrase and re.search(rf"(?<!\w){phrase}(?!\w)", lowered))
+
     scored: list[tuple[int, str]] = []
     for keywords, skill_ids in _TICKET_SKILL_HINTS:
-        hits = sum(1 for kw in keywords if kw in lowered)
+        # A preservation constraint such as "do not touch the frontend" must
+        # not provision frontend/browser skills onto a backend worker.
+        if not ui_work and any(
+            sid in {"webapp-testing", "frontend-design", "decisions-design-references", "frontend-design-direction"}
+            for sid in skill_ids
+        ):
+            continue
+        hits = sum(1 for kw in keywords if contains(kw))
         if hits <= 0:
             continue
         for sid in skill_ids:

@@ -7,6 +7,7 @@ Talks to the local sidecar process via HTTP on 127.0.0.1:SIDECAR_PORT.
 
 import logging
 import threading
+import time
 from typing import Optional
 
 from langchain.tools import BaseTool
@@ -250,4 +251,33 @@ class ClickElementTool(BaseTool):
             return f"Error: {e}"
         except Exception as e:
             logger.error("click_element_by_id failed: %s", e, exc_info=True)
+            return f"Error: {e}"
+
+
+# ── Tool: get_desktop_snapshot ────────────────────────────────────────────────
+
+class GetDesktopSnapshotTool(BaseTool):
+    name: str = "get_desktop_snapshot"
+    description: str = (
+        "Refresh and return a compact ambient desktop summary (frontmost app, window title, "
+        "optional interactive UI labels). Use when ambient context looks stale or the user asks "
+        "what they are looking at without needing a full accessibility tree or screenshot. "
+        "For clicking/targeting named elements prefer get_window_tree / find_element."
+    )
+
+    def _run(self, force_labels: bool = False, **kwargs) -> str:
+        try:
+            from distr.core.desktop_awareness import refresh_desktop_awareness_cache
+
+            snap = refresh_desktop_awareness_cache(force_tier_b=bool(force_labels))
+            line = str(snap.get("line") or "").strip()
+            if not line:
+                return "No desktop snapshot available (permissions or platform)."
+            age = ""
+            captured = float(snap.get("captured_at") or 0.0)
+            if captured:
+                age = f" (age ~{max(0, int(time.time() - captured))}s)"
+            return f"{line}{age}"
+        except Exception as e:
+            logger.error("get_desktop_snapshot failed: %s", e, exc_info=True)
             return f"Error: {e}"

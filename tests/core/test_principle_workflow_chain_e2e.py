@@ -55,10 +55,11 @@ def test_development_covers_plan_build_independent_review_correction_and_memory(
         )
         assert [step.name for step in steps] == [
             "Understand ticket and acceptance criteria",
-            "Create the implementation plan",
+            "Confirm ticket execution contract",
             "Implement the planned change",
             "Independently review and validate the change",
             "Correct defects found by validation",
+            "Final production polish and ship audit",
             "Report, update ticket, and compact memory",
         ]
         configs = [json.loads(step.config or "{}") for step in steps]
@@ -68,6 +69,8 @@ def test_development_covers_plan_build_independent_review_correction_and_memory(
         assert "security" in (steps[3].instruction or "").lower()
         assert "ui work" in (steps[3].instruction or "").lower()
         assert configs[3]["model_policy"]["independent_from"] == "implementation"
+        assert configs[1]["expected_outputs"][0] == "execution_contract"
+        assert "do not create plan.md" in (steps[1].instruction or "").lower()
         assert configs[-1]["expected_outputs"][-2:] == ["failed_attempts", "lessons"]
         assert steps[3].on_pass_goto == steps[5].id
         assert steps[3].on_fail_goto == steps[4].id

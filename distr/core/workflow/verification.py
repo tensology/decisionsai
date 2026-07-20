@@ -3,8 +3,10 @@ Workflow Verification — text_match, rule_based, llm_judgment, screenshot, play
 
 Extracted from service.py as part of the module decomposition.
 """
+import json
 import logging
 import os
+import re
 from typing import Any, Dict
 
 from distr.core.db.workflow import AutoWorkflowStep
@@ -12,16 +14,65 @@ from distr.core.db.workflow import AutoWorkflowStep
 logger = logging.getLogger(__name__)
 
 
-def _ticket_acceptance_gate(step: AutoWorkflowStep, result: str, ticket_context: str) -> bool | None:
-    """Reject objective evidence gaps before an LLM can hand-wave them away.
+_MEDIA_PATH_RE = re.compile(
+    r"(?<![\w.-])(?:[A-Za-z]:[\\/]|/|\.?\.?/)?[^\s`\"'<>]+\.(?:png|jpe?g|webp|gif|mp4|mov)\b",
+    re.IGNORECASE,
+)
 
-    Returns ``False`` for a deterministic acceptance failure and ``None`` when
-    ordinary configured verification should decide. The gate is review-only so
-    planning/context steps are not expected to produce final artifacts.
-    """
+
+def _reported_media_paths(result: str) -> list[str]:
+    """Extract distinct screenshot/video paths from a worker report."""
+    paths: list[str] = []
+    for raw in _MEDIA_PATH_RE.findall(str(result or "")):
+        path = raw.rstrip(".,;:)]}")
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
+def _project_folder(project_id: int | None) -> str:
+    if not project_id:
+        return ""
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+
+        with get_session() as db:
+            project = db.query(Project).filter(Project.id == int(project_id)).first()
+            return os.path.abspath(os.path.expanduser(str(project.folder_location or ""))) if project else ""
+    except Exception:
+        logger.debug("Could not resolve project folder for acceptance evidence", exc_info=True)
+        return ""
+
+
+def ticket_acceptance_findings(
+    step: AutoWorkflowStep,
+    result: str,
+    ticket_context: str,
+    *,
+    project_id: int | None = None,
+) -> list[dict[str, str]]:
+    """Return deterministic ticket-contract findings with actionable corrections."""
+    findings: list[dict[str, str]] = []
     step_name = str(getattr(step, "name", "") or "").lower()
-    if not any(word in step_name for word in ("review", "validate", "quality")):
-        return None
+    raw_config = getattr(step, "config", None)
+    if isinstance(raw_config, str):
+        try:
+            step_config = json.loads(raw_config or "{}") or {}
+        except Exception:
+            step_config = {}
+    elif isinstance(raw_config, dict):
+        step_config = raw_config
+    else:
+        step_config = {}
+    step_role = str(step_config.get("step_role") or "").strip().lower()
+    is_acceptance_review = step_role in {"review", "final_polish"} or (
+        not step_role
+        and "correct" not in step_name
+        and any(word in step_name for word in ("review", "validate", "quality"))
+    )
+    if not is_acceptance_review:
+        return findings
     ticket_text = str(ticket_context or "").lower()
     observed = str(result or "").lower()
 
@@ -29,15 +80,62 @@ def _ticket_acceptance_gate(step: AutoWorkflowStep, result: str, ticket_context:
         "browser evidence required" in ticket_text
         and any(word in ticket_text for word in ("screenshot", "screen recording", "capture"))
     )
-    media_evidence = any(ext in observed for ext in (".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov"))
-    if screenshot_required and not media_evidence:
-        logger.warning("Ticket acceptance gate failed: required browser media evidence was not reported")
-        return False
+    if screenshot_required:
+        reported = _reported_media_paths(result)
+        root = _project_folder(project_id)
+        existing: list[str] = []
+        for item in reported:
+            candidate = os.path.expanduser(item)
+            if not os.path.isabs(candidate) and root:
+                candidate = os.path.join(root, candidate)
+            if not root or os.path.isfile(candidate):
+                existing.append(item)
+        required_count = 2 if "spotify" in ticket_text and "youtube" in ticket_text else 1
+        if len(existing) < required_count:
+            source_label = "Spotify and YouTube" if required_count == 2 else "the required browser source"
+            findings.append(
+                {
+                    "code": "missing_browser_media",
+                    "message": (
+                        f"Required browser evidence is missing: found {len(existing)} existing reported media artifact(s), "
+                        f"but the ticket requires {required_count} for {source_label}."
+                    ),
+                    "correction_hint": (
+                        f"Capture real browser screenshots or recordings for {source_label}, save them inside the project, "
+                        "and return their exact existing .png/.jpg/.webp/.mp4/.mov paths. Do not report browser evidence as N/A."
+                    ),
+                }
+            )
+        visual_verdict = re.search(
+            r"visual_claim_verdicts?\s*:\s*([^\n]+)",
+            str(result or ""),
+            flags=re.IGNORECASE,
+        )
+        browser_verdict = re.search(
+            r"browser_evidence\s*:\s*([^\n]+)",
+            str(result or ""),
+            flags=re.IGNORECASE,
+        )
+        not_applicable = re.compile(r"^\s*(?:n\s*/?\s*a|not applicable)\b", re.IGNORECASE)
+        if (
+            (visual_verdict and not_applicable.search(visual_verdict.group(1)))
+            or (browser_verdict and not_applicable.search(browser_verdict.group(1)))
+        ):
+            findings.append(
+                {
+                    "code": "unvalidated_visual_evidence",
+                    "message": (
+                        "The ticket explicitly requires browser screenshots, but the review marked the "
+                        "browser or visual-claim verdict as not applicable. File existence is not visual validation."
+                    ),
+                    "correction_hint": (
+                        "Inspect the actual contents of every required screenshot with a vision-capable tool/model, "
+                        "report what each image visibly proves against the ticket, and keep the exact artifact paths."
+                    ),
+                }
+            )
 
-    from distr.core.workflow.ticket_contract import (
-        classify_ticket_execution,
-        research_review_has_evidence,
-    )
+    from distr.core.workflow.ticket_contract import classify_ticket_execution
 
     profile = classify_ticket_execution(ticket_context)
     no_code_change = bool(profile.get("explicit_no_code"))
@@ -51,22 +149,60 @@ def _ticket_acceptance_gate(step: AutoWorkflowStep, result: str, ticket_context:
     for phrase in negated_code_claims:
         observed_without_negations = observed_without_negations.replace(phrase, "")
     claims_code_change = any(
-        phrase in observed
-        for phrase in ("code cleanup", "code change", "modified frontend", "updated frontend", "changed frontend")
-    )
-    claims_code_change = claims_code_change and any(
         phrase in observed_without_negations
         for phrase in ("code cleanup", "code change", "modified frontend", "updated frontend", "changed frontend")
     )
     if no_code_change and claims_code_change:
-        logger.warning("Ticket acceptance gate failed: review accepted code changes on a research-only ticket")
-        return False
+        findings.append(
+            {
+                "code": "research_scope_code_change",
+                "message": "The review accepted code changes despite an explicit research-only/no-code ticket contract.",
+                "correction_hint": "Revert or reject the out-of-scope code changes and validate only the documentary deliverables.",
+            }
+        )
 
     copy_first = "copy-first" in ticket_text or "must copy" in ticket_text
     copy_evidence = any(token in observed for token in ("rsync ", "cp -a", "copied from", "copy manifest"))
     if copy_first and "implement" not in step_name and not copy_evidence:
-        logger.warning("Ticket acceptance gate failed: copy-first review omitted terminal copy evidence")
+        findings.append(
+            {
+                "code": "missing_copy_first_evidence",
+                "message": "The review did not report terminal or manifest evidence for the ticket's copy-first constraint.",
+                "correction_hint": "Provide the copy command/manifest evidence and verify excluded secrets, data, caches, and generated files.",
+            }
+        )
+    return findings
+
+
+def _ticket_acceptance_gate(
+    step: AutoWorkflowStep,
+    result: str,
+    ticket_context: str,
+    *,
+    project_id: int | None = None,
+) -> bool | None:
+    """Reject objective evidence gaps before an LLM can hand-wave them away.
+
+    Returns ``False`` for a deterministic acceptance failure and ``None`` when
+    ordinary configured verification should decide. The gate is review-only so
+    planning/context steps are not expected to produce final artifacts.
+    """
+    findings = ticket_acceptance_findings(
+        step,
+        result,
+        ticket_context,
+        project_id=project_id,
+    )
+    if findings:
+        logger.warning("Ticket acceptance gate failed: %s", "; ".join(item["message"] for item in findings))
         return False
+
+    from distr.core.workflow.ticket_contract import (
+        classify_ticket_execution,
+        research_review_has_evidence,
+    )
+
+    profile = classify_ticket_execution(ticket_context)
     if profile.get("research_only") and research_review_has_evidence(result):
         # Explicit ticket scope beats the generic development validator. The
         # evidence helper requires a completed structured report, no blockers,
@@ -111,18 +247,45 @@ def _run_verification(
     project_id: int | None = None,
     ticket_context: str = "",
     standards_context: str = "",
+    validation_routes: list[dict[str, Any]] | None = None,
 ) -> bool:
     """
     Run the configured validation for a step. Returns True if passed.
     If validation_type is 'none', uses the caller's passed flag.
     """
-    acceptance_gate = _ticket_acceptance_gate(step, result, ticket_context)
+    vtype = (step.validation_type or "none").strip().lower()
+    raw_config = getattr(step, "config", None)
+    if isinstance(raw_config, str):
+        try:
+            step_config = json.loads(raw_config or "{}") or {}
+        except Exception:
+            step_config = {}
+    elif isinstance(raw_config, dict):
+        step_config = raw_config
+    else:
+        step_config = {}
+    review_mode = str(step_config.get("review_mode") or "").strip().lower()
+    model_policy = step_config.get("model_policy") if isinstance(step_config.get("model_policy"), dict) else {}
+    require_dual_validator = (
+        review_mode == "dual"
+        or bool(step_config.get("require_independent_validation"))
+        or bool(model_policy.get("require_dual_validation"))
+    )
+    acceptance_gate = _ticket_acceptance_gate(
+        step,
+        result,
+        ticket_context,
+        project_id=project_id,
+    )
     if acceptance_gate is False:
         return False
-    if acceptance_gate is True:
+    if acceptance_gate is True and (vtype != "llm_judgment" or not require_dual_validator):
+        # The worker performing an independent review is already the second
+        # model in the engineering loop. Once deterministic ticket evidence is
+        # complete, do not silently add a third judge. Explicit dual mode still
+        # runs (and fails closed on) its configured evaluator.
         return bool(caller_passed)
 
-    vtype = (step.validation_type or "none").strip().lower()
     if vtype == "none":
         return caller_passed
 
@@ -142,7 +305,9 @@ def _run_verification(
                 prompt,
                 standards_context=standards_context,
                 ticket_context=ticket_context,
-                unavailable_fallback=caller_passed,
+                validation_routes=validation_routes,
+                require_configured_validator=require_dual_validator,
+                unavailable_fallback=caller_passed and not require_dual_validator,
             )
         elif vtype == "screenshot_compare":
             return _verify_screenshot(step, result, prompt)
@@ -256,11 +421,33 @@ def _verify_llm_judgment(
     *,
     standards_context: str = "",
     ticket_context: str = "",
+    validation_routes: list[dict[str, Any]] | None = None,
+    require_configured_validator: bool = False,
     unavailable_fallback: bool = False,
 ) -> bool:
     """Send the result + validation prompt to the orchestrator validator model."""
     try:
         from distr.core.orchestrator_validator import run_orchestrator_validator_judgment
+
+        routes = [dict(item) for item in (validation_routes or []) if isinstance(item, dict)]
+        if routes and require_configured_validator:
+            verdicts = [
+                run_orchestrator_validator_judgment(
+                    result=result,
+                    validation_prompt=validation_prompt,
+                    standards_context=standards_context,
+                    ticket_context=ticket_context,
+                    mode="independent_primary",
+                    route=route,
+                )
+                for route in routes[:2]
+            ]
+            available_verdicts = [verdict for verdict in verdicts if verdict is not None]
+            if any(verdict is None for verdict in verdicts):
+                logger.warning("Configured workflow validator route was unavailable; failing closed")
+                return False
+            if available_verdicts:
+                return all(bool(verdict.get("passed")) for verdict in available_verdicts)
 
         verdict = run_orchestrator_validator_judgment(
             result=result,
@@ -271,6 +458,9 @@ def _verify_llm_judgment(
         )
         if verdict is not None:
             return bool(verdict.get("passed"))
+        if require_configured_validator:
+            logger.warning("Independent workflow validation was required but no validator was available; failing closed")
+            return False
 
         try:
             from distr.core.workflow.standards_memory import UNIVERSAL_WORKFLOW_STANDARDS

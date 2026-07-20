@@ -89,3 +89,17 @@ def test_active_run_polling_does_not_recursively_duplicate_network_refreshes():
     assert "loadWorkflowExecutionSessions();" not in soft_refresh
     assert "loadList();" not in active_runs
     assert "if (pollTimer) return;" in start_polling
+
+
+def test_websocket_worker_event_bursts_are_coalesced_before_network_refreshes():
+    js = read(WORKFLOWS_JS)
+    ws_handler = js.split("ws.onmessage = function (evt)", 1)[1].split("ws.onclose", 1)[0]
+    scheduler = js.split("function scheduleWorkflowLiveRefresh()", 1)[1].split("function formatElapsed", 1)[0]
+
+    assert "scheduleWorkflowLiveRefresh();" in ws_handler
+    assert "loadList();" not in ws_handler
+    assert "softRefresh();" not in ws_handler
+    assert "loadLoopActivityFeed" not in ws_handler
+    assert "workflowWsRefreshInFlight" in scheduler
+    assert "workflowWsRefreshQueued" in scheduler
+    assert "Promise.allSettled(requests)" in scheduler

@@ -1075,7 +1075,15 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         except Exception:
             logger.warning("Could not build developer workflow context", exc_info=True)
 
-        ctx_hash = hash((dropped_files_context, developer_context_text, include_tools_description))
+        desktop_inject = ""
+        try:
+            from distr.core.desktop_awareness import get_desktop_inject_block
+
+            desktop_inject = get_desktop_inject_block(mark_injected=True) or ""
+        except Exception:
+            desktop_inject = ""
+
+        ctx_hash = hash((dropped_files_context, developer_context_text, desktop_inject, include_tools_description))
 
         if (hasattr(self, '_cached_template_hash')
                 and self._cached_template_hash == ctx_hash
@@ -1113,6 +1121,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
         if developer_context_text:
             template += f"\n\n{developer_context_text}"
+
+        if desktop_inject:
+            template += (
+                "\n\nAmbient desktop (cached accessibility summary; may be seconds old; "
+                "not a live feed). For targeting use get_window_tree / find_element / "
+                "get_desktop_snapshot:\n"
+                f"{desktop_inject}"
+            )
 
         self._cached_template = template
         self._cached_template_hash = ctx_hash

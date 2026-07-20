@@ -136,7 +136,10 @@ def apply_orchestrator_validator_overlay(
         return None
 
     vtype = (getattr(step, "validation_type", None) or "none").strip().lower()
-    if vtype == "llm_judgment" and not validation_routes:
+    # Primary LLM judgment already consumes the coordination plan's concrete
+    # validator routes. Running the same routes again here doubles latency and
+    # cost without adding independence.
+    if vtype == "llm_judgment":
         return None
 
     criteria = _validation_criteria(step)
