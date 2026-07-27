@@ -3045,6 +3045,12 @@ class KanbanTicketTool(BaseTool):
                 import concurrent.futures
                 from distr.core.project_cli_backends import run_project_task
 
+                with self._get_session() as s:
+                    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                    move_ticket_to_delivery_lane(s, ticket_id_val, "In Progress")
+                    s.commit()
+
                 async def _run_task():
                     with self._get_session() as s:
                         project = orm_get_by_id(s, Project, project_id)
@@ -3061,6 +3067,12 @@ class KanbanTicketTool(BaseTool):
                             model_override=route["model"],
                             codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
                             codex_service_tier_override=route.get("codex_service_tier"),
+                            adapter_options={
+                                "model_provider": route.get("model_provider") or "",
+                                "required_capabilities": ["code", "files"],
+                                "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
+                                "skills": list(route.get("skills") or []),
+                            },
                         )
 
                 try:
@@ -3071,8 +3083,19 @@ class KanbanTicketTool(BaseTool):
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         result = pool.submit(_thread_runner).result(timeout=900)
                 if result.success:
+                    try:
+                        with self._get_session() as s:
+                            from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                            move_ticket_to_delivery_lane(s, ticket_id_val, "QA")
+                            s.commit()
+                    except ValueError:
+                        logger.info(
+                            "Ticket %s changed lanes during direct CLI execution",
+                            ticket_id_val,
+                        )
                     return voice_then_reference(
-                        f"I sent that {complexity} complexity ticket to {route['backend']} for {project_name}.",
+                        f"The work has finished and is ready for your review in {project_name}.",
                         (
                             f"[{route['backend']} — {project_name}] Ticket #{ticket_id_val} sent to project CLI.\n"
                             f"Complexity: {route['complexity']}\nModel: {route['model'] or 'default'}"

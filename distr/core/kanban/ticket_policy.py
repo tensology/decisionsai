@@ -46,7 +46,18 @@ def infer_ticket_complexity(
     if any(term in text for term in ("production", "deploy", "server", "postgres", "websocket", "webrtc")):
         score += 1
 
-    low_markers = ("typo", "copy", "label", "small css", "button text", "rename", "simple")
+    low_markers = (
+        "typo",
+        "copy",
+        "label",
+        "small css",
+        "button text",
+        "rename",
+        "simple",
+        "readme",
+        "documentation",
+        "docs",
+    )
     if score == 0 and len(words) <= 80 and any(term in text for term in low_markers):
         return "low"
     if score >= 3:

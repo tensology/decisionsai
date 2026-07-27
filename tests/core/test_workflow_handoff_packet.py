@@ -26,6 +26,30 @@ Summary: context assembled
     assert "Status" not in extracted
 
 
+def test_reporting_context_preserves_concrete_test_evidence_via_semantic_aliases():
+    report = """Status: completed
+Summary: Ran the exact named suite.
+Tests run:
+`/Users/paul/.virtualenvs/decisions/bin/python -m pytest tests/core/test_example.py`
+7 passed in 0.55s
+Exit code: `0`
+Drift check: None.
+Files changed: none.
+Blockers: none.
+Ship verdict: pass.
+"""
+
+    extracted = extract_required_handoff_fields(
+        report,
+        ["final_changed_files", "command_log", "evidence", "memory_delta"],
+    )
+
+    assert "7 passed in 0.55s" in extracted
+    assert "Exit code: 0" in extracted
+    assert "Files changed: none" in extracted
+    assert "Blockers: none" in extracted
+
+
 def test_source_urls_are_extracted_exactly_for_critical_handoff_references():
     urls = extract_source_urls(
         "Spotify https://open.spotify.com/artist/abc?si=123 and "
@@ -91,6 +115,45 @@ def test_step_handoff_packet_deduplicates_references_and_reports_section_costs()
     assert telemetry["total_chars"] == len(prompt)
     assert telemetry["section_chars"]["current_step"] > 0
     assert telemetry["reference_count"] == 2
+
+
+def test_current_step_guardrails_precede_project_and_evidence_references():
+    packet = StepHandoffPacket(
+        identity={"run_id": 142, "step": "Confirm contract"},
+        objective="Follow the repository instructions in AGENTS.md.",
+        required_context="context_packet: AGENTS.md was already inspected by planning.",
+        current_step={
+            "title": "Confirm contract",
+            "instruction": (
+                "[TOOL-FREE EXECUTION — HIGHEST PRIORITY]\n"
+                "Do not read files, invoke tools, or emit tool-call markup."
+            ),
+        },
+        memory_refs=["/tmp/project/AGENTS.md"],
+        return_contract="Status: completed",
+    )
+
+    prompt, _telemetry = packet.render(max_chars=8_000)
+
+    guardrail_position = prompt.index("TOOL-FREE EXECUTION")
+    assert guardrail_position < prompt.index("AGENTS.md")
+    assert guardrail_position < prompt.index("## Evidence and memory references")
+    assert prompt.index("## Current step") < prompt.index("## Objective and ticket context")
+
+
+def test_current_step_stays_before_references_when_packet_is_compacted():
+    packet = StepHandoffPacket(
+        identity={"run_id": 142},
+        objective="Large supporting narrative mentioning AGENTS.md. " * 800,
+        current_step={"title": "Synthesize", "instruction": "DO NOT USE TOOLS"},
+        memory_refs=["/tmp/project/AGENTS.md"],
+        return_contract="Status: completed",
+    )
+
+    prompt, telemetry = packet.render(max_chars=2_400)
+
+    assert telemetry["compacted"] is True
+    assert prompt.index("DO NOT USE TOOLS") < prompt.index("AGENTS.md")
 
 
 def test_relevant_memory_prefers_constraints_that_match_current_step():

@@ -160,6 +160,48 @@ def test_chat_manager_assistant_message_records_hermes_audit_event(monkeypatch):
     assert "chat audit path" in payload["content_preview"]
 
 
+def test_chat_manager_correlates_final_response_to_active_intake_uid(monkeypatch):
+    from distr.core.chat_manager import (
+        ChatManagerCore,
+        activate_work_intake_context,
+        reset_work_intake_context,
+    )
+
+    factory = _factory()
+    monkeypatch.setattr("distr.core.chat_manager.get_session", lambda: factory())
+    monkeypatch.setattr("distr.core.orchestrator.get_session", lambda: _session_ctx(factory))
+    captured = []
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service",
+        lambda: type(
+            "Service",
+            (),
+            {"record_direct_response": lambda _self, **kwargs: captured.append(kwargs)},
+        )(),
+    )
+
+    with _session_ctx(factory) as session:
+        root = Chat(parent_id=None, title="Concurrent chat", provider="Ollama", model_name="m")
+        session.add(root)
+        session.flush()
+        chat_id = root.id
+
+    manager = ChatManagerCore()
+    manager.chat_histories[chat_id] = [{"role": "user", "content": "Question"}]
+    token = activate_work_intake_context("exact-intake-uid")
+    try:
+        manager.add_assistant_message(chat_id, "The exact answer.")
+    finally:
+        reset_work_intake_context(token)
+
+    assert captured == [{
+        "source": "web",
+        "source_thread_id": str(chat_id),
+        "response_text": "The exact answer.",
+        "intake_uid": "exact-intake-uid",
+    }]
+
+
 def test_removing_chat_transcript_audit_events_preserves_hermes_memory(monkeypatch):
     from distr.core.chat import ChatService, remove_chat_transcript_audit_events
 

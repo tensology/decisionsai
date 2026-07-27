@@ -1181,7 +1181,12 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
         }
 
 
-def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dict[str, Any]:
+def apply_run_provider_model_selection(
+    run_id: int,
+    candidate_index: int,
+    *,
+    synchronous_redispatch: bool = False,
+) -> Dict[str, Any]:
     """Readiness-check a chosen free model, then resume or offer the next one."""
     from distr.core.project_cli_backends.provider_preflight import probe_openrouter_model_readiness
     from distr.core.settings import load_settings_from_db
@@ -1207,6 +1212,33 @@ def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dic
             retry_candidates = list((latest_data or {}).get("provider_free_candidates") or [])
             paid_fallback = dict((latest_data or {}).get("provider_fallback_route") or {})
             current_route = dict((latest_data or {}).get("execution_route") or {})
+            if not paid_fallback:
+                paid_fallback = dict(current_route.get("paid_fallback_route") or {})
+            if not paid_fallback:
+                fallback_chain = [
+                    dict(item)
+                    for item in (current_route.get("fallback_chain") or [])
+                    if isinstance(item, dict) and item.get("automatic", True) is not False
+                ]
+                paid_fallback = next(
+                    (
+                        item
+                        for item in fallback_chain
+                        if str(item.get("backend") or "").strip() == "codex"
+                    ),
+                    {},
+                )
+            # Exhausting hosted/local free candidates must end in a visible
+            # approval choice, not a dead-end "no route remains" state. Codex
+            # is the configured paid escalation before Claude and is never
+            # started here without the later approval gate.
+            if not paid_fallback and str(current_route.get("backend") or "pi") == "pi":
+                paid_fallback = {
+                    "backend": "codex",
+                    "model": "auto",
+                    "automatic": True,
+                    "reason": "Free provider candidates exhausted; request approval for the configured Codex escalation.",
+                }
         for key in (
             "complexity",
             "step_role",
@@ -1235,7 +1267,11 @@ def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dic
             data["selected_provider_model_readiness"] = readiness.to_dict()
             run.run_data = json.dumps(data)
             db.commit()
-        return apply_run_route_approval(run_id, approved=True)
+        return apply_run_route_approval(
+            run_id,
+            approved=True,
+            synchronous_redispatch=synchronous_redispatch,
+        )
 
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
@@ -1314,7 +1350,12 @@ def apply_run_provider_model_selection(run_id: int, candidate_index: int) -> Dic
     }
 
 
-def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
+def apply_run_route_approval(
+    run_id: int,
+    approved: bool,
+    *,
+    synchronous_redispatch: bool = False,
+) -> Dict[str, Any]:
     """Approve or reject a pending orchestrator route override for an active run."""
     from distr.core.project_cli_backends import normalize_backend_id
 
@@ -1339,6 +1380,8 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
             model = str(pending.get("model") or "auto").strip()
             rationale = str(pending.get("rationale") or "").strip()
             current_route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+            failed_backend = normalize_backend_id(str(current_route.get("backend") or "").strip() or "pi")
+            failed_model = str(current_route.get("model") or "auto").strip()
             previous_backend = normalize_backend_id(str(current_route.get("backend") or "").strip() or "pi")
             if previous_backend != backend_id:
                 # Provider-specific values belong to the route they came from.
@@ -1365,6 +1408,58 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
                 "rationale": rationale,
                 "requires_approval": False,
             }
+            if waiting_kind == "provider_preflight" and failed_model:
+                # A readiness failure applies to the provider/model, not just
+                # one step. Rewrite every still-planned occurrence so approval
+                # does not ask the same question again on the next step. Routes
+                # using an independent model/provider remain untouched.
+                replacement = dict(pending)
+                replacement.update({
+                    "backend": backend_id,
+                    "model": model,
+                    "source": "approved_provider_replacement",
+                    "requires_approval": False,
+                })
+
+                def replace_failed_routes(value: Any) -> Any:
+                    if not isinstance(value, dict):
+                        return value
+                    updated = dict(value)
+                    for key, route in list(updated.items()):
+                        if not isinstance(route, dict):
+                            continue
+                        route_backend = normalize_backend_id(
+                            str(route.get("backend") or "").strip() or "pi"
+                        )
+                        route_model = str(route.get("model") or "auto").strip()
+                        if route_backend == failed_backend and route_model == failed_model:
+                            updated[key] = {
+                                **route,
+                                **replacement,
+                            }
+                    return updated
+
+                run_data["step_routes"] = replace_failed_routes(run_data.get("step_routes"))
+                run_data["step_role_routes"] = replace_failed_routes(
+                    run_data.get("step_role_routes")
+                )
+                replacements = list(run_data.get("approved_provider_replacements") or [])
+                replacements.append({
+                    "from_backend": failed_backend,
+                    "from_model": failed_model,
+                    "to_backend": backend_id,
+                    "to_model": model,
+                })
+                run_data["approved_provider_replacements"] = replacements
+                # A sequential ticket group is one approved delivery plan. A
+                # visible provider substitution accepted on its first ticket
+                # should remain accepted for the queued tickets instead of
+                # asking the same question once per item.
+                common_metadata = run_data.get("ticket_group_common_metadata")
+                if isinstance(common_metadata, dict):
+                    common_metadata = dict(common_metadata)
+                    common_metadata["approved_provider_replacements"] = replacements
+                    run_data["ticket_group_common_metadata"] = common_metadata
             event_type = "route_approval_granted"
             summary = f"Route override approved: {backend_id} / {model or 'auto'}"
         else:
@@ -1377,6 +1472,9 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
         run_data.pop("route_approval_pending", None)
         run_data.pop("provider_preflight_pending", None)
         run_data.pop("provider_preflight_prompt", None)
+        run_data.pop("waiting_prompt", None)
+        run_data.pop("waiting_result", None)
+        run_data.pop("waiting_passed", None)
         run_data["waiting_kind"] = ""
         run.run_data = json.dumps(run_data)
 
@@ -1423,12 +1521,15 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
         try:
             from distr.core.workflow.dispatcher import _dispatch_workflow_step
 
-            threading.Thread(
-                target=_dispatch_workflow_step,
-                args=(int(run_id), int(step_id)),
-                name=f"workflow-route-approval-{run_id}-{step_id}",
-                daemon=True,
-            ).start()
+            if synchronous_redispatch:
+                _dispatch_workflow_step(int(run_id), int(step_id))
+            else:
+                threading.Thread(
+                    target=_dispatch_workflow_step,
+                    args=(int(run_id), int(step_id)),
+                    name=f"workflow-route-approval-{run_id}-{step_id}",
+                    daemon=True,
+                ).start()
             redispatched = True
         except Exception:
             logger.exception("Failed to redispatch workflow step after route approval")
@@ -1438,6 +1539,7 @@ def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
         "approved": approved,
         "run_id": run_id,
         "redispatched": redispatched,
+        "redispatch_mode": "synchronous" if synchronous_redispatch else "background",
         "execution_route": run_data.get("execution_route") or {},
     }
 
@@ -2369,6 +2471,16 @@ def start_workflow_run(
 # ── Test compatibility stubs ──
 # These functions were extracted into StepDispatcher methods during the refactor.
 # The stubs exist so existing tests can mock them without rewriting.
+
+
+def _speak_result(_text: str) -> None:
+    """Deprecated compatibility hook for callers that still patch workflow speech.
+
+    Workflow speech is now emitted by the engagement layer after it has reduced
+    internal events to an operator-facing update. Keeping this no-op hook avoids
+    coupling older integrations to that delivery refactor without reintroducing
+    duplicate or overly technical TTS messages.
+    """
 
 
 def _check_and_enter_wait(step_id: int, action_result: str, passed: bool):

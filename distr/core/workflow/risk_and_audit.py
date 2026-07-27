@@ -135,6 +135,7 @@ def enforce_validation_requirements(
     packet: Dict[str, Any],
     run_status: str,
     risk_profile: Dict[str, Any],
+    requires_ui_quality: bool | None = None,
 ) -> Tuple[str, Dict[str, Any], List[str]]:
     """Enforce required validation checks on a result packet.
 
@@ -149,7 +150,12 @@ def enforce_validation_requirements(
     observed = [str(item).strip().lower() for item in (tests_and_checks.get("tests_run") or []) if str(item).strip()]
     missing = [name for name in required if name not in observed]
 
-    if _requires_ui_quality_gate(risk_profile):
+    ui_gate_required = (
+        _requires_ui_quality_gate(risk_profile)
+        if requires_ui_quality is None
+        else bool(requires_ui_quality)
+    )
+    if ui_gate_required:
         try:
             from distr.core.harness.ui_quality import evaluate_ui_artifacts
 
@@ -212,8 +218,42 @@ def infer_risk_profile(text: str) -> Dict[str, Any]:
         phrase = r"\s+".join(re.escape(part) for part in term.split())
         return bool(re.search(rf"(?<!\w){phrase}(?!\w)", lower))
 
-    system_matched = [term for term in HIGH_RISK_TERMS if contains(term)]
-    product_matched = [term for term in PRODUCT_RISK_TERMS if contains(term)]
+    def contains_actionable(term: str) -> bool:
+        phrase = r"\s+".join(re.escape(part) for part in term.split())
+        for match in re.finditer(rf"(?<!\w){phrase}(?!\w)", lower):
+            clause_start = max(
+                lower.rfind(".", 0, match.start()),
+                lower.rfind("\n", 0, match.start()),
+                lower.rfind(";", 0, match.start()),
+            )
+            prefix = lower[clause_start + 1:match.start()]
+            # Guardrail language describes what the worker must avoid; it is
+            # not evidence that the ticket is changing that sensitive system.
+            # Without this distinction, prompts such as "reject secret-bearing
+            # output" incorrectly require lint/typecheck/build for a read-only
+            # test run and turn a successful safety recovery into a failure.
+            if re.search(
+                r"\b(?:do not|don't|must not|without|never|avoid|prevent|reject|refuse|exclude)\b",
+                prefix,
+            ):
+                continue
+            return True
+        return False
+
+    system_matched = [term for term in HIGH_RISK_TERMS if contains_actionable(term)]
+    has_explicit_ui_anchor = any(
+        contains(term)
+        for term in (
+            "ui", "ux", "design system", "layout", "button", "navigation",
+            "onboarding", "conversion", "signup", "checkout", "pricing page",
+            "landing page",
+        )
+    )
+    product_matched = (
+        [term for term in PRODUCT_RISK_TERMS if contains(term)]
+        if bool(execution.get("ui_evidence_required")) or has_explicit_ui_anchor
+        else []
+    )
     if system_matched:
         signals = system_matched + product_matched
         return {"level": "high", "signals": signals, "risk_type": "system_or_security"}

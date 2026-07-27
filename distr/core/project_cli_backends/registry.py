@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, wait
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -13,6 +15,7 @@ import threading
 import time
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import uuid
 
 from .base import BackendStatus, BackendTaskResult, EventCallback, ProjectCliBackend, ProjectTask
 from .contracts import BackendCapabilities
@@ -31,6 +34,10 @@ DEFAULT_BACKEND_ID = "pi"
 _ONE_SHOT_PROCESS_LOCK = threading.RLock()
 _ONE_SHOT_PROCESSES: dict[tuple[int, str, int | None], asyncio.subprocess.Process] = {}
 _KIRO_SESSION_CONNECTED: dict[int, bool] = {}
+_BACKEND_STATUS_CACHE_LOCK = threading.RLock()
+_BACKEND_STATUS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_BACKEND_STATUS_CACHE_TTL_SECONDS = 30.0
+_BACKEND_STATUS_TOTAL_TIMEOUT_SECONDS = 2.0
 
 
 def _normalize_board_id(board_id: int | None) -> int | None:
@@ -299,7 +306,13 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         # The installed Pi web-search extension exposes read-only research
         # tools. Planning/review steps need these for source URLs without
         # granting bash, edit, or write access.
-        read_only_tools = "read,grep,find,ls"
+        read_only_tools = "read,grep,find,ls,exec"
+        read_only_extension = (
+            Path(__file__).resolve().parent
+            / "pi_extensions"
+            / "read_only_exec.ts"
+        )
+        command.extend(["--extension", str(read_only_extension)])
         if str(task.adapter_options.get("step_role") or "").strip().lower() in {"review", "validation"}:
             read_only_tools += ",web_search,web_fetch"
         command.extend(["--tools", read_only_tools])
@@ -312,8 +325,29 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         if provider:
             command.extend(["--provider", provider])
         command.extend(["--model", model])
+    if task.execution_session_id and (task.origin == "workflow" or task.ticket_id):
+        command.extend(["--session-id", _pi_workflow_session_id(task)])
     system_prompt = f"You are working on project: {task.project_name}"
     if task.origin == "workflow":
+        inspection_budget = task.adapter_options.get("inspection_budget")
+        inspection_budget = inspection_budget if isinstance(inspection_budget, dict) else {}
+        try:
+            target_tool_calls = max(0, int(inspection_budget.get("max_tool_calls") or 0))
+            hard_tool_calls = max(
+                target_tool_calls,
+                int(inspection_budget.get("hard_max_tool_calls") or target_tool_calls or 0),
+            )
+        except (TypeError, ValueError):
+            target_tool_calls = 0
+            hard_tool_calls = 0
+        if target_tool_calls:
+            system_prompt += (
+                f"\nExecution budget: use at most {target_tool_calls} project-tool calls as the normal target"
+                + (f" and never exceed {hard_tool_calls}" if hard_tool_calls else "")
+                + ". Inspect only files needed for this ticket. Stop discovery once the expected outputs are supported; "
+                "reserve context and a final turn to make the change, run focused checks, and return the workflow report. "
+                "Do not spend the final available turn on another inspection command."
+            )
         expected_outputs = [
             str(item).strip()
             for item in (task.adapter_options.get("expected_outputs") or [])
@@ -344,6 +378,21 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
     return command
 
 
+def _pi_workflow_session_id(task: ProjectTask) -> str:
+    """Return a stable UUID so a failed one-shot can be finalized in place."""
+    source = ":".join(
+        str(value or "")
+        for value in (
+            "decisionsai-workflow",
+            task.project_id,
+            task.run_id,
+            task.step_id,
+            task.execution_session_id,
+        )
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, source))
+
+
 def _pi_message_text(message: Any) -> str:
     """Extract assistant text from a Pi JSON event message without raw logs."""
     if not isinstance(message, dict):
@@ -358,6 +407,131 @@ def _pi_message_text(message: Any) -> str:
         for item in content
         if isinstance(item, dict) and item.get("type") == "text"
     )
+
+
+async def _finalize_pi_workflow_session(
+    *,
+    pi_path: str,
+    task: ProjectTask,
+    on_event: Optional[EventCallback],
+) -> tuple[str, list[str]]:
+    """Ask the same Pi session for its terminal report with tools disabled.
+
+    Some local and hosted tool-capable models finish a one-shot immediately
+    after their final tool call.  Throwing that session away causes a needless
+    full replay and often a provider escalation.  Resume the exact session once
+    in tool-free mode so it can summarize the work and satisfy the deterministic
+    workflow contract without performing any additional project action.
+    """
+    expected_outputs = [
+        str(item).strip()
+        for item in (task.adapter_options.get("expected_outputs") or [])
+        if str(item).strip()
+    ]
+    instruction = (
+        "Finalize the current workflow step now. Do not inspect files or call tools. "
+        "Use only the work and tool results already present in this session. "
+        "Begin with every exact expected-output label and end with the required "
+        "Status, Summary, Files changed, Commands run, and Blockers lines. "
+        "If the implementation was not actually completed, choose Status: failed "
+        "or Status: needs_input and state the precise blocker; never claim success."
+    )
+    if expected_outputs:
+        instruction += "\nExpected output labels:\n" + "\n".join(
+            f"{item}: <concise value>" for item in expected_outputs
+        )
+    command = [
+        pi_path,
+        "-p",
+        "--mode",
+        "json",
+        "--session-id",
+        _pi_workflow_session_id(task),
+        "--no-tools",
+    ]
+    provider = str(task.adapter_options.get("model_provider") or "").strip()
+    model = str(task.model or "").strip()
+    if provider:
+        command.extend(["--provider", provider])
+    if model and model != "auto":
+        command.extend(["--model", model])
+    command.append(instruction)
+
+    _emit(on_event, {
+        "type": "workflow_report_finalization_started",
+        "backend": "pi",
+        "model": model or "auto",
+        "message": "Worker finished its tool phase; requesting the final workflow report without tools.",
+    })
+    output = _BoundedCliOutput(head_limit=12_000, tail_limit=120_000)
+    errors: list[str] = []
+    process: asyncio.subprocess.Process | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=task.folder,
+            limit=PI_JSONL_STREAM_LIMIT,
+        )
+        _register_oneshot_process(task.project_id, "pi", process, board_id=task.board_id)
+        assert process.stdout is not None
+        while True:
+            try:
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=120.0)
+            except asyncio.TimeoutError:
+                errors.append("Pi workflow report finalization timed out after 120 seconds.")
+                process.terminate()
+                break
+            if not raw:
+                if process.returncode is not None:
+                    break
+                continue
+            decoded = raw.decode(errors="replace").strip()
+            if not decoded:
+                continue
+            try:
+                event = json.loads(decoded)
+            except json.JSONDecodeError:
+                event = {"type": "executor_output", "message": decoded[:2000]}
+            if isinstance(event, dict):
+                if event.get("type") == "message_end":
+                    message = event.get("message")
+                    if isinstance(message, dict) and message.get("role") == "assistant":
+                        text = _pi_message_text(message).strip()
+                        if text:
+                            output.append(text + "\n\n")
+                error_message = str(event.get("errorMessage") or "").strip()
+                if not error_message and isinstance(event.get("message"), dict):
+                    error_message = str(event["message"].get("errorMessage") or "").strip()
+                if error_message:
+                    errors.append(error_message)
+                _emit(on_event, event)
+                if event.get("type") == "agent_end":
+                    break
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            process.terminate()
+            await process.wait()
+    except Exception as exc:
+        errors.append(str(exc))
+    finally:
+        if process is not None:
+            _clear_oneshot_process(task.project_id, "pi", process, board_id=task.board_id)
+    final_output = output.render().strip()
+    _emit(on_event, {
+        "type": "workflow_report_finalization_finished",
+        "backend": "pi",
+        "model": model or "auto",
+        "success": bool(final_output) and not errors,
+        "message": (
+            "Worker returned its final workflow report."
+            if final_output and not errors
+            else "Worker could not return a valid final workflow report."
+        ),
+    })
+    return final_output, errors
 
 
 def _workflow_report_error(
@@ -454,7 +628,11 @@ def _git_status_short(folder: str) -> list[str]:
         from distr.core.rtk_support import run_argv_command
 
         result = run_argv_command(
-            ["git", "status", "--short"],
+            # Scope inherited-repository status to the configured project
+            # directory. A project may live inside the DecisionsAI checkout;
+            # including the parent's unrelated dirty tree bloats every handoff
+            # and makes workers reason about files outside their authority.
+            ["git", "status", "--short", "--", "."],
             cwd=folder,
             timeout=8,
         )
@@ -492,9 +670,36 @@ def _workspace_state_snapshot(folder: str) -> dict[str, tuple[int, int]]:
     if not folder or not os.path.isdir(folder):
         return snapshot
     root = os.path.abspath(folder)
+    ignored_runtime_roots: set[str] = set()
+    try:
+        # In a source checkout DecisionsAI's runtime database may live below
+        # the repository root. Workflow/event writes are observability, not a
+        # worker mutating the audited project, and must not create a false
+        # read-only violation. Ignore the exact configured runtime root only;
+        # a project's own ordinary ``db`` directory remains fully observed.
+        from distr.core.paths import DB_DIR
+
+        runtime_root = os.path.abspath(str(DB_DIR))
+        if os.path.commonpath([root, runtime_root]) == root:
+            ignored_runtime_roots.add(runtime_root)
+    except (OSError, ValueError):
+        pass
     try:
         for current, dirs, files in os.walk(root):
+            current_abs = os.path.abspath(current)
+            if any(
+                current_abs == ignored or current_abs.startswith(ignored + os.sep)
+                for ignored in ignored_runtime_roots
+            ):
+                dirs[:] = []
+                continue
             dirs[:] = [name for name in dirs if name not in _READ_ONLY_SNAPSHOT_IGNORES]
+            dirs[:] = [
+                name
+                for name in dirs
+                if os.path.abspath(os.path.join(current_abs, name))
+                not in ignored_runtime_roots
+            ]
             for name in files:
                 path = os.path.join(current, name)
                 try:
@@ -524,6 +729,42 @@ def _workspace_state_delta(
         "total_changed": len(added) + len(modified) + len(deleted),
         "truncated": len(added) + len(modified) + len(deleted) > limit,
     }
+
+
+def _completion_contract_error(
+    result: BackendTaskResult,
+    *,
+    read_only_expected: bool,
+    mutation_expected: bool,
+    workspace_state_delta: dict[str, Any],
+    normalized_result: dict[str, Any],
+) -> str:
+    """Reject empty or unevidenced success before it reaches lifecycle state."""
+    if not result.success or getattr(result, "waits_for_human", False):
+        return ""
+    report_text = str(
+        normalized_result.get("summary") or normalized_result.get("output") or ""
+    ).strip()
+    artifacts = list(normalized_result.get("artifacts") or [])
+    memory_delta = (
+        normalized_result.get("memory_delta")
+        if isinstance(normalized_result.get("memory_delta"), dict)
+        else {}
+    )
+    changed_files = list(memory_delta.get("changed_files") or [])
+    mutation_observed = bool(
+        workspace_state_delta.get("changed") or artifacts or changed_files
+    )
+    contract_errors: list[str] = []
+    if not report_text:
+        contract_errors.append("a non-empty completion report")
+    if read_only_expected and workspace_state_delta.get("changed"):
+        contract_errors.append("the required read-only workspace boundary")
+    if mutation_expected and not mutation_observed:
+        contract_errors.append("an observed project workspace change or artifact")
+    if not contract_errors:
+        return ""
+    return "Worker claimed success without " + " and ".join(contract_errors) + "."
 
 
 class PiBackend(ProjectCliBackend):
@@ -593,10 +834,16 @@ class PiBackend(ProjectCliBackend):
             return BackendTaskResult(False, self.id, "pi", error=self.setup_instructions, session_id=task.audit_id)
 
         last_error = ""
-        # Workflow steps require a terminal result before validation/routing.
-        # Persistent Pi RPC is fire-and-forget here and has no workflow completion
-        # callback, so reserve it for interactive project sessions.
-        if task.origin != "workflow":
+        # Persistent Pi RPC is intentionally fire-and-forget. It is suitable for
+        # an interactive chat/terminal turn, but never for tracked ticket work:
+        # those callers need the terminal report and workspace evidence before
+        # they can update lifecycle state or learn provider health.
+        interactive_rpc = (
+            task.origin in {"cli", "desktop", "telegram"}
+            and not task.ticket_id
+            and not task.adapter_options.get("mutation_expected")
+        )
+        if interactive_rpc:
             try:
                 rpc = await get_or_create_rpc_session(task.project_id, task.folder, board_id=task.board_id)
                 if rpc.send_prompt(task.instruction, origin=task.origin):
@@ -856,18 +1103,63 @@ class PiBackend(ProjectCliBackend):
             if task.origin == "workflow"
             else ""
         )
+        recoverable_terminal_errors = bool(model_errors) and saw_agent_end and all(
+            any(marker in str(item or "").lower() for marker in (
+                "stream ended without finish_reason",
+                "stream closed",
+                "unexpected eof",
+                "connection reset",
+            ))
+            for item in model_errors
+        )
+        finalized_after_guardrail = False
+        needs_terminal_report = bool(report_error or (task.ticket_id and not output))
+        if (
+            (task.origin == "workflow" or task.ticket_id)
+            and task.execution_session_id
+            and needs_terminal_report
+            and not timed_out
+            and (
+                inspection_budget_exceeded
+                or (
+                    saw_agent_end
+                    and (not model_errors or recoverable_terminal_errors)
+                )
+            )
+        ):
+            finalized_output, finalization_errors = await _finalize_pi_workflow_session(
+                pi_path=pi_path,
+                task=task,
+                on_event=on_event,
+            )
+            if finalized_output:
+                output = finalized_output
+                report_error = _pi_workflow_report_error(
+                    output,
+                    expected_outputs=task.adapter_options.get("expected_outputs"),
+                )
+                if not report_error and inspection_budget_exceeded:
+                    # The guardrail already prevented the extra tool call. A
+                    # tool-free terminal report from the same durable session
+                    # is the desired bounded recovery, not a reason to discard
+                    # all evidence and switch providers.
+                    inspection_budget_exceeded = False
+                    finalized_after_guardrail = True
+            if finalization_errors:
+                model_errors.extend(finalization_errors)
         transient_after_report = bool(model_errors) and all(
             any(marker in str(item or "").lower() for marker in (
                 "connection error",
                 "connection reset",
                 "stream closed",
+                "stream ended without finish_reason",
                 "unexpected eof",
             ))
             for item in model_errors
         )
         ignored_transient_errors = transient_after_report and not report_error
         terminal_event_ok = (
-            saw_agent_end
+            (saw_agent_end or finalized_after_guardrail)
             and not report_error
             and (not model_errors or ignored_transient_errors)
         )
@@ -987,6 +1279,10 @@ class OneShotCliBackend(ProjectCliBackend):
         """Return the compact result handed to validation and the next step."""
         return _compact_cli_output(output)
 
+    def _usage_from_output(self, output: str) -> dict[str, Any]:
+        """Return normalized usage when a one-shot CLI exposes it."""
+        return {}
+
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
         status = self.setup_status()
         if not status.ready or not status.path:
@@ -1102,7 +1398,11 @@ class OneShotCliBackend(ProjectCliBackend):
 
         output = output_buffer.render().strip()
         _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "done"}})
-        _emit(on_event, {"type": "message_end", "message": {"role": "assistant", "content": output}})
+        assistant_message: dict[str, Any] = {"role": "assistant", "content": output}
+        usage = self._usage_from_output(output)
+        if usage:
+            assistant_message["usage"] = usage
+        _emit(on_event, {"type": "message_end", "message": assistant_message})
         _emit(on_event, {"type": "agent_end", "backend": self.id})
         compact_output = self._result_output(output)
         if timed_out:
@@ -1453,20 +1753,80 @@ class CodexBackend(OneShotCliBackend):
         and can bury the actual result under startup warnings.
         """
         text = str(output or "").strip()
+        assistant_messages: list[str] = []
+        for line in text.splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(event, dict) or event.get("type") != "item.completed":
+                continue
+            item = event.get("item")
+            if not isinstance(item, dict) or item.get("type") != "agent_message":
+                continue
+            message = str(item.get("text") or "").strip()
+            if message:
+                assistant_messages.append(message)
+        if assistant_messages:
+            return _compact_cli_output(assistant_messages[-1], limit=12_000)
         matches = list(re.finditer(r"(?im)^\s*(?:\*\*)?Status(?:\*\*)?\s*:\s*", text))
         if matches:
             return _compact_cli_output(text[matches[-1].start():], limit=12_000)
         return super()._result_output(text)
 
+    def _usage_from_output(self, output: str) -> dict[str, Any]:
+        """Normalize Codex JSONL usage without guessing at unavailable cost."""
+        totals = {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoningOutput": 0,
+        }
+        observed = False
+        for line in str(output or "").splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(event, dict) or event.get("type") != "turn.completed":
+                continue
+            usage = event.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            observed = True
+            for target, source in (
+                ("input", "input_tokens"),
+                ("output", "output_tokens"),
+                ("cacheRead", "cached_input_tokens"),
+                ("cacheWrite", "cache_write_input_tokens"),
+                ("reasoningOutput", "reasoning_output_tokens"),
+            ):
+                value = usage.get(source)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    totals[target] += int(value)
+        if not observed:
+            return {}
+        # Codex input_tokens already includes cached input. Keep cache reads as
+        # a separate diagnostic and do not double-count them in totalTokens.
+        totals["totalTokens"] = totals["input"] + totals["output"]
+        return totals
+
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
-        cmd = [executable] + self.command_args
+        cmd = [executable] + self.command_args + ["--json"]
         # Planning and independent-review steps are contracts for observation,
         # not implementation. Enforce that boundary in Codex itself instead of
         # merely detecting writes after the worker has polluted the project.
         # An explicit environment override still controls mutable steps.
+        read_only_expected = bool(task.adapter_options.get("read_only_expected"))
+        allow_transient_test_writes = bool(
+            task.adapter_options.get("allow_transient_test_writes")
+        )
         sandbox = (
-            "read-only"
-            if task.adapter_options.get("read_only_expected")
+            "workspace-write"
+            if read_only_expected and allow_transient_test_writes
+            else "read-only"
+            if read_only_expected
             else (os.environ.get("DECISIONSAI_CODEX_SANDBOX") or "workspace-write").strip()
         )
         if sandbox:
@@ -1685,11 +2045,85 @@ def list_backends() -> list[ProjectCliBackend]:
     return list(_BACKENDS.values())
 
 
-def get_backend_statuses(active_backend_id: str | None = None) -> dict[str, Any]:
+def get_backend_statuses(
+    active_backend_id: str | None = None,
+    *,
+    refresh: bool = False,
+    timeout_seconds: float = _BACKEND_STATUS_TOTAL_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Return backend readiness without serially blocking the UI.
+
+    Several CLIs perform authentication/version subprocess checks. Running all
+    of them in sequence previously froze the models/workflows surfaces for the
+    sum of every subprocess timeout. Status probes now run concurrently behind
+    a short shared deadline and a small TTL cache. A slow adapter is reported
+    as ``checking`` while its last known state remains available.
+    """
     active = normalize_backend_id(active_backend_id)
+    backends = list_backends()
+    now = time.monotonic()
+    statuses_by_id: dict[str, dict[str, Any]] = {}
+    pending_backends: list[ProjectCliBackend] = []
+    with _BACKEND_STATUS_CACHE_LOCK:
+        for backend in backends:
+            cached = _BACKEND_STATUS_CACHE.get(backend.id)
+            if not refresh and cached and (now - cached[0]) < _BACKEND_STATUS_CACHE_TTL_SECONDS:
+                statuses_by_id[backend.id] = dict(cached[1])
+            else:
+                pending_backends.append(backend)
+
+    if pending_backends:
+        executor = ThreadPoolExecutor(
+            max_workers=min(8, len(pending_backends)),
+            thread_name_prefix="backend-status",
+        )
+        futures = {executor.submit(backend.setup_status): backend for backend in pending_backends}
+        done, unfinished = wait(
+            futures,
+            timeout=max(0.1, float(timeout_seconds or _BACKEND_STATUS_TOTAL_TIMEOUT_SECONDS)),
+        )
+        completed_at = time.monotonic()
+        for future in done:
+            backend = futures[future]
+            try:
+                item = future.result().to_dict()
+            except Exception as exc:
+                item = BackendStatus(
+                    id=backend.id,
+                    name=backend.name,
+                    installed=False,
+                    ready=False,
+                    state="error",
+                    message=f"Readiness check failed: {type(exc).__name__}.",
+                ).to_dict()
+            with _BACKEND_STATUS_CACHE_LOCK:
+                _BACKEND_STATUS_CACHE[backend.id] = (completed_at, dict(item))
+            statuses_by_id[backend.id] = item
+        for future in unfinished:
+            backend = futures[future]
+            future.cancel()
+            with _BACKEND_STATUS_CACHE_LOCK:
+                cached = _BACKEND_STATUS_CACHE.get(backend.id)
+            if cached:
+                item = dict(cached[1])
+                item["stale"] = True
+                item["readiness_check"] = "timed_out"
+            else:
+                item = BackendStatus(
+                    id=backend.id,
+                    name=backend.name,
+                    installed=False,
+                    ready=False,
+                    state="checking",
+                    message="Readiness check is still running; refresh shortly.",
+                ).to_dict()
+                item["readiness_check"] = "timed_out"
+            statuses_by_id[backend.id] = item
+        executor.shutdown(wait=False, cancel_futures=True)
+
     statuses = []
-    for backend in list_backends():
-        item = backend.setup_status().to_dict()
+    for backend in backends:
+        item = dict(statuses_by_id.get(backend.id) or {})
         item["description"] = backend.description
         item["active"] = backend.id == active
         statuses.append(item)
@@ -1994,6 +2428,7 @@ async def run_project_task(
         codex_reasoning_effort=(codex_reasoning_effort_override or "").strip(),
         codex_service_tier=(codex_service_tier_override or "").strip(),
         adapter_options=adapter_options or {},
+        required_capabilities=list((adapter_options or {}).get("required_capabilities") or []),
     )
     selected_model = task.model or "auto"
     selection_reason = "explicit backend override" if backend_id_override else "project backend setting"
@@ -2005,8 +2440,10 @@ async def run_project_task(
         selection_reason += "; backend default model"
     git_status_before = _git_status_short(task.folder)
     read_only_expected = bool(task.adapter_options.get("read_only_expected"))
+    mutation_expected = bool(task.adapter_options.get("mutation_expected"))
+    workspace_contract_enabled = read_only_expected or mutation_expected
     workspace_state_before = (
-        _workspace_state_snapshot(task.folder) if read_only_expected else {}
+        _workspace_state_snapshot(task.folder) if workspace_contract_enabled else {}
     )
     runtime_snapshot: dict[str, Any] = {}
     try:
@@ -2417,9 +2854,32 @@ async def run_project_task(
             workspace_state_before,
             _workspace_state_snapshot(task.folder),
         )
-        if read_only_expected
+        if workspace_contract_enabled
         else {"changed": False, "added": [], "modified": [], "deleted": [], "total_changed": 0, "truncated": False}
     )
+    if workspace_contract_enabled:
+        normalized_result = _normalized_output_packet(result)
+        contract_error = _completion_contract_error(
+            result,
+            read_only_expected=read_only_expected,
+            mutation_expected=mutation_expected,
+            workspace_state_delta=workspace_state_delta,
+            normalized_result=normalized_result,
+        )
+        if contract_error:
+            result.success = False
+            result.error = contract_error
+
+    # Expose the normalized evidence on the provider-neutral legacy result so
+    # direct-ticket callers apply the exact same completion contract as the
+    # durable execution session and workflow dispatcher.
+    normalized_result = _normalized_output_packet(result)
+    result.artifacts = list(normalized_result.get("artifacts") or [])
+    result.evidence = dict(normalized_result.get("evidence") or {})
+    result.memory_delta = dict(normalized_result.get("memory_delta") or {})
+    result.diagnostics = dict(normalized_result.get("diagnostics") or {})
+    result.next_actions = dict(normalized_result.get("next_actions") or {})
+    result.workspace_state_delta = dict(workspace_state_delta)
     if getattr(result, "waits_for_human", False) and result.success:
         append_execution_event(
             execution_session_id,
@@ -2541,4 +3001,41 @@ async def run_project_task(
         ),
         error=result.error,
     )
+    try:
+        from distr.core.project_cli_backends.policy_manager import _counts_as_model_health_failure
+        from distr.core.qualification import (
+            ProviderCertificationStore,
+            record_provider_execution,
+        )
+
+        provider_id = str(
+            task.adapter_options.get("model_provider") or backend_id
+        ).strip().lower()
+        capabilities = list(task.required_capabilities or [])
+        if not capabilities and not read_only_expected:
+            capabilities = ["code", "files"]
+        record_provider_execution(
+            ProviderCertificationStore(),
+            provider=provider_id,
+            model=selected_model,
+            capabilities=capabilities,
+            success=bool(result.success),
+            route_failure=(
+                not result.success
+                and _counts_as_model_health_failure(result.error or result.output or "")
+            ),
+            evidence={
+                "execution_session_id": execution_session_id,
+                "backend_id": backend_id,
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "ticket_id": ticket_id,
+                "origin": origin,
+                "success": bool(result.success),
+                "error": str(result.error or "")[:1000],
+            },
+        )
+    except Exception:
+        logger.debug("Could not record provider execution certification", exc_info=True)
     return result

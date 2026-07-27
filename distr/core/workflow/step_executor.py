@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,50 @@ from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowR
 from distr.core.kanban.result_packet import summarize_packet_for_step_context
 
 logger = logging.getLogger(__name__)
+
+
+def _is_interpreter_shutdown_error(error: BaseException) -> bool:
+    """Identify executor rejection caused only by interpreter teardown."""
+    return bool(
+        sys.is_finalizing()
+        and "cannot schedule new futures after shutdown" in str(error).lower()
+    )
+
+
+def _project_python_runtime_hint(project_folder: str, ticket_context: str) -> str:
+    """Return a concrete Python command when a project runtime is known.
+
+    Model workers should not rediscover or guess the interpreter for every
+    pytest ticket. Prefer a project-local environment; for DecisionsAI's own
+    repository, the host process interpreter is authoritative. Other projects
+    never inherit the DecisionsAI host virtualenv.
+    """
+    text = str(ticket_context or "").lower()
+    if not any(token in text for token in ("pytest", "test suite", "tests/", "python test")):
+        return ""
+    try:
+        project_root = Path(project_folder).expanduser().resolve()
+    except Exception:
+        return ""
+    candidates = [
+        project_root / ".venv" / "bin" / "python",
+        project_root / "venv" / "bin" / "python",
+    ]
+    decisions_root = Path(__file__).resolve().parents[3]
+    if project_root == decisions_root:
+        # Preserve the virtualenv launcher path. Resolving its symlink points
+        # at the bare Homebrew interpreter and silently drops the environment's
+        # installed pytest/plugins/compiled dependencies.
+        candidates.insert(0, Path(sys.executable))
+    runtime = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if runtime is None:
+        return ""
+    return (
+        "[AVAILABLE PROJECT RUNTIME — AUTHORITATIVE]\n"
+        f"Use this exact interpreter for Python checks: {runtime}. "
+        "Invoke it directly as `<interpreter> -m pytest ...`; do not use bare "
+        "`python`, `python3`, or `pytest`, and do not spend tool calls rediscovering it."
+    )
 
 
 def _exclude_failed_route_candidates(
@@ -45,6 +90,24 @@ def _exclude_failed_route_candidates(
             continue
         output.append(candidate)
     return output
+
+
+def _exclude_proven_unhealthy_retry_candidates(candidates: Any) -> list[dict[str, Any]]:
+    """Do not recommend a model whose real project execution already failed."""
+    routes = [dict(item or {}) for item in candidates if isinstance(item, dict)] if isinstance(candidates, list) else []
+    if not routes:
+        return []
+    try:
+        from distr.core.project_cli_backends.policy_manager import _apply_provider_certification
+
+        annotated = _apply_provider_certification(routes, capability="project_execution")
+        return [
+            route for route in annotated
+            if str(route.get("certification_status") or "unknown").lower()
+            not in {"limited", "unavailable"}
+        ]
+    except Exception:
+        return routes
 
 
 def _route_required_capabilities(
@@ -130,6 +193,85 @@ def _agent_result_passed(result_text: str) -> bool:
     return not any(marker in text for marker in failure_markers)
 
 
+def _consume_qualification_fault(
+    run_data: dict[str, Any],
+    *,
+    expected: str,
+    stage: str,
+) -> bool:
+    """Consume one explicitly enabled qualification fault at a real boundary.
+
+    Qualification metadata can arrive through the intake API, so it must never
+    alter production execution by itself.  The process-level switch is required
+    as a second factor and defaults off.  Consumption is durable in ``run_data``
+    so retries exercise recovery rather than creating an endless failure loop.
+    """
+    if os.environ.get("DECISIONS_ENABLE_QUALIFICATION_FAULTS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return False
+    if not str(run_data.get("qualification_scenario_id") or "").strip():
+        return False
+    configured = str(run_data.get("qualification_injected_failure") or "").strip().lower()
+    if configured != str(expected or "").strip().lower():
+        return False
+    marker = f"{configured}:{stage}"
+    consumed = [str(item) for item in (run_data.get("qualification_faults_consumed") or [])]
+    if any(item == configured or item.startswith(configured + ":") for item in consumed):
+        return False
+    consumed.append(marker)
+    run_data["qualification_faults_consumed"] = consumed[-20:]
+    run_data["qualification_failure_observed"] = True
+    run_data["qualification_failure_stage"] = stage
+    return True
+
+
+def _worker_result_safety_issue(result: Any) -> str:
+    """Return a fail-closed reason for explicit unsafe worker evidence."""
+    if result is None:
+        return "Worker returned no completion result."
+    diagnostics = getattr(result, "diagnostics", None)
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    if diagnostics.get("unsafe_artifact") or diagnostics.get("unsafe_output"):
+        return str(
+            diagnostics.get("safety_reason")
+            or "Worker marked its output as unsafe or outside the approved contract."
+        )
+    workspace_delta = getattr(result, "workspace_state_delta", None)
+    workspace_delta = workspace_delta if isinstance(workspace_delta, dict) else {}
+    outside_scope = workspace_delta.get("outside_scope_paths") or workspace_delta.get("scope_violations")
+    if outside_scope:
+        paths = ", ".join(str(item) for item in list(outside_scope)[:5])
+        return f"Worker reported changes outside the approved project scope: {paths}"
+    evidence = getattr(result, "evidence", None)
+    evidence = evidence if isinstance(evidence, dict) else {}
+    if evidence.get("secrets_detected") or evidence.get("unsafe_commands"):
+        return "Worker evidence contains secrets or unsafe command activity."
+    return ""
+
+
+def _planning_handoff_contract_complete(output: str, expected_outputs: Any) -> bool:
+    """Accept a planning packet that satisfies its step contract.
+
+    Some coding agents report the *ticket* as failed during the planning step
+    because implementation or tests have not happened yet.  The workflow must
+    judge that step against its named handoff fields instead of inheriting the
+    model's premature whole-ticket verdict.
+    """
+    text = str(output or "").strip()
+    if not text:
+        return False
+    try:
+        from distr.core.workflow.router import _missing_expected_outputs
+
+        return not _missing_expected_outputs(text, list(expected_outputs or []))
+    except Exception:
+        logger.debug("Could not evaluate planning handoff fields", exc_info=True)
+        return False
+
+
 def _workflow_run_cancelled(run_id: Optional[int]) -> bool:
     """Read cancellation from durable state before launching another worker."""
     if not run_id:
@@ -148,15 +290,20 @@ def _workflow_run_cancelled(run_id: Optional[int]) -> bool:
 def _paid_fallback_requires_approval(
     route: dict[str, Any], fallback: dict[str, Any], config: dict[str, Any]
 ) -> bool:
-    """Require consent before Auto crosses from free/local into paid work."""
+    """Require consent before Auto crosses into paid or final-expense work."""
     if not fallback or bool(config.get("auto_approve_paid_failover")):
         return False
+    fallback_backend = str(fallback.get("backend") or "").strip().lower()
+    # Claude is the deliberately last and most expensive recovery tier.  It
+    # must never become a silent retry merely because the route immediately
+    # before it was another paid worker such as Codex.
+    if fallback_backend == "claude_code":
+        return True
     current_provider = str(route.get("model_provider") or "").strip().lower()
     current_model = str(route.get("model") or "").strip().lower()
     current_is_free = current_provider in {"ollama", "local"} or current_model.endswith(":free")
     if not current_is_free:
         return False
-    fallback_backend = str(fallback.get("backend") or "").strip().lower()
     fallback_provider = str(fallback.get("model_provider") or "").strip().lower()
     fallback_model = str(fallback.get("model") or "auto").strip().lower()
     fallback_is_free = fallback_provider in {"ollama", "local"} or fallback_model.endswith(":free")
@@ -164,6 +311,41 @@ def _paid_fallback_requires_approval(
         fallback_provider == "openrouter" and not fallback_is_free
     )
     return fallback_is_paid and not fallback_is_free
+
+
+def _known_fallback_blocker(
+    fallback: dict[str, Any], *, required_capabilities: list[str] | None = None
+) -> str:
+    """Return a durable reason a fallback must not be dispatched again."""
+    backend = str(fallback.get("backend") or "").strip().lower()
+    model = str(fallback.get("model") or "auto").strip() or "auto"
+    if not backend:
+        return ""
+    try:
+        from distr.core.qualification import ProviderCertificationStore
+
+        store = ProviderCertificationStore()
+        capabilities = list(dict.fromkeys([
+            *(required_capabilities or []),
+            "project_execution", "code", "files", "text",
+        ]))
+        for capability in capabilities:
+            certification = store.get(backend, model, str(capability))
+            evidence = certification.evidence or {}
+            message = str(evidence.get("error") or evidence.get("message") or "").strip()
+            normalized = message.lower()
+            if any(marker in normalized for marker in (
+                "credit balance is too low",
+                "insufficient credit",
+                "insufficient quota",
+                "billing failed",
+                "authentication failed",
+                "not authenticated",
+            )):
+                return message
+    except Exception:
+        logger.debug("Could not consult fallback certification history", exc_info=True)
+    return ""
 
 
 def _hosted_free_recommendation(candidate: dict[str, Any], *, complexity: str) -> str:
@@ -189,10 +371,80 @@ def _hosted_free_recommendation(candidate: dict[str, Any], *, complexity: str) -
             "The stronger compatible hosted free models are unavailable, so the best "
             f"remaining free option is {name}{descriptor}."
         )
+    provider = str(candidate.get("model_provider") or candidate.get("provider") or "hosted provider").strip()
+    provider_label = "OpenRouter" if provider.lower() == "openrouter" else provider
     return (
-        "This work runs on OpenRouter, so your Mac's memory is not the size limit. "
+        f"This work runs on {provider_label}, so your Mac's memory is not the size limit. "
         f"The strongest healthy compatible free option is {name}{descriptor}."
     )
+
+
+def _provider_rate_limited(*, message: str = "", http_status: Any = None) -> bool:
+    """Recognize provider-wide throttling so Auto does not roulette models.
+
+    A 429 is usually capacity or account throttling for the provider route, not
+    evidence that the next identifier in the same free catalogue will work.
+    Prefer a different healthy provider/local route before asking the operator
+    to approve another doomed readiness probe.
+    """
+    lowered = str(message or "").strip().lower()
+    # OpenRouter explicitly distinguishes an upstream model's shared free-tier
+    # capacity from account/provider throttling. In that case another ranked
+    # free model is a meaningful retry; treating every 429 as provider-wide
+    # incorrectly skipped the remaining candidates and jumped to paid Codex.
+    upstream_model_limit = any(
+        marker in lowered
+        for marker in (
+            "rate-limited upstream",
+            "upstream rate limit",
+            "temporarily rate-limited upstream",
+        )
+    )
+    if upstream_model_limit:
+        return False
+    if str(http_status or "").strip() == "429":
+        return True
+    return "429" in lowered or "rate limit" in lowered or "too many requests" in lowered
+
+
+def _ticket_requires_read_only_execution(ticket_context: str) -> bool:
+    """Preserve an explicit ticket-wide no-mutation contract across all steps."""
+    text = " ".join(str(ticket_context or "").lower().split())
+    if not text:
+        return False
+    explicit_markers = (
+        "strictly read-only",
+        "read-only audit",
+        "read-only verification",
+        "read-only workflow verification",
+        "do not edit project files",
+        "do not edit files",
+        "do not modify project files",
+        "do not modify files",
+        "no implementation change is requested",
+    )
+    return any(marker in text for marker in explicit_markers)
+
+
+def _requested_execution_is_read_only(run_data: Any) -> bool:
+    """Read the canonical intake policy carried by a durable workflow run."""
+    try:
+        payload = json.loads(run_data or "{}") if isinstance(run_data, str) else (run_data or {})
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    policy = payload.get("requested_execution_policy")
+    return bool(policy.get("read_only")) if isinstance(policy, dict) else False
+
+
+def _read_only_ticket_requires_test_runtime(ticket_context: str) -> bool:
+    """Allow transient test-runtime writes while retaining workspace drift checks."""
+    text = " ".join(str(ticket_context or "").lower().split())
+    return bool(re.search(
+        r"\b(?:run|execute|rerun)\b.{0,100}\b(?:pytest|tests?/|test suite|tests? suite)\b",
+        text,
+    ))
 
 
 class StepExecutorMixin:
@@ -1104,6 +1356,24 @@ class StepExecutorMixin:
                     except Exception:
                         logger.debug("send_to_project_cli: model policy resolution failed", exc_info=True)
                     try:
+                        from distr.core.work_intake.execution_policy import (
+                            apply_approved_provider_replacements_to_route,
+                        )
+
+                        route = apply_approved_provider_replacements_to_route(
+                            route,
+                            run_data_local.get("approved_provider_replacements") or [],
+                        )
+                        if run_row:
+                            run_data_local["execution_route"] = route
+                            run_row.run_data = json.dumps(run_data_local)
+                            db.commit()
+                    except Exception:
+                        logger.warning(
+                            "send_to_project_cli: approved provider replacement could not be applied",
+                            exc_info=True,
+                        )
+                    try:
                         from distr.core.project_cli_backends.provider_preflight import preflight_provider_route
 
                         provider_preflight = preflight_provider_route(
@@ -1114,6 +1384,26 @@ class StepExecutorMixin:
                     except Exception:
                         logger.warning("Provider preflight failed unexpectedly; leaving route unverified", exc_info=True)
                         provider_preflight = None
+                    if _consume_qualification_fault(
+                        run_data_local,
+                        expected="http_402_or_429",
+                        stage=f"provider_preflight:{step_data.get('id')}",
+                    ):
+                        from distr.core.project_cli_backends.provider_preflight import ProviderPreflight
+
+                        provider_preflight = ProviderPreflight(
+                            provider=str(route.get("model_provider") or route.get("backend") or "openrouter"),
+                            model=str(route.get("model") or "auto"),
+                            status="blocked",
+                            ready=False,
+                            message=(
+                                "Controlled qualification fault: provider returned HTTP 429 rate limit."
+                            ),
+                            http_status=429,
+                        )
+                        if run_row:
+                            run_row.run_data = json.dumps(run_data_local)
+                            db.commit()
                     provider_model_readiness = None
                     if (
                         provider_preflight is not None
@@ -1162,7 +1452,7 @@ class StepExecutorMixin:
                             )
 
                             free_retry_candidates = _exclude_failed_route_candidates(
-                                _apply_recent_model_health(
+                                _exclude_proven_unhealthy_retry_candidates(_apply_recent_model_health(
                                     rank_openrouter_free_models(
                                         api_key=str((routing_settings or {}).get("openrouter_key") or ""),
                                         complexity=str(route.get("complexity") or "medium"),
@@ -1171,7 +1461,7 @@ class StepExecutorMixin:
                                         ),
                                         limit=8,
                                     )
-                                ),
+                                )),
                                 failed_models=run_data_local.get("provider_failed_models") or [],
                             )
                             if free_retry_candidates:
@@ -1191,19 +1481,25 @@ class StepExecutorMixin:
                         and not bool(route.get("provider_preflight_override"))
                     ):
                         free_candidates = []
-                        if str(route.get("model_provider") or "").strip().lower() == "openrouter":
+                        previously_failed = list(run_data_local.get("provider_failed_models") or [])
+                        failed_model = str(route.get("model") or "")
+                        if failed_model and failed_model.lower() not in {
+                            str(item or "").lower() for item in previously_failed
+                        }:
+                            previously_failed.append(failed_model)
+                        if (
+                            str(route.get("model_provider") or "").strip().lower() == "openrouter"
+                            and not _provider_rate_limited(
+                                message=str(provider_preflight.message or ""),
+                                http_status=provider_preflight.http_status,
+                            )
+                        ):
                             try:
                                 from distr.core.project_cli_backends.provider_preflight import rank_openrouter_free_models
                                 from distr.core.project_cli_backends.policy_manager import _apply_recent_model_health
 
-                                previously_failed = list(run_data_local.get("provider_failed_models") or [])
-                                failed_model = str(route.get("model") or "")
-                                if failed_model and failed_model.lower() not in {
-                                    str(item or "").lower() for item in previously_failed
-                                }:
-                                    previously_failed.append(failed_model)
                                 free_candidates = _exclude_failed_route_candidates(
-                                    _apply_recent_model_health(
+                                    _exclude_proven_unhealthy_retry_candidates(_apply_recent_model_health(
                                         rank_openrouter_free_models(
                                             api_key=str((routing_settings or {}).get("openrouter_key") or ""),
                                             complexity=str(route.get("complexity") or "medium"),
@@ -1212,7 +1508,7 @@ class StepExecutorMixin:
                                             ),
                                             limit=6,
                                         )
-                                    ),
+                                    )),
                                     failed_models=previously_failed,
                                 )
                             except Exception:
@@ -1255,17 +1551,17 @@ class StepExecutorMixin:
                             question = (
                                 f"{current_label} failed its readiness check: {failure_reason} "
                                 f"{recommendation} "
-                                "Approve to readiness-check and try it, choose another model, or Stop."
+                                "Choose one of the model options below to readiness-check and try it, or Stop."
                             )
                         elif fallback:
                             question = (
                                 f"{current_label} failed its readiness check: {failure_reason} "
-                                f"I recommend {proposed_label}. Approve to use it, choose another model, or Stop."
+                                f"I recommend {proposed_label}. Approve to use it, or Stop."
                             )
                         else:
                             question = (
                                 f"{current_label} failed its readiness check: {failure_reason} "
-                                "No verified alternative is available. Choose another model or Stop."
+                                "No verified alternative is available. Stop and change the pinned model before retrying."
                             )
                         if run_row:
                             latest = json.loads(run_row.run_data or "{}") or {}
@@ -1504,6 +1800,19 @@ class StepExecutorMixin:
                             final_instruction = instruction
                     else:
                         final_instruction = instruction
+                    runtime_hint = _project_python_runtime_hint(
+                        project.folder_location,
+                        "\n".join(
+                            str(value or "")
+                            for value in (
+                                final_instruction,
+                                getattr(ticket, "title", "") if ticket is not None else "",
+                                getattr(ticket, "description", "") if ticket is not None else "",
+                            )
+                        ),
+                    )
+                    if runtime_hint:
+                        final_instruction = f"{runtime_hint}\n\n{final_instruction}"
                     if backend_id == "pi":
                         # Pi also loads project skills and repo guidance into its
                         # own context window. Keep the workflow packet compact so
@@ -1554,6 +1863,17 @@ class StepExecutorMixin:
                             )
                             if str(value or "").strip()
                         )
+                    read_only_contract = (
+                        bool(config.get("read_only"))
+                        or _requested_execution_is_read_only(
+                            run_row.run_data if run_row is not None else None
+                        )
+                        or _ticket_requires_read_only_execution(ticket_budget_context)
+                    )
+                    allow_transient_test_writes = bool(
+                        read_only_contract
+                        and _read_only_ticket_requires_test_runtime(ticket_budget_context)
+                    )
 
                     def _harness_context(
                         selected_backend: str,
@@ -1587,7 +1907,8 @@ class StepExecutorMixin:
                                         or config.get("timeout_seconds")
                                     ),
                                     "provider_preflight_override": route.get("provider_preflight_override"),
-                                    "read_only_expected": bool(config.get("read_only")),
+                                    "read_only_expected": read_only_contract,
+                                    "allow_transient_test_writes": allow_transient_test_writes,
                                     "disable_tools": bool(config.get("disable_tools")),
                                     "step_role": requested_step_role,
                                     "expected_outputs": list(config.get("expected_outputs") or []),
@@ -1601,13 +1922,79 @@ class StepExecutorMixin:
                             },
                         )
 
-                    handle = await dispatch_harness_async(
-                        _harness_context(
-                            backend_id,
-                            str(route.get("model") or ""),
-                            str(route.get("model_provider") or ""),
-                        )
+                    injected_timeout = _consume_qualification_fault(
+                        run_data_local,
+                        expected="timeout",
+                        stage=f"worker_dispatch:{step_data.get('id')}",
                     )
+                    injected_unsafe_output = _consume_qualification_fault(
+                        run_data_local,
+                        expected="unsafe_artifact",
+                        stage=f"worker_result:{step_data.get('id')}",
+                    )
+                    if (injected_timeout or injected_unsafe_output) and run_row:
+                        run_row.run_data = json.dumps(run_data_local)
+                        db.commit()
+                    if injected_timeout or injected_unsafe_output:
+                        from distr.core.project_cli_backends.base import BackendTaskResult
+                        from distr.core.project_cli_backends.harness import HarnessHandle, HarnessStatus
+
+                        if injected_timeout:
+                            injected_result = BackendTaskResult(
+                                success=False,
+                                backend_id=backend_id,
+                                engine=backend_id,
+                                error="Controlled qualification fault: local model timed out before completion.",
+                                diagnostics={"qualification_fault": "timeout"},
+                            )
+                            injected_status = HarnessStatus.FAILED
+                        else:
+                            injected_result = BackendTaskResult(
+                                success=True,
+                                backend_id=backend_id,
+                                engine=backend_id,
+                                output="Controlled malformed worker output.",
+                                diagnostics={
+                                    "qualification_fault": "unsafe_artifact",
+                                    "unsafe_artifact": True,
+                                    "safety_reason": "Artifact escaped the approved project scope.",
+                                },
+                                workspace_state_delta={
+                                    "changed": True,
+                                    "outside_scope_paths": ["/tmp/decisions-qualification-escape"],
+                                },
+                            )
+                            injected_status = HarnessStatus.DONE
+                        handle = HarnessHandle(
+                            backend_id=backend_id,
+                            result=injected_result,
+                            status=injected_status,
+                            evidence={
+                                "error": injected_result.error,
+                                "output": injected_result.output,
+                                "qualification_fault": True,
+                            },
+                        )
+                    else:
+                        handle = await dispatch_harness_async(
+                            _harness_context(
+                                backend_id,
+                                str(route.get("model") or ""),
+                                str(route.get("model_provider") or ""),
+                            )
+                        )
+                    safety_issue = _worker_result_safety_issue(handle.result)
+                    if safety_issue and handle.result is not None:
+                        handle.result.success = False
+                        handle.result.error = f"Worker output rejected by safety gate: {safety_issue}"
+                        handle.result.diagnostics = dict(handle.result.diagnostics or {})
+                        handle.result.diagnostics["safety_rejected"] = True
+                        handle.status = HarnessStatus.FAILED
+                        run_data_local["unsafe_worker_output_rejected"] = True
+                        run_data_local["unsafe_worker_output_reason"] = safety_issue[:1000]
+                        if run_row:
+                            run_row.run_data = json.dumps(run_data_local)
+                            db.commit()
                     if handle.result is not None and not bool(handle.result.success):
                         # Cancellation can arrive while a provider is unwinding.
                         # Never interpret that failed/terminated worker as a
@@ -1637,7 +2024,7 @@ class StepExecutorMixin:
                                 )
 
                                 free_retry_candidates = _exclude_failed_route_candidates(
-                                    _apply_recent_model_health(
+                                    _exclude_proven_unhealthy_retry_candidates(_apply_recent_model_health(
                                         rank_openrouter_free_models(
                                             api_key=str((routing_settings or {}).get("openrouter_key") or ""),
                                             complexity=str(route.get("complexity") or "medium"),
@@ -1646,7 +2033,7 @@ class StepExecutorMixin:
                                             ),
                                             limit=8,
                                         )
-                                    ),
+                                    )),
                                     failed_model=str(route.get("model") or ""),
                                     failed_models=run_data_local.get("provider_failed_models") or [],
                                 )
@@ -1691,6 +2078,8 @@ class StepExecutorMixin:
                                 ):
                                     remaining.append((index, candidate))
                             paid_fallback = dict(route.get("paid_fallback_route") or {})
+                            if _provider_rate_limited(message=failed_text):
+                                remaining = []
                             if remaining:
                                 next_index, recommended = remaining[0]
                                 proposed_retry = dict(recommended)
@@ -1734,6 +2123,39 @@ class StepExecutorMixin:
                             }
                         fallback = self._runtime_provider_fallback_route(route, config)
                         fallback_backend = str(fallback.get("backend") or "")
+                        fallback_blocker = _known_fallback_blocker(
+                            fallback,
+                            required_capabilities=[
+                                str(item or "").strip()
+                                for item in (route.get("required_capabilities") or [])
+                                if str(item or "").strip()
+                            ],
+                        )
+                        if fallback_backend and fallback_blocker and run_row:
+                            fallback_label = " / ".join(
+                                part for part in (
+                                    fallback_backend,
+                                    str(fallback.get("model_provider") or ""),
+                                    str(fallback.get("model") or "auto"),
+                                ) if part
+                            )
+                            question = (
+                                f"I did not start {fallback_label} because its latest account check failed: "
+                                f"{fallback_blocker[:500]} Change the route or stop this run."
+                            )
+                            latest = json.loads(run_row.run_data or "{}") or {}
+                            latest["provider_preflight_prompt"] = question
+                            latest["waiting_prompt"] = question
+                            latest["provider_preflight_pending"] = True
+                            latest.pop("pending_route_approval", None)
+                            run_row.run_data = json.dumps(latest)
+                            db.commit()
+                            return {
+                                "output": question,
+                                "passed": True,
+                                "skip_wait": False,
+                                "provider_preflight_pending": True,
+                            }
                         if (
                             fallback_backend
                             and run_row
@@ -1990,6 +2412,18 @@ class StepExecutorMixin:
             output = (getattr(result, "output", "") or "").strip()
             error = (getattr(result, "error", "") or "").strip()
             passed = bool(getattr(result, "success", False))
+            step_role = str(config.get("step_role") or "").strip().lower()
+            if (
+                not passed
+                and step_role in {"planning", "context", "triage"}
+                and _planning_handoff_contract_complete(
+                    output,
+                    config.get("expected_outputs") or [],
+                )
+                and not _worker_result_safety_issue(result)
+            ):
+                passed = True
+                error = ""
             waits_for_human = bool(getattr(result, "waits_for_human", False))
             text = output or error or f"Sent to {backend_name}."
             if not passed and not waits_for_human:
@@ -2000,13 +2434,16 @@ class StepExecutorMixin:
                     error=text,
                     suggestion="Narrow the diff, re-run the failing check, or report needs_input if blocked.",
                 )
+            from distr.core.workflow.context_limits import compact_execution_result
+
             return {
-                "output": (
+                "output": compact_execution_result(
                     f"Project CLI backend: {backend_name}\n"
                     f"Project: {project_id}\n"
                     f"Status: {'waiting in IDE' if waits_for_human else ('completed' if passed else 'failed')}\n\n"
-                    f"{text}"
-                )[:6000],
+                    f"{text}",
+                    max_chars=6000,
+                ),
                 "passed": passed,
                 "skip_wait": not waits_for_human,
             }
@@ -2396,6 +2833,19 @@ class StepExecutorMixin:
                                           result_text=result_text, passed=passed)
             return {"output": result_text, "passed": passed}
         except Exception as e:
+            if _is_interpreter_shutdown_error(e):
+                # A daemon workflow callback can lose the race with Python
+                # teardown. Do not write a bogus failed step or wake the Qt
+                # bridge after the process has already committed to exit.
+                logger.debug(
+                    "WorkflowAgent fallback ended during interpreter shutdown for step %s",
+                    step_id,
+                )
+                return {
+                    "output": "Agent dispatch stopped during application shutdown.",
+                    "passed": False,
+                    "shutdown": True,
+                }
             logger.error("WorkflowAgent fallback failed for step %s: %s", step_id, e)
             # Last resort: record failure so the workflow doesn't stall forever
             self._record_result_and_route(step_id, run_id=run_id,
@@ -2741,15 +3191,27 @@ class StepExecutorMixin:
                         from distr.core.workflow.standards_memory import build_standards_context
 
                         board_id_for_standards = None
+                        include_ui_standards = True
                         if run_id is not None:
                             run_row = db.query(AutoWorkflowRun).filter(
                                 AutoWorkflowRun.id == int(run_id)
                             ).first()
                             if run_row and run_row.board_id:
                                 board_id_for_standards = int(run_row.board_id)
+                            if run_row:
+                                try:
+                                    run_payload = json.loads(run_row.run_data or "{}") or {}
+                                    execution_profile = run_payload.get("ticket_execution_profile") or {}
+                                    if isinstance(execution_profile, dict):
+                                        include_ui_standards = bool(
+                                            execution_profile.get("ui_evidence_required")
+                                        )
+                                except Exception:
+                                    pass
                         context_rules = build_standards_context(
                             context_rules,
                             board_id=board_id_for_standards,
+                            include_ui_standards=include_ui_standards,
                         )
                     except Exception as ce:
                         logger.debug("_build_agent_prompt: failed to add standards memory: %s", ce)
@@ -2938,6 +3400,17 @@ class StepExecutorMixin:
             except Exception:
                 step_config = {}
         guardrail_text = str(step_config.get("guardrail") or "").strip()
+
+        if bool(step_config.get("disable_tools")):
+            tool_free_guardrail = (
+                "[TOOL-FREE EXECUTION — HIGHEST PRIORITY]\n"
+                "Do not read files, invoke tools, or emit tool-call markup. "
+                "All context needed for this synthesis step is already supplied in this packet. "
+                "Start directly with the named output fields and finish with the required status contract."
+            )
+            guardrail_text = "\n\n".join(
+                item for item in (tool_free_guardrail, guardrail_text) if item
+            )
 
         # Prepend step description if it exists (adds "why" context)
         if step_description:

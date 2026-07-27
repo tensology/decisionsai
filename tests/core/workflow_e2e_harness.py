@@ -219,7 +219,11 @@ def workflow_patch_stack(factory, tmp_path):
         ),
         patch(
             "distr.core.workflow.dispatcher.enforce_validation_requirements",
-            lambda *, packet, run_status, risk_profile: (run_status or "completed", dict(packet or {}), []),
+            lambda *, packet, run_status, risk_profile, **_kwargs: (
+                run_status or "completed",
+                dict(packet or {}),
+                [],
+            ),
         ),
         patch(
             "distr.core.workflow.dogfood_gate.enforce_dogfood_exit_gate",

@@ -331,7 +331,11 @@ def test_ticket_workflow_uses_orchestrator_backbone(tmp_path):
                 event.ticket_id == ids["ticket_id"]
                 for event in events
                 if not (event.event_type == "worker_completed" and event.source == "workflow")
-            )
+            ), [
+                (event.event_type, event.source, event.ticket_id)
+                for event in events
+                if event.ticket_id != ids["ticket_id"]
+            ]
 
             with _runs_lock:
                 ctx = _active_runs.pop(run_id, None)

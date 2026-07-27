@@ -9,6 +9,8 @@ import os
 import tempfile
 import subprocess
 import shutil
+import threading
+import time
 from urllib.parse import quote
 
 from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -32,6 +34,40 @@ _wa_sse_queues = []
 _wa_ws_clients = set()
 _wa_sse_hooked = False
 _wa_sse_loop = None
+_wa_media_negative_cache: dict[str, float] = {}
+_wa_media_negative_cache_lock = threading.Lock()
+_wa_media_fetch_locks: dict[str, asyncio.Lock] = {}
+
+
+def _wa_media_cache_key(message_id: int, wa_id: str, path_hint: str) -> str:
+    return f"{int(message_id)}:{str(wa_id or '').strip()}:{str(path_hint or '').strip()}"
+
+
+def _wa_media_negative_cached(key: str, *, now: float | None = None) -> bool:
+    current = time.monotonic() if now is None else float(now)
+    with _wa_media_negative_cache_lock:
+        expires_at = float(_wa_media_negative_cache.get(key) or 0)
+        if expires_at > current:
+            return True
+        if key in _wa_media_negative_cache:
+            _wa_media_negative_cache.pop(key, None)
+        return False
+
+
+def _remember_missing_wa_media(
+    key: str,
+    *,
+    ttl_seconds: float = 300.0,
+    now: float | None = None,
+) -> None:
+    current = time.monotonic() if now is None else float(now)
+    with _wa_media_negative_cache_lock:
+        # Bound memory when a long message history contains many stale items.
+        if len(_wa_media_negative_cache) >= 2048:
+            stale = sorted(_wa_media_negative_cache, key=_wa_media_negative_cache.get)[:512]
+            for item in stale:
+                _wa_media_negative_cache.pop(item, None)
+        _wa_media_negative_cache[key] = current + max(1.0, float(ttl_seconds))
 
 
 def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_identity):
@@ -717,43 +753,68 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         # ── Fallback: try relay server ────────────────────────────────────
         # Never use local numeric PK as relay key — relay indexes by WhatsApp message_id string.
         async def _fetch_relay_media() -> tuple[bytes, str, str]:
-            media_headers, media_params = await _get_media_auth(relay_base)
-            if not media_headers and not media_params:
-                logger.warning("relay-media: no relay auth (internal token or ws_token); inbound fetch may 401")
+            cache_key = _wa_media_cache_key(message_id, effective_wa_id, relay_path_hint)
+            if _wa_media_negative_cached(cache_key):
+                raise HTTPException(404, "Media is still unavailable; retry is temporarily paused")
 
-            candidates: list[tuple[str, str]] = []
-            if effective_wa_id:
-                candidates.append((f"{relay_base}/media/{quote(str(effective_wa_id), safe='')}", "by_wa_id"))
-            if relay_path_hint:
-                candidates.append((f"{relay_base}/media", "by_path"))
-            seen_urls: set[str] = set()
-            for url, mode in candidates:
-                if mode == "by_path":
-                    params = dict(media_params or {})
-                    params["path"] = relay_path_hint.lstrip("/")
-                    key = f"path:{params.get('path')}"
-                else:
-                    params = media_params or {}
-                    key = url
-                if key in seen_urls:
-                    continue
-                seen_urls.add(key)
-                try:
-                    media_resp = req_lib.get(url, headers=media_headers, params=params, timeout=15)
-                    if media_resp.status_code == 200:
-                        ct = media_resp.headers.get("Content-Type", msg_media_mime_type or "application/octet-stream")
-                        return media_resp.content, ct, effective_wa_id or ""
-                    logger.warning(
-                        "relay-media: relay GET %s returned %s (wa_id=%r path_hint=%r)",
-                        url,
-                        media_resp.status_code,
-                        effective_wa_id,
-                        relay_path_hint[:80] if relay_path_hint else "",
-                    )
-                except Exception as ex:
-                    logger.warning("relay-media: relay GET %s failed: %s", url, ex)
+            # One stale thumbnail can be requested by several UI renders at
+            # once. Collapse those requests so only one relay/auth round trip
+            # occurs, then let the negative cache answer the rest immediately.
+            fetch_lock = _wa_media_fetch_locks.setdefault(cache_key, asyncio.Lock())
+            async with fetch_lock:
+                if _wa_media_negative_cached(cache_key):
+                    raise HTTPException(404, "Media is still unavailable; retry is temporarily paused")
+                media_headers, media_params = await _get_media_auth(relay_base)
+                if not media_headers and not media_params:
+                    logger.warning("relay-media: no relay auth (internal token or ws_token); inbound fetch may 401")
 
-            raise HTTPException(404, "Media not available — reconnect WhatsApp to download")
+                candidates: list[tuple[str, str]] = []
+                if effective_wa_id:
+                    candidates.append((f"{relay_base}/media/{quote(str(effective_wa_id), safe='')}", "by_wa_id"))
+                if relay_path_hint:
+                    candidates.append((f"{relay_base}/media", "by_path"))
+                seen_urls: set[str] = set()
+                for url, mode in candidates:
+                    if mode == "by_path":
+                        params = dict(media_params or {})
+                        params["path"] = relay_path_hint.lstrip("/")
+                        request_key = f"path:{params.get('path')}"
+                    else:
+                        params = media_params or {}
+                        request_key = url
+                    if request_key in seen_urls:
+                        continue
+                    seen_urls.add(request_key)
+                    try:
+                        # requests is intentionally retained for its existing
+                        # auth/response contract, but it must never block the
+                        # FastAPI event loop or Qt web-event delivery thread.
+                        media_resp = await asyncio.to_thread(
+                            req_lib.get,
+                            url,
+                            headers=media_headers,
+                            params=params,
+                            timeout=(3, 8),
+                        )
+                        if media_resp.status_code == 200:
+                            with _wa_media_negative_cache_lock:
+                                _wa_media_negative_cache.pop(cache_key, None)
+                            _wa_media_fetch_locks.pop(cache_key, None)
+                            ct = media_resp.headers.get("Content-Type", msg_media_mime_type or "application/octet-stream")
+                            return media_resp.content, ct, effective_wa_id or ""
+                        logger.warning(
+                            "relay-media: relay GET %s returned %s (wa_id=%r path_hint=%r); retry paused",
+                            url,
+                            media_resp.status_code,
+                            effective_wa_id,
+                            relay_path_hint[:80] if relay_path_hint else "",
+                        )
+                    except Exception as ex:
+                        logger.warning("relay-media: relay GET %s failed: %s; retry paused", url, ex)
+
+                _remember_missing_wa_media(cache_key)
+                _wa_media_fetch_locks.pop(cache_key, None)
+                raise HTTPException(404, "Media not available — reconnect WhatsApp to download")
 
         try:
             media_bytes, content_type, ack_wa_id = await _fetch_relay_media()

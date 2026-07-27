@@ -386,6 +386,43 @@ def record_tool_execution(
     """Record a tool execution to the chat-local audit log."""
     if not chat_id:
         return
+    # New durable lifecycle. Providers which call ``record_tool_start`` before
+    # execution update that exact event here; legacy completion-only callers
+    # still get a valid start→terminal pair instead of losing activity.
+    try:
+        if (status or "").lower() == "routed":
+            raise StopIteration
+        from distr.core.chat_turns import (
+            find_running_tool_event,
+            finish_tool,
+            recently_finished_tool_event,
+            start_tool,
+        )
+
+        lifecycle_event_id = find_running_tool_event(int(chat_id), tool_name)
+        if lifecycle_event_id is None and recently_finished_tool_event(int(chat_id), tool_name):
+            raise StopIteration  # Already terminal; suppress compatibility duplicate.
+        if lifecycle_event_id is None:
+            lifecycle_event_id, _, _ = start_tool(
+                int(chat_id),
+                tool_name,
+                title=_tool_activity_title(tool_name, result, instruction_hint),
+                summary="Running…",
+                metadata={"routing_path": routing_hint or routing_path or ""},
+            )
+        if lifecycle_event_id:
+            finish_tool(
+                lifecycle_event_id,
+                success=(status or "completed").lower() not in {"failed", "error", "cancelled"}
+                and not _looks_like_error(result),
+                summary=_preview_result(result, 420),
+                detail=_full_result_for_chat(result),
+                metadata={"routing_path": routing_hint or routing_path or ""},
+            )
+    except StopIteration:
+        pass
+    except Exception:
+        logger.debug("durable tool lifecycle write failed", exc_info=True)
     turn_chat_id: int | None = None
     try:
         from distr.core.db import get_session
@@ -430,3 +467,30 @@ def record_tool_execution(
         signal_manager.tool_executed.emit(chat_event)
     except Exception as e:
         logger.debug("tool_executed signal emit failed: %s", e)
+
+
+def record_tool_start(
+    chat_id: Optional[int],
+    tool_name: str,
+    *,
+    instruction_hint: Optional[str] = None,
+    routing_path: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Persist and broadcast a running tool event before side effects begin."""
+    if not chat_id:
+        return None
+    try:
+        from distr.core.chat_turns import start_tool
+
+        event_id, _, _ = start_tool(
+            int(chat_id),
+            tool_name,
+            title=_chat_title(tool_name, None, instruction_hint),
+            summary="Running…",
+            metadata={"routing_path": routing_path or "", **(metadata or {})},
+        )
+        return event_id
+    except Exception:
+        logger.debug("durable tool start write failed", exc_info=True)
+        return None

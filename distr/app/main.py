@@ -289,6 +289,21 @@ def setup_logging(clear_logs=True):
     app_logger.setLevel(logging.INFO)
     logging.getLogger().setLevel(logging.INFO)
 
+    # Pipecat and a few native-adjacent dependencies use Loguru directly,
+    # bypassing the handlers above. Its default DEBUG sink was writing every
+    # pipeline frame to the dock launcher's stderr log. Keep normal launches
+    # quiet while retaining an explicit opt-in for diagnostics.
+    try:
+        from loguru import logger as loguru_logger
+
+        loguru_level = (
+            os.environ.get("DECISIONSAI_LOGURU_LEVEL") or "WARNING"
+        ).strip().upper()
+        loguru_logger.remove()
+        loguru_logger.add(_console_stream, level=loguru_level)
+    except Exception:
+        pass
+
     # Agent tool completions: always INFO to file + stderr (unless opted out), independent of console_level
     activity_show_stderr = (os.environ.get("DECISIONSAI_AGENT_ACTIVITY_CONSOLE") or "1").strip().lower() not in (
         "0", "false", "no", "off",

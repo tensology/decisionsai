@@ -14,9 +14,37 @@ from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.workflow.verification import _run_verification
 from distr.core.workflow.runtime_contract import should_pause_after_step
+from distr.core.workflow.chat_trace import record_workflow_chat_event
 from distr.gui.web.workflow_events import increment_workflow_updated
 
 logger = logging.getLogger(__name__)
+
+
+def _read_only_step_action(
+    *,
+    read_only: bool,
+    step_role: str,
+    step_name: str,
+    prior_step_passed: bool,
+    verification_only: bool = False,
+) -> str:
+    """Choose whether a shared Development step is valid for read-only work."""
+    if not read_only:
+        return "execute"
+    role = str(step_role or "").strip().lower()
+    name = str(step_name or "").strip().lower()
+    if verification_only and role in {"planning", "reporting"}:
+        return "skip"
+    if role == "implementation":
+        # Read-only work may discover defects, but discovery is the requested
+        # outcome—not authorization to repair them. Skip an unneeded mutation
+        # after a passing prior step, but fail closed when a failed review would
+        # otherwise route into a mutation step. Reporting that run as completed
+        # would turn an unresolved test failure into a false success.
+        return "skip" if prior_step_passed else "fail"
+    if role == "final_polish":
+        return "skip"
+    return "execute"
 
 
 class PostExecutionMixin:
@@ -309,9 +337,102 @@ class PostExecutionMixin:
                 router = StepRouter()
                 decision = router.route(step_id, result_text, passed, run_id, skip_wait=skip_wait)
                 self._append_workflow_step_audit(step_id, run_id, result_text, passed)
+                # The worker's raw success flag is not authoritative after
+                # deterministic/LLM verification. Read-only routing must use
+                # the persisted verified result or it can skip a prohibited
+                # correction step and falsely complete a failed test run.
+                with get_session() as db:
+                    verified_row = (
+                        db.query(AutoWorkflowStepResult)
+                        .filter(AutoWorkflowStepResult.run_id == int(run_id))
+                        .filter(AutoWorkflowStepResult.step_id == int(step_id))
+                        .order_by(AutoWorkflowStepResult.id.desc())
+                        .first()
+                    )
+                    prior_verified_passed = bool(
+                        verified_row and str(verified_row.status or "").lower() == "passed"
+                    )
 
                 if decision.get("action") == "next_step":
                     next_step_id = decision["step_id"]
+                    while True:
+                        with get_session() as db:
+                            run = db.query(AutoWorkflowRun).filter(
+                                AutoWorkflowRun.id == int(run_id)
+                            ).first()
+                            candidate = db.query(AutoWorkflowStep).filter(
+                                AutoWorkflowStep.id == int(next_step_id)
+                            ).first()
+                            try:
+                                run_data = json.loads(run.run_data or "{}") or {} if run else {}
+                            except Exception:
+                                run_data = {}
+                            policy = run_data.get("requested_execution_policy")
+                            policy = policy if isinstance(policy, dict) else {}
+                            config = {}
+                            if candidate and candidate.config:
+                                try:
+                                    config = json.loads(candidate.config or "{}") or {}
+                                except Exception:
+                                    config = {}
+                            from distr.core.work_intake.execution_policy import infer_step_role
+
+                            action = _read_only_step_action(
+                                read_only=bool(policy.get("read_only")),
+                                step_role=infer_step_role({
+                                    "name": getattr(candidate, "name", ""),
+                                    "description": getattr(candidate, "description", ""),
+                                    "instruction": getattr(candidate, "instruction", ""),
+                                    "step_type": getattr(candidate, "step_type", ""),
+                                    "config": config,
+                                }) if candidate else "",
+                                step_name=getattr(candidate, "name", ""),
+                                prior_step_passed=prior_verified_passed,
+                                verification_only=bool(policy.get("verification_only")),
+                            )
+                            if action == "execute" or not run or not candidate:
+                                break
+                            if action == "fail":
+                                run_data["read_only_blocked_step_id"] = int(candidate.id)
+                                run_data["read_only_blocker"] = (
+                                    "Read-only validation found work that would require a project mutation."
+                                )
+                                run.run_data = json.dumps(run_data)
+                                db.commit()
+                                complete_run(run_id, "failed")
+                                return
+                            skipped_step_id = int(candidate.id)
+                            skipped_step_name = str(candidate.name or f"Step {candidate.id}")
+                            skipped = list(run_data.get("conditionally_skipped_step_ids") or [])
+                            if skipped_step_id not in skipped:
+                                skipped.append(skipped_step_id)
+                            run_data["conditionally_skipped_step_ids"] = skipped
+                            if not prior_verified_passed:
+                                run_data["read_only_findings_require_action"] = True
+                            following = (
+                                db.query(AutoWorkflowStep)
+                                .filter(AutoWorkflowStep.workflow_id == candidate.workflow_id)
+                                .filter(AutoWorkflowStep.position > candidate.position)
+                                .order_by(AutoWorkflowStep.position.asc())
+                                .first()
+                            )
+                            if not following:
+                                run.run_data = json.dumps(run_data)
+                                db.commit()
+                                complete_run(run_id, "completed")
+                                return
+                            next_step_id = int(following.id)
+                            run.current_step_id = next_step_id
+                            run.run_data = json.dumps(run_data)
+                            db.commit()
+                        record_workflow_chat_event(
+                            run_id,
+                            "step_skipped",
+                            status="skipped",
+                            step_id=skipped_step_id,
+                            step_name=skipped_step_name,
+                            summary=f"Skipped {skipped_step_name}; this run is read-only.",
+                        )
                     try:
                         from distr.core.workflow.run_briefing import maybe_pause_before_next_step
 

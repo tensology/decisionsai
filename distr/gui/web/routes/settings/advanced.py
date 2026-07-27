@@ -441,10 +441,20 @@ def register_routes(router, templates):
             isinstance(acc, dict) and acc.get("provider") == "telegram" and (acc.get("app_user_id") or acc.get("user_id"))
             for acc in connected_accounts
         )
-        jira_accounts = [acc for acc in connected_accounts if isinstance(acc, dict) and acc.get("provider") == "jira"]
-        trello_accounts = [acc for acc in connected_accounts if isinstance(acc, dict) and acc.get("provider") == "trello"]
-        jira_has_valid = sum(1 for a in jira_accounts if a.get("is_valid", False)) > 0
-        trello_has_valid = sum(1 for a in trello_accounts if a.get("is_valid", False)) > 0
+        jira_accounts_private = [
+            acc for acc in connected_accounts
+            if isinstance(acc, dict) and acc.get("provider") == "jira"
+        ]
+        trello_accounts_private = [
+            acc for acc in connected_accounts
+            if isinstance(acc, dict) and acc.get("provider") == "trello"
+        ]
+        jira_has_valid = any(a.get("is_valid", False) for a in jira_accounts_private)
+        trello_has_valid = any(a.get("is_valid", False) for a in trello_accounts_private)
+        # This endpoint is consumed by local UI, diagnostics, and automation.
+        # It reports capability state, never reusable credentials.
+        jira_accounts = [redact_connected_account(a) for a in jira_accounts_private]
+        trello_accounts = [redact_connected_account(a) for a in trello_accounts_private]
 
         discord_bot_configured = bool((os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN") or "").strip())
         slack_bot_configured = bool((os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN") or "").strip())

@@ -106,6 +106,13 @@ def _safe_json_obj(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _chat_tool_event_messages(chat: Chat) -> List[Dict[str, Any]]:
     params = _safe_json_obj(getattr(chat, "params", None))
     events = params.get("tool_events")
@@ -665,6 +672,15 @@ class SendMessageRequest(ChatRequestModel):
     voice_model: Optional[str] = (
         None  # Chat's TTS voice (e.g. Adam); persist to chat so agent says "I'm Adam" not wrong name
     )
+    intake_source_message_id: Optional[str] = None
+    intake_requested_outcome: Optional[str] = None
+    intake_metadata: Optional[Dict[str, Any]] = None
+
+
+class SteerTurnRequest(ChatRequestModel):
+    """Plain-English guidance for an active turn; Stop remains separate."""
+
+    message: str
 
 
 class CreateChatRequest(ChatRequestModel):
@@ -949,6 +965,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_model": voice_model,
                 }
             )
+
         except Exception as e:
             logger.debug("Agent setup fallback: %s", e)
             return JSONResponse(
@@ -959,6 +976,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_model": "—",
                 }
             )
+
+    @router.get("/chats/qualification-capabilities")
+    async def get_chat_qualification_capabilities():
+        """Versioned handshake for channel-authentic qualification clients."""
+        return JSONResponse({"intake_identity_version": 1})
 
     @router.get("/chats/usage-status")
     async def get_chat_usage_status(
@@ -1024,6 +1046,31 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
                 messages = _merge_thread_rows_with_tool_and_workflow_events(rows, root_chat)
 
+                from distr.core.chat_turns import get_turns
+
+                turn_state = get_turns(int(root_chat.id))
+                durable_turn_ids = {
+                    int(item.get("turn_id"))
+                    for item in (turn_state.get("turns") or [])
+                    if item.get("turn_id") is not None
+                }
+                has_durable_workflow = any(
+                    (event.get("metadata") or {}).get("source") == "workflow"
+                    for item in (turn_state.get("turns") or [])
+                    for event in (item.get("events") or [])
+                )
+                if durable_turn_ids:
+                    messages = [
+                        message
+                        for message in messages
+                        if not (
+                            message.get("role") == "tool"
+                            and _safe_int((message.get("tool_event") or {}).get("turn_chat_id"))
+                            in durable_turn_ids
+                        )
+                        and not (message.get("role") == "workflow" and has_durable_workflow)
+                    ]
+
                 settings = load_settings_from_db()
                 # Use chat row first; fall back to settings so UI always has a value
                 provider = (
@@ -1078,7 +1125,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 )
                 additional_context = _chat_additional_context(root_chat.additional_context)
                 compact_checkpoint = additional_context.get("compact_checkpoint")
-
                 return JSONResponse(
                     {
                         "id": root_chat.id,
@@ -1094,6 +1140,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         "context_stats": header_payload["context_stats"],
                         "title_auto": header_payload["title_auto"],
                         "compact_checkpoint": compact_checkpoint,
+                        "active_turn": turn_state["active_turn"],
+                        "turns": turn_state["turns"],
                     }
                 )
         except HTTPException:
@@ -1903,13 +1951,24 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 else:
                     from distr.core.signals import signal_manager
 
+                    intake_context: Dict[str, Any] = {}
+                    if request_data.intake_source_message_id:
+                        intake_context["source_message_id"] = request_data.intake_source_message_id
+                    if request_data.intake_requested_outcome:
+                        intake_context["requested_outcome"] = request_data.intake_requested_outcome
+                    if isinstance(request_data.intake_metadata, dict):
+                        intake_context["metadata"] = request_data.intake_metadata
+                    signal_options = (
+                        {"work_intake": intake_context} if intake_context else None
+                    )
+
                     signal_manager.web_send_to_agent_requested.emit(
                         chat_id,
                         agent_message,
                         speak,
                         provider,
                         model_name,
-                        None,
+                        signal_options,
                     )
                 logger.info(
                     "Send-to-agent: emitted web_send_to_agent_requested for chat_id=%s",
@@ -1920,12 +1979,52 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             except Exception as e:
                 logger.warning("Failed to send to agent: %s", e, exc_info=True)
                 raise HTTPException(status_code=500, detail="Agent not available")
-            return JSONResponse({"sent": True})
+            return JSONResponse({
+                "sent": True,
+                "intake_source_message_id": request_data.intake_source_message_id,
+            })
         except HTTPException:
             raise
         except Exception as e:
             logger.error("Send to agent failed: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
+
+    @router.post("/chats/{chat_id}/turns/{turn_id}/steer")
+    async def steer_chat_turn(chat_id: int, turn_id: int, request_data: SteerTurnRequest):
+        """Persist guidance now and route delegated work through its live steer path."""
+        guidance = (request_data.message or "").strip()
+        if not guidance:
+            raise HTTPException(status_code=400, detail="Steering guidance is required")
+        from distr.core.chat_turns import get_turns, steer_turn
+
+        state = get_turns(chat_id)
+        active = state.get("active_turn")
+        if not active or int(active.get("turn_id") or 0) != int(turn_id):
+            raise HTTPException(status_code=409, detail="That turn is no longer active")
+        event = steer_turn(chat_id, turn_id, guidance)
+        if event is None:
+            raise HTTPException(status_code=404, detail="Chat turn not found")
+
+        delegated: Optional[Dict[str, Any]] = None
+        # A workflow projected into this turn exposes its run id in event
+        # metadata. Route through the existing harness steering contract when
+        # available; otherwise the conversational provider consumes the durable
+        # steer at its next tool/synthesis boundary.
+        for prior in reversed(active.get("events") or []):
+            metadata = prior.get("metadata") if isinstance(prior, dict) else None
+            run_id = (metadata or {}).get("run_id") if isinstance(metadata, dict) else None
+            if run_id is None:
+                continue
+            try:
+                from distr.core.workflow.service import apply_run_harness_steer
+
+                delegated = apply_run_harness_steer(
+                    int(run_id), guidance, source="chat_turn"
+                )
+            except Exception as exc:
+                delegated = {"error": str(exc), "delivered": False}
+            break
+        return JSONResponse({"accepted": True, "event": event, "delegated": delegated})
 
     @router.post("/chats/restore-speaker")
     async def restore_speaker():
@@ -1951,6 +2050,19 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             logger.debug(
                 "Cancel: interrupt_tts emit failed (agent may not be running): %s", e
             )
+        try:
+            from distr.core.chat_turns import latest_active_turn_id, terminal_turn
+
+            turn_id = latest_active_turn_id(chat_id)
+            if turn_id is not None:
+                terminal_turn(
+                    chat_id,
+                    "turn_cancelled",
+                    turn_id=turn_id,
+                    summary="Stopped by the user.",
+                )
+        except Exception:
+            logger.debug("Could not persist turn cancellation", exc_info=True)
         return JSONResponse({"message": "Cancel requested"})
 
     @router.post("/chats/tts/generate")

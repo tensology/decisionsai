@@ -1249,6 +1249,15 @@ class EventHandlerMixin:
 
     def _send_to_telegram_worker(self, data):
         """Heavy lifting for send_to_telegram — runs in a background thread."""
+        if data.get("reply_markup"):
+            # Telegram relay/media delivery can legally accept a keyboard on a
+            # voice payload, but clients and relay versions do not render that
+            # combination consistently. An actionable prompt must therefore be
+            # a visible text message with its controls; TTS must never replace
+            # the exact question or make its buttons disappear.
+            data = dict(data)
+            data["input_type"] = "text"
+            data["allow_voice"] = False
         # Inject input_type from telegram_manager if not already in event data.
         # The LLM service / TTS emitters don't have access to the manager, so
         # the event dict may arrive without input_type.  We read it here once
@@ -1390,6 +1399,10 @@ class EventHandlerMixin:
                 audio_file_path=str(audio_file) if audio_file and audio_file.exists() else None,
                 screenshot_path=str(screenshot_file) if screenshot_file and screenshot_file.exists() else None,
                 reply_markup=data.get("reply_markup"),
+                interaction_token=data.get("interaction_token"),
+            )
+            self._record_telegram_direct_intake_response(
+                text_to_send or data.get("text") or data.get("voice_note_message") or ""
             )
             self._record_remote_reply_context(
                 data,
@@ -1399,6 +1412,33 @@ class EventHandlerMixin:
 
         # Cleanup temp files
         self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
+
+    def _record_telegram_direct_intake_response(self, outbound_text: str) -> bool:
+        """Close the durable intake loop for a normal Telegram agent answer."""
+        manager = getattr(self, "telegram_manager", None)
+        if manager is None:
+            return False
+        intake_uid = str(getattr(manager, "_pending_work_intake_uid", "") or "").strip()
+        thread_id = str(getattr(manager, "_pending_work_intake_thread_id", "") or "").strip()
+        response = str(outbound_text or "").strip()
+        if not intake_uid or not thread_id or not response:
+            return False
+        try:
+            from distr.core.work_intake import get_work_intake_service
+
+            recorded = get_work_intake_service().record_direct_response(
+                source="telegram",
+                source_thread_id=thread_id,
+                response_text=response,
+                intake_uid=intake_uid,
+            )
+            if recorded:
+                manager._pending_work_intake_uid = ""
+                manager._pending_work_intake_thread_id = ""
+            return bool(recorded)
+        except Exception:
+            logger.debug("[Telegram] Failed to persist direct intake response", exc_info=True)
+            return False
 
     @staticmethod
     def _telegram_engagement_state_fingerprint(text: str) -> str:

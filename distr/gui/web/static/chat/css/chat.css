@@ -919,6 +919,139 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* One compact, durable lifecycle panel per user turn. */
+.turn-panel {
+    width: min(660px, calc(100% - 64px));
+    margin: -6px 0 2px 56px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    background: rgba(15, 23, 42, 0.46);
+    color: rgba(226, 232, 240, 0.82);
+    overflow: hidden;
+}
+
+.turn-panel--running {
+    border-color: rgba(249, 115, 22, 0.36);
+    box-shadow: inset 2px 0 0 rgba(249, 115, 22, 0.72);
+}
+
+.turn-panel--failed { border-color: rgba(248, 113, 113, 0.42); }
+.turn-panel--cancelled { opacity: 0.78; }
+
+.turn-panel-head {
+    min-height: 44px;
+    padding: 7px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.turn-panel-copy {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.turn-panel-kicker {
+    flex-shrink: 0;
+    color: #fb923c;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+.turn-panel-ack {
+    min-width: 0;
+    overflow: hidden;
+    color: rgba(248, 250, 252, 0.9);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.turn-panel-state {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(203, 213, 225, 0.58);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.turn-panel-phase { color: rgba(226, 232, 240, 0.72); }
+
+.turn-panel-details {
+    border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.turn-panel-details > summary {
+    min-height: 28px;
+    padding: 4px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    color: rgba(203, 213, 225, 0.62);
+    font-size: 11px;
+    list-style: none;
+}
+
+.turn-panel-details > summary::-webkit-details-marker,
+.turn-step > summary::-webkit-details-marker { display: none; }
+.turn-panel-details[open] .turn-panel-chevron { transform: rotate(180deg); }
+
+.turn-step-list { padding: 0 10px 8px; }
+
+.turn-step {
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.turn-step > summary {
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.turn-step-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: rgba(226, 232, 240, 0.78);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.turn-step-time { color: rgba(148, 163, 184, 0.48); font-size: 10px; }
+.turn-step-summary { padding: 0 0 3px 21px; color: rgba(226, 232, 240, 0.78); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.turn-step-detail { padding: 0 0 8px 21px; color: rgba(203, 213, 225, 0.58); font-size: 10.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.turn-step-mark { width: 14px; color: rgba(148, 163, 184, 0.68); text-align: center; font-size: 10px; }
+.turn-step-mark--complete { color: #4ade80; }
+.turn-step-mark--failed { color: #f87171; font-weight: 800; }
+.turn-step-spinner { display: inline-block; flex: 0 0 12px; width: 12px; height: 12px; border: 2px solid rgba(249, 115, 22, 0.28); border-top-color: #f97316; border-radius: 50%; animation: turn-spin 0.8s linear infinite; }
+@keyframes turn-spin { to { transform: rotate(360deg); } }
+
+.sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
 .assistant-activity {
     width: 100%;
     margin-top: 6px;
@@ -1833,6 +1966,40 @@
 .speaker-toggle:disabled:hover {
     background-color: transparent;
     color: #f97316;
+}
+
+.turn-stop-button {
+    min-height: 34px;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid rgba(248, 113, 113, 0.42);
+    border-radius: 7px;
+    background: rgba(127, 29, 29, 0.26);
+    color: #fca5a5;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.turn-stop-button[hidden] { display: none !important; }
+.turn-stop-button:hover { background: rgba(153, 27, 27, 0.42); color: #fee2e2; }
+
+@media (max-width: 720px) {
+    /* The chat list is the mobile entry screen; once a thread is open, give
+       the conversation the viewport instead of stacking two full panels. */
+    body.chat-has-active-thread .chat-shell .sidebar { display: none; }
+    .turn-panel { width: calc(100% - 12px); margin-left: 6px; }
+    .turn-panel-head { align-items: flex-start; }
+    .turn-panel-copy { align-items: flex-start; flex-direction: column; gap: 2px; }
+    .turn-panel-ack { white-space: normal; }
+    .turn-panel-state { flex-direction: column; align-items: flex-end; gap: 2px; }
+    .turn-stop-button span { display: none; }
+    /* Keep the decorative avatar tappable without laying an invisible
+       280px square over messages and turn controls on a phone. */
+    .llama-click-target { width: 88px; height: 112px; }
 }
 .speaker-toggle[aria-pressed="false"] {
     color: #8e8ea0;

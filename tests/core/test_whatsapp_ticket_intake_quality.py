@@ -125,6 +125,22 @@ def test_whatsapp_media_items_use_stable_message_preview_urls_without_local_cach
     assert items[1]["local_preview_url"] == "/api/tickets/whatsapp/media?path=brief.pdf"
 
 
+def test_missing_whatsapp_media_is_negatively_cached_with_expiry(monkeypatch):
+    from distr.gui.web.routes import kanban_whatsapp
+
+    monkeypatch.setattr(kanban_whatsapp, "_wa_media_negative_cache", {})
+    key = kanban_whatsapp._wa_media_cache_key(42, "WA_KEY_42", "")
+
+    assert kanban_whatsapp._wa_media_negative_cached(key, now=100.0) is False
+    kanban_whatsapp._remember_missing_wa_media(
+        key,
+        ttl_seconds=300,
+        now=100.0,
+    )
+    assert kanban_whatsapp._wa_media_negative_cached(key, now=399.9) is True
+    assert kanban_whatsapp._wa_media_negative_cached(key, now=400.1) is False
+
+
 def test_resolving_reviewed_whatsapp_messages_rejects_changed_batch(tmp_path):
     import distr.core.db.kanban  # noqa: F401
 

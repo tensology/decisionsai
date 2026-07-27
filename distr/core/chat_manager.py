@@ -10,6 +10,7 @@ import json
 import getpass
 import logging
 import threading
+from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from collections import OrderedDict
 from typing import List, Optional, Callable, Any
@@ -30,6 +31,24 @@ from distr.core.chat import (
 )
 
 logger = logging.getLogger(__name__)
+
+_active_work_intake_uid: ContextVar[str] = ContextVar(
+    "active_work_intake_uid",
+    default="",
+)
+
+
+def activate_work_intake_context(intake_uid: str) -> Token:
+    """Bind one async response task to its exact durable intake."""
+    return _active_work_intake_uid.set(str(intake_uid or "").strip())
+
+
+def reset_work_intake_context(token: Token) -> None:
+    _active_work_intake_uid.reset(token)
+
+
+def current_work_intake_uid() -> str:
+    return _active_work_intake_uid.get()
 
 
 def _load_chat_params(raw: Optional[str]) -> dict[str, Any]:
@@ -701,6 +720,12 @@ class ChatManagerCore:
                         root.params = json.dumps({"source_platform": source_platform})
                 _set_active_turn_chat_row_id(root, int(root.id))
                 session.commit()
+                try:
+                    from distr.core.chat_turns import ensure_turn_started
+
+                    ensure_turn_started(int(root_id), int(root.id))
+                except Exception:
+                    logger.debug("Could not initialize durable chat turn", exc_info=True)
                 record_chat_audit_event(
                     chat_id=int(root_id),
                     chat_row_id=int(root.id) if root.id is not None else None,
@@ -726,6 +751,12 @@ class ChatManagerCore:
                 session.refresh(new_chat)
                 _set_active_turn_chat_row_id(root, int(new_chat.id))
                 session.commit()
+                try:
+                    from distr.core.chat_turns import ensure_turn_started
+
+                    ensure_turn_started(int(root_id), int(new_chat.id))
+                except Exception:
+                    logger.debug("Could not initialize durable chat turn", exc_info=True)
                 record_chat_audit_event(
                     chat_id=int(root_id),
                     chat_row_id=int(new_chat.id) if new_chat.id is not None else None,
@@ -748,7 +779,12 @@ class ChatManagerCore:
             session.close()
 
     def add_assistant_message(
-        self, chat_id: int, text_content: str, is_hidden: bool = False
+        self,
+        chat_id: int,
+        text_content: str,
+        is_hidden: bool = False,
+        *,
+        is_final: bool = True,
     ) -> None:
         if chat_id not in self.chat_histories:
             self.get_chat_history(chat_id)
@@ -782,12 +818,27 @@ class ChatManagerCore:
                 if target is chat and chat.children:
                     target = max(chat.children, key=lambda x: x.created_date)
             if target:
+                active_turn_id = int(target.id) if target.id is not None else None
                 target.response = text_content
                 target.is_hidden = is_hidden
                 target.modified_date = datetime.now(timezone.utc)
-                if root:
+                if root and is_final:
                     _clear_active_turn_chat_row_id(root)
                 session.commit()
+                if is_final and not is_hidden and active_turn_id is not None:
+                    try:
+                        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+                        from distr.core.chat_turns import begin_synthesis, complete_turn
+
+                        begin_synthesis(int(root.id if root else chat_id), active_turn_id)
+                        complete_turn(
+                            int(root.id if root else chat_id),
+                            turn_id=active_turn_id,
+                            display_text=text_content,
+                            speech_text=clean_text_for_tts(text_content),
+                        )
+                    except Exception:
+                        logger.debug("Could not finalize durable chat turn", exc_info=True)
                 record_chat_audit_event(
                     chat_id=int(chat_id),
                     chat_row_id=int(target.id) if target.id is not None else None,
@@ -807,6 +858,18 @@ class ChatManagerCore:
             logger.error("Error adding assistant message: %s", e)
         finally:
             session.close()
+        if not is_hidden and is_final:
+            try:
+                from distr.core.work_intake import get_work_intake_service
+
+                get_work_intake_service().record_direct_response(
+                    source="web",
+                    source_thread_id=str(chat_id),
+                    response_text=text_content,
+                    intake_uid=current_work_intake_uid(),
+                )
+            except Exception:
+                logger.debug("Could not correlate final chat response to work intake", exc_info=True)
 
     # ---- model/provider ----
 

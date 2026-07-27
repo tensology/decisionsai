@@ -307,6 +307,21 @@ def resolve_board_id_for_run(run_id: int | None) -> int | None:
         return None
 
 
+def resolve_ticket_id_for_run(run_id: int | None) -> int | None:
+    """Resolve a workflow run's ticket for events emitted by lower-level workers."""
+    if not run_id:
+        return None
+    try:
+        from distr.core.db.workflow import AutoWorkflowRun
+
+        with get_session() as session:
+            run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            ticket_id = getattr(run, "ticket_id", None) if run else None
+            return int(ticket_id) if ticket_id is not None else None
+    except Exception:
+        return None
+
+
 def _coalesce_board_id(
     board_id: int | None,
     *,
@@ -388,6 +403,8 @@ def emit_event(
     if not is_orchestrator_enabled():
         return None
 
+    if ticket_id is None:
+        ticket_id = resolve_ticket_id_for_run(run_id)
     board_id = _coalesce_board_id(board_id, ticket_id=ticket_id, run_id=run_id)
 
     ensure_orchestrator_tables()
@@ -2025,7 +2042,12 @@ def promote_learned_rule_to_board_policy(
         return policy
 
 
-def build_learned_rules_context(board_id: int | None, *, limit: int = 8) -> str:
+def build_learned_rules_context(
+    board_id: int | None,
+    *,
+    limit: int = 8,
+    include_ui_standards: bool = True,
+) -> str:
     """Format enabled board learned rules for validation and planning context."""
     if not board_id:
         return ""
@@ -2039,6 +2061,20 @@ def build_learned_rules_context(board_id: int | None, *, limit: int = 8) -> str:
             continue
         evidence = int(rule.get("evidence_count") or 0)
         rule_type = str(rule.get("rule_type") or "rule").replace("_", " ")
+        lowered = summary.lower()
+        if not include_ui_standards and rule_type == "validation failure" and evidence < 2:
+            continue
+        if not include_ui_standards and (
+            rule_type in {"ui feedback"}
+            or any(
+                marker in lowered
+                for marker in (
+                    " ui ", "ux", "visual", "layout", "screenshot", "playwright",
+                    "browser", "responsive", "spotify", "now-playing",
+                )
+            )
+        ):
+            continue
         prefix = f"- ({rule_type}, seen {evidence}x)" if evidence > 1 else f"- ({rule_type})"
         lines.append(f"{prefix} {summary[:320]}")
     return "\n".join(lines).strip() if len(lines) > 1 else ""

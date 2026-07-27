@@ -77,6 +77,7 @@ class TelegramSenderMixin:
         document_path: Optional[str] = None,
         video_path: Optional[str] = None,
         reply_markup: Optional[Dict[str, Any]] = None,
+        interaction_token: Optional[str] = None,
     ):
         """Enqueue message for sending."""
         # Stop the persistent typing loop — we're about to send the actual response
@@ -218,6 +219,11 @@ class TelegramSenderMixin:
 
         # Build Message Payload
         msg = {"type": "send_message"}
+        if interaction_token:
+            # Opaque correlation value echoed by the relay.  This lets a
+            # durable workflow interaction distinguish "queued locally" from
+            # a Telegram API acknowledgment without exposing run internals.
+            msg["client_message_id"] = str(interaction_token)
         if not_before:
             msg["_not_before"] = not_before
 

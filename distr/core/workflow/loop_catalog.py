@@ -259,7 +259,12 @@ def infer_loop_archetype(text: str, parsed: Dict[str, Any] | None = None) -> str
 
     if "before any git commit" in lower or "pre-commit" in lower:
         return "event_gate"
-    if "senior software engineer" in lower or ("plan.md" in lower and "ticket" in lower):
+    if (
+        "senior software engineer" in lower
+        or ("plan.md" in lower and "ticket" in lower)
+        or "one linked ticket is implemented" in lower
+        or ("scoped slice is implemented" in lower and "compact result packet" in lower)
+    ):
         return "incremental_ship"
     if "gh pr list" in check or "gh pr list" in lower or "babysitter" in lower or "codex-watch" in lower:
         return "watch_maintain"

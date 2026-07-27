@@ -19,6 +19,12 @@ DELIVERY_LANES: tuple[str, ...] = (
 DELIVERY_SOURCE_LANE = DELIVERY_LANES[0]
 DELIVERY_DONE_LANE = DELIVERY_LANES[-1]
 
+_LEGACY_DELIVERY_LANE_ALIASES: dict[str, tuple[str, ...]] = {
+    "In Progress": ("Current", "Doing", "Active"),
+    "QA": ("QA / Assess", "QA/Assess", "Review", "Testing"),
+    "Complete": ("Done", "Completed", "Closed"),
+}
+
 
 def require_automation_lane(lane_name: str) -> str:
     """Validate a lane requested by an agent or background automation.
@@ -66,6 +72,24 @@ def ensure_delivery_lanes(
             by_name.pop(legacy_key, None)
             break
 
+    # Older Decisions boards used Current / QA Assess / Done. Reuse those
+    # lane records when the canonical destination is absent so their tickets,
+    # ordering, and audit identity survive the migration without producing a
+    # second set of visually conflicting lanes.
+    for lane_name, aliases in _LEGACY_DELIVERY_LANE_ALIASES.items():
+        canonical_key = lane_name.lower()
+        if by_name.get(canonical_key) is not None:
+            continue
+        for alias in aliases:
+            alias_key = alias.lower()
+            legacy = by_name.get(alias_key)
+            if legacy is None:
+                continue
+            legacy.name = lane_name
+            by_name[canonical_key] = legacy
+            by_name.pop(alias_key, None)
+            break
+
     for position, lane_name in enumerate(DELIVERY_LANES):
         lane = by_name.get(lane_name.lower())
         if lane is None:
@@ -105,7 +129,7 @@ def move_ticket_to_delivery_lane(
     lanes = ensure_delivery_lanes(
         session,
         int(current_lane.board_id),
-        legacy_source_names=("Scoped work", "To Do", "Current", "Queue"),
+        legacy_source_names=("Scoped work", "To Do", "Current", "Queue", "Queued"),
     )
     target = lanes[target_name]
     if int(ticket.lane_id) == int(target.id):

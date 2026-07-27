@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
 
@@ -9,7 +10,11 @@ from distr.core.project_cli_backends.provider_preflight import (
     probe_openrouter_model_readiness,
     rank_openrouter_free_models,
 )
-from distr.core.workflow.step_executor import _hosted_free_recommendation
+from distr.core.workflow.step_executor import (
+    _hosted_free_recommendation,
+    _provider_rate_limited,
+    _ticket_requires_read_only_execution,
+)
 
 
 class _Response:
@@ -128,6 +133,13 @@ def test_provider_preflight_interaction_uses_proceed_and_stop_actions():
     from distr.core.workflow.interactions import allowed_actions_for_kind
 
     assert allowed_actions_for_kind("provider_preflight") == ["approve", "stop"]
+
+
+def test_provider_preflight_prompt_never_offers_an_unavailable_action():
+    source = Path("distr/core/workflow/step_executor.py").read_text(encoding="utf-8")
+
+    assert "Approve to use it, choose another model, or Stop." not in source
+    assert "Choose one of the model options below" in source
 
 
 def test_direct_project_prompt_is_not_dispatched_when_provider_has_no_credit(monkeypatch, tmp_path):
@@ -347,6 +359,23 @@ def test_hosted_recommendation_explains_capacity_and_honestly_labels_small_fallb
     assert "120B" in large
     assert "stronger compatible hosted free models are unavailable" in last_resort
     assert "best remaining" in last_resort
+
+
+def test_provider_rate_limit_is_treated_as_provider_wide_not_model_specific():
+    assert _provider_rate_limited(http_status=429) is True
+    assert _provider_rate_limited(message="429 Rate limit exceeded") is True
+    assert _provider_rate_limited(
+        message="429 Provider returned error: model is temporarily rate-limited upstream"
+    ) is False
+    assert _provider_rate_limited(message="model not found") is False
+
+
+def test_explicit_ticket_wide_read_only_contract_survives_implementation_steps():
+    assert _ticket_requires_read_only_execution(
+        "Run this through the workflow as a strictly read-only verification ticket. "
+        "No implementation change is requested."
+    ) is True
+    assert _ticket_requires_read_only_execution("Implement the checkout fix and test it.") is False
 
 
 def test_selected_free_model_must_pass_minimal_readiness_request(monkeypatch):

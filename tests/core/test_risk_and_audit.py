@@ -42,3 +42,27 @@ def test_backend_copy_and_authoritative_language_do_not_invent_ui_or_auth_risk()
     assert "copy" not in profile["signals"]
     rules = validation_rules_for_risk(profile["level"], profile["signals"])
     assert not any("UI remains" in rule for rule in rules)
+
+
+def test_backend_diagnostic_boundaries_do_not_invent_security_or_ui_work():
+    profile = infer_risk_profile(
+        "Provide one coherent backend diagnostic flow. "
+        "Do not expose credentials, personal data, or raw production secrets."
+    )
+
+    assert profile["risk_type"] == "technical_scope"
+    assert profile["level"] == "medium"
+    assert "flow" not in profile["signals"]
+    assert "credential" not in profile["signals"]
+    assert "secrets" not in profile["signals"]
+
+
+def test_safety_guardrails_do_not_invent_sensitive_implementation_scope():
+    profile = infer_risk_profile(
+        "Run the named read-only tests. Reject unsafe, malformed, secret-bearing, "
+        "or out-of-scope worker output and recover with a safe worker."
+    )
+
+    assert profile["level"] == "low"
+    assert profile["risk_type"] == "standard"
+    assert "secret" not in profile["signals"]

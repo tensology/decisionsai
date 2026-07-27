@@ -131,7 +131,12 @@ def _counts_as_model_health_failure(error: str) -> bool:
     if any(marker in lowered for marker in non_route_markers):
         return False
     route_failure_markers = (
+        "401",
+        "402",
         "429",
+        "unauthorized",
+        "authentication required",
+        "add credits",
         "rate limit",
         "quota",
         "insufficient credit",
@@ -142,8 +147,12 @@ def _counts_as_model_health_failure(error: str) -> bool:
         "connection error",
         "not support chat",
         "model not found",
+        "free period of this model ended",
         "provider unavailable",
         "service unavailable",
+        "resourceexhausted",
+        "resource exhausted",
+        "request limit reached",
         "http 5",
         "status code 5",
     )
@@ -191,6 +200,52 @@ def _apply_provider_health(
     return available or annotated
 
 
+def _apply_provider_certification(
+    routes: list[dict[str, Any]],
+    *,
+    capability: str = "code",
+) -> list[dict[str, Any]]:
+    """Annotate Auto candidates and suppress capability-proven failures.
+
+    Unknown routes remain visible so a fresh install can readiness-check them.
+    A route explicitly proven unavailable for the required capability is only
+    retained when every discovered route is unavailable, allowing the UI to
+    explain the blocker instead of silently returning an empty catalogue.
+    """
+    try:
+        from distr.core.qualification import (
+            CertificationStatus,
+            ProviderCertificationStore,
+        )
+
+        store = ProviderCertificationStore()
+        annotated: list[dict[str, Any]] = []
+        eligible: list[dict[str, Any]] = []
+        for raw in routes:
+            route = dict(raw)
+            provider = str(route.get("model_provider") or "").strip().lower()
+            model = str(route.get("model") or "auto").strip()
+            certification = store.get(provider, model, capability)
+            blocking = store.blocking_unavailable(provider, model, capability)
+            if blocking is not None:
+                certification = blocking
+            route["certification_status"] = certification.status.value
+            route["certification_checked_at"] = certification.checked_at
+            annotated.append(route)
+            if certification.status is not CertificationStatus.UNAVAILABLE:
+                eligible.append(route)
+        preferred = eligible or annotated
+        return sorted(
+            preferred,
+            key=lambda route: (
+                0 if route.get("certification_status") == "certified" else 1,
+                1 if route.get("certification_status") == "limited" else 0,
+            ),
+        )
+    except Exception:
+        return routes
+
+
 def _route_strength(route: dict[str, Any]) -> float:
     if route.get("score") is not None:
         try:
@@ -228,7 +283,10 @@ def _apply_recent_model_health(
         annotated.append(route)
         if failures < failure_threshold:
             healthy.append(route)
-    return healthy or annotated
+    return _apply_provider_certification(
+        healthy or annotated,
+        capability="project_execution",
+    )
 
 
 def _step_role(step: Any) -> str:
@@ -300,7 +358,8 @@ def _discover_routes(settings: dict[str, Any], *, complexity: str) -> list[dict[
             routes.append({**row, "source": "live_openrouter_free_catalog", "free": True, "local": False})
     seen: set[str] = set()
     unique = [route for route in routes if not (_route_key(route) in seen or seen.add(_route_key(route)))]
-    model_healthy = _apply_recent_model_health(unique)
+    certified = _apply_provider_certification(unique, capability="code")
+    model_healthy = _apply_recent_model_health(certified)
     return _apply_provider_health(
         model_healthy,
         openrouter_free_cooldown=_openrouter_free_cooldown_active(),

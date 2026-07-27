@@ -11,6 +11,7 @@ def _free_eligible_model(
     *,
     complexity: str = "medium",
     prefer_local: bool = False,
+    avoid_proven_limited: bool = False,
 ) -> dict[str, str]:
     from distr.core.project_cli_backends.models_catalog import pi_cli_models, recommend_cli_model
 
@@ -21,10 +22,105 @@ def _free_eligible_model(
         if isinstance(cached_models, list)
         else pi_cli_models(settings)
     )
+    # This helper is the free/local tier, not a soft preference. A paid scoped
+    # model can otherwise outscore a free route and silently spend money while
+    # the orchestrator is explicitly trying cheaper recovery candidates.
+    free_or_local = [
+        model
+        for model in models
+        if bool(model.get("free"))
+        or bool(model.get("local"))
+        or str(model.get("id") or model.get("model") or "").strip().lower().endswith(":free")
+    ]
+    models = free_or_local
+    if avoid_proven_limited and models:
+        try:
+            from distr.core.qualification import (
+                CertificationStatus,
+                ProviderCertificationStore,
+            )
+
+            store = ProviderCertificationStore()
+            capable = []
+            for model in models:
+                provider = str(
+                    model.get("provider") or model.get("model_provider") or ""
+                ).strip().lower()
+                model_id = str(model.get("id") or model.get("model") or "").strip()
+                status = store.get(provider, model_id, "project_execution").status
+                blocking = store.blocking_unavailable(
+                    provider, model_id, "project_execution"
+                )
+                if blocking is not None:
+                    status = blocking.status
+                if status not in {
+                    CertificationStatus.LIMITED,
+                    CertificationStatus.UNAVAILABLE,
+                }:
+                    capable.append(model)
+            # Keep the full catalogue when every option is known-bad so the
+            # caller can surface a truthful blocker rather than inventing a
+            # route. Otherwise Auto learns from observed execution quality and
+            # does not keep selecting the same underperforming model.
+            if capable:
+                models = capable
+        except Exception:
+            pass
+        try:
+            from distr.core.project_cli_backends.policy_manager import (
+                _openrouter_free_cooldown_active,
+            )
+
+            if _openrouter_free_cooldown_active():
+                outside_cooldown = [
+                    model
+                    for model in models
+                    if not (
+                        str(model.get("provider") or model.get("model_provider") or "")
+                        .strip()
+                        .lower()
+                        == "openrouter"
+                        and str(model.get("id") or model.get("model") or "")
+                        .strip()
+                        .lower()
+                        .endswith(":free")
+                    )
+                ]
+                if outside_cooldown:
+                    models = outside_cooldown
+        except Exception:
+            pass
+    if (
+        avoid_proven_limited
+        and prefer_local
+        and str(complexity or "medium").strip().lower()
+        in {"medium", "high", "complex", "critical"}
+    ):
+        try:
+            from distr.core.project_cli_backends.models_catalog import enrich_model_entry
+
+            enriched = [enrich_model_entry(model) for model in models]
+            strong_local = [
+                model
+                for model in enriched
+                if bool(model.get("local"))
+                and str(model.get("tier") or "").strip().lower() == "high"
+            ]
+            # Auto may use a small configured model for lightweight work, but
+            # a medium/high unattended project step should use an installed
+            # high-tier local worker when one is available. This prevents a
+            # failed 9B route from being replaced by an even smaller 7B model.
+            if strong_local:
+                models = strong_local
+        except Exception:
+            pass
+    effective_prefer_local = bool(
+        prefer_local and any(bool(model.get("local")) for model in models)
+    )
     selected = recommend_cli_model(
         models,
         prefer_free=True,
-        prefer_local=prefer_local,
+        prefer_local=effective_prefer_local,
         prefer_scoped=True,
         complexity=complexity,
     )
@@ -225,7 +321,18 @@ def apply_auto_step_role_policy(
     selected: dict[str, Any]
     rationale: str
 
-    if role == "final_polish":
+    if role == "final_polish" and bool(task_profile.get("read_only")):
+        selected = _free_eligible_model(
+            settings,
+            complexity=complexity,
+            prefer_local=prefer_free_local,
+            avoid_proven_limited=True,
+        )
+        rationale = (
+            "This is a read-only evidence pass, so Auto kept final verification on a "
+            "healthy free route instead of paying Codex to make no implementation change."
+        )
+    elif role == "final_polish":
         selected = {"backend": "codex", "model": "auto", "source": "auto_role_route"}
         rationale = "The final production polish uses Codex after cheaper implementation and independent review complete."
     elif role == "planning" and complexity in {"medium", "high"} and not prefer_free_local:
@@ -239,6 +346,7 @@ def apply_auto_step_role_policy(
             settings,
             complexity=complexity,
             prefer_local=prefer_free_local,
+            avoid_proven_limited=True,
         )
         rationale = (
             f"Auto honored the workflow free/local preference and selected a free planning model "
@@ -257,13 +365,19 @@ def apply_auto_step_role_policy(
             settings,
             complexity=complexity,
             prefer_local=str(implementation.get("model_provider") or "") != "ollama",
+            avoid_proven_limited=True,
         )
         rationale = "Review uses a different free/lower-cost provider from implementation to reduce context bias."
     elif role == "deployment":
         selected = merged
         rationale = "Deployment keeps its approved route; the workflow approval gate controls execution."
     else:
-        selected = _free_eligible_model(settings, complexity=complexity, prefer_local=True)
+        selected = _free_eligible_model(
+            settings,
+            complexity=complexity,
+            prefer_local=True,
+            avoid_proven_limited=True,
+        )
         rationale = (
             f"Auto selected the configured local/free model for {role} at {complexity} complexity"
             + (", honoring the workflow preference before paid escalation." if prefer_free_local else ".")

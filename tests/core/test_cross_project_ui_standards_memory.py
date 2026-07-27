@@ -53,6 +53,15 @@ def test_project_a_ui_feedback_is_recalled_as_project_b_standard(monkeypatch, tm
     assert "controls dense" in context_for_project_b
     assert "excessive vertical padding" in context_for_project_b
 
+    backend_context = build_standards_context(
+        "Project B backend ticket rules.",
+        board_id=202,
+        include_ui_standards=False,
+    )
+    assert "controls dense" not in backend_context
+    assert "excessive vertical padding" not in backend_context
+    assert "[VISUAL TASTE MEMORY]" not in backend_context
+
     with _session_ctx(factory) as session:
         memory = session.query(OrchestratorUserMemory).filter_by(category="ui_design_standard").one()
         assert memory.scope == "global"
@@ -90,6 +99,37 @@ def test_repeated_ui_feedback_reinforces_one_global_principle(monkeypatch, tmp_p
     context = build_global_user_standards_context()
     assert "reinforced 2x" in context
     assert "responsive flow" in context
+
+
+def test_project_specific_request_is_not_promoted_as_a_global_standard(monkeypatch):
+    from distr.core.workflow.standards_memory import build_global_user_standards_context
+
+    monkeypatch.setattr(
+        "distr.core.orchestrator_memory.list_user_memories",
+        lambda **_kwargs: [
+            {
+                "scope": "global",
+                "category": "quality_standard",
+                "content": (
+                    "Use these exact supplied URLs for ticket PLAYER1-177: "
+                    "https://example.test/artist"
+                ),
+                "evidence_count": 4,
+            },
+            {
+                "scope": "global",
+                "category": "quality_standard",
+                "content": "Always keep raw production secrets out of diagnostic output.",
+                "evidence_count": 2,
+            },
+        ],
+    )
+
+    context = build_global_user_standards_context()
+
+    assert "PLAYER1-177" not in context
+    assert "example.test" not in context
+    assert "raw production secrets" in context
 
 
 def test_project_b_ui_gate_requires_assessment_against_recalled_standards(monkeypatch, tmp_path):

@@ -5,6 +5,9 @@ let currentChatId = null;   // chat currently displayed (view)
 let loadedChatId = null;   // chat that is "loaded" - messages go here, input shown (matches native chat.py)
 let agentCurrentChatId = null;   // chat currently loaded in the voice agent (from desktop); used to show "In agent" in sidebar
 let currentChatSettings = null;
+let currentActiveTurn = null;
+let turnElapsedTimer = null;
+const chatTurnStateById = new Map();
 let isStreaming = false;
 let streamAbortController = null;   // abort controller for current stream (cancel button)
 let contextMenuChatId = null;
@@ -568,7 +571,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // Event Listeners
 function setupEventListeners() {
     newChatBtn.addEventListener('click', () => showNewChatModal());
-    sendButton.addEventListener('click', () => { if (isStreaming) cancelStream(); else sendMessage(); });
+    sendButton.addEventListener('click', () => sendMessage());
+    const turnStopButton = document.getElementById('turnStopButton');
+    if (turnStopButton) turnStopButton.addEventListener('click', () => cancelStream());
     if (speakerToggle) {
         speakerToggle.addEventListener('click', () => {
             ttsEnabled = !ttsEnabled;
@@ -721,7 +726,7 @@ function handleInputKeydown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
-        if (!messageInput.disabled && !sendButton.disabled && !isStreaming) {
+        if (!messageInput.disabled && !sendButton.disabled && (!isStreaming || currentActiveTurn)) {
             sendMessage();
         }
     }
@@ -734,7 +739,7 @@ function handleInputChange() {
     
     // Enable/disable send button
     const canReply = currentChatId == null || loadedChatId === currentChatId;
-    sendButton.disabled = !canReply || !messageInput.value.trim() || isStreaming;
+    sendButton.disabled = !canReply || !messageInput.value.trim() || (isStreaming && !currentActiveTurn);
 }
 
 function getChatWsUrl() {
@@ -817,6 +822,10 @@ function startChatWebSocket(force) {
                 }
                 if (msg.event === 'workflow_event') {
                     handleChatEventWorkflow(msg);
+                    return;
+                }
+                if (msg.event === 'turn_event' || msg.type === 'turn_event') {
+                    handleChatTurnEvent(msg);
                     return;
                 }
                 if (msg.event === 'transcription_progress') {
@@ -934,6 +943,9 @@ function startChatWebSocket(force) {
             if (chatWsSubscribedId != null && chatWs.readyState === WebSocket.OPEN) {
                 chatWs.send(JSON.stringify({ subscribe: chatWsSubscribedId }));
             }
+            // The durable ledger is the recovery source for any events dropped
+            // while the socket was disconnected.
+            recoverTurnState(chatId);
             if (chatWsHeartbeatTimer) clearInterval(chatWsHeartbeatTimer);
             chatWsHeartbeatTimer = setInterval(() => {
                 if (!chatWs || chatWs.readyState !== WebSocket.OPEN) return;
@@ -948,6 +960,18 @@ function startChatWebSocket(force) {
     } catch (e) {
         console.debug('Chat WebSocket error:', e);
     }
+}
+
+function recoverTurnState(chatId) {
+    const requested = Number(chatId);
+    if (!requested) return;
+    fetch(`${API_BASE}/chats/${requested}`)
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (!data || Number(currentChatId) !== requested) return;
+            renderTurnState(data.active_turn, data.turns || []);
+        })
+        .catch(() => {});
 }
 
 /** Track user message content already rendered optimistically by sendMessage()
@@ -2367,6 +2391,7 @@ async function selectChat(chatId) {
         // Discard if a newer selectChat/loadChat has already taken over
         if (seq !== _selectSeq) return;
         renderMessages(data.messages);
+        renderTurnState(data.active_turn, data.turns || []);
         restoreLiveChatState(chatId, data.messages);
         updateChatSettingsDisplay({
             title: data.title || 'New Chat',
@@ -2418,6 +2443,7 @@ async function loadChat(chatId, options = {}) {
         const data = await response.json();
         if (seq !== _selectSeq) return; // superseded by another navigation
         renderMessages(data.messages);
+        renderTurnState(data.active_turn, data.turns || []);
         restoreLiveChatState(chatId, data.messages);
         updateChatSettingsDisplay({
             title: data.title || 'New Chat',
@@ -2536,6 +2562,7 @@ function startEmptyStateAgentWatch() {
 
 function showChatView(isLoaded) {
     stopEmptyStateAgentWatch();
+    document.body.classList.add('chat-has-active-thread');
     emptyState.style.display = 'none';
     chatMessages.style.display = 'flex';
     if (chatSettingsHeader) chatSettingsHeader.style.display = 'flex';
@@ -2577,6 +2604,7 @@ function setViewOnlyChrome(isViewOnly) {
 
 function showEmptyState() {
     stopChatWebSocket();
+    document.body.classList.remove('chat-has-active-thread');
     emptyState.style.display = 'flex';
     chatMessages.style.display = 'none';
     chatSettingsHeader.style.display = 'none';
@@ -3222,6 +3250,220 @@ function renderMessages(messages, preserveOnEmpty) {
     }
     _renderedMessageCount = toRender.length;
     scrollToBottomImmediate();
+}
+
+// ── Durable multi-stage turn activity ──────────────────────────────────────
+
+function turnIsTerminal(turn) {
+    return turn && ['completed', 'failed', 'cancelled'].includes(String(turn.status || '').toLowerCase());
+}
+
+function turnEventPhase(event) {
+    const type = String(event?.event_type || 'turn_started');
+    if (type === 'acknowledgment' || type === 'turn_started') return 'Preparing';
+    if (type === 'tool_started') return event.title || 'Working';
+    if (type === 'tool_completed') return 'Continuing';
+    if (type === 'tool_failed') return 'Needs attention';
+    if (type === 'synthesis_started') return 'Preparing answer';
+    if (type === 'turn_steered') return 'Guidance received';
+    if (type === 'turn_completed') return 'Completed';
+    if (type === 'turn_failed') return 'Failed';
+    if (type === 'turn_cancelled') return 'Stopped';
+    return 'Working';
+}
+
+function turnElapsedLabel(startedAt, completedAt) {
+    const start = new Date(normalizeUtcTimestampInput(startedAt) || startedAt).getTime();
+    const end = completedAt ? new Date(normalizeUtcTimestampInput(completedAt) || completedAt).getTime() : Date.now();
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return '';
+    const seconds = Math.max(0, Math.floor((end - start) / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+function turnEventStatus(event) {
+    const status = String(event?.status || 'running').toLowerCase();
+    return ['running', 'completed', 'failed', 'cancelled', 'skipped', 'passed'].includes(status) ? status : 'running';
+}
+
+function turnEventStepHtml(event) {
+    const status = turnEventStatus(event);
+    const summary = String(event?.summary || '').trim();
+    const detail = String(event?.detail || '').trim();
+    const title = String(event?.title || turnEventPhase(event)).trim();
+    const icon = status === 'running'
+        ? '<span class="turn-step-spinner" aria-hidden="true"></span>'
+        : status === 'failed'
+            ? '<span class="turn-step-mark turn-step-mark--failed" aria-hidden="true">!</span>'
+            : status === 'cancelled'
+                ? '<span class="turn-step-mark" aria-hidden="true">■</span>'
+                : '<span class="turn-step-mark turn-step-mark--complete" aria-hidden="true">✓</span>';
+    return `
+        <details class="turn-step turn-step--${status}" data-turn-event-id="${escapeHtml(event.event_id || '')}">
+            <summary>${icon}<span class="turn-step-title">${escapeHtml(title)}</span><span class="turn-step-time">${escapeHtml(_formatTimestamp(event.timestamp))}</span></summary>
+            ${summary && summary !== title ? `<div class="turn-step-summary">${formatMessage(summary)}</div>` : ''}
+            ${detail && detail !== summary ? `<div class="turn-step-detail">${formatMessage(detail)}</div>` : ''}
+        </details>`;
+}
+
+function createTurnPanel(turn) {
+    const events = Array.isArray(turn?.events) ? turn.events : [];
+    const ack = events.find(event => event.event_type === 'acknowledgment');
+    const latest = events[events.length - 1] || {};
+    const visibleSteps = events.filter(event => !['turn_started', 'acknowledgment', 'turn_completed'].includes(event.event_type));
+    const panel = document.createElement('section');
+    panel.className = `turn-panel turn-panel--${escapeHtml(turn.status || 'running')}`;
+    panel.id = `turnPanel-${Number(turn.turn_id)}`;
+    panel.dataset.turnId = String(turn.turn_id);
+    panel.dataset.lastSequence = String(turn.last_sequence || 0);
+    panel.dataset.startedAt = turn.started_at || '';
+    panel.dataset.completedAt = turn.completed_at || '';
+    panel.setAttribute('aria-label', 'Agent activity');
+    panel.innerHTML = `
+        <div class="turn-panel-head">
+            <div class="turn-panel-copy">
+                <span class="turn-panel-kicker">${turnIsTerminal(turn) ? 'Activity' : 'Working'}</span>
+                <strong class="turn-panel-ack">${escapeHtml(ack?.summary || ack?.title || 'Preparing your response…')}</strong>
+            </div>
+            <div class="turn-panel-state">
+                <span class="turn-panel-phase">${escapeHtml(turnEventPhase(latest))}</span>
+                <span class="turn-panel-elapsed">${escapeHtml(turnElapsedLabel(turn.started_at, turn.completed_at))}</span>
+            </div>
+        </div>
+        <details class="turn-panel-details"${visibleSteps.some(event => event.status === 'failed') ? ' open' : ''}>
+            <summary><span>${visibleSteps.length} step${visibleSteps.length === 1 ? '' : 's'}</span><span class="turn-panel-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="turn-step-list">${visibleSteps.map(turnEventStepHtml).join('')}</div>
+        </details>
+        <span class="sr-only turn-panel-announcement" aria-live="polite"></span>`;
+    return panel;
+}
+
+function insertTurnPanel(panel, turnId) {
+    if (!chatMessages || !panel) return;
+    const anchor = [...chatMessages.querySelectorAll(`[data-turn-chat-id="${Number(turnId)}"]`)]
+        .find(node => node.classList.contains('user'));
+    if (anchor && anchor.parentNode === chatMessages) {
+        insertDomNodeAfter(panel, anchor);
+        return;
+    }
+    const liveAnchor = document.getElementById('streamingAssistantActivity')
+        || document.getElementById('streamingAssistantMessage')
+        || document.getElementById('typingIndicator');
+    if (liveAnchor && liveAnchor.parentNode === chatMessages) chatMessages.insertBefore(panel, liveAnchor);
+    else chatMessages.appendChild(panel);
+}
+
+function upsertTurnPanel(turn) {
+    if (!turn || turn.turn_id == null || !chatMessages) return;
+    const prior = document.getElementById(`turnPanel-${Number(turn.turn_id)}`);
+    const replacement = createTurnPanel(turn);
+    if (prior) {
+        const priorDetails = prior.querySelector('.turn-panel-details');
+        const replacementDetails = replacement.querySelector('.turn-panel-details');
+        if (priorDetails?.open && replacementDetails) replacementDetails.open = true;
+        const openSteps = new Set(
+            [...prior.querySelectorAll('.turn-step[open]')]
+                .map(step => step.dataset.turnEventId)
+                .filter(Boolean)
+        );
+        replacement.querySelectorAll('.turn-step').forEach(step => {
+            if (openSteps.has(step.dataset.turnEventId)) step.open = true;
+        });
+        prior.replaceWith(replacement);
+    }
+    else insertTurnPanel(replacement, turn.turn_id);
+    // Durable activity supersedes legacy tool/workflow cards for the same turn.
+    [...chatMessages.querySelectorAll(`.message.activity[data-turn-chat-id="${Number(turn.turn_id)}"]`)]
+        .forEach(node => node.remove());
+}
+
+function updateTurnComposerState() {
+    const active = currentActiveTurn && !turnIsTerminal(currentActiveTurn);
+    const stop = document.getElementById('turnStopButton');
+    if (stop) stop.hidden = !active;
+    if (messageInput && loadedChatId === currentChatId) {
+        messageInput.disabled = false;
+        messageInput.placeholder = active ? 'Steer the active work…' : 'Send message…';
+    }
+    if (sendButton) {
+        sendButton.title = active ? 'Steer active work' : 'Send';
+        sendButton.setAttribute('aria-label', active ? 'Steer active work' : 'Send message');
+        sendButton.disabled = loadedChatId !== currentChatId || !messageInput.value.trim();
+    }
+}
+
+function scheduleTurnElapsedUpdates() {
+    if (turnElapsedTimer) clearInterval(turnElapsedTimer);
+    turnElapsedTimer = null;
+    if (!currentActiveTurn || turnIsTerminal(currentActiveTurn)) return;
+    turnElapsedTimer = setInterval(() => {
+        document.querySelectorAll('.turn-panel:not(.turn-panel--completed):not(.turn-panel--failed):not(.turn-panel--cancelled)').forEach(panel => {
+            const elapsed = panel.querySelector('.turn-panel-elapsed');
+            if (elapsed) elapsed.textContent = turnElapsedLabel(panel.dataset.startedAt, panel.dataset.completedAt);
+        });
+    }, 1000);
+}
+
+function renderTurnState(activeTurn, turns) {
+    chatTurnStateById.clear();
+    currentActiveTurn = activeTurn && !turnIsTerminal(activeTurn) ? activeTurn : null;
+    const durableTurns = Array.isArray(turns) ? turns : [];
+    durableTurns.forEach(turn => {
+        chatTurnStateById.set(Number(turn.turn_id), turn);
+        upsertTurnPanel(turn);
+    });
+    updateTurnComposerState();
+    scheduleTurnElapsedUpdates();
+}
+
+function handleChatTurnEvent(msg) {
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
+    const event = {
+        chat_id: msg.chat_id,
+        turn_id: msg.turn_id,
+        sequence: msg.sequence,
+        event_id: msg.event_id,
+        event_type: msg.event_type,
+        status: msg.status,
+        title: msg.title,
+        summary: msg.summary,
+        detail: msg.detail,
+        metadata: msg.metadata || {},
+        timestamp: msg.timestamp,
+        completed_at: msg.completed_at
+    };
+    const cached = chatTurnStateById.get(Number(event.turn_id));
+    let turn = cached
+        ? { ...cached, events: [...(cached.events || [])] }
+        : { turn_id: Number(event.turn_id), status: 'running', active: true, started_at: event.timestamp, events: [] };
+    const index = turn.events.findIndex(item => item.event_id === event.event_id);
+    if (index < 0 && Number(event.sequence || 0) <= Number(turn.last_sequence || 0)) return;
+    if (index >= 0) turn.events[index] = event;
+    else turn.events.push(event);
+    turn.events.sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0));
+    turn.last_sequence = Math.max(Number(turn.last_sequence || 0), Number(event.sequence || 0));
+    const wasTerminal = turnIsTerminal(turn);
+    const terminal = ['turn_completed', 'turn_failed', 'turn_cancelled'].includes(event.event_type);
+    if (terminal) {
+        turn.status = event.status;
+        turn.active = false;
+        turn.completed_at = event.completed_at || event.timestamp;
+        currentActiveTurn = null;
+    } else if (!wasTerminal) {
+        turn.status = 'running';
+        turn.active = true;
+        currentActiveTurn = turn;
+    }
+    chatTurnStateById.set(Number(turn.turn_id), turn);
+    upsertTurnPanel(turn);
+    updateTurnComposerState();
+    scheduleTurnElapsedUpdates();
+    const announcement = document.querySelector(`#turnPanel-${Number(turn.turn_id)} .turn-panel-announcement`);
+    if (announcement && (event.event_type === 'acknowledgment' || event.event_type === 'tool_failed')) {
+        announcement.textContent = event.summary || event.title || '';
+    }
+    scrollToBottom();
 }
 
 function formatTime(seconds) {
@@ -3884,7 +4126,31 @@ function formatMessage(text) {
 // Guard: prevent double submission (e.g. Enter + click or double-tap)
 async function sendMessage() {
     const message = messageInput.value.trim();
-    if (!message || isStreaming) return;
+    if (!message) return;
+    if (currentActiveTurn && !turnIsTerminal(currentActiveTurn)) {
+        const turnId = Number(currentActiveTurn.turn_id);
+        messageInput.value = '';
+        messageInput.style.height = 'auto';
+        handleInputChange();
+        sendButton.disabled = true;
+        try {
+            const response = await fetch(`${API_BASE}/chats/${Number(currentChatId)}/turns/${turnId}/steer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.detail || 'Could not steer the active work');
+            if (data.event) handleChatTurnEvent({ type: 'turn_event', event: 'turn_event', ...data.event });
+        } catch (error) {
+            messageInput.value = message;
+            addErrorMessage(error.message || 'Could not steer the active work.');
+        } finally {
+            updateTurnComposerState();
+        }
+        return;
+    }
+    if (isStreaming) return;
     isStreaming = true;
     sendButton.disabled = true;
     if (!loadedChatId || loadedChatId !== currentChatId) {
@@ -4133,6 +4399,7 @@ async function pollUntilAgentResponse(abortSignal) {
             const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
             if (!r || !r.ok) return;
             const data = await r.json();
+            if (currentChatId === myChatId) renderTurnState(data.active_turn, data.turns || []);
             const messages = (data.messages || []);
             const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
@@ -4174,6 +4441,7 @@ async function pollUntilAgentResponse(abortSignal) {
             const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
             if (r && r.ok) {
                 const d = await r.json();
+                renderTurnState(d.active_turn, d.turns || []);
                 const msgs = (d.messages || []);
                 const lastAssistant = msgs.filter(m => m.role === 'assistant').pop();
                 const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
@@ -4235,6 +4503,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
             const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
             if (!r || !r.ok) return;
             const data = await r.json();
+            if (currentChatId === myChatId) renderTurnState(data.active_turn, data.turns || []);
             const messages = (data.messages || []);
             const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
@@ -4275,6 +4544,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
             const r = await fetch(`${API_BASE}/chats/${myChatId}`).catch(() => null);
             if (r && r.ok) {
                 const d = await r.json();
+                renderTurnState(d.active_turn, d.turns || []);
                 const msgs = (d.messages || []);
                 const lastAssistant = msgs.filter(m => m.role === 'assistant').pop();
                 const lastPlain = lastAssistant ? _normalizeMsgPlain(lastAssistant.content) : '';
@@ -4302,21 +4572,13 @@ function cancelStream() {
 
 function setSendButtonStreaming(streaming) {
     if (!sendButton) return;
-    // Keep modal create button in sync — can't create a new chat while agent is responding
+    // The composer remains available for steering. Stop is an explicit,
+    // separate action rather than replacing Send.
     if (modalCreate) modalCreate.disabled = streaming;
-    if (streaming) {
-        if (!sendButton.dataset.originalHtml) {
-            sendButton.dataset.originalHtml = sendButton.innerHTML;
-            sendButton.dataset.originalTitle = sendButton.title || 'Send';
-        }
-        sendButton.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
-        sendButton.title = 'Stop';
-    } else {
-        if (sendButton.dataset.originalHtml) {
-            sendButton.innerHTML = sendButton.dataset.originalHtml;
-            sendButton.title = sendButton.dataset.originalTitle || 'Send';
-        }
-    }
+    const stop = document.getElementById('turnStopButton');
+    if (stop) stop.hidden = !(streaming || currentActiveTurn);
+    if (messageInput && loadedChatId === currentChatId) messageInput.disabled = false;
+    handleInputChange();
 }
 
 function createTypingIndicator() {

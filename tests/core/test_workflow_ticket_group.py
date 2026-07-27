@@ -43,6 +43,10 @@ def test_sequential_ticket_group_starts_one_and_carries_explicit_group(monkeypat
             {"ticket_id": 4, "board_id": 8, "context": "Ticket four", "run_metadata": {"project_id": "1"}},
             {"ticket_id": 3, "board_id": 8, "context": "duplicate"},
         ],
+        run_metadata={
+            "requested_execution_policy": {"read_only": True},
+            "qualification_scenario_id": "multi_ticket_delivery",
+        },
     )
 
     assert result["mode"] == "sequential"
@@ -52,6 +56,12 @@ def test_sequential_ticket_group_starts_one_and_carries_explicit_group(monkeypat
     assert len(calls) == 1
     metadata = calls[0][1]["run_metadata"]
     assert metadata["ticket_group_size"] == 2
+    assert metadata["requested_execution_policy"] == {"read_only": True}
+    assert metadata["qualification_scenario_id"] == "multi_ticket_delivery"
+    assert metadata["ticket_group_common_metadata"] == {
+        "requested_execution_policy": {"read_only": True},
+        "qualification_scenario_id": "multi_ticket_delivery",
+    }
     assert [item["ticket_id"] for item in metadata["ticket_group_items"]] == [3, 4]
     assert all(set(item) <= {"ticket_id", "board_id"} for item in metadata["ticket_group_items"])
 
@@ -150,6 +160,10 @@ def test_group_auto_advance_uses_next_selected_ticket_not_global_queue(monkeypat
             "ticket_group_id": "group-a",
             "ticket_group_index": 0,
             "ticket_group_items": items,
+            "ticket_group_common_metadata": {
+                "requested_execution_policy": {"read_only": True},
+                "qualification_scenario_id": "multi_ticket_delivery",
+            },
         }),
     )
     workflow = SimpleNamespace(run_settings=json.dumps({"execution_mode": "sequential"}))
@@ -188,6 +202,8 @@ def test_group_auto_advance_uses_next_selected_ticket_not_global_queue(monkeypat
     assert calls[0][1]["board_id"] == 5
     assert calls[0][1]["context"] == "Second"
     assert calls[0][1]["run_metadata"]["ticket_group_index"] == 1
+    assert calls[0][1]["run_metadata"]["requested_execution_policy"] == {"read_only": True}
+    assert calls[0][1]["run_metadata"]["qualification_scenario_id"] == "multi_ticket_delivery"
 
 
 def test_ticket_scoped_developer_context_replaces_ambient_project_state():

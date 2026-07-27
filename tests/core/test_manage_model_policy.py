@@ -55,6 +55,9 @@ def test_auto_health_does_not_blame_model_for_cancelled_work(error):
 def test_auto_health_counts_only_route_readiness_failures():
     assert _counts_as_model_health_failure("429 Rate limit exceeded") is True
     assert _counts_as_model_health_failure("Provider unavailable: HTTP 503") is True
+    assert _counts_as_model_health_failure(
+        "404 The free period of this model ended. Please use kilo-auto/free."
+    ) is True
     assert _counts_as_model_health_failure("Missing required Status contract") is False
     assert _counts_as_model_health_failure(
         "Inspection budget exceeded: model used 13 tool calls; this step allows 12."
@@ -340,3 +343,34 @@ def test_auto_role_policy_reserves_codex_for_final_polish(monkeypatch):
     assert route["backend"] == "codex"
     assert route["model"] == "auto"
     assert "final production polish" in route["policy_reason"].lower()
+
+
+def test_auto_role_policy_does_not_spend_codex_on_read_only_final_polish(monkeypatch):
+    from distr.core.project_cli_backends.model_policy import apply_auto_step_role_policy
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.model_policy._free_eligible_model",
+        lambda *_args, **_kwargs: {
+            "backend": "pi",
+            "model_provider": "kilocode",
+            "model": "kilo-auto/free",
+        },
+    )
+    workflow = type("Workflow", (), {"run_settings": json.dumps({"auto_route_models": True})})()
+    route = apply_auto_step_role_policy(
+        {
+            "backend": "pi",
+            "model": "kilo-auto/free",
+            "model_provider": "kilocode",
+            "complexity": "medium",
+            "task_profile": {"read_only": True},
+        },
+        workflow=workflow,
+        config={},
+        settings={},
+        step_role="final_polish",
+    )
+
+    assert route["backend"] == "pi"
+    assert route["model"] == "kilo-auto/free"
+    assert "read-only evidence pass" in route["policy_reason"].lower()

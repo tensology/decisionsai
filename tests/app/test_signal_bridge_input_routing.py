@@ -170,6 +170,73 @@ def test_web_create_chat_initial_message_skips_second_persist(monkeypatch):
     )
 
 
+def test_web_send_preserves_durable_intake_identity(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+
+    captured = []
+
+    class _Decision:
+        handled = False
+
+    class _IntakeService:
+        def ingest(self, intake):
+            captured.append(intake)
+            return _Decision()
+
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service",
+        lambda: _IntakeService(),
+    )
+
+    host = _Host()
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_send_to_agent_requested.emit(
+        808,
+        "Research this artist and summarize the evidence.",
+        False,
+        "openai",
+        "gpt-5.2",
+        {
+            "work_intake": {
+                "source_message_id": "qualification:research:808",
+                "requested_outcome": "A cited research brief",
+                "metadata": {"qualification_campaign_id": "campaign-808"},
+            }
+        },
+    )
+
+    assert len(captured) == 1
+    assert captured[0].source == "web"
+    assert captured[0].source_thread_id == "808"
+    assert captured[0].source_message_id == "qualification:research:808"
+    assert captured[0].requested_outcome == "A cited research brief"
+    assert captured[0].metadata == {
+        "chat_id": 808,
+        "qualification_campaign_id": "campaign-808",
+    }
+    assert host.sent_commands[-1] == (
+        "process_text_input",
+        {
+            "text": "Research this artist and summarize the evidence.",
+            "speak": False,
+            "chat_id": 808,
+            "work_intake_uid": captured[0].intake_uid,
+        },
+    )
+
+
 def test_web_chat_events_are_queued_for_ordered_delivery():
     src = inspect.getsource(SignalBridgeMixin._bridge_signals_to_agent)
 

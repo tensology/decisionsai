@@ -28,7 +28,11 @@ def test_process_text_input_honors_requested_chat_before_appending(monkeypatch):
     assert session._agent_current_chat_id_from_signal == 77
     chat_manager.set_current_chat.assert_called_once_with(77)
     llm_service.on_chat_changed.assert_called_once_with(77)
-    assert session._pending_text_inputs[0][0] == "[Workflow Report]\nDone"
+    assert session._pending_text_inputs[0] == {
+        "text": "[Workflow Report]\nDone",
+        "chat_id": 77,
+        "speak": False,
+    }
 
 
 def test_process_text_input_ignores_stale_requested_chat(monkeypatch):
@@ -55,3 +59,30 @@ def test_process_text_input_ignores_stale_requested_chat(monkeypatch):
     assert not hasattr(session, "_agent_current_chat_id_from_signal")
     chat_manager.set_current_chat.assert_not_called()
     llm_service.on_chat_changed.assert_not_called()
+
+
+def test_process_text_input_preserves_full_request_until_loop_is_ready(monkeypatch):
+    monkeypatch.setattr(command_handler, "_chat_id_exists_for_input", lambda _chat_id: True)
+    chat_manager = MagicMock()
+    llm_service = MagicMock()
+    llm_service._speaker_enabled = True
+    session = SimpleNamespace(
+        _welcome_task=None,
+        tts_service=None,
+        llm_service=llm_service,
+        chat_manager=chat_manager,
+        runner=None,
+        _main_loop=None,
+        logger=MagicMock(),
+    )
+    params = {
+        "text": "Research this without speaking.",
+        "chat_id": 77,
+        "speak": False,
+        "skip_user_persist": True,
+        "work_intake_uid": "intake-77",
+    }
+
+    command_handler._cmd_process_text_input(session, params)
+
+    assert session._pending_text_inputs == [params]

@@ -74,6 +74,21 @@ def test_provider_preflight_nudge_says_no_work_started_and_offers_decision():
     assert "approve" in voice.lower()
 
 
+def test_restart_recovery_nudge_explains_context_is_safe_and_actionable():
+    from distr.core.kanban.ticket_workflow_engagement import build_workflow_waiting_nudge
+
+    text, voice = build_workflow_waiting_nudge(
+        workflow_name="Development",
+        ticket_title="Fix checkout",
+        waiting_kind="restart_recovery",
+    )
+
+    assert "saved ticket, step, and context are intact" in text.lower()
+    assert "continue" in text.lower()
+    assert "stop" in text.lower()
+    assert "restart" in voice.lower()
+
+
 def test_workflow_waiting_state_notifies_with_continue_prompt(monkeypatch):
     captured = []
 

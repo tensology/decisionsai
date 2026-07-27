@@ -131,6 +131,16 @@ def _ticket_requires_visual_evidence(run_data: dict[str, Any]) -> bool:
     return bool(classify_ticket_execution(ticket_text).get("ui_evidence_required"))
 
 
+def _run_requires_read_only_execution(run_data: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(run_data.get(key) or "")
+        for key in ("ticket_title", "ticket_workflow_brief")
+    )
+    from distr.core.workflow.step_executor import _ticket_requires_read_only_execution
+
+    return _ticket_requires_read_only_execution(text)
+
+
 def _configured_vision_review_route(settings: dict[str, Any]) -> dict[str, Any]:
     provider = str(settings.get("vision_llm_provider") or "").strip().lower()
     model = str(settings.get("vision_llm_model") or "").strip()
@@ -218,6 +228,11 @@ def build_run_coordination_plan(
     role_routes: dict[str, dict[str, Any]] = {}
     prior_step_id: int | None = None
     visual_evidence_required = _ticket_requires_visual_evidence(run_data)
+    read_only_execution = _run_requires_read_only_execution(run_data)
+    if read_only_execution:
+        task_profile = _dict(base_route.get("task_profile"))
+        task_profile["read_only"] = True
+        base_route["task_profile"] = task_profile
 
     for index, step in enumerate(steps):
         config = _dict(getattr(step, "config", None))

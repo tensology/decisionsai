@@ -1,6 +1,8 @@
 import asyncio
 import json
+import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -34,7 +36,10 @@ from distr.core.project_cli_backends.registry import (
 from distr.core.workflow.step_executor import (
     StepExecutorMixin,
     _exclude_failed_route_candidates,
+    _exclude_proven_unhealthy_retry_candidates,
+    _known_fallback_blocker,
     _paid_fallback_requires_approval,
+    _project_python_runtime_hint,
     _route_required_capabilities,
     _workflow_run_cancelled,
 )
@@ -44,6 +49,38 @@ from distr.core.kanban.ticket_workflow_engagement import build_route_selection_m
 
 async def _async_value(value):
     return value
+
+
+def test_project_python_runtime_hint_prefers_project_local_environment(tmp_path):
+    runtime = tmp_path / ".venv" / "bin" / "python"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("", encoding="utf-8")
+
+    hint = _project_python_runtime_hint(
+        str(tmp_path),
+        "Run tests/core/test_example.py with pytest.",
+    )
+
+    assert str(runtime) in hint
+    assert "do not use bare" in hint
+
+
+def test_project_python_runtime_hint_does_not_leak_host_venv_to_other_projects(tmp_path):
+    assert _project_python_runtime_hint(
+        str(tmp_path),
+        "Run tests/core/test_example.py with pytest.",
+    ) == ""
+
+
+def test_decisions_runtime_hint_preserves_virtualenv_launcher_path():
+    decisions_root = Path(__file__).resolve().parents[2]
+
+    hint = _project_python_runtime_hint(
+        str(decisions_root),
+        "Run tests/core/test_work_intake_execution_policy.py with pytest.",
+    )
+
+    assert sys.executable in hint
 
 
 def test_cancelled_run_is_detected_before_provider_fallback(monkeypatch):
@@ -81,6 +118,30 @@ def test_free_local_route_requires_approval_before_paid_codex_fallback():
     ) is False
 
 
+def test_claude_fallback_always_requires_explicit_approval_after_paid_route():
+    assert _paid_fallback_requires_approval(
+        {"backend": "codex", "model": "auto"},
+        {"backend": "claude_code", "model": "auto"},
+        {},
+    ) is True
+
+
+def test_known_cli_credit_failure_blocks_repeat_dispatch(monkeypatch):
+    certification = SimpleNamespace(
+        evidence={"error": "Credit balance is too low"},
+    )
+    store = SimpleNamespace(get=lambda *_args: certification)
+    monkeypatch.setattr(
+        "distr.core.qualification.ProviderCertificationStore",
+        lambda: store,
+    )
+
+    assert _known_fallback_blocker(
+        {"backend": "claude_code", "model": "auto"},
+        required_capabilities=["code"],
+    ) == "Credit balance is too low"
+
+
 def test_failed_readiness_model_is_not_recommended_again():
     candidates = [
         {"model": "google/gemma-4-31b-it:free", "name": "Gemma"},
@@ -112,6 +173,25 @@ def test_all_previously_failed_models_are_excluded_from_retry_catalog():
         {"backend": "codex", "model": "auto"},
         {"auto_approve_paid_failover": True},
     ) is False
+
+
+def test_project_execution_limited_model_is_not_offered_as_retry(monkeypatch):
+    def annotate(routes, *, capability):
+        assert capability == "project_execution"
+        return [
+            {**routes[0], "certification_status": "limited"},
+            {**routes[1], "certification_status": "unknown"},
+        ]
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.policy_manager._apply_provider_certification",
+        annotate,
+    )
+
+    assert _exclude_proven_unhealthy_retry_candidates([
+        {"model": "failed:free"},
+        {"model": "untried:free"},
+    ]) == [{"model": "untried:free", "certification_status": "unknown"}]
 
 
 class _FakeAsyncStream:
@@ -195,6 +275,24 @@ def test_read_only_workspace_snapshot_detects_writes_inside_untracked_directorie
     assert "backend/webapp/__init__.py" in delta["added"]
     assert "backend/webapp/settings.py" in delta["modified"]
     assert delta["total_changed"] == 2
+
+
+def test_read_only_workspace_snapshot_ignores_only_configured_runtime_db(tmp_path, monkeypatch):
+    runtime_db = tmp_path / "runtime-db"
+    project_db = tmp_path / "db"
+    runtime_db.mkdir()
+    project_db.mkdir()
+    (runtime_db / "settings.db").write_text("before", encoding="utf-8")
+    (project_db / "schema.sql").write_text("before", encoding="utf-8")
+    monkeypatch.setattr("distr.core.paths.DB_DIR", str(runtime_db))
+
+    before = _workspace_state_snapshot(str(tmp_path))
+    (runtime_db / "settings.db").write_text("after", encoding="utf-8")
+    (project_db / "schema.sql").write_text("after", encoding="utf-8")
+    after = _workspace_state_snapshot(str(tmp_path))
+    delta = _workspace_state_delta(before, after)
+
+    assert delta["modified"] == ["db/schema.sql"]
 
 
 def test_backend_capabilities_are_name_not_backend_based():
@@ -650,6 +748,7 @@ def test_high_complexity_auto_uses_stronger_installed_local_not_configured_9b(mo
         "distr.core.project_cli_backends.models_catalog.pi_cli_models",
         lambda settings: [
             {"id": "ornith:9b", "provider": "ollama", "local": True, "free": True},
+            {"id": "qwen2.5-coder:7b", "provider": "ollama", "local": True, "free": True},
             {"id": "ornith:35b", "provider": "ollama", "local": True, "free": True},
         ],
     )
@@ -668,6 +767,78 @@ def test_high_complexity_auto_uses_stronger_installed_local_not_configured_9b(mo
     assert resolved["backend"] == "pi"
     assert resolved["model_provider"] == "ollama"
     assert resolved["model"] == "ornith:35b"
+
+
+def test_auto_learns_not_to_repeat_a_proven_limited_local_worker(tmp_path, monkeypatch):
+    from distr.core.qualification import ProviderCertificationStore, record_provider_execution
+
+    path = tmp_path / "providers.json"
+    monkeypatch.setenv("DECISIONSAI_PROVIDER_CERTIFICATIONS", str(path))
+    record_provider_execution(
+        ProviderCertificationStore(path),
+        provider="ollama",
+        model="ornith:9b",
+        capabilities=["project_execution"],
+        success=False,
+        route_failure=False,
+        evidence={"reason": "failed completion contract"},
+    )
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+        lambda settings: [
+            {"id": "ornith:9b", "provider": "ollama", "local": True, "free": True},
+            {"id": "ornith:35b", "provider": "ollama", "local": True, "free": True},
+        ],
+    )
+
+    resolved = apply_auto_step_role_policy(
+        {"backend": "pi", "model": "auto", "complexity": "medium"},
+        workflow=type(
+            "Workflow",
+            (),
+            {"run_settings": '{"auto_route_models": true, "prefer_free_local": true}'},
+        )(),
+        config={"model_policy": {"mode": "auto", "prefer_local": True}},
+        settings={"coding_llm_provider": "ollama", "coding_llm_model": "ornith:9b"},
+        step_role="planning",
+    )
+
+    assert resolved["model"] == "ornith:35b"
+
+
+def test_auto_avoids_openrouter_free_catalog_during_real_429_cooldown(monkeypatch):
+    from distr.core.project_cli_backends.model_policy import _free_eligible_model
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.policy_manager._openrouter_free_cooldown_active",
+        lambda: True,
+    )
+    settings = {
+        "_pi_cli_models_cache": [
+            {
+                "id": "vendor/coder:free",
+                "provider": "openrouter",
+                "free": True,
+                "scope": "scoped",
+            },
+            {
+                "id": "openrouter/free",
+                "provider": "kilocode",
+                "free": True,
+                "scope": "scoped",
+            },
+        ]
+    }
+
+    selected = _free_eligible_model(
+        settings,
+        complexity="medium",
+        prefer_local=True,
+        avoid_proven_limited=True,
+    )
+
+    assert selected["model"] == "openrouter/free"
+    assert selected["provider"] == "kilocode"
 
 
 def test_auto_model_selection_reuses_run_scoped_catalog_cache(monkeypatch):
@@ -689,6 +860,47 @@ def test_auto_model_selection_reuses_run_scoped_catalog_cache(monkeypatch):
     selected = _free_eligible_model(settings, complexity="high", prefer_local=True)
 
     assert selected["model"] == "ornith:35b"
+
+
+def test_free_eligible_model_never_silently_selects_a_paid_scoped_route():
+    from distr.core.project_cli_backends.model_policy import _free_eligible_model
+
+    selected = _free_eligible_model(
+        {
+            "_pi_cli_models_cache": [
+                {
+                    "id": "moonshotai/kimi-k2.5",
+                    "provider": "openrouter",
+                    "free": False,
+                    "scope": "scoped",
+                    "tier": "high",
+                },
+                {
+                    "id": "provider/coder:free",
+                    "provider": "openrouter",
+                    "free": True,
+                    "scope": "available",
+                    "tier": "standard",
+                },
+            ],
+        },
+        complexity="high",
+        prefer_local=False,
+    )
+
+    assert selected["model"] == "provider/coder:free"
+    assert selected["provider"] == "openrouter"
+
+
+@pytest.mark.parametrize("message", [
+    "401 status code (no body)",
+    "402 Add credits to continue, or switch to a free model",
+    "Unauthorized",
+])
+def test_auth_and_credit_responses_count_as_route_health_failures(message):
+    from distr.core.project_cli_backends.policy_manager import _counts_as_model_health_failure
+
+    assert _counts_as_model_health_failure(message) is True
 
 
 def test_route_selection_message_names_model_role_and_reason_plainly():
@@ -953,6 +1165,93 @@ def test_pi_workflow_command_requires_exact_expected_output_labels():
     assert system_prompt.index("context_packet: <value>") < system_prompt.index("Status:")
 
 
+def test_pi_tracked_mutation_uses_terminal_one_shot_instead_of_fire_and_forget_rpc(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr("distr.core.pi_rpc.PiRpcSession.find_pi", lambda: "/usr/bin/pi")
+
+    async def rpc_must_not_be_used(*_args, **_kwargs):
+        raise AssertionError("tracked ticket work must not use fire-and-forget RPC")
+
+    monkeypatch.setattr("distr.core.pi_rpc.get_or_create_rpc_session", rpc_must_not_be_used)
+    final_event = json.dumps({
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Status: completed\nSummary: Updated README."}],
+        },
+    })
+    process = _FakeAsyncProcess([final_event])
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.registry.asyncio.create_subprocess_exec",
+        lambda *_args, **_kwargs: _async_value(process),
+    )
+    task = ProjectTask(
+        project_id=12,
+        project_name="Pizza House",
+        folder=str(tmp_path),
+        instruction="Update README.",
+        origin="initiative",
+        ticket_id=208,
+        adapter_options={"mutation_expected": True},
+    )
+
+    result = asyncio.run(PiBackend().send_task(task))
+
+    assert result.engine == "pi_cli"
+    assert result.output == "Status: completed\nSummary: Updated README."
+
+
+def test_pi_tracked_mutation_finalizes_empty_tool_turn_in_same_session(monkeypatch, tmp_path):
+    monkeypatch.setattr("distr.core.pi_rpc.PiRpcSession.find_pi", lambda: "/usr/bin/pi")
+    initial = _FakeAsyncProcess([json.dumps({"type": "agent_end", "messages": []})])
+    final_report = (
+        "Status: completed\nSummary: Updated README usage.\n"
+        "Files changed: README.md\nCommands run: none\nBlockers: none"
+    )
+    finalized = _FakeAsyncProcess([
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": final_report}],
+            },
+        }),
+        json.dumps({"type": "agent_end", "messages": []}),
+    ])
+    processes = iter([initial, finalized])
+    commands = []
+
+    def fake_process(*args, **kwargs):
+        commands.append(list(args))
+        return _async_value(next(processes))
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.registry.asyncio.create_subprocess_exec",
+        fake_process,
+    )
+    task = ProjectTask(
+        project_id=12,
+        project_name="Pizza House",
+        folder=str(tmp_path),
+        instruction="Update README.",
+        origin="initiative",
+        ticket_id=209,
+        execution_session_id=291,
+        adapter_options={"mutation_expected": True},
+    )
+
+    result = asyncio.run(PiBackend().send_task(task))
+
+    assert result.success is True
+    assert result.output == final_report
+    assert len(commands) == 2
+    assert "--session-id" in commands[0]
+    assert commands[0][commands[0].index("--session-id") + 1] == commands[1][commands[1].index("--session-id") + 1]
+    assert "--no-tools" in commands[1]
+
+
 def test_pi_preserves_opening_handoff_fields_and_terminal_contract_in_long_output(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "distr.core.pi_rpc.PiRpcSession.find_pi",
@@ -1108,10 +1407,25 @@ def test_pi_read_only_workflow_step_excludes_mutating_tools():
 
     command = _pi_print_command("pi", task)
 
-    assert command[command.index("--tools") + 1] == "read,grep,find,ls"
+    assert command[command.index("--tools") + 1] == "read,grep,find,ls,exec"
+    assert command[command.index("--extension") + 1].endswith("pi_extensions/read_only_exec.ts")
     assert "bash" not in command
     assert "edit" not in command
     assert "write" not in command
+
+
+def test_pi_read_only_exec_allows_project_virtualenv_pytest_without_shell_activation():
+    from pathlib import Path
+
+    extension = (
+        Path(__file__).resolve().parents[2]
+        / "distr/core/project_cli_backends/pi_extensions/read_only_exec.ts"
+    ).read_text(encoding="utf-8")
+
+    assert r"\/(?:Users|home)\/" in extension
+    assert r"\.virtualenvs\/" in extension
+    assert "invoke its bin/python directly with -m pytest" in extension
+    assert "never prefix a command with cd or shell operators" in extension
 
 
 def test_pi_tool_free_synthesis_step_disables_all_tools():
@@ -1134,6 +1448,31 @@ def test_pi_tool_free_synthesis_step_disables_all_tools():
     assert "--tools" not in command
 
 
+def test_pi_workflow_system_prompt_exposes_tool_budget_and_requires_a_final_turn():
+    task = ProjectTask(
+        project_id=12,
+        project_name="Example Project",
+        folder="/tmp/example-project",
+        instruction="Implement the focused ticket.",
+        origin="workflow",
+        adapter_options={
+            "step_role": "implementation",
+            "inspection_budget": {
+                "max_tool_calls": 12,
+                "hard_max_tool_calls": 18,
+                "enforcement": "soft",
+            },
+        },
+    )
+
+    command = _pi_print_command("pi", task)
+    system_prompt = command[command.index("--append-system-prompt") + 1]
+
+    assert "use at most 12 project-tool calls" in system_prompt
+    assert "never exceed 18" in system_prompt
+    assert "reserve context and a final turn" in system_prompt
+
+
 def test_pi_read_only_review_can_validate_public_sources_without_mutating_files():
     task = ProjectTask(
         project_id=12,
@@ -1146,7 +1485,7 @@ def test_pi_read_only_review_can_validate_public_sources_without_mutating_files(
 
     command = _pi_print_command("pi", task)
 
-    assert command[command.index("--tools") + 1] == "read,grep,find,ls,web_search,web_fetch"
+    assert command[command.index("--tools") + 1] == "read,grep,find,ls,exec,web_search,web_fetch"
     assert "bash" not in command
     assert "edit" not in command
     assert "write" not in command
@@ -1193,6 +1532,148 @@ def test_pi_empty_success_is_classified_as_failed_noop(monkeypatch, tmp_path):
     assert subprocess_kwargs["limit"] > 64 * 1024
 
 
+def test_pi_workflow_resumes_same_session_without_tools_to_collect_missing_report(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "distr.core.pi_rpc.PiRpcSession.find_pi",
+        lambda: "/usr/bin/pi",
+    )
+    first = _FakeAsyncProcess([
+        json.dumps({
+            "type": "agent_end",
+            "messages": [{
+                "role": "assistant",
+                "content": [{"type": "toolCall", "name": "read", "arguments": {"path": "models.py"}}],
+            }],
+        }),
+    ])
+    second = _FakeAsyncProcess([
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "changed_files: backend/diagnostics.py\n"
+                        "command_log: pytest diagnostics\n"
+                        "Status: completed\n"
+                        "Summary: Device diagnostics implemented.\n"
+                        "Files changed: backend/diagnostics.py\n"
+                        "Commands run: pytest diagnostics\n"
+                        "Blockers: none"
+                    ),
+                }],
+            },
+        }),
+        json.dumps({"type": "agent_end", "messages": []}),
+    ])
+    processes = iter([first, second])
+    commands: list[tuple[str, ...]] = []
+
+    def create_process(*args, **_kwargs):
+        commands.append(tuple(str(item) for item in args))
+        return _async_value(next(processes))
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.registry.asyncio.create_subprocess_exec",
+        create_process,
+    )
+    task = ProjectTask(
+        project_id=12,
+        project_name="Player project",
+        folder=str(tmp_path),
+        instruction="Implement device diagnostics.",
+        origin="workflow",
+        model="free/coder",
+        run_id=142,
+        step_id=2055,
+        execution_session_id=244,
+        adapter_options={
+            "model_provider": "openrouter",
+            "expected_outputs": ["changed_files", "command_log"],
+        },
+    )
+    events: list[dict] = []
+
+    result = asyncio.run(PiBackend().send_task(task, events.append))
+
+    assert result.success is True
+    assert "Device diagnostics implemented" in result.output
+    assert len(commands) == 2
+    initial_session_id = commands[0][commands[0].index("--session-id") + 1]
+    final_session_id = commands[1][commands[1].index("--session-id") + 1]
+    assert initial_session_id == final_session_id
+    assert "--no-tools" not in commands[0]
+    assert "--no-tools" in commands[1]
+    assert any(event.get("type") == "workflow_report_finalization_started" for event in events)
+    assert any(event.get("type") == "workflow_report_finalization_finished" for event in events)
+
+
+def test_pi_recovers_missing_finish_reason_by_finalizing_same_session(monkeypatch, tmp_path):
+    monkeypatch.setattr("distr.core.pi_rpc.PiRpcSession.find_pi", lambda: "/usr/bin/pi")
+    first = _FakeAsyncProcess([
+        json.dumps({
+            "type": "message_end",
+            "errorMessage": "Stream ended without finish_reason",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "I inspected the requested files."}],
+            },
+        }),
+        json.dumps({"type": "agent_end", "messages": []}),
+    ])
+    second = _FakeAsyncProcess([
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "context_packet: Ticket scope and evidence gates inspected.\n"
+                        "unknowns: None.\n"
+                        "Status: completed\n"
+                        "Summary: Read-only audit complete.\n"
+                        "Files changed: none\nCommands run: none\nBlockers: none"
+                    ),
+                }],
+            },
+        }),
+        json.dumps({"type": "agent_end", "messages": []}),
+    ])
+    processes = iter([first, second])
+    commands = []
+
+    def create_process(*args, **_kwargs):
+        commands.append(tuple(str(item) for item in args))
+        return _async_value(next(processes))
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.registry.asyncio.create_subprocess_exec",
+        create_process,
+    )
+    task = ProjectTask(
+        project_id=12,
+        project_name="Acceptance fixture",
+        folder=str(tmp_path),
+        instruction="Audit the evidence gates.",
+        origin="workflow",
+        model="ornith:35b",
+        execution_session_id=244,
+        adapter_options={
+            "model_provider": "ollama",
+            "expected_outputs": ["context_packet", "unknowns"],
+        },
+    )
+
+    result = asyncio.run(PiBackend().send_task(task))
+
+    assert result.success is True
+    assert "Status: completed" in result.output
+    assert len(commands) == 2
+    assert "--no-tools" in commands[1]
+
+
 def test_pi_stops_overbroad_inspection_at_the_configured_tool_budget(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "distr.core.pi_rpc.PiRpcSession.find_pi",
@@ -1224,6 +1705,60 @@ def test_pi_stops_overbroad_inspection_at_the_configured_tool_budget(monkeypatch
     assert "used 3 tool calls" in result.error
     assert process.returncode == -15
     assert any(event.get("type") == "inspection_budget_exceeded" for event in events)
+
+
+def test_pi_budget_ceiling_finalizes_durable_workflow_without_more_tools(monkeypatch, tmp_path):
+    monkeypatch.setattr("distr.core.pi_rpc.PiRpcSession.find_pi", lambda: "/usr/bin/pi")
+    tool_event = json.dumps({"type": "tool_execution_start", "toolName": "read"})
+    first = _FakeAsyncProcess([tool_event, tool_event, tool_event])
+    second = _FakeAsyncProcess([
+        json.dumps({
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "context_packet: Existing evidence is sufficient.\n"
+                        "unknowns: None.\n"
+                        "Status: completed\nSummary: Audit complete.\n"
+                        "Files changed: none\nCommands run: none\nBlockers: none"
+                    ),
+                }],
+            },
+        }),
+        json.dumps({"type": "agent_end", "messages": []}),
+    ])
+    processes = iter([first, second])
+    commands = []
+
+    def create_process(*args, **_kwargs):
+        commands.append(tuple(str(item) for item in args))
+        return _async_value(next(processes))
+
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.registry.asyncio.create_subprocess_exec",
+        create_process,
+    )
+    task = ProjectTask(
+        project_id=12,
+        project_name="Acceptance fixture",
+        folder=str(tmp_path),
+        instruction="Audit the evidence gates.",
+        origin="workflow",
+        execution_session_id=244,
+        adapter_options={
+            "inspection_budget": {"max_tool_calls": 2},
+            "expected_outputs": ["context_packet", "unknowns"],
+        },
+    )
+
+    result = asyncio.run(PiBackend().send_task(task))
+
+    assert result.success is True
+    assert "Status: completed" in result.output
+    assert len(commands) == 2
+    assert "--no-tools" in commands[1]
 
 
 def test_pi_soft_inspection_budget_allows_small_overage_to_finish(monkeypatch, tmp_path):
@@ -1402,6 +1937,172 @@ Blockers: none.
     ) == []
 
 
+def test_router_accepts_standard_cli_final_audit_headings_for_non_ui_ticket():
+    from distr.core.workflow.router import _missing_expected_outputs
+
+    output = """Status: completed
+Final fixes: None required.
+Tests run: node --test passed 11/11.
+Security: no credentials or unsafe defaults found.
+UI assessment: N/A; validation logic only and no UI files changed.
+Ship verdict: Ready for ticket scope.
+Blockers: None.
+"""
+
+    assert _missing_expected_outputs(
+        output,
+        [
+            "final_fixes",
+            "final_check_results",
+            "final_security_audit",
+            "final_browser_evidence",
+            "visual_quality_verdict",
+            "ship_verdict",
+        ],
+    ) == []
+
+
+def test_final_polish_rejects_hold_even_when_all_expected_headings_exist():
+    from distr.core.workflow.router import _release_hold_findings
+
+    output = """Status: completed
+Final fixes: None required.
+Tests run: node tests passed.
+Security: no findings.
+UI assessment: Existing screenshots predate the final change.
+Ship verdict: HOLD pending fresh browser evidence.
+Blockers: Chromium could not launch in the current environment.
+"""
+
+    findings = _release_hold_findings(output, {"step_role": "final_polish"})
+
+    assert any("HOLD" in item for item in findings)
+    assert any("blocker" in item.lower() for item in findings)
+    assert any("browser evidence" in item.lower() for item in findings)
+
+
+def test_release_hold_gate_does_not_apply_to_reporting_transform():
+    from distr.core.workflow.router import _release_hold_findings
+
+    assert _release_hold_findings(
+        "Ship verdict: HOLD pending evidence.",
+        {"step_role": "reporting"},
+    ) == []
+
+
+def test_release_hold_gate_applies_to_independent_review():
+    from distr.core.workflow.router import _release_hold_findings
+
+    findings = _release_hold_findings(
+        "Ship verdict: HOLD. Blockers: Playwright could not launch.",
+        {"step_role": "review"},
+    )
+
+    assert findings
+
+
+def test_release_hold_gate_accepts_explicit_no_blockers_followed_by_context():
+    from distr.core.workflow.router import _release_hold_findings
+
+    findings = _release_hold_findings(
+        "Ship verdict: PASS.\nBlockers: None. The earlier provider 429 was recovered.",
+        {"step_role": "review"},
+    )
+
+    assert findings == []
+
+
+def test_host_browser_recovery_runs_exact_project_local_test_and_requires_fresh_viewports(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+    from distr.core.workflow.verification import recover_blocked_browser_validation
+
+    test_file = tmp_path / "test" / "keyboard-focus.e2e.mjs"
+    test_file.parent.mkdir()
+    test_file.write_text("// project test", encoding="utf-8")
+    observed = {}
+
+    def run(argv, **kwargs):
+        observed.update({"argv": argv, **kwargs})
+        evidence = tmp_path / "test" / "evidence"
+        evidence.mkdir()
+        (evidence / "desktop-focus.png").write_bytes(b"desktop")
+        (evidence / "mobile-focus.png").write_bytes(b"mobile")
+        return SimpleNamespace(returncode=0, stdout="21 desktop; 19 mobile", stderr="")
+
+    monkeypatch.setattr("distr.core.workflow.verification._project_folder", lambda _id: str(tmp_path))
+    monkeypatch.setattr("distr.core.workflow.verification.subprocess.run", run)
+
+    recovered = recover_blocked_browser_validation(
+        "Playwright was blocked because Chromium could not launch. Run `node test/keyboard-focus.e2e.mjs`.",
+        project_id=12,
+    )
+
+    assert recovered["passed"] is True
+    assert observed["argv"] == ["node", "test/keyboard-focus.e2e.mjs"]
+    assert recovered["desktop_and_mobile"] is True
+
+
+def test_host_browser_recovery_handles_cli_allowlist_block(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from distr.core.workflow.verification import recover_blocked_browser_validation
+
+    test_file = tmp_path / "test" / "keyboard-focus.e2e.mjs"
+    test_file.parent.mkdir()
+    test_file.write_text("// project test", encoding="utf-8")
+
+    def run(_argv, **_kwargs):
+        evidence = tmp_path / "test" / "evidence"
+        evidence.mkdir()
+        (evidence / "desktop-focus.png").write_bytes(b"desktop")
+        (evidence / "mobile-focus.png").write_bytes(b"mobile")
+        return SimpleNamespace(returncode=0, stdout="passed", stderr="")
+
+    monkeypatch.setattr("distr.core.workflow.verification._project_folder", lambda _id: str(tmp_path))
+    monkeypatch.setattr("distr.core.workflow.verification.subprocess.run", run)
+
+    recovered = recover_blocked_browser_validation(
+        "Cannot run `node test/keyboard-focus.e2e.mjs` - exec tool command not in allowlist. "
+        "No browser access in review mode.",
+        project_id=12,
+    )
+
+    assert recovered["passed"] is True
+
+
+def test_host_browser_recovery_rejects_command_outside_project(tmp_path, monkeypatch):
+    from distr.core.workflow.verification import recover_blocked_browser_validation
+
+    outside = tmp_path.parent / "evil.e2e.mjs"
+    outside.write_text("// no", encoding="utf-8")
+    monkeypatch.setattr("distr.core.workflow.verification._project_folder", lambda _id: str(tmp_path))
+
+    recovered = recover_blocked_browser_validation(
+        f"Chromium was blocked. Run `node {outside}`.",
+        project_id=12,
+    )
+
+    assert recovered == {}
+
+
+def test_git_status_context_is_scoped_to_the_configured_project_directory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from distr.core.project_cli_backends.registry import _git_status_short
+
+    observed = {}
+
+    def run(argv, *, cwd, timeout):
+        observed.update({"argv": argv, "cwd": cwd, "timeout": timeout})
+        return SimpleNamespace(returncode=0, stdout=" M styles.css\n")
+
+    monkeypatch.setattr("distr.core.rtk_support.run_argv_command", run)
+
+    assert _git_status_short(str(tmp_path)) == [" M styles.css"]
+    assert observed["argv"] == ["git", "status", "--short", "--", "."]
+    assert observed["cwd"] == str(tmp_path)
+
+
 def test_pi_workflow_report_rejects_completed_status_without_named_handoff_fields():
     error = _pi_workflow_report_error(
         "Status: completed\nSummary: I verified the ticket.",
@@ -1471,6 +2172,66 @@ def test_unavailable_llm_judge_preserves_explicit_success(monkeypatch):
     })()
     assert _run_verification(step, "Status: completed\nTicket and route are explicit.", True)
     assert not _run_verification(step, "Status: failed", False)
+
+
+def test_llm_judge_rejects_worker_that_declares_unresolved_correction(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.orchestrator_validator.run_orchestrator_validator_judgment",
+        lambda **kwargs: {"passed": True, "rationale": "missed buried blocker"},
+    )
+    step = type("Step", (), {
+        "id": 1,
+        "validation_type": "llm_judgment",
+        "validation_prompt": "No unresolved ticket-blocking findings remain.",
+    })()
+
+    assert not _run_verification(
+        step,
+        (
+            "Status: completed. Read-only review completed; correction is required "
+            "before scoped-memory isolation can be considered validated."
+        ),
+        True,
+    )
+
+
+def test_llm_judge_does_not_treat_no_correction_required_as_failure(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.orchestrator_validator.run_orchestrator_validator_judgment",
+        lambda **kwargs: {"passed": True, "rationale": "validated"},
+    )
+    step = type("Step", (), {
+        "id": 1,
+        "validation_type": "llm_judgment",
+        "validation_prompt": "No unresolved ticket-blocking findings remain.",
+    })()
+
+    assert _run_verification(
+        step,
+        "Status: completed. No correction is required; all checks passed.",
+        True,
+    )
+
+
+def test_reporting_validator_may_truthfully_report_an_open_blocker(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.orchestrator_validator.run_orchestrator_validator_judgment",
+        lambda **kwargs: {"passed": True, "rationale": "accurate report"},
+    )
+    step = type("Step", (), {
+        "id": 1,
+        "validation_type": "llm_judgment",
+        "validation_prompt": (
+            "Ticket contains summary, evidence, commands, changed files, "
+            "risks/blockers, and next actions."
+        ),
+    })()
+
+    assert _run_verification(
+        step,
+        "Status: completed. Correction is required; the blocker is documented.",
+        True,
+    )
 
 
 def test_dual_llm_judge_fails_closed_when_validator_is_unavailable(monkeypatch):
@@ -1748,6 +2509,87 @@ def test_provider_billing_messages_fail_closed(message):
     assert _agent_result_passed(message) is False
 
 
+def test_qualification_fault_requires_process_switch_and_is_consumed_once(monkeypatch):
+    from distr.core.workflow.step_executor import _consume_qualification_fault
+
+    run_data = {
+        "qualification_scenario_id": "local_model_timeout",
+        "qualification_injected_failure": "timeout",
+    }
+    monkeypatch.delenv("DECISIONS_ENABLE_QUALIFICATION_FAULTS", raising=False)
+    assert not _consume_qualification_fault(
+        run_data, expected="timeout", stage="worker_dispatch:1"
+    )
+
+    monkeypatch.setenv("DECISIONS_ENABLE_QUALIFICATION_FAULTS", "1")
+    assert _consume_qualification_fault(
+        run_data, expected="timeout", stage="worker_dispatch:1"
+    )
+    assert not _consume_qualification_fault(
+        run_data, expected="timeout", stage="worker_dispatch:1"
+    )
+    assert not _consume_qualification_fault(
+        run_data, expected="timeout", stage="worker_dispatch:2"
+    )
+    assert run_data["qualification_failure_observed"] is True
+
+
+def test_worker_safety_gate_rejects_explicit_unsafe_and_scope_escape():
+    from distr.core.project_cli_backends.base import BackendTaskResult
+    from distr.core.workflow.step_executor import _worker_result_safety_issue
+
+    explicit = BackendTaskResult(
+        success=True,
+        backend_id="pi",
+        engine="pi",
+        diagnostics={"unsafe_artifact": True, "safety_reason": "unsafe file"},
+    )
+    escaped = BackendTaskResult(
+        success=True,
+        backend_id="pi",
+        engine="pi",
+        workspace_state_delta={"outside_scope_paths": ["/tmp/escape"]},
+    )
+    safe = BackendTaskResult(
+        success=True,
+        backend_id="pi",
+        engine="pi",
+        output="Completed with evidence.",
+    )
+
+    assert _worker_result_safety_issue(explicit) == "unsafe file"
+    assert "outside the approved project scope" in _worker_result_safety_issue(escaped)
+    assert _worker_result_safety_issue(safe) == ""
+
+
+def test_planning_handoff_is_judged_by_its_named_contract_not_ticket_completion():
+    from distr.core.workflow.step_executor import _planning_handoff_contract_complete
+
+    output = """
+    context_packet: Ticket scope and project route are understood.
+    unknowns: Exact test result is intentionally deferred to implementation.
+    route_recommendation: Use the configured test-capable worker next.
+    ui_design_read_if_applicable: N/A — backend-only verification ticket.
+
+    Status: failed
+    Blocker: The test suite has not run yet.
+    """
+
+    assert _planning_handoff_contract_complete(
+        output,
+        [
+            "context_packet",
+            "unknowns",
+            "route_recommendation",
+            "ui_design_read_if_applicable",
+        ],
+    )
+    assert not _planning_handoff_contract_complete(
+        "context_packet: partial",
+        ["context_packet", "unknowns"],
+    )
+
+
 def test_runtime_provider_failover_can_be_disabled_or_scoped():
     assert StepExecutorMixin._runtime_provider_fallback_route(
         {"backend": "pi"},
@@ -1877,6 +2719,67 @@ def test_opencode_workflow_rejects_success_without_completion_report(monkeypatch
 
     assert result.success is False
     assert result.error.startswith("OpenCode exited successfully but returned no completion report")
+
+
+def test_mutating_execution_rejects_empty_success_without_workspace_evidence():
+    from distr.core.project_cli_backends.registry import _completion_contract_error
+
+    result = BackendTaskResult(True, "pi", "pi_rpc", output="")
+
+    error = _completion_contract_error(
+        result,
+        read_only_expected=False,
+        mutation_expected=True,
+        workspace_state_delta={"changed": False},
+        normalized_result={
+            "summary": "",
+            "output": "",
+            "artifacts": [],
+            "memory_delta": {"changed_files": []},
+        },
+    )
+
+    assert error == (
+        "Worker claimed success without a non-empty completion report and "
+        "an observed project workspace change or artifact."
+    )
+
+
+def test_mutating_execution_accepts_report_with_observed_workspace_change():
+    from distr.core.project_cli_backends.registry import _completion_contract_error
+
+    result = BackendTaskResult(True, "kilocode", "opencode", output="Status: completed")
+
+    error = _completion_contract_error(
+        result,
+        read_only_expected=False,
+        mutation_expected=True,
+        workspace_state_delta={"changed": True, "modified": ["README.md"]},
+        normalized_result={
+            "summary": "Updated the README.",
+            "output": "Status: completed",
+            "artifacts": [],
+            "memory_delta": {"changed_files": []},
+        },
+    )
+
+    assert error == ""
+
+
+def test_read_only_execution_rejects_a_workspace_change():
+    from distr.core.project_cli_backends.registry import _completion_contract_error
+
+    result = BackendTaskResult(True, "openrouter", "pi", output="Status: completed")
+
+    error = _completion_contract_error(
+        result,
+        read_only_expected=True,
+        mutation_expected=False,
+        workspace_state_delta={"changed": True, "modified": ["app.py"]},
+        normalized_result={"summary": "Reviewed app.py.", "output": "Status: completed"},
+    )
+
+    assert error == "Worker claimed success without the required read-only workspace boundary."
 
 
 @pytest.mark.parametrize("backend_class", ["CodexBackend", "CursorBackend"])

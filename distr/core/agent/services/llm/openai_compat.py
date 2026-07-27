@@ -311,6 +311,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
                 # Feed tool results back to the LLM for the next round
                 # Pass tools so the LLM can keep calling tools if needed
+                try:
+                    from distr.core.chat_turns import begin_synthesis
+
+                    begin_synthesis(current_chat_id)
+                except Exception:
+                    logger.debug("Could not mark chat synthesis", exc_info=True)
                 follow_up_content, follow_up_tool_calls = await self._process_follow_up(tools_list=tools_list)
                 if not follow_up_tool_calls:
                     await self._auto_send_file_to_telegram()
@@ -672,6 +678,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
         branch_failed = False
         tickets_verified = self._tickets_verified_since_last_user()
         for idx, tc in enumerate(tool_calls):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            try:
+                from distr.core.chat_turns import apply_pending_steering_to_messages
+
+                apply_pending_steering_to_messages(self, chat_id)
+            except Exception:
+                logger.debug("Could not apply pending chat steering", exc_info=True)
             func_name = tc["function"]["name"]
             decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             try:
@@ -752,6 +765,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if func_name in self._tools_dict:
                 tool = self._tools_dict[func_name]
                 status = "completed"
+                from distr.core.agent.tool_audit import record_tool_start
+
+                record_tool_start(chat_id, func_name)
                 try:
                     result = await self._run_tool_with_timeout(tool, func_args, func_name)
                 except asyncio.CancelledError:
@@ -762,7 +778,6 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     branch_failed = True
                     logger.error("Error executing tool %s: %s", func_name, e, exc_info=True)
 
-                chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                 from distr.core.agent.tool_audit import record_tool_execution
                 record_tool_execution(chat_id, func_name, str(result), status, event_queue=self.event_queue)
 
@@ -778,13 +793,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
             else:
                 matched = self._fuzzy_match_tool(func_name) if hasattr(self, '_fuzzy_match_tool') else None
                 if matched:
+                    from distr.core.agent.tool_audit import record_tool_start
+
+                    record_tool_start(chat_id, matched.name, instruction_hint=f"Matched from {func_name}")
                     try:
                         result = matched._run(**json.loads(tc["function"].get("arguments", "{}")))
                         status = "completed"
                     except Exception as e:
                         result = f"Error: {e}"
                         status = "failed"
-                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, matched.name, str(result), status, event_queue=self.event_queue)
                     resp = {"tool_call_id": tc["id"], "role": "tool", "name": matched.name, "content": str(result)}

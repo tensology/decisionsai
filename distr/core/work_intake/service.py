@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import asdict, replace
 from typing import Any
@@ -19,20 +20,114 @@ from .contracts import WorkIntake, WorkIntakeAction, WorkIntakeDecision
 
 logger = logging.getLogger(__name__)
 
-_EXECUTE_RE = re.compile(r"\b(run|execute|start|push|send)\b.{0,30}\b(workflow|loop)\b|\b(push|send)\s+(it|this|ticket)\s+(into|to|through)\s+(the\s+)?(workflow|loop)\b", re.I | re.S)
-_TICKET_RE = re.compile(r"\b(create|make|add|open|log|raise)\b.{0,24}\b(ticket|task|work item)\b|\b(ticket|task)\s*:\s*", re.I | re.S)
+_EXECUTE_RE = re.compile(
+    r"\b(run|execute|start|push|send)\b.{0,120}\b(workflow|loop)\b"
+    r"|\b(push|send)\s+(it|this|ticket)\s+(into|to|through)\s+"
+    r"(?:the\s+|a\s+|configured\s+)?(workflow|loop)\b",
+    re.I | re.S,
+)
+_TICKET_RE = re.compile(
+    r"\b(?:create|make|add|open|log|raise)\s+"
+    r"(?:an?\s+)?(?:new\s+)?(?:(?:urgent|high|medium|low|priority)\s+){0,2}"
+    r"(?:ticket|task|work item)\b|\b(?:ticket|task)\s*:\s*",
+    re.I,
+)
 _UPDATE_RE = re.compile(r"\b(update|edit|change|append|add to)\b.{0,20}\b(ticket|task)\s*#?(\d+)\b", re.I | re.S)
 _STEER_RE = re.compile(r"\b(continue|resume|stop|cancel|steer|change)\b.{0,30}\b(run|workflow)\s*#?(\d+)\b", re.I | re.S)
+_PROJECT_WORK_RE = re.compile(
+    r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
+    r"(?:make|change|fix|repair|patch|update|add|remove|rename|replace|run|execute|build|implement|"
+    r"perform|assess|analyse|analyze|refactor|test|validate|verify|audit|review|inspect|"
+    r"investigate|redesign|copy|migrate|integrate)\b",
+    re.I,
+)
 _BATCH_TICKETS_RE = re.compile(
     r"\b(?:create|make|open|add)?\s*(?:separate|individual|multiple)\s+"
     r"(?:tickets|tasks|work items)\s+(?:for|:)\s+(?P<items>.+?)"
     r"(?=(?:\.\s+|\n+)(?:run|execute|start|push|send|put|use|prefer|ask|report|update|then)\b|$)",
     re.I | re.S,
 )
+_LABELED_BATCH_INTENT_RE = re.compile(
+    r"\b(?:create|make|open|add)\s+"
+    r"(?:(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+)?"
+    r"(?:separate|individual|multiple)\s+(?:tickets|tasks|work items)\b",
+    re.I,
+)
+_LABELED_BATCH_ITEM_RE = re.compile(
+    r"\b(?:ticket|task|work item)\s+"
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s*:\s*",
+    re.I,
+)
+_BATCH_CONTROL_SENTENCE_RE = re.compile(
+    r"\.\s+(?=(?:"
+    r"keep\s+(?:them|these|the\s+(?:tickets|tasks|work items))"
+    r"|(?:run|execute|start|push|send|put|use|prefer|report|update)\s+"
+    r"(?:them|these|the\s+(?:tickets|tasks|work items|group))"
+    r"|do\s+not\s+start\s+(?:ticket|task|work item)"
+    r"|return\s+(?:a\s+)?final\s+report\s+for\s+(?:both|all)"
+    r")\b)",
+    re.I,
+)
 _SCOPE_STOPWORDS = {"board", "delivery", "house", "project", "ticket", "workflow"}
+
+_UNRESOLVED_REFERENCE_RE = re.compile(
+    r"\b(?:"
+    r"(?:the|that)\s+(?:thing|stuff|issue|change|work)"
+    r"|(?:make|change|fix|repair|patch|update|add\s+to|remove|rename|replace|"
+    r"inspect|review|test|validate)\s+(?:it|this|that)\b"
+    r"|(?:it|this|that)\s+(?:we\s+)?(?:discussed|mentioned|talked\s+about|spoke\s+about)"
+    r"|what\s+we\s+(?:discussed|mentioned|talked\s+about|spoke\s+about)"
+    r")\b",
+    re.I,
+)
+
+
+def _has_unresolved_reference(intake: WorkIntake) -> bool:
+    """Detect work commands whose omitted object depends on absent context."""
+    if intake.attachments or str(intake.conversation_context or "").strip():
+        return False
+    return bool(_UNRESOLVED_REFERENCE_RE.search(intake.text))
+
+
+def _is_lightweight_project_change(value: str) -> bool:
+    """Conservatively identify an atomic change that does not need a full loop."""
+    clean = re.sub(r"\s+", " ", str(value or "")).strip()
+    # Atomic requests often include the target, desired value, and acceptance
+    # hint in one sentence. A 14-word ceiling routed ordinary one-line edits
+    # into the full seven-step Development workflow. Multi-step/risky intent is
+    # screened below, so keep a modest single-clause allowance instead.
+    if not clean or len(clean.split()) > 24 or "\n" in str(value or ""):
+        return False
+    # A literal/named "test command" is documentation or configuration data,
+    # not a request to design and execute a test campaign. Keep actual testing,
+    # test coverage, and validation requests on the full development workflow.
+    risk_text = re.sub(r"\btest\s+command\b", "command", clean, flags=re.I)
+    risk_text = re.sub(r"`[^`]*`", "", risk_text)
+    if re.search(
+        r"\b(?:and then|after that|multiple|across|audit|investigate|test|validate|"
+        r"refactor|redesign|build|implement|migrate|integrate|bug|error|failing)\b",
+        risk_text,
+        re.I,
+    ):
+        return False
+    return bool(re.match(
+        r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
+        r"(?:make|change|update|add|remove|rename|replace)\b",
+        clean,
+        re.I,
+    ))
 
 
 def _clean_title(value: str) -> str:
+    value = re.sub(
+        r"^\s*(?:please\s+)?(?:run|execute|start|push|send)\s+"
+        r"(?:(?:this|it|the\s+request|the\s+ticket)\s+)"
+        r"(?:through|into|to)\s+(?:the\s+)?(?:workflow|loop)\s*"
+        r"(?:as\s+(?:a\s+)?)?[:\-]?\s*",
+        "",
+        str(value or ""),
+        flags=re.I,
+    )
     clean = re.sub(r"^\s*(please\s+)?(create|make|add|open|log|raise|run|execute|start|push|send)\s+(a\s+)?(new\s+)?(ticket|task|work item)?\s*[:\-]?\s*", "", value, flags=re.I)
     clean = re.sub(r"\s+", " ", clean).strip(" .:-")
     first = re.split(r"(?<=[.!?])\s+|\n", clean, maxsplit=1)[0].strip()
@@ -49,11 +144,41 @@ def _scope_tokens(value: str) -> set[str]:
 
 def _explicit_batch_ticket_items(value: str) -> list[str]:
     """Extract a short, explicitly requested ticket list without guessing."""
-    match = _BATCH_TICKETS_RE.search(str(value or ""))
+    text = str(value or "")
+    # Natural channel requests often spell out substantial tickets as
+    # ``Ticket one: ... Ticket two: ...``.  This is stronger evidence than a
+    # comma-separated noun list and must not be collapsed into one umbrella
+    # ticket merely because a count appears before "separate tickets".
+    if _LABELED_BATCH_INTENT_RE.search(text):
+        labels = list(_LABELED_BATCH_ITEM_RE.finditer(text))
+        if 2 <= len(labels) <= 20:
+            labeled_items: list[str] = []
+            for index, label in enumerate(labels):
+                end = labels[index + 1].start() if index + 1 < len(labels) else len(text)
+                raw_item = text[label.end():end].strip()
+                control = _BATCH_CONTROL_SENTENCE_RE.search(raw_item)
+                if control:
+                    raw_item = raw_item[:control.start() + 1]
+                clean = raw_item.strip(" .:'\"“”")
+                if not clean or len(clean.split()) > 80:
+                    return []
+                labeled_items.append(clean)
+            return labeled_items
+
+    match = _BATCH_TICKETS_RE.search(text)
     if not match:
         return []
     raw = match.group("items").strip().strip('"“”')
-    parts = re.split(r"\s*(?:,|;)\s*|\s+\band\b\s+", raw, flags=re.I)
+    # Prefer explicit punctuation as the list boundary. Splitting every
+    # occurrence of "and" turns one compound task ("run tests and report")
+    # into two bogus tickets. Bare "A and B" remains supported only when the
+    # request did not provide commas or semicolons.
+    if ";" in raw:
+        parts = re.split(r"\s*;\s*", raw)
+    elif "," in raw:
+        parts = re.split(r"\s*,\s*", raw)
+    else:
+        parts = re.split(r"\s+\band\b\s+", raw, flags=re.I)
     items: list[str] = []
     for part in parts:
         clean = re.sub(r"^and\s+", "", part.strip(), flags=re.I)
@@ -80,8 +205,47 @@ class OrchestratorIntakeService:
             return WorkIntakeDecision(WorkIntakeAction.RUN_WORKFLOW, "Explicit request to execute work through a workflow")
         if _TICKET_RE.search(value):
             return WorkIntakeDecision(WorkIntakeAction.CREATE_TICKET, "Explicit request to create a durable work item")
+        project_scope = bool(
+            str(intake.project_hint or "").strip()
+            or (intake.metadata or {}).get("project_id")
+            or (intake.metadata or {}).get("active_project_id")
+            or (intake.metadata or {}).get("project_name")
+        )
+        # A project association supplies scope, not intent. Never turn a lone
+        # verb such as "fix" into permission to create a ticket and execute
+        # against that project; ask for the missing object/outcome first.
         if len(value.split()) < 2 and not intake.attachments:
-            return WorkIntakeDecision(WorkIntakeAction.ASK_MISSING_INFO, "Request is too short to route safely", confidence=0.8, response_text="Could you add the outcome you want?")
+            return WorkIntakeDecision(
+                WorkIntakeAction.ASK_MISSING_INFO,
+                "Request is too short to route safely",
+                confidence=0.8,
+                response_text="What specifically should I change, and what result should I verify?",
+            )
+        if project_scope and _PROJECT_WORK_RE.search(value) and _has_unresolved_reference(intake):
+            return WorkIntakeDecision(
+                WorkIntakeAction.ASK_MISSING_INFO,
+                "The request refers to prior context that was not supplied",
+                confidence=0.9,
+                response_text=(
+                    "What specifically should I change in this project, and what result should I verify?"
+                ),
+            )
+        if project_scope and _PROJECT_WORK_RE.search(value):
+            if _is_lightweight_project_change(value):
+                return WorkIntakeDecision(
+                    WorkIntakeAction.CREATE_TICKET,
+                    "Atomic project change; create a trackable ticket and execute it with the lightweight project worker",
+                    diagnostics={
+                        "routing_shape": "lightweight_project_work",
+                        "project_scoped": True,
+                        "execute_lightweight": True,
+                    },
+                )
+            return WorkIntakeDecision(
+                WorkIntakeAction.RUN_WORKFLOW,
+                "Project-scoped work request; create a trackable ticket and execute it through the linked workflow",
+                diagnostics={"routing_shape": "project_work", "project_scoped": True},
+            )
         return WorkIntakeDecision(WorkIntakeAction.ANSWER_DIRECTLY, "Conversational or non-explicit request; preserve normal agent behaviour")
 
     def ingest(self, intake: WorkIntake, *, execute: bool = True) -> WorkIntakeDecision:
@@ -100,6 +264,11 @@ class OrchestratorIntakeService:
                 self._ingest_ticket_batch(intake, decision, batch_items)
             elif decision.action == WorkIntakeAction.CREATE_TICKET:
                 self._create_ticket(intake, decision)
+                if (
+                    decision.status != "duplicate"
+                    and decision.diagnostics.get("execute_lightweight")
+                ):
+                    self._start_lightweight_execution(intake, decision)
             elif decision.action == WorkIntakeAction.RUN_WORKFLOW:
                 self._create_ticket(intake, decision)
                 if decision.status != "duplicate":
@@ -121,16 +290,97 @@ class OrchestratorIntakeService:
         self._log_decision(intake, decision)
         return decision
 
+    def _start_lightweight_execution(
+        self,
+        intake: WorkIntake,
+        decision: WorkIntakeDecision,
+    ) -> None:
+        """Execute one atomic ticket through the normal tracked CLI lifecycle."""
+        if not decision.ticket_id:
+            raise ValueError("Lightweight execution requires a created ticket")
+
+        def execute() -> dict[str, Any]:
+            from distr.core.initiative.action_handlers import run_project_cli_tasks
+
+            return run_project_cli_tasks({
+                "ticket_ids": [int(decision.ticket_id)],
+                "project_id": decision.project_id,
+            })
+
+        synchronous = bool(
+            (intake.metadata or {}).get("qualification_sync_execution", False)
+        )
+        if synchronous:
+            outcome = execute()
+            rows = outcome.get("results") if isinstance(outcome.get("results"), list) else []
+            first = rows[0] if rows and isinstance(rows[0], dict) else {}
+            ticket_lane = ""
+            try:
+                with get_session() as session:
+                    ticket = session.query(KanbanTicket).filter(
+                        KanbanTicket.id == int(decision.ticket_id)
+                    ).first()
+                    ticket_lane = str(
+                        getattr(getattr(ticket, "lane", None), "name", "") or ""
+                    )
+            except Exception:
+                logger.debug("Could not inspect lightweight ticket lifecycle", exc_info=True)
+            decision.diagnostics.update({
+                "execution_completed": bool(outcome.get("success")),
+                "execution_session_id": first.get("execution_session_id"),
+                "execution_backend": first.get("backend_id") or first.get("engine"),
+                "terminal_report_observed": bool(
+                    str(first.get("output") or first.get("error") or "").strip()
+                ),
+                "ticket_lane": ticket_lane,
+                "lifecycle_correct": bool(
+                    outcome.get("success") and ticket_lane.strip().lower() in {"qa", "quality assurance"}
+                ),
+            })
+            decision.status = "completed" if outcome.get("success") else "failed"
+            decision.response_text = str(outcome.get("message") or "").strip()
+            if not outcome.get("success"):
+                raise RuntimeError(decision.response_text or "Lightweight project execution failed")
+            return
+
+        threading.Thread(
+            target=self._run_lightweight_execution_background,
+            args=(int(decision.ticket_id), decision.project_id),
+            daemon=True,
+            name=f"DecisionsLightweightTicket-{int(decision.ticket_id)}",
+        ).start()
+        decision.status = "execution_started"
+        decision.response_text = (
+            f"Created ticket #{decision.ticket_id} and started the project change. "
+            "I’ll move it to QA when the checks pass."
+        )
+
+    @staticmethod
+    def _run_lightweight_execution_background(
+        ticket_id: int,
+        project_id: int | None,
+    ) -> None:
+        try:
+            from distr.core.initiative.action_handlers import run_project_cli_tasks
+
+            run_project_cli_tasks({
+                "ticket_ids": [int(ticket_id)],
+                "project_id": project_id,
+            })
+        except Exception:
+            logger.exception("Lightweight ticket execution failed ticket_id=%s", ticket_id)
+
     def _ingest_ticket_batch(
         self,
         intake: WorkIntake,
         decision: WorkIntakeDecision,
         items: list[str],
     ) -> None:
-        """Create and optionally run each explicitly named work item independently."""
+        """Create an explicit ticket plan and run it as one ordered group."""
         ticket_ids: list[int] = []
         workflow_run_ids: list[int] = []
         duplicate_ticket_ids: list[int] = []
+        group_ticket_items: list[dict[str, int | None]] = []
         first: WorkIntakeDecision | None = None
         for index, item in enumerate(items, start=1):
             child_metadata = dict(intake.metadata or {})
@@ -164,10 +414,18 @@ class OrchestratorIntakeService:
                 if item_decision.ticket_id is not None:
                     duplicate_ticket_ids.append(int(item_decision.ticket_id))
                 continue
-            if decision.action == WorkIntakeAction.RUN_WORKFLOW:
-                self._start_workflow(child, item_decision)
-                if item_decision.workflow_run_id is not None:
-                    workflow_run_ids.append(int(item_decision.workflow_run_id))
+            if (
+                decision.action == WorkIntakeAction.RUN_WORKFLOW
+                and item_decision.ticket_id is not None
+            ):
+                group_ticket_items.append({
+                    "ticket_id": int(item_decision.ticket_id),
+                    "board_id": (
+                        int(item_decision.board_id)
+                        if item_decision.board_id is not None
+                        else None
+                    ),
+                })
 
         if first is None:
             raise ValueError("No ticket items were supplied")
@@ -175,6 +433,31 @@ class OrchestratorIntakeService:
         decision.board_id = first.board_id
         decision.project_id = first.project_id
         decision.workflow_id = first.workflow_id
+        group_result: dict[str, Any] = {}
+        if decision.action == WorkIntakeAction.RUN_WORKFLOW and group_ticket_items:
+            if not decision.workflow_id:
+                raise ValueError("The selected board has no default workflow")
+            from distr.core.workflow.dispatcher import start_workflow_ticket_group
+
+            group_result = start_workflow_ticket_group(
+                int(decision.workflow_id),
+                group_ticket_items,
+                run_metadata=self._workflow_intake_metadata(intake, decision),
+                dispatch_async=True,
+            )
+            if group_result.get("error") or not group_result.get("success"):
+                raise RuntimeError(
+                    str(
+                        group_result.get("error")
+                        or group_result.get("errors")
+                        or "Ticket group did not start"
+                    )
+                )
+            workflow_run_ids = [
+                int(row["run_id"])
+                for row in group_result.get("started") or []
+                if isinstance(row, dict) and row.get("run_id") is not None
+            ]
         decision.workflow_run_id = workflow_run_ids[0] if workflow_run_ids else None
         decision.handled = True
         decision.diagnostics.update({
@@ -182,13 +465,16 @@ class OrchestratorIntakeService:
             "ticket_ids": ticket_ids,
             "workflow_run_ids": workflow_run_ids,
             "duplicate_ticket_ids": duplicate_ticket_ids,
+            "ticket_group_id": group_result.get("group_id"),
+            "ticket_group_mode": group_result.get("mode"),
+            "ticket_group_queued_count": int(group_result.get("queued_count") or 0),
         })
         ticket_refs = ", ".join(f"#{ticket_id}" for ticket_id in ticket_ids)
         if workflow_run_ids:
-            run_refs = ", ".join(f"#{run_id}" for run_id in workflow_run_ids)
             decision.status = "workflow_started"
             decision.response_text = (
-                f"Created tickets {ticket_refs} and started workflow runs {run_refs}."
+                f"Created an ordered group of {len(ticket_ids)} tickets and started the first workflow run. "
+                f"The remaining {int(group_result.get('queued_count') or 0)} will follow in sequence."
             )
         elif len(duplicate_ticket_ids) == len(items):
             decision.status = "duplicate"
@@ -207,7 +493,13 @@ class OrchestratorIntakeService:
             request_text = intake.text.lower()
             projects = session.query(Project).all()
             project = None
-            project_hint = str(intake.project_hint or "").strip()
+            project_hint = str(
+                intake.project_hint
+                or (intake.metadata or {}).get("project_id")
+                or (intake.metadata or {}).get("active_project_id")
+                or (intake.metadata or {}).get("project_name")
+                or ""
+            ).strip()
             if project_hint.isdigit():
                 project = session.query(Project).filter(Project.id == int(project_hint)).first()
             elif project_hint:
@@ -250,6 +542,36 @@ class OrchestratorIntakeService:
                 hinted_workflow = session.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_hint)).first()
             elif workflow_hint:
                 hinted_workflow = session.query(AutoWorkflow).filter(AutoWorkflow.name.ilike(f"%{workflow_hint}%")).first()
+            if board is None and project is not None:
+                # A project may outlive a deleted/recreated board. Never place
+                # its work on whichever unrelated board happens to be active.
+                # Repair the project control surface with the standard delivery
+                # lanes and the canonical Development workflow when available.
+                from sqlalchemy import func
+                from distr.core.kanban.lifecycle import ensure_delivery_lanes
+
+                default_workflow = hinted_workflow or (
+                    session.query(AutoWorkflow)
+                    .filter(AutoWorkflow.name.ilike("Development%"))
+                    .order_by(AutoWorkflow.id)
+                    .first()
+                )
+                max_position = session.query(func.max(KanbanBoard.position)).scalar()
+                board = KanbanBoard(
+                    name=f"{project.name} Delivery",
+                    default_project_id=int(project.id),
+                    default_workflow_id=(
+                        int(default_workflow.id) if default_workflow is not None else None
+                    ),
+                    position=int(max_position or 0) + 1,
+                    in_use=False,
+                    archived=False,
+                )
+                session.add(board)
+                session.flush()
+                ensure_delivery_lanes(session, int(board.id))
+                project.kanban_board_id = int(board.id)
+                session.flush()
             if board is None and hinted_workflow is not None:
                 matching_boards = session.query(KanbanBoard).filter(
                     KanbanBoard.default_workflow_id == hinted_workflow.id,
@@ -374,25 +696,28 @@ class OrchestratorIntakeService:
     def _start_workflow(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
         if not decision.ticket_id or not decision.workflow_id:
             raise ValueError("The selected board has no default workflow")
+        # Board/project links can change after their companion workspace was
+        # first created. Refresh the small router files at the intake boundary
+        # so a worker never follows stale "no linked board/project" context.
+        try:
+            from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+
+            if decision.board_id:
+                hook_ensure_workspace("boards", int(decision.board_id), force=True, reason="work_intake")
+            if decision.project_id:
+                hook_ensure_workspace("projects", int(decision.project_id), force=True, reason="work_intake")
+        except Exception:
+            logger.debug("Could not refresh intake workspace routers", exc_info=True)
         from distr.core.workflow.service import start_workflow_run
 
         from distr.core.workflow.ticket_dispatch import build_ticket_run_item
 
         item = build_ticket_run_item(decision.ticket_id, decision.workflow_id)
-        metadata = dict(item.get("run_metadata") or {})
-        from .execution_policy import compile_requested_execution_policy
-
-        requested_execution_policy = compile_requested_execution_policy(intake.text)
-        metadata.update({
-            "source_type": intake.source.value,
-            "request_uid": intake.intake_uid,
-            "phase": "planning",
-            "source_thread_id": intake.source_thread_id or None,
-            "source_user_id": intake.source_user_id or None,
-            "attachments": [asdict(attachment) for attachment in intake.attachments],
-        })
-        if requested_execution_policy:
-            metadata["requested_execution_policy"] = requested_execution_policy
+        metadata = self._workflow_intake_metadata(
+            intake,
+            decision,
+            base=dict(item.get("run_metadata") or {}),
+        )
         result = start_workflow_run(
             decision.workflow_id,
             context=str(item.get("context") or f"Ticket: {_clean_title(intake.text)}"),
@@ -406,6 +731,53 @@ class OrchestratorIntakeService:
         decision.workflow_run_id = int(result.get("run_id")) if result.get("run_id") else None
         decision.status = "workflow_started"
         decision.response_text = f"Created ticket #{decision.ticket_id} and started workflow run #{decision.workflow_run_id}."
+
+    @staticmethod
+    def _workflow_intake_metadata(
+        intake: WorkIntake,
+        decision: WorkIntakeDecision,
+        *,
+        base: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return channel-neutral metadata shared by single and grouped work."""
+        metadata = dict(base or {})
+        from .execution_policy import compile_requested_execution_policy
+
+        requested_execution_policy = compile_requested_execution_policy(intake.text)
+        metadata.update({
+            "source_type": intake.source.value,
+            "request_uid": intake.intake_uid,
+            "phase": "planning",
+            "intake_action": decision.action.value,
+            "intake_reason": decision.reason,
+            "intake_confidence": decision.confidence,
+            "source_thread_id": intake.source_thread_id or None,
+            "source_user_id": intake.source_user_id or None,
+            "attachments": [asdict(attachment) for attachment in intake.attachments],
+        })
+        # Preserve only the narrow qualification correlation fields. Copying
+        # arbitrary channel metadata into the durable run would pollute worker
+        # context and make benchmark evidence user-controlled.
+        qualification_scenario_id = str(
+            (intake.metadata or {}).get("qualification_scenario_id") or ""
+        ).strip()
+        if qualification_scenario_id:
+            metadata["qualification_scenario_id"] = qualification_scenario_id
+            metadata["qualification_auto_record"] = bool(
+                (intake.metadata or {}).get("qualification_auto_record", False)
+            )
+            injected_failure = str(
+                (intake.metadata or {}).get("qualification_injected_failure") or ""
+            ).strip()
+            if injected_failure:
+                metadata["qualification_injected_failure"] = injected_failure
+            if qualification_scenario_id == "telegram_control_round_trip":
+                metadata["qualification_remote_control_probe"] = bool(
+                    (intake.metadata or {}).get("qualification_remote_control_probe", False)
+                )
+        if requested_execution_policy:
+            metadata["requested_execution_policy"] = requested_execution_policy
+        return metadata
 
     def _update_ticket(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
         ticket_id = int(decision.diagnostics["ticket_id"])
@@ -540,6 +912,99 @@ class OrchestratorIntakeService:
                 "needs_attention": needs,
             })
         return inbox
+
+    def record_direct_response(
+        self,
+        *,
+        source: str,
+        source_thread_id: str,
+        response_text: str,
+        intake_uid: str = "",
+    ) -> bool:
+        """Correlate a final conversational answer with its intake decision.
+
+        ``answer_directly`` intentionally leaves execution to the normal chat
+        agent.  Persisting this separate event closes that asynchronous loop
+        without mutating the append-only decision event or coupling intake to a
+        particular model/provider implementation.
+        """
+        response = str(response_text or "").strip()
+        thread_id = str(source_thread_id or "").strip()
+        if not response or not thread_id:
+            return False
+        try:
+            from distr.core.db.orchestrator import OrchestratorEvent
+            from distr.core.orchestrator import emit_event, ensure_orchestrator_tables
+
+            ensure_orchestrator_tables()
+            with get_session() as session:
+                rows = (
+                    session.query(OrchestratorEvent)
+                    .filter(OrchestratorEvent.event_type == "work_intake_decision")
+                    .order_by(OrchestratorEvent.id.desc())
+                    .limit(100)
+                    .all()
+                )
+                matched: tuple[OrchestratorEvent, dict[str, Any], dict[str, Any]] | None = None
+                for row in rows:
+                    try:
+                        payload = json.loads(row.payload or "{}") or {}
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    intake = payload.get("intake") if isinstance(payload.get("intake"), dict) else {}
+                    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+                    if str(intake.get("source") or row.source or "").strip() != str(source or "").strip():
+                        continue
+                    if str(intake.get("source_thread_id") or "").strip() != thread_id:
+                        continue
+                    if intake_uid and str(intake.get("intake_uid") or "") != str(intake_uid):
+                        continue
+                    if str(decision.get("action") or "") != WorkIntakeAction.ANSWER_DIRECTLY.value:
+                        continue
+                    if str(decision.get("response_text") or "").strip():
+                        continue
+                    matched = (row, intake, decision)
+                    break
+                if matched is None:
+                    return False
+                row, intake, decision = matched
+                uid = str(intake.get("intake_uid") or "")
+                existing = (
+                    session.query(OrchestratorEvent.id)
+                    .filter(OrchestratorEvent.event_type == "work_intake_response")
+                    .filter(OrchestratorEvent.parent_event_id == int(row.id))
+                    .first()
+                )
+                if existing:
+                    return False
+                event_context = {
+                    "ticket_id": row.ticket_id,
+                    "board_id": row.board_id,
+                    "project_id": row.project_id,
+                    "workflow_id": row.workflow_id,
+                    "run_id": row.run_id,
+                }
+                parent_event_id = int(row.id)
+            emit_event(
+                source=str(source or "chat"),
+                event_type="work_intake_response",
+                status="completed",
+                parent_event_id=parent_event_id,
+                summary=response,
+                payload={
+                    "intake_uid": uid,
+                    "source_message_id": str(intake.get("source_message_id") or ""),
+                    "source_thread_id": thread_id,
+                    "response_text": response,
+                    "decision_action": str(decision.get("action") or ""),
+                    "phase": "final",
+                },
+                **event_context,
+            )
+            return True
+        except Exception:
+            logger.debug("Could not correlate direct intake response", exc_info=True)
+            return False
 
     def resolve_inbox_item(
         self,

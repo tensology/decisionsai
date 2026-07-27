@@ -432,6 +432,12 @@ class ChatService:
                 params["active_turn_chat_row_id"] = int(child.id)
                 root.params = json.dumps(params)
                 session.commit()
+                try:
+                    from distr.core.chat_turns import ensure_turn_started
+
+                    ensure_turn_started(int(chat_id), int(child.id))
+                except Exception:
+                    logger.debug("Could not initialize durable chat turn", exc_info=True)
                 record_chat_audit_event(
                     chat_id=int(chat_id),
                     chat_row_id=int(child.id) if child.id is not None else None,
@@ -534,6 +540,17 @@ class ChatService:
             )
             session.add(child)
             session.commit()
+            session.refresh(child)
+            params = _chat_params(root.params)
+            params["active_turn_chat_row_id"] = int(child.id)
+            root.params = json.dumps(params)
+            session.commit()
+            try:
+                from distr.core.chat_turns import ensure_turn_started
+
+                ensure_turn_started(int(root_id), int(child.id))
+            except Exception:
+                logger.debug("Could not initialize durable chat turn", exc_info=True)
             record_chat_audit_event(
                 chat_id=int(root_id),
                 chat_row_id=int(child.id) if child.id is not None else None,

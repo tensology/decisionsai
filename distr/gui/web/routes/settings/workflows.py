@@ -2195,6 +2195,23 @@ def register_routes(router, templates):
             logger.error("Workflow continue run failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "continue"), status_code=500)
 
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/reissue-interaction")
+    async def workflow_reissue_interaction(workflow_id: int, run_id: int):
+        """Re-send the same durable Telegram question and controls for a waiting run."""
+        try:
+            from distr.core.workflow.interactions import reissue_workflow_interaction
+
+            result = reissue_workflow_interaction(run_id, workflow_id=workflow_id)
+            if result.get("error"):
+                return JSONResponse(
+                    {"detail": result["error"]},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow interaction reissue failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     @router.post("/workflows/{workflow_id}/runs/{run_id}/codex-events")
     async def workflow_codex_bridge_event(workflow_id: int, run_id: int, event: CodexBridgeEventRequest):
         """Record Codex IDE/plugin steering and execution events into Decisions/orchestrator.

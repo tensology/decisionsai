@@ -697,6 +697,9 @@ def _cmd_process_text_input(session, params):
         if isinstance(params, dict) and params.get('telegram_input_type') in ('text', 'voice')
         else None
     )
+    work_intake_uid = str(
+        params.get("work_intake_uid") or ""
+    ).strip() if isinstance(params, dict) else ""
     session.logger.debug(f"process_text_input: speak param={speaker_val}, parsed={speaker_override}, current _speaker_enabled={getattr(session.llm_service, '_speaker_enabled', None) if hasattr(session, 'llm_service') and session.llm_service else 'N/A'}")
 
     # Save current speaker state so we can restore it after a speak=False request.
@@ -728,6 +731,11 @@ def _cmd_process_text_input(session, params):
             )
 
             async def _run_and_restore():
+                intake_context_token = None
+                if work_intake_uid:
+                    from distr.core.chat_manager import activate_work_intake_context
+
+                    intake_context_token = activate_work_intake_context(work_intake_uid)
                 automation_run_id = (
                     int(params.get('automation_run_id'))
                     if isinstance(params, dict) and params.get('automation_run_id') is not None
@@ -751,6 +759,10 @@ def _cmd_process_text_input(session, params):
                         skip_user_persist=skip_user_persist,
                     )
                 finally:
+                    if intake_context_token is not None:
+                        from distr.core.chat_manager import reset_work_intake_context
+
+                        reset_work_intake_context(intake_context_token)
                     # Restore speaker state after a speak-override request so
                     # subsequent user requests are not silenced.
                     if _prev is not None and speaker_override is not None:
@@ -786,7 +798,10 @@ def _cmd_process_text_input(session, params):
             )
             if getattr(session, '_pending_text_inputs', None) is None:
                 session._pending_text_inputs = []
-            session._pending_text_inputs.append((text, is_telegram, uploaded_image_path, speaker_override, telegram_input_type))
+            # Preserve the complete request. Reconstructing a short tuple used
+            # to lose speak/correlation/persistence metadata while the agent
+            # event loop was still starting.
+            session._pending_text_inputs.append(dict(params))
 
 
 

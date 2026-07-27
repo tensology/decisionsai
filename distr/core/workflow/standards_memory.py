@@ -7,6 +7,7 @@ defaults stop ticket runs from treating a code change as completion.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from distr.core.db import get_session
@@ -63,7 +64,12 @@ _FEEDBACK_SIGNALS = (
 )
 
 
-def build_standards_context(context_rules: Optional[str] = None, board_id: int | None = None) -> str:
+def build_standards_context(
+    context_rules: Optional[str] = None,
+    board_id: int | None = None,
+    *,
+    include_ui_standards: bool = True,
+) -> str:
     """Append universal, global user, and board-learned standards to context."""
     existing = (context_rules or "").strip()
     standards = UNIVERSAL_WORKFLOW_STANDARDS.strip()
@@ -76,7 +82,9 @@ def build_standards_context(context_rules: Optional[str] = None, board_id: int |
 
     additions = []
     try:
-        global_standards = build_global_user_standards_context()
+        global_standards = build_global_user_standards_context(
+            include_ui_standards=include_ui_standards,
+        )
         if global_standards and "[GLOBAL USER STANDARDS]" not in base:
             additions.append(global_standards)
     except Exception:
@@ -86,18 +94,64 @@ def build_standards_context(context_rules: Optional[str] = None, board_id: int |
         try:
             from distr.core.orchestrator import build_learned_rules_context, build_visual_taste_context
 
-            learned = build_learned_rules_context(int(board_id))
+            learned = build_learned_rules_context(
+                int(board_id),
+                include_ui_standards=include_ui_standards,
+            )
             if learned and "[BOARD LEARNED RULES]" not in base:
                 additions.append(learned)
-            taste = build_visual_taste_context(board_id=int(board_id))
-            if taste and "[VISUAL TASTE MEMORY]" not in base:
-                additions.append(taste)
+            if include_ui_standards:
+                taste = build_visual_taste_context(board_id=int(board_id))
+                if taste and "[VISUAL TASTE MEMORY]" not in base:
+                    additions.append(taste)
         except Exception:
             pass
     return base + ("\n\n" + "\n\n".join(additions) if additions else "")
 
 
-def build_global_user_standards_context(*, limit: int = 16) -> str:
+def _looks_like_project_specific_instruction(content: str) -> bool:
+    """Reject run inputs that were accidentally promoted as universal policy."""
+    text = " ".join(str(content or "").split())
+    lowered = text.lower()
+    return bool(
+        re.search(r"https?://", text)
+        or re.search(r"\b[A-Z][A-Z0-9]+-\d+\b", text)
+        or re.search(r"\bticket\s+#?\d+\b", lowered)
+    )
+
+
+def _is_reusable_global_standard(memory: dict, *, include_ui_standards: bool) -> bool:
+    category = str(memory.get("category") or "")
+    content = " ".join(str(memory.get("content") or "").split())
+    lowered = content.lower()
+    if not content or _looks_like_project_specific_instruction(content):
+        return False
+    if not include_ui_standards and (
+        category == "ui_design_standard"
+        or any(
+            marker in lowered
+            for marker in (
+                " ui ", "ux", "visual", "layout", "screenshot", "playwright",
+                "browser flow", "responsive", "spotify", "now-playing",
+            )
+        )
+    ):
+        return False
+    if category == "quality_standard":
+        reusable_language = (
+            "always", "never", "must", "should", "do not", "don't", "avoid",
+            "prefer", "require", "needs to", "need to", "reject", "keep ",
+        )
+        if not any(marker in lowered for marker in reusable_language):
+            return False
+    return True
+
+
+def build_global_user_standards_context(
+    *,
+    limit: int = 16,
+    include_ui_standards: bool = True,
+) -> str:
     """Format durable cross-project user standards for workflow prompts."""
     from distr.core.orchestrator_memory import list_user_memories
 
@@ -106,6 +160,10 @@ def build_global_user_standards_context(*, limit: int = 16) -> str:
         memory for memory in memories
         if str(memory.get("scope") or "global") == "global"
         and str(memory.get("category") or "") in GLOBAL_STANDARD_CATEGORIES
+        and _is_reusable_global_standard(
+            memory,
+            include_ui_standards=include_ui_standards,
+        )
         and (
             str(memory.get("category") or "") != "user_preference"
             or int(memory.get("evidence_count") or 0) >= 2

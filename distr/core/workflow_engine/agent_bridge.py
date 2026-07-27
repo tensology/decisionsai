@@ -55,7 +55,19 @@ class WorkflowAgentBridge:
         """Emit ``workflow_finished`` signal for the Voice Agent."""
         from distr.core.signals import signal_manager
 
-        signal_manager.workflow_finished.emit(session_id, summary)
+        try:
+            signal_manager.workflow_finished.emit(session_id, summary)
+        except RuntimeError as error:
+            if "wrapped c/c++ object" in str(error).lower() and "deleted" in str(error).lower():
+                # The report is already durably queued. During application or
+                # test teardown Qt may destroy the signal manager before a
+                # late background completion callback arrives.
+                logger.debug(
+                    "WorkflowAgentBridge: skipped deleted Qt signal for session %d",
+                    session_id,
+                )
+                return
+            raise
         logger.debug(
             "WorkflowAgentBridge: emitted workflow_finished for session %d",
             session_id,

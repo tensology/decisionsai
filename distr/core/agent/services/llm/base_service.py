@@ -255,6 +255,13 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         results = []
         decisions = build_computer_use_execution_decisions(tool_calls)
         for idx, tool_call in enumerate(tool_calls):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            try:
+                from distr.core.chat_turns import apply_pending_steering_to_messages
+
+                apply_pending_steering_to_messages(self, chat_id)
+            except Exception:
+                logger.debug("Could not apply pending chat steering", exc_info=True)
             decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             tool_name = tool_call["function"]["name"]
             if not decision.get("allow", True):
@@ -284,6 +291,9 @@ class BaseLLMService(LLMSharedMixin, LLMService):
 
             tool = self._tools_dict.get(tool_name) or next((t for t in self._tools if t.name == tool_name), None)
             if tool:
+                from distr.core.agent.tool_audit import record_tool_start
+
+                record_tool_start(chat_id, tool_name)
                 try:
                     # Self-reflection: check for failure loops before re-issuing
                     reflection_prompt = None
@@ -305,7 +315,6 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                                 "name": tool_name,
                                 "content": str(result)
                             })
-                            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                             from distr.core.agent.tool_audit import record_tool_execution
                             record_tool_execution(chat_id, tool_name, str(result), "failed", event_queue=self.event_queue)
                             # Record the loop-break outcome for reflection tracking
@@ -331,7 +340,6 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                         "name": tool_name,
                         "content": str(result)
                     })
-                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
                     # Record successful execution for self-reflection
@@ -346,7 +354,6 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                         "name": tool_name,
                         "content": err_content
                     })
-                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, err_content, "failed", event_queue=self.event_queue)
                     # Record failed execution for self-reflection

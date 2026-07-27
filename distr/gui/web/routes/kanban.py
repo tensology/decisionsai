@@ -2614,6 +2614,7 @@ def create_routes():
             board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
+            previous_default_project_id = board.default_project_id
             if payload.name is not None:
                 board.name = payload.name
             if payload.description is not None:
@@ -2638,17 +2639,33 @@ def create_routes():
             # Sync Project's kanban_board_id reference if default_project_id changed
             if payload.default_project_id is not None:
                 from distr.core.db.projects import Project
+                if (
+                    previous_default_project_id
+                    and previous_default_project_id != board.default_project_id
+                ):
+                    previous = s.query(Project).filter(Project.id == previous_default_project_id).first()
+                    if previous and previous.kanban_board_id == board.id:
+                        previous.kanban_board_id = None
                 if board.default_project_id:
                     proj = s.query(Project).filter(Project.id == board.default_project_id).first()
                     if proj and proj.kanban_board_id != board.id:
                         proj.kanban_board_id = board.id
-                        s.commit()
+                s.commit()
             try:
                 from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
+                from distr.core.workspace_memory.sync import sync_projection_for_project
 
                 hook_ensure_workspace("boards", board_id, reason="update_board")
+                affected_project_ids = {
+                    int(project_id)
+                    for project_id in (previous_default_project_id, board.default_project_id)
+                    if project_id
+                }
+                for project_id in affected_project_ids:
+                    hook_ensure_workspace("projects", project_id, force=True, reason="update_board")
+                    sync_projection_for_project(project_id, force=True)
             except Exception:
-                pass
+                logger.debug("update_board: workspace sync failed", exc_info=True)
             return JSONResponse({"success": True})
 
     @router.delete("/tickets/boards/{board_id}")
@@ -5584,6 +5601,13 @@ source: kanban_ticket_{t.id}
                 or route.get("codex_service_tier")
                 or None
             )
+            # A manually triggered direct CLI run is still tracked work. Make
+            # the state observable before waiting on model startup/execution.
+            with get_session() as s:
+                from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                move_ticket_to_delivery_lane(s, tid, "In Progress")
+                s.commit()
             with get_session() as s:
                 project = orm_get_by_id(s, Project, project_id)
                 if not project:
@@ -5602,7 +5626,24 @@ source: kanban_ticket_{t.id}
                     model_override=model_override,
                     codex_reasoning_effort_override=codex_reasoning_effort,
                     codex_service_tier_override=codex_service_tier,
+                    adapter_options={
+                        "model_provider": route.get("model_provider") or "",
+                        "required_capabilities": ["code", "files"],
+                        "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
+                        "skills": list(route.get("skills") or []),
+                    },
                 )
+            if result.success:
+                try:
+                    with get_session() as s:
+                        from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                        move_ticket_to_delivery_lane(s, tid, "QA")
+                        s.commit()
+                except ValueError:
+                    # Do not turn a successful worker result into an HTTP 500
+                    # if a human moved the card while it was running.
+                    logger.info("Ticket %s changed lanes during direct CLI execution", tid)
         except Exception as e:
             logger.error(f"Failed to send ticket to project backend: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)

@@ -58,7 +58,8 @@ def test_peek_handoff_and_build():
         raw = handoff_resume_proposal(sit)
         assert raw is not None
         assert raw["payload"]["kind"] == "handoff_resume"
-        assert "Resume after" in raw["description"]
+        assert "I noticed we left off" in raw["description"]
+        assert "Want me to pick that up" in raw["description"]
 
 
 def test_short_idle_does_not_prefer_handoff():

@@ -11,6 +11,8 @@ PRIOR_STEP_RESULT_MAX_CHARS = 1000
 # Workflow run summaries shown to the agent / bridge: keep more text when a step failed.
 STEP_SUMMARY_FAILED_MAX_CHARS = 6000
 
+_TRUNCATION_MARKER = "\n\n[... verbose worker output omitted; full transcript remains in the execution session ...]\n\n"
+
 _LINE_FILE = re.compile(
     r"^(?:\s*)([^\s:]+\.(?:py|js|ts|tsx|md|txt|json|yaml|yml|csv|log|pdf|png|jpe?g|webp|ogg|mp3|m4a|opus|mp4|3gp|bin))\s*$",
     re.MULTILINE | re.IGNORECASE,
@@ -43,6 +45,27 @@ def truncate_step_summary(text: str, status: str) -> str:
     if len(s) <= limit:
         return s
     return s[:limit]
+
+
+def compact_execution_result(text: str, *, max_chars: int = 6000) -> str:
+    """Bound verbose worker output while preserving its final contract/report.
+
+    Coding workers commonly put required handoff fields, blockers, test results,
+    and the terminal status at the end of their answer. A prefix-only slice can
+    therefore turn a valid result into a false validation failure and trigger a
+    second model run. Keep both the opening evidence and the conclusion; the
+    complete transcript remains available on ``ProjectExecutionSession``.
+    """
+    value = str(text or "").strip()
+    if max_chars <= 0 or len(value) <= max_chars:
+        return value
+    marker = _TRUNCATION_MARKER
+    available = max_chars - len(marker)
+    if available <= 1:
+        return value[:max_chars]
+    tail_chars = min(3000, available // 2)
+    head_chars = available - tail_chars
+    return value[:head_chars].rstrip() + marker + value[-tail_chars:].lstrip()
 
 
 def extract_artifact_paths_from_result(text: str, *, max_paths: int = 12) -> List[str]:

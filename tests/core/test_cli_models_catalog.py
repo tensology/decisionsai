@@ -43,6 +43,47 @@ class CliModelsCatalogTests(unittest.TestCase):
         self.assertFalse(by_id["kimi-k2.7-code:cloud"]["local"])
         self.assertFalse(by_id["kimi-k2.7-code:cloud"]["free"])
 
+    def test_pi_manifest_ollama_cloud_alias_is_not_mislabeled_local_or_free(self):
+        model = catalog.enrich_model_entry(
+            catalog.model_entry(
+                "qwen3.5:397b-cloud",
+                "ollama",
+                scope="scoped",
+            )
+        )
+
+        self.assertFalse(model["local"])
+        self.assertFalse(model["free"])
+
+    def test_pi_manifest_skips_stale_local_ollama_but_keeps_cloud_alias(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        import json
+
+        with TemporaryDirectory() as folder:
+            manifest = Path(folder) / "models.json"
+            manifest.write_text(json.dumps({
+                "providers": {
+                    "ollama": {
+                        "models": [
+                            {"id": "stale:7b"},
+                            {"id": "qwen3.5:397b-cloud"},
+                        ]
+                    }
+                }
+            }), encoding="utf-8")
+            with patch.object(catalog.os.path, "expanduser", return_value=str(manifest)), patch.object(
+                catalog,
+                "_ollama_model_chat_ready",
+                side_effect=lambda model_id: model_id != "stale:7b",
+            ):
+                models = catalog.models_from_pi_json()
+
+        by_id = {model["id"]: catalog.enrich_model_entry(model) for model in models}
+        self.assertNotIn("stale:7b", by_id)
+        self.assertFalse(by_id["qwen3.5:397b-cloud"]["local"])
+        self.assertFalse(by_id["qwen3.5:397b-cloud"]["free"])
+
     def test_installed_ollama_catalog_skips_stale_local_manifest(self):
         installed = [
             {"id": "qwen3:8b", "name": "Qwen3 8B", "local": True},
@@ -114,13 +155,20 @@ class CliModelsCatalogTests(unittest.TestCase):
                     tier="standard",
                     scope="scoped",
                 ),
+                catalog.model_entry(
+                    "kilo-auto/free",
+                    "kilocode",
+                    free=True,
+                    tier="standard",
+                    scope="scoped",
+                ),
             ],
             prefer_free=True,
             prefer_local=False,
             prefer_scoped=True,
             complexity="high",
         )
-        self.assertEqual(selected["id"], "openrouter/free")
+        self.assertEqual(selected["id"], "kilo-auto/free")
         self.assertEqual(selected["provider"], "kilocode")
 
 

@@ -156,6 +156,7 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanTicket
     from distr.core.db.projects import Project
+    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
     from distr.core.kanban.ticket_audit import append_ticket_audit_entry
     from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
     from distr.core.project_cli_backends import run_project_task
@@ -176,6 +177,31 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
             if not project:
                 results.append({"ticket_id": ticket_id, "success": False, "error": "No linked project"})
                 continue
+            # Direct CLI work follows the same human-visible lifecycle as a
+            # workflow run. Commit before invoking the worker so the web UI
+            # can show that execution actually started while a slow model is
+            # still loading or working. A failed worker deliberately remains
+            # In Progress; only successful, evidenced work advances to QA.
+            moved_to_progress = move_ticket_to_delivery_lane(
+                session,
+                ticket_id,
+                "In Progress",
+            )
+            if moved_to_progress:
+                append_ticket_audit_entry(
+                    session,
+                    ticket_id=ticket_id,
+                    run_id=None,
+                    step_id=None,
+                    step_result_id=None,
+                    execution_lane="cli",
+                    status="running",
+                    final_verdict="started",
+                    summary="Project CLI execution started; ticket moved to In Progress",
+                    details="The ticket remains visible in In Progress until the worker returns.",
+                )
+                session.commit()
+                _publish_ticket_lane_change(board, ticket_id, "In Progress")
             instruction = build_kanban_ticket_cli_instruction(
                 session,
                 ticket_id,
@@ -184,27 +210,64 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
                 project_id=project.id,
             )
             from distr.core.orchestrator_routing import resolve_execution_route
+            from distr.core.project_cli_backends.policy_manager import _counts_as_model_health_failure
 
-            decision = resolve_execution_route(
-                project=project,
-                ticket=ticket,
-                board=board,
-                emit_event=True,
-            )
-            route = decision.to_route_dict()
-            result = _run_async(run_project_task(
-                project,
-                instruction,
-                audit_id=None,
-                origin="initiative",
-                ticket_id=ticket_id,
-                ticket_complexity=route["complexity"],
-                backend_id_override=route["backend"],
-                model_override=route["model"],
-                codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
-                codex_service_tier_override=route.get("codex_service_tier"),
-            ))
-            result_dict = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+            required_capabilities = ["code", "files"]
+            attempts: list[dict[str, Any]] = []
+            result_dict: dict[str, Any] = {}
+            # Auto gets one bounded free/local recovery after a route or
+            # completion-contract failure. The failed execution certification
+            # is persisted synchronously, so resolving again selects a different
+            # model without hard-coding provider order here.
+            for attempt_number in range(1, 3):
+                decision = resolve_execution_route(
+                    project=project,
+                    ticket=ticket,
+                    board=board,
+                    emit_event=True,
+                )
+                route = decision.to_route_dict()
+                result = _run_async(run_project_task(
+                    project,
+                    instruction,
+                    audit_id=None,
+                    origin="initiative",
+                    ticket_id=ticket_id,
+                    ticket_complexity=route["complexity"],
+                    backend_id_override=route["backend"],
+                    model_override=route["model"],
+                    codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
+                    codex_service_tier_override=route.get("codex_service_tier"),
+                    adapter_options={
+                        "model_provider": route.get("model_provider") or "",
+                        "required_capabilities": required_capabilities,
+                        "task_intent": (route.get("task_profile") or {}).get("intent") or "implementation",
+                        "skills": list(route.get("skills") or []),
+                        "mutation_expected": True,
+                    },
+                ))
+                result_dict = _validated_direct_result(result)
+                attempts.append({
+                    "attempt": attempt_number,
+                    "backend": route.get("backend"),
+                    "provider": route.get("model_provider"),
+                    "model": route.get("model"),
+                    "source": route.get("source"),
+                    "success": bool(result_dict.get("success")),
+                    "error": str(result_dict.get("error") or "")[:1000],
+                    "execution_session_id": result_dict.get("execution_session_id"),
+                })
+                if result_dict.get("success") or route.get("requires_approval"):
+                    break
+                failure = str(result_dict.get("error") or result_dict.get("output") or "")
+                completion_failure = any(marker in failure.lower() for marker in (
+                    "claimed success without",
+                    "no assistant text",
+                    "completion report",
+                ))
+                if not (_counts_as_model_health_failure(failure) or completion_failure):
+                    break
+            result_dict["attempts"] = attempts
             append_ticket_audit_entry(
                 session,
                 ticket_id=ticket_id,
@@ -217,9 +280,129 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
                 summary=f"Initiative sent ticket to {result_dict.get('engine') or result_dict.get('backend_id') or 'project CLI'}",
                 details=(result_dict.get("output") or result_dict.get("error") or "")[:8000],
             )
-            results.append({"ticket_id": ticket_id, **result_dict})
+            if result_dict.get("success"):
+                try:
+                    moved_to_qa = move_ticket_to_delivery_lane(session, ticket_id, "QA")
+                except ValueError:
+                    # A human may have moved the ticket while the worker was
+                    # running. Preserve that decision and retain worker success.
+                    moved_to_qa = False
+                if moved_to_qa:
+                    append_ticket_audit_entry(
+                        session,
+                        ticket_id=ticket_id,
+                        run_id=None,
+                        step_id=None,
+                        step_result_id=None,
+                        execution_lane="cli",
+                        status="waiting",
+                        final_verdict="awaiting_human_acceptance",
+                        summary="Project CLI execution passed; ticket moved to QA",
+                        details="A human must verify the result and move the ticket to Complete.",
+                    )
+                    session.commit()
+                    _publish_ticket_lane_change(board, ticket_id, "QA")
+            results.append({
+                "ticket_id": ticket_id,
+                "title": str(ticket.title or "").strip(),
+                "lane": str(getattr(getattr(ticket, "lane", None), "name", "") or ""),
+                **result_dict,
+            })
         session.commit()
-    return {"success": any(r.get("success") for r in results), "message": f"Ran {len(results)} CLI task(s)", "results": results}
+    return {
+        "success": any(r.get("success") for r in results),
+        "message": _direct_execution_message(results),
+        "results": results,
+    }
+
+
+def _direct_execution_message(results: list[dict[str, Any]]) -> str:
+    """Return a user-facing outcome suitable for chat, Telegram, and TTS."""
+    if not results:
+        return "I could not find a linked project ticket to work on."
+    if len(results) > 1:
+        completed = sum(1 for item in results if item.get("success"))
+        if completed == len(results):
+            return f"Completed all {completed} requested changes. They are waiting in QA for your review."
+        return (
+            f"Completed {completed} of {len(results)} requested changes. "
+            "The unfinished work remains In Progress with its blocker attached."
+        )
+    item = results[0]
+    title = str(item.get("title") or "the requested change").strip()
+    if item.get("success"):
+        return f"Completed “{title}”. It is waiting in QA for your review."
+    blocker = str(item.get("error") or item.get("output") or "The worker did not return usable evidence.").strip()
+    blocker = blocker.splitlines()[0][:240]
+    return f"I could not complete “{title}”. It remains In Progress. {blocker}"
+
+
+def _validated_direct_result(result: Any) -> dict[str, Any]:
+    """Compatibility guard for adapters/tests not yet enforcing the registry contract."""
+    result_dict = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+    if not result_dict.get("success"):
+        return result_dict
+    workspace_delta = (
+        result_dict.get("workspace_state_delta")
+        if isinstance(result_dict.get("workspace_state_delta"), dict)
+        else {}
+    )
+    memory_delta = (
+        result_dict.get("memory_delta")
+        if isinstance(result_dict.get("memory_delta"), dict)
+        else {}
+    )
+    report_text = str(
+        result_dict.get("output") or result_dict.get("summary") or ""
+    ).strip()
+    changed_files = list(memory_delta.get("changed_files") or [])
+    artifacts = list(result_dict.get("artifacts") or [])
+    mutation_observed = bool(
+        workspace_delta.get("changed") or changed_files or artifacts
+    )
+    if report_text and mutation_observed:
+        return result_dict
+    missing = []
+    if not report_text:
+        missing.append("a non-empty completion report")
+    if not mutation_observed:
+        missing.append("a project workspace change or artifact")
+    result_dict["success"] = False
+    result_dict["error"] = "Worker claimed success without " + " and ".join(missing) + "."
+    try:
+        from distr.core.kanban.project_execution import complete_execution_session
+
+        complete_execution_session(
+            result_dict.get("execution_session_id"),
+            success=False,
+            output_packet=result_dict,
+            error=result_dict["error"],
+        )
+    except Exception:
+        pass
+    return result_dict
+
+
+def _publish_ticket_lane_change(board: Any, ticket_id: int, lane_name: str) -> None:
+    """Best-effort refresh signal for lifecycle changes made outside workflows."""
+    board_id = int(getattr(board, "id", 0) or 0)
+    if not board_id:
+        return
+    try:
+        from distr.gui.web.kanban_events import increment_kanban_updated
+
+        increment_kanban_updated(
+            board_id,
+            event_type="ticket_lane_move",
+            payload={
+                "board_id": board_id,
+                "ticket_ids": [int(ticket_id)],
+                "target_lane": lane_name,
+                "source": "project_cli",
+            },
+        )
+    except Exception:
+        pass
 
 
 def _ticket_workflow_context(session: Any, ticket_id: int, board: Any) -> str:

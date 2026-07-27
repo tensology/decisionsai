@@ -1161,8 +1161,32 @@ class TelegramWebSocketManager(
                 logger.info(
                     f"[Telegram WebSocket] 📥 Server confirmed message sent: {data}"
                 )
+                client_message_id = str(data.get("client_message_id") or "").strip()
+                if client_message_id:
+                    try:
+                        from distr.core.workflow.interactions import record_telegram_delivery
+
+                        record_telegram_delivery(
+                            token=client_message_id,
+                            telegram_chat_id=data.get("chat_id"),
+                            telegram_message_id=data.get("telegram_message_id"),
+                            reply_markup_sent=bool(data.get("reply_markup_sent")),
+                        )
+                    except Exception:
+                        logger.warning("Could not persist Telegram workflow delivery acknowledgment", exc_info=True)
             elif msg_type == "error":
                 logger.error(f"[Telegram WebSocket] ❌ Server returned ERROR: {data}")
+                client_message_id = str(data.get("client_message_id") or "").strip()
+                if client_message_id:
+                    try:
+                        from distr.core.workflow.interactions import record_telegram_delivery_error
+
+                        record_telegram_delivery_error(
+                            token=client_message_id,
+                            error=str(data.get("message") or "Telegram delivery failed"),
+                        )
+                    except Exception:
+                        logger.warning("Could not persist Telegram workflow delivery failure", exc_info=True)
             else:
                 pass  # Too noisy to print every type
 

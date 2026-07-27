@@ -19,6 +19,7 @@ COMPLEXITY_ORDER = {"low": 0, "medium": 1, "high": 2}
 class RouteDecision:
     backend_id: str
     model: str
+    model_provider: str
     complexity: str
     source: RouteSource
     rationale: str
@@ -38,6 +39,7 @@ class RouteDecision:
             "complexity": self.complexity,
             "backend": self.backend_id,
             "model": self.model,
+            "model_provider": self.model_provider,
             "source": self.source,
             "rationale": self.rationale,
             "requires_approval": self.requires_approval,
@@ -76,6 +78,49 @@ def _ticket_text(ticket: Any | None) -> str:
     title = str(getattr(ticket, "title", "") or "").strip()
     desc = str(getattr(ticket, "description", "") or "").strip()
     return f"{title}\n{desc}".strip()
+
+
+def _resolved_model_provider(backend_id: str, route: dict[str, Any]) -> str:
+    """Keep provider identity explicit across policy, handoff, and learning.
+
+    A CLI backend is not necessarily the model provider: Pi can dispatch to
+    Ollama, OpenRouter, Kilo, or another configured catalogue. Conversely,
+    Codex and Claude Code have provider identities inherent to their adapters,
+    so a stale provider value from an earlier candidate must not survive a
+    fallback or orchestrator override.
+    """
+    backend = str(backend_id or "").strip().lower()
+    if backend == "codex":
+        return "openai"
+    if backend == "claude_code":
+        return "anthropic"
+    if backend in {"cursor", "cursor_ide"}:
+        return "cursor"
+    explicit = str(
+        route.get("model_provider") or route.get("provider") or ""
+    ).strip().lower()
+    if not explicit and backend == "pi":
+        model_id = str(route.get("model") or "").strip()
+        if model_id:
+            try:
+                from distr.core.project_cli_backends.models_catalog import pi_cli_models
+                from distr.core.settings import load_settings_from_db
+
+                match = next(
+                    (
+                        item for item in pi_cli_models(load_settings_from_db())
+                        if str(item.get("id") or item.get("model") or "").strip() == model_id
+                    ),
+                    None,
+                )
+                explicit = str(
+                    (match or {}).get("provider")
+                    or (match or {}).get("model_provider")
+                    or ""
+                ).strip().lower()
+            except Exception:
+                logger.debug("Could not resolve Pi model provider from catalog", exc_info=True)
+    return explicit or backend
 
 
 def _infer_harness_category(text: str) -> str | None:
@@ -426,18 +471,67 @@ def resolve_execution_route(
 
     backend_id = normalize_backend_id(route.get("backend") or "pi")
     model = str(route.get("model") or "").strip()
+    model_provider = _resolved_model_provider(backend_id, route)
     try:
         if not get_backend(backend_id).setup_status().ready:
             fallback = resolve_ticket_cli_route(project, level, board=None)
             backend_id = normalize_backend_id(fallback.get("backend") or "pi")
             model = str(fallback.get("model") or "").strip()
+            model_provider = _resolved_model_provider(backend_id, fallback)
             rationale = f"{rationale} (fallback: chosen backend unavailable)"
             source_hint = "fallback"
     except Exception:
         backend_id = "pi"
         model = ""
+        model_provider = ""
         source_hint = "fallback"
         rationale = f"{rationale} (fallback: backend check failed)"
+
+    # CLI availability does not prove that a pinned model is usable. A real
+    # failed project execution certifies that exact provider/model route as
+    # unavailable; Auto may then select a healthy free/local worker instead of
+    # repeatedly launching an obsolete Codex model or another known-bad pin.
+    try:
+        from distr.core.qualification import CertificationStatus, ProviderCertificationStore
+
+        certification_store = ProviderCertificationStore()
+        certification = certification_store.get(
+            model_provider,
+            model or "auto",
+            "project_execution",
+        )
+        blocking = certification_store.blocking_unavailable(
+            model_provider,
+            model or "auto",
+            "project_execution",
+        )
+        if blocking is not None:
+            certification = blocking
+        if certification.status in {
+            CertificationStatus.LIMITED,
+            CertificationStatus.UNAVAILABLE,
+        }:
+            from distr.core.project_cli_backends.model_policy import _free_eligible_model
+            from distr.core.settings import load_settings_from_db
+
+            fallback = _free_eligible_model(
+                load_settings_from_db(),
+                complexity=level,
+                prefer_local=level in {"low", "medium"},
+                avoid_proven_limited=True,
+            )
+            backend_id = normalize_backend_id(fallback.get("backend") or "pi")
+            model = str(fallback.get("model") or "auto").strip()
+            model_provider = str(
+                fallback.get("provider") or fallback.get("model_provider") or backend_id
+            ).strip().lower()
+            source_hint = "fallback"
+            rationale = (
+                f"{rationale} (fallback: {certification.provider}/{certification.model} "
+                f"is certified {certification.status.value})"
+            )
+    except Exception:
+        logger.debug("Could not apply provider certification to direct route", exc_info=True)
 
     source = source_hint if source_hint != "policy" else _determine_source(baseline, route, board)
     requires_approval = bool(
@@ -449,6 +543,7 @@ def resolve_execution_route(
         route = dict(baseline)
         backend_id = normalize_backend_id(route.get("backend") or "pi")
         model = str(route.get("model") or "").strip()
+        model_provider = _resolved_model_provider(backend_id, route)
         source = _determine_source(baseline, baseline, board)
         rationale = (
             f"Route override pending approval: "
@@ -458,6 +553,7 @@ def resolve_execution_route(
     decision = RouteDecision(
         backend_id=backend_id,
         model=model,
+        model_provider=model_provider,
         complexity=level,
         source=source,
         rationale=rationale,

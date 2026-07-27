@@ -101,6 +101,33 @@ def test_code_implementation_keeps_complexity_budget():
     assert "ticket_profile" not in budget
 
 
+def test_code_implementation_without_configuration_gets_role_default_budget():
+    budget = resolve_inspection_budget(
+        None,
+        complexity="high",
+        step_role="implementation",
+        ticket_context="Implement the device diagnostics command and focused tests.",
+    )
+
+    assert budget["max_tool_calls"] == 16
+    assert budget["hard_max_tool_calls"] == 24
+    assert budget["enforcement"] == "soft"
+    assert budget["defaulted_for_step_role"] == "implementation"
+
+
+def test_review_soft_budget_warns_at_target_but_allows_bounded_evidence_finish():
+    budget = resolve_inspection_budget(
+        None,
+        complexity="medium",
+        step_role="review",
+        ticket_context="Review the UI change and capture browser evidence.",
+    )
+
+    assert budget["max_tool_calls"] == 12
+    assert budget["hard_max_tool_calls"] == 21
+    assert budget["enforcement"] == "soft"
+
+
 def test_plan_steering_revises_only_current_and_future_assignments():
     from distr.core.workflow.coordination_plan import apply_steering_to_plan
 

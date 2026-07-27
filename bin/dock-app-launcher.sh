@@ -12,6 +12,20 @@ VENV_PYTHON="${VENV_PYTHON:-$HOME/.virtualenvs/decisions/bin/python}"
 
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
+# The dock wrapper captures stderr from native libraries as well as Python.
+# Keep that useful crash trail bounded; Pipecat/loguru debug output otherwise
+# grows this file indefinitely and creates avoidable disk churn while idle.
+MAX_LAUNCHER_LOG_BYTES="${DECISIONSAI_LAUNCHER_LOG_MAX_BYTES:-10485760}"
+if [ -f "$LOG_FILE" ]; then
+    current_log_bytes=$(wc -c < "$LOG_FILE" | tr -d ' ')
+    if [ "${current_log_bytes:-0}" -ge "$MAX_LAUNCHER_LOG_BYTES" ]; then
+        rm -f "$LOG_FILE.3"
+        [ ! -f "$LOG_FILE.2" ] || mv "$LOG_FILE.2" "$LOG_FILE.3"
+        [ ! -f "$LOG_FILE.1" ] || mv "$LOG_FILE.1" "$LOG_FILE.2"
+        mv "$LOG_FILE" "$LOG_FILE.1"
+    fi
+fi
+
 export DECISIONS_DOCK_APP=1
 export DECISIONS_APP_BUNDLE="$APP_ROOT"
 export DECISIONS_PROJECT_ROOT="$PROJECT_ROOT"

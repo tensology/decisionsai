@@ -1,0 +1,13 @@
+{
+  "status": "completed",
+  "session_key": "default",
+  "run_name": "workflow-sidepanel-baseline",
+  "final_url": "http://127.0.0.1:8765/workflows/",
+  "viewport": {
+    "width": 1920,
+    "height": 1080,
+    "device_scale_factor": 1.0
+  },
+  "screenshot_path": "artifacts/screenshot-20260719-093736-96188714/claim-01/screenshot.webp",
+  "summary": "Captured the current page state successfully."
+}

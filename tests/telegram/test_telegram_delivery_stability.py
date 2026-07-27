@@ -284,6 +284,50 @@ def test_saved_status_is_silent_and_never_generates_voice(monkeypatch):
     assert app.generated_tts == []
 
 
+def test_interactive_prompt_is_visible_text_with_buttons_not_voice(monkeypatch):
+    import distr.app.events as events
+    from distr.core.human_engagement import reset_engagement_ledger
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_engagement_ledger()
+    reset_notification_activity()
+    manager = DummyTelegramManager(connected=True)
+    app = WorkerApp(manager)
+    markup = {
+        "inline_keyboard": [[
+            {"text": "Approve", "callback_data": "wf:opaque:approve"},
+            {"text": "Stop", "callback_data": "wf:opaque:stop"},
+        ]]
+    }
+    payload = {
+        "text": "The control check is ready. Tap Approve to begin.",
+        "provider": "kokoro",
+        "is_done": False,
+        "input_type": "voice",
+        "explicit_notification_intent": True,
+        "requires_response": True,
+        "engagement_kind": "workflow_progress",
+        "state_fingerprint": "interactive-prompt-test",
+        "reply_markup": markup,
+        "allow_voice": True,
+    }
+    monkeypatch.setattr(events, "load_settings_from_db", lambda: {})
+    monkeypatch.setattr(
+        events,
+        "load_response_format_settings",
+        lambda _settings: (False, True),
+    )
+
+    app._send_to_telegram_worker(payload)
+
+    assert app.generated_tts == []
+    assert len(manager.sent) == 1
+    _, kwargs = manager.sent[0]
+    assert kwargs["text"] == payload["text"]
+    assert kwargs["audio_file_path"] is None
+    assert kwargs["reply_markup"] == markup
+
+
 def test_screenshot_evidence_status_is_silent(monkeypatch):
     import distr.app.events as events
     from distr.core.human_engagement import reset_engagement_ledger
@@ -446,6 +490,19 @@ def test_sender_preserves_inline_workflow_keyboard():
 
     payload = sender._message_queue.get_nowait()
     assert payload["reply_markup"] == markup
+
+
+def test_sender_correlates_durable_workflow_keyboard_delivery():
+    sender = DummyTelegramSender()
+
+    assert sender.send_to_telegram(
+        "Needs approval",
+        reply_markup={"inline_keyboard": []},
+        interaction_token="opaque-token",
+    ) is True
+
+    payload = sender._message_queue.get_nowait()
+    assert payload["client_message_id"] == "opaque-token"
 
 
 def test_direct_outbound_low_value_status_is_suppressed():

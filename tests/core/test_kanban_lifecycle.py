@@ -56,6 +56,53 @@ def test_delivery_lifecycle_migrates_scoped_work_without_losing_tickets():
         engine.dispose()
 
 
+def test_delivery_lifecycle_reuses_legacy_destination_lanes_and_tickets():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        board = KanbanBoard(name="Legacy delivery", source="database")
+        session.add(board)
+        session.flush()
+        legacy_names = ("Backlog", "Current", "QA / Assess", "Done")
+        legacy_lanes = []
+        for position, name in enumerate(legacy_names):
+            lane = KanbanLane(board_id=board.id, name=name, position=position)
+            session.add(lane)
+            session.flush()
+            legacy_lanes.append(lane)
+        tickets = [
+            KanbanTicket(lane_id=lane.id, title=f"Ticket in {lane.name}")
+            for lane in legacy_lanes
+        ]
+        session.add_all(tickets)
+        session.flush()
+        original_ids = [lane.id for lane in legacy_lanes]
+
+        lanes = ensure_delivery_lanes(session, board.id)
+        session.flush()
+
+        actual = (
+            session.query(KanbanLane)
+            .filter(KanbanLane.board_id == board.id)
+            .order_by(KanbanLane.position, KanbanLane.id)
+            .all()
+        )
+        assert [lane.name for lane in actual] == list(DELIVERY_LANES)
+        assert [lane.id for lane in actual] == original_ids
+        assert [ticket.lane_id for ticket in tickets] == original_ids
+        assert lanes["In Progress"].id == legacy_lanes[1].id
+        assert lanes["QA"].id == legacy_lanes[2].id
+        assert lanes["Complete"].id == legacy_lanes[3].id
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_automation_moves_backlog_to_in_progress_then_qa_but_never_complete():
     engine = create_engine(
         "sqlite:///:memory:",

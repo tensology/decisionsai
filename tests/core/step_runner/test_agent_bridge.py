@@ -179,6 +179,16 @@ class TestNotifyVoiceAgent:
         bridge.notify_voice_agent(42, "done")
         mock_sm.workflow_finished.emit.assert_called_once_with(42, "done")
 
+    @patch("distr.core.signals.signal_manager")
+    def test_deleted_qt_signal_during_shutdown_is_ignored(self, mock_sm):
+        mock_sm.workflow_finished.emit.side_effect = RuntimeError(
+            "wrapped C/C++ object of type SignalManager has been deleted"
+        )
+
+        WorkflowAgentBridge().notify_voice_agent(42, "done")
+
+        mock_sm.workflow_finished.emit.assert_called_once_with(42, "done")
+
 
 class TestOnWorkflowCompleted:
     """Tests for the top-level on_workflow_completed orchestration."""

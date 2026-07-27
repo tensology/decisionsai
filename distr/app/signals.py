@@ -33,7 +33,14 @@ class SignalBridgeMixin:
         except Exception:
             return True
 
-    def _route_explicit_work_intake(self, chat_id, message, *, source: str = "web") -> bool:
+    def _route_explicit_work_intake(
+        self,
+        chat_id,
+        message,
+        *,
+        source: str = "web",
+        intake_context=None,
+    ) -> bool:
         """Intercept explicit work commands while preserving normal conversation."""
         clean = str(message or "").strip()
         if not clean:
@@ -41,14 +48,27 @@ class SignalBridgeMixin:
         try:
             from distr.core.work_intake import WorkIntake, get_work_intake_service
 
-            decision = get_work_intake_service().ingest(
-                WorkIntake(
-                    source=source,
-                    user_text=clean,
-                    source_thread_id=str(chat_id or ""),
-                    metadata={"chat_id": int(chat_id) if str(chat_id or "").isdigit() else None},
-                )
+            context = intake_context if isinstance(intake_context, dict) else {}
+            supplied_metadata = context.get("metadata")
+            metadata = {
+                "chat_id": int(chat_id) if str(chat_id or "").isdigit() else None,
+            }
+            if isinstance(supplied_metadata, dict):
+                metadata.update(supplied_metadata)
+
+            intake = WorkIntake(
+                source=source,
+                user_text=clean,
+                source_thread_id=str(chat_id or ""),
+                source_message_id=str(context.get("source_message_id") or ""),
+                requested_outcome=str(context.get("requested_outcome") or ""),
+                metadata=metadata,
             )
+            # The generated UID is authoritative. Carry it through the agent
+            # request so a final answer can bind to this exact intake even when
+            # multiple conversational requests overlap in the same chat.
+            context["intake_uid"] = intake.intake_uid
+            decision = get_work_intake_service().ingest(intake)
             if not decision.handled:
                 return False
             manager = getattr(self, "chat_manager", None)
@@ -619,6 +639,20 @@ class SignalBridgeMixin:
                 self._web_stream_flush_timer = None
             _flush_stream_tokens()
             self._web_stream_chat_id = None
+            if cid:
+                try:
+                    from distr.core.chat_turns import latest_active_turn_id, terminal_turn
+
+                    turn_id = latest_active_turn_id(int(cid))
+                    if turn_id is not None:
+                        terminal_turn(
+                            int(cid),
+                            "turn_failed",
+                            turn_id=turn_id,
+                            summary=str(error),
+                        )
+                except Exception:
+                    logger.debug("Could not persist failed chat turn", exc_info=True)
             _post_chat_event({"event": "stream_error", "chat_id": int(cid) if cid else None, "error": str(error)})
         signal_manager.chat_stream_error.connect(on_chat_stream_error_web)
 
@@ -669,15 +703,25 @@ class SignalBridgeMixin:
         ):
             """Send message to agent. load-in-agent already ran current_chat_changed; just send the text."""
             try:
-                if self._route_explicit_work_intake(chat_id, message, source="web"):
+                opts = options if isinstance(options, dict) else {}
+                intake_context = opts.get("work_intake")
+                if not isinstance(intake_context, dict):
+                    intake_context = {}
+                if self._route_explicit_work_intake(
+                    chat_id,
+                    message,
+                    source="web",
+                    intake_context=intake_context,
+                ):
                     return
                 speak_bool = coerce_speak_enabled(speak, default=True)
-                opts = options if isinstance(options, dict) else {}
                 params = {
                     'text': message,
                     'speak': speak_bool,
                     'chat_id': chat_id,
                 }
+                if intake_context.get("intake_uid"):
+                    params["work_intake_uid"] = str(intake_context["intake_uid"])
                 mgr = getattr(self, 'telegram_manager', None)
                 if speak_bool and mgr is not None:
                     from distr.core.integrations.telegram.remote_tts_delivery import (

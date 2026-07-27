@@ -123,7 +123,7 @@ def _seed_terminal_run(factory):
 
 def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
     from distr.core.db.kanban import KanbanLane, KanbanTicket, KanbanTicketAuditEntry
-    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
     from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
     from distr.core.workflow.dispatcher import complete_run
 
@@ -137,6 +137,17 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
     # terminal result may then advance In Progress to QA, but never to Complete.
     with get_session() as session:
         move_ticket_to_delivery_lane(session, ids["ticket_id"], "In Progress")
+        skipped_branch = AutoWorkflowStep(
+            workflow_id=ids["workflow_id"],
+            name="Correct only if review fails",
+            position=1,
+            action_type="agent_instruction",
+            instruction="Correct review findings.",
+            status="pending",
+        )
+        session.add(skipped_branch)
+        session.flush()
+        skipped_branch_id = skipped_branch.id
 
     with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
         "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
@@ -159,6 +170,13 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
         packet = run_data["result_packet"]
 
         assert run.status == "completed"
+        assert (
+            session.query(AutoWorkflowStep)
+            .filter(AutoWorkflowStep.id == skipped_branch_id)
+            .one()
+            .status
+            == "skipped"
+        )
         assert packet["status"] == "completed"
         assert packet["summary"] == f"Workflow run {ids['run_id']} finished with status: completed."
         assert packet["audit"]["final_verdict"] == "pass"
@@ -175,6 +193,38 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
         assert terminal.run_id == ids["run_id"]
         assert terminal.status == "completed"
         assert terminal.final_verdict == "pass"
+
+
+def test_terminal_ticket_lifecycle_survives_audit_telemetry_failure():
+    """Audit persistence is observability, never a lifecycle dependency."""
+    from distr.core.db.kanban import KanbanLane, KanbanTicket
+    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        move_ticket_to_delivery_lane(session, ids["ticket_id"], "In Progress")
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()), patch(
+        "distr.core.workflow.dispatcher.append_ticket_audit_entry",
+        side_effect=RuntimeError("telemetry unavailable"),
+    ):
+        assert complete_run(ids["run_id"], "completed") is True
+
+    with get_session() as session:
+        ticket = session.query(KanbanTicket).filter(KanbanTicket.id == ids["ticket_id"]).one()
+        lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).one()
+        assert ticket.workflow_status == "completed"
+        assert lane.name == "QA"
 
 
 def test_failed_run_stays_in_progress_for_retry_or_human_direction():

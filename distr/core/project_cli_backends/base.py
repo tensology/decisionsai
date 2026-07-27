@@ -44,6 +44,12 @@ class BackendTaskResult:
     execution_session_id: Optional[int] = None
     waits_for_human: bool = False
     work_packet_path: str = ""
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    evidence: dict[str, Any] = field(default_factory=dict)
+    memory_delta: dict[str, Any] = field(default_factory=dict)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    next_actions: dict[str, Any] = field(default_factory=dict)
+    workspace_state_delta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

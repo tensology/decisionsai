@@ -5,6 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from distr.core.db.time import utc_now_naive
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,8 +104,61 @@ def record_chat_workflow_event(
             events.append(payload)
             params["workflow_events"] = events[-limit:]
             chat.params = json.dumps(params)
-            chat.modified_date = datetime.utcnow()
+            chat.modified_date = utc_now_naive()
             db.commit()
+
+        # Project workflow/worker progress into the same durable turn ledger as
+        # ordinary chat tools. Legacy workflow cards remain persisted for one
+        # compatibility release, but new clients read this unified lifecycle.
+        try:
+            from distr.core.chat_turns import find_running_tool_event, finish_tool, start_tool
+
+            activity_key = f"workflow:{run_id or workflow_id or 'chat'}:{step_id or 'run'}"
+            terminal_statuses = {"completed", "passed", "failed", "cancelled", "skipped"}
+            normalized_status = (status or "running").lower()
+            existing_event_id = find_running_tool_event(resolved_chat_id, activity_key)
+            title = step_name or workflow_name or "Workflow"
+            metadata = {
+                "tool_name": activity_key,
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "run_id": run_id,
+                "step_id": step_id,
+                "phase": phase,
+                "source": "workflow",
+            }
+            if existing_event_id is None and normalized_status not in terminal_statuses:
+                start_tool(
+                    resolved_chat_id,
+                    activity_key,
+                    title=title,
+                    summary=summary or "Workflow step running…",
+                    metadata=metadata,
+                )
+            elif existing_event_id is not None and normalized_status in terminal_statuses:
+                finish_tool(
+                    existing_event_id,
+                    success=normalized_status in {"completed", "passed", "skipped"},
+                    summary=summary or normalized_status.title(),
+                    metadata=metadata,
+                )
+            elif existing_event_id is None and normalized_status in terminal_statuses:
+                created_id, _, _ = start_tool(
+                    resolved_chat_id,
+                    activity_key,
+                    title=title,
+                    summary="Workflow activity recorded.",
+                    metadata=metadata,
+                )
+                if created_id:
+                    finish_tool(
+                        created_id,
+                        success=normalized_status in {"completed", "passed", "skipped"},
+                        summary=summary or normalized_status.title(),
+                        metadata=metadata,
+                    )
+        except Exception:
+            logger.debug("durable workflow turn projection failed", exc_info=True)
 
         try:
             from distr.core.signals import signal_manager

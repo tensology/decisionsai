@@ -24,8 +24,10 @@ from distr.core.db.workflow import (
 )
 from distr.core.workflow.tools import normalize_tool_list, tools_for_action
 from distr.core.workflow.verification import (
+    _ticket_acceptance_gate,
     _run_verification,
     build_validation_snapshot,
+    recover_blocked_browser_validation,
     ticket_acceptance_findings,
 )
 from distr.core.workflow.runtime_contract import emit_step_activity, should_pause_after_step
@@ -37,6 +39,26 @@ from distr.gui.web.kanban_events import increment_kanban_updated
 
 logger = logging.getLogger(__name__)
 
+
+def _apply_approved_provider_replacements(
+    routes: dict[str, Any],
+    replacements: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Keep accepted provider swaps when a coordination plan is revised."""
+    updated = dict(routes or {})
+    for key, route in list(updated.items()):
+        if not isinstance(route, dict):
+            continue
+        from distr.core.work_intake.execution_policy import (
+            apply_approved_provider_replacements_to_route,
+        )
+
+        updated[key] = apply_approved_provider_replacements_to_route(
+            route,
+            replacements,
+        )
+    return updated
+
 _EXPECTED_OUTPUT_ALIASES = {
     "unknowns": ("missing information", "open questions", "unresolved questions"),
     "ui_design_read_if_applicable": ("ui design read", "design direction"),
@@ -44,9 +66,25 @@ _EXPECTED_OUTPUT_ALIASES = {
     # asks for equivalent snake_case fields. Preserve semantic contracts without
     # spending another model call solely to reformat a valid review.
     "review_findings": ("independent review findings", "summary"),
-    "project_release_findings": ("project release finding",),
+    "project_release_findings": (
+        "project release finding",
+        "ticket specific finding",
+        "ticket specific findings",
+        "security",
+        "remaining risks",
+    ),
+    "browser_evidence": ("browser evidence", "ui assessment"),
+    "visual_claim_verdicts": ("visual claim verdict", "ui assessment"),
     "check_results": ("tests run", "checks run"),
     "security_audit": ("security",),
+    "final_fixes": ("final fixes", "self corrections", "self-corrections"),
+    "final_check_results": ("tests run", "checks run", "test results"),
+    "final_security_audit": ("security", "security audit"),
+    # Standard coding-agent reports use these human headings. For a non-UI
+    # ticket, an explicit UI assessment of N/A is still the required evidence;
+    # demanding a second snake_case field caused valid audits to loop forever.
+    "final_browser_evidence": ("browser evidence", "ui assessment"),
+    "visual_quality_verdict": ("visual quality verdict", "ui assessment"),
 }
 
 
@@ -92,6 +130,57 @@ def _missing_expected_outputs(result: str, expected_outputs: list[Any]) -> list[
         if not _has_expected_output(result, label):
             missing.append(label)
     return missing
+
+
+def _release_hold_findings(result: str, step_config: dict[str, Any]) -> list[str]:
+    """Reject a final audit that names its fields but says the work cannot ship.
+
+    Expected-output checks prove that a worker returned the requested headings;
+    they do not prove the values under those headings are successful.  In
+    particular, ``Ship verdict: HOLD`` must never advance into the reporting
+    step merely because the words ``ship verdict`` are present.
+    """
+    if str(step_config.get("step_role") or "").strip().lower() not in {
+        "review",
+        "final_polish",
+    }:
+        return []
+    text = str(result or "")
+    plain = re.sub(r"[*_`]+", "", text)
+    findings: list[str] = []
+    verdict = re.search(
+        r"(?im)\bship\s+verdict\s*(?::|-|\bis\b)?\s*"
+        r"(hold|blocked|failed?|no[ -]?go|not\s+ready)\b",
+        plain,
+    )
+    if verdict:
+        findings.append(f"Final ship verdict is {verdict.group(1).upper()}.")
+    terminal = re.search(
+        r"(?im)^\s*status\s*:\s*(needs[_ -]?input|blocked|failed?|incomplete)\b",
+        plain,
+    )
+    if terminal:
+        findings.append(f"Final audit status is {terminal.group(1)}.")
+    for match in re.finditer(r"(?im)^\s*(?:[-*]\s*)?blockers?\s*:\s*(.+)$", plain):
+        blocker = match.group(1).strip()
+        if re.match(
+            r"(?i)^(?:none|n\s*/?\s*a|no\s+blockers?|not\s+applicable)\s*(?:[.;]|$)",
+            blocker,
+        ):
+            continue
+        normalized = re.sub(r"[^a-z0-9]+", " ", blocker.lower()).strip()
+        if normalized and normalized not in {"none", "n a", "no blockers", "not applicable"}:
+            findings.append(f"Final audit reports a blocker: {blocker[:300]}")
+    # Keep this deterministic and conservative. A UI audit that explicitly
+    # says its browser proof was blocked/not executed is not release evidence.
+    if re.search(
+        r"(?is)\b(?:browser|playwright|chromium)\b.{0,160}"
+        r"\b(?:blocked|not\s+(?:run|executed)|could\s+not\s+(?:run|launch)|"
+        r"unable\s+to\s+(?:run|launch)|stale|predate[sd]?)\b",
+        plain,
+    ):
+        findings.append("Fresh browser evidence was not produced.")
+    return list(dict.fromkeys(findings))
 
 
 _DESTRUCTIVE_SCOPE_RE = re.compile(
@@ -242,6 +331,21 @@ class StepRouter:
                     run_data = json.loads(run.run_data or "{}")
                 except Exception:
                     run_data = {}
+                correction_context = run_data.get("last_validation_correction")
+                correction_context = (
+                    correction_context if isinstance(correction_context, dict) else {}
+                )
+                prior_result = str(correction_context.get("prior_result") or "").strip()
+                if (
+                    prior_result
+                    and int(correction_context.get("step_id") or 0) == int(step_id)
+                    and prior_result not in str(result or "")
+                ):
+                    result = (
+                        prior_result
+                        + "\n\n[VALIDATION CORRECTION SUPPLEMENT]\n"
+                        + str(result or "").strip()
+                    ).strip()
                 if run_data.pop("ide_handoff_pending", False):
                     run_data["waiting_kind"] = "ide_handoff"
                     run.run_data = json.dumps(run_data)
@@ -357,6 +461,7 @@ class StepRouter:
                     validation_routes = []
             ticket_context = ""
             standards_context = ""
+            include_ui_standards = True
             try:
                 from distr.core.db.kanban import KanbanTicket
                 from distr.core.workflow.standards_memory import build_standards_context
@@ -368,7 +473,16 @@ class StepRouter:
                 if run:
                     try:
                         brief_data = json.loads(run.run_data or "{}") or {}
-                        brief = (brief_data.get("ticket_workflow_brief") or "").strip()
+                        execution_profile = brief_data.get("ticket_execution_profile") or {}
+                        if isinstance(execution_profile, dict):
+                            include_ui_standards = bool(
+                                execution_profile.get("ui_evidence_required")
+                            )
+                        raw_brief = brief_data.get("ticket_workflow_brief") or ""
+                        if isinstance(raw_brief, dict):
+                            brief = json.dumps(raw_brief, ensure_ascii=False)
+                        else:
+                            brief = str(raw_brief).strip()
                         if brief:
                             ticket_context = (
                                 f"{ticket_context}\n\n{brief}".strip()
@@ -380,6 +494,7 @@ class StepRouter:
                 standards_context = build_standards_context(
                     getattr(run.workflow, "context_rules", None) if run and run.workflow else None,
                     board_id=getattr(run, "board_id", None) if run else None,
+                    include_ui_standards=include_ui_standards,
                 )
             except Exception:
                 logger.debug("Could not build verification context", exc_info=True)
@@ -392,6 +507,15 @@ class StepRouter:
                 ticket_context=ticket_context,
                 standards_context=standards_context,
                 validation_routes=validation_routes,
+            )
+            objective_acceptance_passed = bool(
+                verified_passed
+                and _ticket_acceptance_gate(
+                    step,
+                    result,
+                    ticket_context,
+                    project_id=verify_project_id,
+                ) is True
             )
             read_only_evidence: dict[str, Any] = {}
             raw_step_config = getattr(step, "config", None)
@@ -450,22 +574,68 @@ class StepRouter:
                 project_id=verify_project_id,
             )
             protected_scope_conflicts = _protected_scope_conflicts(ticket_context, result)
-            orchestrator_overlay = None
-            try:
-                from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
-                orchestrator_overlay = apply_orchestrator_validator_overlay(
-                    step=step,
-                    result=result,
-                    caller_passed=passed,
-                    mechanical_passed=verified_passed,
-                    standards_context=standards_context,
-                    ticket_context=ticket_context,
-                    validation_routes=validation_routes,
+            release_hold_findings = _release_hold_findings(result, step_config)
+            host_browser_validation: dict[str, Any] = {}
+            if release_hold_findings:
+                recovery_context = result
+                # A constrained reviewer may accurately report that its Node
+                # command is blocked while abbreviating the filename. Reuse
+                # exact commands already reported by earlier workers in this
+                # same run; the recovery helper still enforces a project-local
+                # test path, no shell, a clean exit, and fresh viewport media.
+                try:
+                    from distr.core.db.kanban import ProjectExecutionSession
+
+                    prior_sessions = (
+                        db.query(ProjectExecutionSession)
+                        .filter(ProjectExecutionSession.run_id == int(run_id))
+                        .filter(ProjectExecutionSession.step_id != int(step_id))
+                        .order_by(ProjectExecutionSession.id.desc())
+                        .limit(5)
+                        .all()
+                    )
+                    prior_reports: list[str] = []
+                    for session in prior_sessions:
+                        packet = json.loads(session.output_packet or "{}") or {}
+                        report = str(packet.get("output") or packet.get("summary") or "").strip()
+                        if report:
+                            prior_reports.append(report)
+                    if prior_reports:
+                        recovery_context += "\n\nEarlier same-run execution evidence:\n" + "\n".join(prior_reports)
+                except Exception:
+                    logger.debug("Could not load same-run browser command evidence", exc_info=True)
+                host_browser_validation = recover_blocked_browser_validation(
+                    recovery_context,
+                    project_id=verify_project_id,
                 )
-                if orchestrator_overlay is not None:
-                    verified_passed = bool(orchestrator_overlay.get("passed"))
-            except Exception:
-                logger.debug("Orchestrator validator overlay skipped", exc_info=True)
+                if host_browser_validation.get("passed"):
+                    command = " ".join(host_browser_validation.get("command") or [])
+                    media = ", ".join(host_browser_validation.get("fresh_media") or [])
+                    result = (
+                        result.rstrip()
+                        + "\n\nAuthoritative Decisions host browser validation: PASSED."
+                        + f"\nHost command: {command}."
+                        + f"\nFresh desktop/mobile evidence: {media}."
+                        + "\nFinal ship verdict override: SHIP.\nFinal blockers override: None."
+                    )
+                    release_hold_findings = []
+            orchestrator_overlay = None
+            if not objective_acceptance_passed:
+                try:
+                    from distr.core.orchestrator_validator import apply_orchestrator_validator_overlay
+                    orchestrator_overlay = apply_orchestrator_validator_overlay(
+                        step=step,
+                        result=result,
+                        caller_passed=passed,
+                        mechanical_passed=verified_passed,
+                        standards_context=standards_context,
+                        ticket_context=ticket_context,
+                        validation_routes=validation_routes,
+                    )
+                    if orchestrator_overlay is not None:
+                        verified_passed = bool(orchestrator_overlay.get("passed"))
+                except Exception:
+                    logger.debug("Orchestrator validator overlay skipped", exc_info=True)
 
             # These are deterministic contract gates. An LLM validator may add
             # useful judgment but cannot overrule file-system evidence or omit
@@ -476,6 +646,7 @@ class StepRouter:
                 or missing_expected_outputs
                 or acceptance_findings
                 or protected_scope_conflicts
+                or release_hold_findings
             ):
                 verified_passed = False
 
@@ -514,6 +685,15 @@ class StepRouter:
                     + ", ".join(sorted({item["target"] for item in protected_scope_conflicts}))
                     + "."
                 )
+            if release_hold_findings:
+                validation_snapshot["release_hold_findings"] = release_hold_findings
+                validation_snapshot["correction_hint"] = (
+                    "Do not report this ticket complete. Resolve the release hold, run the missing "
+                    "checks in a capable environment, and return fresh evidence before issuing SHIP. "
+                    + " ".join(release_hold_findings)
+                )
+            if host_browser_validation:
+                validation_snapshot["host_browser_validation"] = host_browser_validation
             if orchestrator_overlay:
                 validation_snapshot["orchestrator_validator"] = orchestrator_overlay
                 if not verified_passed:
@@ -630,6 +810,17 @@ class StepRouter:
                     )
                     run_data["coordination_plan"] = coordination_plan
                     planned_step_routes, planned_role_routes = coordination_plan_routes(coordination_plan)
+                    approved_replacements = list(
+                        run_data.get("approved_provider_replacements") or []
+                    )
+                    planned_step_routes = _apply_approved_provider_replacements(
+                        planned_step_routes,
+                        approved_replacements,
+                    )
+                    planned_role_routes = _apply_approved_provider_replacements(
+                        planned_role_routes,
+                        approved_replacements,
+                    )
                     run_data["step_routes"] = planned_step_routes
                     run_data["step_role_routes"] = planned_role_routes
                 except Exception:
@@ -1011,6 +1202,7 @@ class StepRouter:
             run,
             verified_passed=verified_passed,
             validation_snapshot=validation_snapshot or {},
+            result=result,
         )
         if retry_decision:
             return retry_decision
@@ -1078,6 +1270,7 @@ class StepRouter:
         *,
         verified_passed: bool,
         validation_snapshot: Dict[str, Any],
+        result: str,
     ) -> Optional[Dict[str, Any]]:
         """Retry a correctable step with its compact validator finding.
 
@@ -1095,6 +1288,12 @@ class StepRouter:
             if key in retry_counts:
                 retry_counts.pop(key, None)
                 run_data["step_retry_counts"] = retry_counts
+                correction = run_data.get("last_validation_correction")
+                if (
+                    isinstance(correction, dict)
+                    and int(correction.get("step_id") or 0) == int(step.id)
+                ):
+                    run_data.pop("last_validation_correction", None)
                 run.run_data = json.dumps(run_data)
             return None
         max_retries = max(0, int(getattr(step, "max_retries", 0) or 0))
@@ -1105,15 +1304,19 @@ class StepRouter:
         retry_counts[key] = used + 1
         run_data["step_retry_counts"] = retry_counts
         run_data["feedback"] = (
-            "The previous result failed deterministic validation. Correct only this finding and "
-            "return the same compact expected-output contract; do not repeat the repository scan: "
+            "The previous result failed deterministic validation. Preserve every valid field from "
+            "the prior result, correct only this finding, and return a complete replacement report; "
+            "do not repeat the repository scan: "
             + correction_hint
+            + "\n\nPrior rejected result (reuse its valid fields):\n"
+            + str(result or "").strip()[:6000]
         )
         run_data["last_validation_correction"] = {
             "step_id": int(step.id),
             "attempt": used + 1,
             "max_retries": max_retries,
             "correction_hint": correction_hint,
+            "prior_result": str(result or "").strip()[:12000],
         }
         current_route = run_data.get("execution_route")
         if (
@@ -1294,7 +1497,7 @@ class StepRouter:
         result: str,
         verified_passed: bool,
     ) -> Dict[str, Any] | None:
-        """Pause for Paul when automatic retries would only waste another loop."""
+        """Pause for the operator when automatic retries would only waste another loop."""
         if not run or verified_passed:
             return None
         try:
@@ -1327,7 +1530,11 @@ class StepRouter:
         run_data["human_intervention_state"] = "needs_human_input"
         run_data["next_action"] = "needs_human_input"
         run.run_data = json.dumps(run_data)
-        db.flush()
+        # Persist the wait state before any notification code opens its own
+        # transaction.  SQLite cannot service a second writer while this
+        # session still owns the write lock, which previously dropped the
+        # Telegram interaction and left only a vague spoken message.
+        wait_result = self._enter_wait_state(db, step, run_id, prompt, False)
         try:
             from distr.core.orchestration_events import emit_orchestration_event
 
@@ -1345,22 +1552,7 @@ class StepRouter:
             )
         except Exception:
             logger.debug("Could not emit control interrupt event", exc_info=True)
-        try:
-            from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
-
-            options = ", ".join(decision.options) if decision.options else "Steer, Stop"
-            notify_ticket_workflow_progress(
-                run_id=run_id,
-                step_id=int(step.id),
-                body=f"{prompt} Options: {options}.",
-                voice_body=decision.question,
-                state_fingerprint=f"control-interrupt:{run_id}:{step.id}:{repeated}",
-                priority="high",
-                requires_response=True,
-            )
-        except Exception:
-            logger.debug("Could not notify control interrupt", exc_info=True)
-        return self._enter_wait_state(db, step, run_id, prompt, False)
+        return wait_result
 
     # ── Static routing ──────────────────────────────────────────────
 
@@ -1717,17 +1909,28 @@ class StepRouter:
                 waiting_kind = str((json.loads(run.run_data or "{}") or {}).get("waiting_kind") or "")
             except Exception:
                 waiting_kind = ""
-        # Provider decisions have a dedicated notification below containing the
-        # exact failure, recommendation, and actions. Emitting the generic wait
-        # signal first caused TTS to say only "needs your input" and hid the
-        # actual question behind a second message.
-        if waiting_kind != "provider_preflight":
+        # Interactive decisions use the exact stored question below. Emitting
+        # the generic wait signal first caused TTS to say only "needs your
+        # input" and hid the actual question behind a second message.
+        interactive_kinds = {
+            "control_interrupt",
+            "route_approval",
+            "approval",
+            "provider_preflight",
+            "pre_execution_approval",
+            "run_briefing",
+            "step_review",
+            "worker_needs_input",
+            "restart_recovery",
+        }
+        if waiting_kind not in interactive_kinds:
             self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
             self._notify_main_agent(workflow_id, run_id, handoff, result_text=result)
         if run:
             try:
                 latest_data = json.loads(run.run_data or "{}") or {}
-                if str(latest_data.get("waiting_kind") or "") == "provider_preflight":
+                latest_kind = str(latest_data.get("waiting_kind") or "").strip().lower()
+                if latest_kind in interactive_kinds:
                     from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
 
                     question = str(
@@ -1741,12 +1944,12 @@ class StepRouter:
                         step_id=step_id,
                         body=question,
                         voice_body=question,
-                        state_fingerprint=f"provider-preflight:{run_id}:{step_id}",
+                        state_fingerprint=f"workflow-decision:{latest_kind}:{run_id}:{step_id}",
                         priority="high",
                         requires_response=True,
                     )
             except Exception:
-                logger.warning("Could not send provider preflight approval to Telegram", exc_info=True)
+                logger.warning("Could not send workflow decision to Telegram", exc_info=True)
 
         return {"action": "waiting", "notify_main_agent": True, "run_id": run_id}
 

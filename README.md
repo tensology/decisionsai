@@ -279,6 +279,16 @@ python bin/start.py
 
 ---
 
+## Quality checks
+
+Run the test suite with:
+
+```bash
+pytest
+```
+
+This runs the unit and property-based tests, skipping optional heavy dependencies by default.
+
 ## Keyboard & Voice Commands
 
 ### Voice commands

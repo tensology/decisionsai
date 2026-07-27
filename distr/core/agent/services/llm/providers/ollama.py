@@ -715,6 +715,12 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                         event_queue=self.event_queue,
                     )
 
+                try:
+                    from distr.core.chat_turns import begin_synthesis
+
+                    begin_synthesis(current_chat_id)
+                except Exception:
+                    logger.debug("Could not mark chat synthesis", exc_info=True)
                 full_response, should_return = await self._handle_post_tool_execution(
                     tool_calls, tool_results, current_chat_id, full_response,
                 )
@@ -1005,6 +1011,13 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         results = []
         decisions = build_computer_use_execution_decisions(tool_calls)
         for idx, tool_call in enumerate(tool_calls):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            try:
+                from distr.core.chat_turns import apply_pending_steering_to_messages
+
+                apply_pending_steering_to_messages(self, chat_id)
+            except Exception:
+                logger.debug("Could not apply pending chat steering", exc_info=True)
             function = tool_call.get('function', {})
             tool_name = function.get('name', '')
             arguments = function.get('arguments', {})
@@ -1026,6 +1039,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
             if tool_name in self._tools_dict:
                 tool = self._tools_dict[tool_name]
+                from distr.core.agent.tool_audit import record_tool_start
+
+                record_tool_start(chat_id, tool_name)
                 try:
                     # Inject context for tools that need it
                     if getattr(self, '_is_telegram_request', False):
@@ -1047,20 +1063,21 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     )
                     results.append(result)
 
-                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
                 except Exception as e:
                     error_msg = f"Error executing tool {tool_name}: {e}"
                     logger.error(error_msg, exc_info=True)
                     results.append(error_msg)
-                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, error_msg, "failed", event_queue=self.event_queue)
             else:
                 # Fuzzy match — LLM may have hallucinated a tool name
                 matched = self._fuzzy_match_tool(tool_name)
                 if matched:
+                    from distr.core.agent.tool_audit import record_tool_start
+
+                    record_tool_start(chat_id, matched.name, instruction_hint=f"Matched from {tool_name}")
                     try:
                         loop = asyncio.get_running_loop()
                         result = await loop.run_in_executor(

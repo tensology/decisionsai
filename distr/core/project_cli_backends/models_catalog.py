@@ -79,6 +79,9 @@ def enrich_model_entry(item: dict[str, Any], *, default_free: bool | None = None
     out = dict(item or {})
     model_id = (out.get("id") or "").strip().lower()
     provider = (out.get("provider") or "").strip().lower()
+    ollama_cloud = provider == "ollama" and bool(
+        re.search(r"(?:^|[-_:])cloud$", model_id)
+    )
     if "free" not in out and "is_free" in out:
         out["free"] = bool(out.get("is_free"))
     if "free" not in out and "(free)" in str(out.get("name") or "").lower():
@@ -88,7 +91,9 @@ def enrich_model_entry(item: dict[str, Any], *, default_free: bool | None = None
     if "free" not in out and default_free is not None:
         out["free"] = bool(default_free)
     if "free" not in out:
-        out["free"] = provider in {"ollama", "local", "pi"} or model_id.endswith(":latest")
+        out["free"] = (
+            provider in {"ollama", "local", "pi"} and not ollama_cloud
+        ) or model_id.endswith(":latest")
     if "tier" not in out or not out.get("tier"):
         size_match = re.search(r"(?:^|[-_:])([0-9]+(?:\.[0-9]+)?)b(?:$|[-_:])", model_id)
         parameter_billions = float(size_match.group(1)) if size_match else None
@@ -107,7 +112,7 @@ def enrich_model_entry(item: dict[str, Any], *, default_free: bool | None = None
     if "supports_chat" not in out:
         out["supports_chat"] = not any(token in model_id for token in ("embed", "embedding", "whisper", "tts", "vision-only"))
     if "local" not in out:
-        out["local"] = provider in {"ollama", "local", "pi"}
+        out["local"] = provider in {"ollama", "local", "pi"} and not ollama_cloud
     if "usable" not in out:
         out["usable"] = bool(out.get("supports_chat", True)) and str(out.get("id") or "").strip() != ""
     return out
@@ -171,12 +176,11 @@ def recommend_cli_model(
         # Kilo's moving aliases are deliberately stable as individual free
         # promotions expire. Prefer the free alias over a dated model that may
         # still linger in the provider catalog after its free period ends.
-        if (
-            not prefer_local
-            and model_id == "openrouter/free"
-            and str(model.get("provider") or "").lower() == "kilocode"
-        ):
-            value += 120
+        if not prefer_local and str(model.get("provider") or "").lower() == "kilocode":
+            if model_id == "kilo-auto/free":
+                value += 140
+            elif model_id == "openrouter/free":
+                value += 120
         return value
 
     selected = sorted(usable, key=score, reverse=True)[0]
@@ -227,7 +231,27 @@ def models_from_pi_json() -> list[dict]:
                     mid = (m.get("id") or "").strip()
                     mname = (m.get("name") or mid).strip()
                     if mid:
-                        models.append(model_entry(mid, prov_name, mname, scope="scoped"))
+                        provider_id = str(prov_name or "").strip().lower()
+                        ollama_cloud = provider_id == "ollama" and bool(
+                            re.search(r"(?:^|[-_:])cloud$", mid.lower())
+                        )
+                        if provider_id == "ollama" and not ollama_cloud:
+                            if not _ollama_model_chat_ready(mid):
+                                continue
+                            row = model_entry(
+                                mid,
+                                prov_name,
+                                mname,
+                                free=True,
+                                scope="scoped",
+                            )
+                            row["local"] = True
+                        else:
+                            row = model_entry(mid, prov_name, mname, scope="scoped")
+                            if ollama_cloud:
+                                row["local"] = False
+                                row["free"] = False
+                        models.append(row)
     except Exception as exc:
         logger.debug("Failed to load models.json: %s", exc)
 
@@ -270,7 +294,7 @@ def settings_backed_cloud_models(settings: dict) -> list[dict]:
             rows.extend(
                 [
                     model_entry(
-                        "openrouter/free",
+                        "kilo-auto/free",
                         "kilocode",
                         "Kilo Auto Free",
                         free=True,

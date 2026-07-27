@@ -90,6 +90,22 @@ def test_enforce_validation_requirements_blocks_ui_completion_without_screenshot
     assert updated["status"] == "partial_success"
 
 
+def test_explicit_backend_profile_does_not_inherit_ui_gate_from_flow_word():
+    packet = _base_packet()
+    packet["tests_and_checks"]["tests_run"] = []
+
+    status, updated, missing = enforce_validation_requirements(
+        packet=packet,
+        run_status="completed",
+        risk_profile={"level": "medium", "signals": ["flow"]},
+        requires_ui_quality=False,
+    )
+
+    assert status == "completed"
+    assert missing == []
+    assert updated["audit"]["final_verdict"] == "pass"
+
+
 def test_enforce_validation_requirements_allows_ui_completion_with_screenshot_and_flow():
     packet = _base_packet()
     packet["artifacts"] = {

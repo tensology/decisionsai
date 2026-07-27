@@ -6,7 +6,10 @@ Extracted from service.py as part of the module decomposition.
 import json
 import logging
 import os
+from pathlib import Path
 import re
+import subprocess
+import time
 from typing import Any, Dict
 
 from distr.core.db.workflow import AutoWorkflowStep
@@ -43,6 +46,93 @@ def _project_folder(project_id: int | None) -> str:
     except Exception:
         logger.debug("Could not resolve project folder for acceptance evidence", exc_info=True)
         return ""
+
+
+def recover_blocked_browser_validation(
+    result: str,
+    *,
+    project_id: int | None,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    """Run a reported project-local browser check in the Decisions host.
+
+    Coding CLIs can be placed in a stricter child sandbox than the Decisions
+    process itself.  When a final audit explicitly reports that Chromium could
+    not launch, recover with the exact project-local Node test it attempted.
+    No shell is used, the file must live inside the linked project, and a UI
+    pass requires freshly written desktop and mobile evidence.
+    """
+    text = str(result or "")
+    browser_blocked = re.search(
+        r"(?is)\b(?:browser|playwright|chromium)\b.{0,240}"
+        r"\b(?:blocked|could\s+not\s+(?:run|launch)|cannot\s+(?:run|launch)|"
+        r"unable\s+to\s+(?:run|launch)|denied|permissions?|allowlist|no\s+browser\s+access)\b",
+        text,
+    )
+    command_blocked = re.search(
+        r"(?is)\b(?:cannot|could\s+not|unable\s+to)\s+run\s+`?node\s+[^\n]{1,180}"
+        r"(?:allowlist|blocked|denied|permission)",
+        text,
+    )
+    if not browser_blocked and not command_blocked:
+        return {}
+    root_text = _project_folder(project_id)
+    if not root_text:
+        return {}
+    root = Path(root_text).expanduser().resolve()
+    candidates: list[Path] = []
+    for raw in re.findall(r"(?i)\bnode\s+(?!--check\b)([^\s`'\"]+\.(?:mjs|cjs|js))", text):
+        candidate = (root / raw).resolve() if not os.path.isabs(raw) else Path(raw).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        lower = candidate.as_posix().lower()
+        if candidate.is_file() and "test" in lower and any(
+            token in lower for token in ("playwright", "e2e", "browser", "focus")
+        ):
+            candidates.append(candidate)
+    if not candidates:
+        return {}
+    command = ["node", str(candidates[0].relative_to(root))]
+    started = time.time()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=max(15, min(int(timeout_seconds or 300), 900)),
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "attempted": True,
+            "passed": False,
+            "command": command,
+            "error": str(exc),
+        }
+    media: list[str] = []
+    for suffix in ("*.png", "*.jpg", "*.jpeg", "*.webp"):
+        for path in root.rglob(suffix):
+            try:
+                if path.stat().st_mtime >= started - 1:
+                    media.append(str(path.relative_to(root)))
+            except OSError:
+                continue
+    media = sorted(set(media))
+    names = " ".join(media).lower()
+    desktop_and_mobile = "desktop" in names and "mobile" in names
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+    return {
+        "attempted": True,
+        "passed": bool(completed.returncode == 0 and desktop_and_mobile),
+        "command": command,
+        "exit_code": completed.returncode,
+        "output": output[-4000:],
+        "fresh_media": media,
+        "desktop_and_mobile": desktop_and_mobile,
+    }
 
 
 def ticket_acceptance_findings(
@@ -203,6 +293,29 @@ def _ticket_acceptance_gate(
     )
 
     profile = classify_ticket_execution(ticket_context)
+    normalized_ticket = " ".join(str(ticket_context or "").lower().split())
+    normalized_result = " ".join(str(result or "").lower().split())
+    test_only_ticket = bool(
+        re.search(r"\b(?:run|execute|rerun)\b.{0,100}\b(?:pytest|tests?/|test suite|tests? suite)\b", normalized_ticket)
+        and any(marker in normalized_ticket for marker in (
+            "without editing files",
+            "without editing project files",
+            "do not edit files",
+            "do not edit project files",
+            "strictly read-only",
+        ))
+    )
+    objective_test_pass = bool(
+        re.search(r"\b\d+\s+passed\b", normalized_result)
+        and re.search(r"\bexit (?:code|status)\s*[:=]?\s*[`*_]*0\b", normalized_result)
+        and re.search(r"\bblockers\s*:\s*(?:none|n/a)\b", normalized_result)
+        and re.search(r"\bfiles changed\s*:\s*none\b", normalized_result)
+    )
+    if test_only_ticket and objective_test_pass:
+        # Exact process evidence is stronger than a subjective judge. This is
+        # especially important when the optional validator model is absent or
+        # rejects a valid retry merely because an earlier command failed.
+        return True
     if profile.get("research_only") and research_review_has_evidence(result):
         # Explicit ticket scope beats the generic development validator. The
         # evidence helper requires a completed structured report, no blockers,
@@ -426,6 +539,32 @@ def _verify_llm_judgment(
     unavailable_fallback: bool = False,
 ) -> bool:
     """Send the result + validation prompt to the orchestrator validator model."""
+    normalized_result = " ".join(str(result or "").lower().split())
+    explicit_failure_patterns = (
+        r"\bstatus\s*:\s*(?:failed|blocked)\b",
+        r"\bverdict\s*:\s*fail(?:ed)?\b",
+        r"\b(?:could not|cannot|can't|was not|is not) be (?:fully )?validated\b",
+        r"\b(?<!no )(?:correction|further work|changes?) (?:is|are) required\b",
+        r"\b(?:not|isn't) (?:ready|safe) to (?:ship|release|deploy)\b",
+        r"\bunresolved (?:ticket-?blocking|blocking|critical|high-severity)\b",
+    )
+    normalized_prompt = " ".join(str(validation_prompt or "").lower().split())
+    expects_clearance = any(
+        phrase in normalized_prompt
+        for phrase in (
+            "no unresolved",
+            "resolves release blockers",
+            "all known defects are corrected",
+        )
+    )
+    if expects_clearance and any(
+        re.search(pattern, normalized_result) for pattern in explicit_failure_patterns
+    ):
+        # A worker's own explicit blocker is stronger evidence than a missing
+        # validator fallback (or a later judge overlooking prose buried in a
+        # long report).  Do not mark a self-declared failed review as passed.
+        logger.warning("LLM judgment rejected an explicit failure claim in worker output")
+        return False
     try:
         from distr.core.orchestrator_validator import run_orchestrator_validator_judgment
 

@@ -40,6 +40,23 @@ def resolve_inspection_budget(
         maximum = max(0, int(selected or 0))
     except (TypeError, ValueError):
         maximum = 0
+
+    # Implementation and review workers need a visible inspection allowance
+    # even when a workflow author omitted one.  An unlimited repository scan is
+    # especially harmful to local models: tool output fills their context before
+    # they edit, validate, or return the workflow contract.  Explicit workflow
+    # configuration remains authoritative; these are safe role defaults only.
+    role = str(step_role or "").strip().lower()
+    if maximum == 0 and role in {"implementation", "correction", "review", "validation"}:
+        role_defaults = {
+            "implementation": {"low": 8, "medium": 12, "high": 16},
+            "correction": {"low": 6, "medium": 10, "high": 14},
+            "review": {"low": 8, "medium": 12, "high": 16},
+            "validation": {"low": 8, "medium": 12, "high": 16},
+        }
+        maximum = role_defaults[role][level]
+        budget["defaulted_for_step_role"] = role
+        budget.setdefault("enforcement", "soft")
     budget["max_tool_calls"] = maximum
     budget["resolved_for_complexity"] = level
     enforcement = str(budget.get("enforcement") or "hard").strip().lower()
@@ -48,7 +65,13 @@ def resolve_inspection_budget(
     budget["enforcement"] = enforcement
     raw_hard_maximum = budget.get("hard_max_tool_calls")
     if enforcement == "soft" and raw_hard_maximum in (None, ""):
-        raw_hard_maximum = max(maximum + 2, math.ceil(maximum * 1.5)) if maximum else 0
+        # Read-only reviewers often need one final evidence call after their
+        # repository inspection (for example, checking screenshot freshness).
+        # Killing that call discards the whole review and costs more via a new
+        # provider retry. Keep the warning target compact while allowing a
+        # slightly wider, still-bounded validation finish.
+        multiplier = 1.75 if role in {"review", "validation"} else 1.5
+        raw_hard_maximum = max(maximum + 2, math.ceil(maximum * multiplier)) if maximum else 0
     try:
         hard_maximum = max(maximum, int(raw_hard_maximum or maximum or 0))
     except (TypeError, ValueError):
@@ -59,7 +82,6 @@ def resolve_inspection_budget(
     # ticket may still be high consequence, but its execution surface is small:
     # consume the contract, reuse named evidence, and update the documentary
     # artifact. Keep this generic and derived from the ticket contract.
-    role = str(step_role or "").strip().lower()
     if role in {"implementation", "correction"} and str(ticket_context or "").strip():
         try:
             from distr.core.workflow.ticket_contract import classify_ticket_execution

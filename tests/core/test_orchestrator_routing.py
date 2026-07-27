@@ -53,6 +53,20 @@ def test_harness_category_treats_preserved_frontend_as_backend_constraint():
     ) == "api"
 
 
+@patch("distr.core.settings.load_settings_from_db", return_value={})
+@patch(
+    "distr.core.project_cli_backends.models_catalog.pi_cli_models",
+    return_value=[{"id": "qwen/qwen3-coder:free", "provider": "openrouter"}],
+)
+def test_pi_route_resolves_missing_provider_from_model_catalog(_models, _settings):
+    from distr.core.orchestrator_routing import _resolved_model_provider
+
+    assert _resolved_model_provider(
+        "pi",
+        {"model": "qwen/qwen3-coder:free"},
+    ) == "openrouter"
+
+
 @patch("distr.core.orchestrator.emit_event")
 @patch("distr.core.orchestrator_routing._call_orchestrator_llm", return_value=None)
 @patch("distr.core.project_cli_backends.get_backend")
@@ -88,6 +102,8 @@ def test_resolve_execution_route_uses_board_complexity_override(
     )
 
     assert decision.backend_id == "cursor"
+    assert decision.model_provider == "cursor"
+    assert decision.to_route_dict()["model_provider"] == "cursor"
     assert decision.source in {"board_override", "policy", "harness_preference"}
 
 
@@ -175,7 +191,12 @@ def test_resolve_execution_route_falls_back_when_backend_unavailable(
 
     mock_resolve.side_effect = [
         {"backend": "codex", "model": "auto", "complexity": "medium"},
-        {"backend": "pi", "model": "auto", "complexity": "medium"},
+        {
+            "backend": "pi",
+            "model": "ornith:35b",
+            "model_provider": "ollama",
+            "complexity": "medium",
+        },
     ]
 
     def _backend_status(bid):
@@ -201,6 +222,55 @@ def test_resolve_execution_route_falls_back_when_backend_unavailable(
     )
 
     assert decision.backend_id == "pi"
+    assert decision.model == "ornith:35b"
+    assert decision.model_provider == "ollama"
+    assert decision.source == "fallback"
+
+
+@patch("distr.core.settings.load_settings_from_db", return_value={})
+@patch(
+    "distr.core.project_cli_backends.model_policy._free_eligible_model",
+    return_value={"backend": "pi", "model": "kilo-auto/free", "provider": "kilocode"},
+)
+@patch("distr.core.qualification.ProviderCertificationStore.get")
+@patch("distr.core.orchestrator_routing._call_orchestrator_llm", return_value=None)
+@patch("distr.core.project_cli_backends.get_backend")
+@patch("distr.core.kanban.ticket_policy.resolve_ticket_cli_route")
+@pytest.mark.parametrize("certification_status", ["limited", "unavailable"])
+def test_direct_route_replaces_model_that_failed_real_execution(
+    mock_resolve,
+    mock_get_backend,
+    _mock_llm,
+    mock_certification,
+    _mock_free_route,
+    _mock_settings,
+    certification_status,
+):
+    from distr.core.qualification import CertificationStatus
+    from distr.core.orchestrator_routing import resolve_execution_route
+
+    mock_resolve.return_value = {
+        "backend": "codex",
+        "model": "gpt-5.3-codex",
+        "complexity": "medium",
+    }
+    mock_get_backend.side_effect = lambda bid: _backend_ready(bid)
+    mock_certification.return_value = SimpleNamespace(
+        status=CertificationStatus(certification_status),
+        provider="openai",
+        model="gpt-5.3-codex",
+    )
+
+    decision = resolve_execution_route(
+        project=_project(),
+        ticket=_ticket(),
+        board=None,
+        emit_event=False,
+    )
+
+    assert decision.backend_id == "pi"
+    assert decision.model == "kilo-auto/free"
+    assert decision.model_provider == "kilocode"
     assert decision.source == "fallback"
 
 

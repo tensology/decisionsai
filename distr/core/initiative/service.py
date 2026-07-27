@@ -980,15 +980,19 @@ class InitiativeService:
                     )
                 continue
 
+            # Never dump the raw instruction into chat/TTS — that reads like an
+            # injected user command. Delivery formats a notice; keep instruction in payload.
             action = ProposedAction(
                 action_type="suggestion",
-                description=f"[{name}] {instruction}",
+                description=f"I have a scheduled check ready ({name}). Want me to go through it with you?",
                 payload={
                     "source": "proactive",
                     "task_name": name,
                     "proactive_task_id": tid,
+                    "instruction": instruction,
                 },
-                telegram_message=f"Proactive — {name}",
+                draft=f"I have a scheduled check ready ({name}). Want me to go through it with you?",
+                telegram_message=f"I have a scheduled check ready ({name}). Want me to go through it with you?",
             )
             try:
                 self._dispatch_proactive_instruction(action, settings, boundaries, tier=tier)
@@ -1278,12 +1282,15 @@ class InitiativeService:
         situational_block = format_situational_prompt_block(getattr(bundle, "situational", None))
 
         return (
-            f"You are an autonomous agent assistant. Initiative level: {level}.\n"
+            f"You are DecisionsAI Initiative. Level: {level}.\n"
             f"Current datetime: {bundle.current_datetime}\n"
             f"Boundary settings: {boundary_info}\n\n"
             f"{situational_block}"
             f"{role_instruction}\n\n"
             f"{memory_block}"
+            "You are NOT answering a user chat message. Nothing was injected into the chat "
+            "for you to reply to. If you act, you are opening on your own because you noticed "
+            "something useful — a stuck ticket, a waiting run, a handoff, a gap after idle.\n\n"
             "Context available: active project, ticket boards and tickets, board notes, "
             "scheduled sessions, workflows (stuck/unfinished), recent tool audit trail, "
             "available tools, available skills, developer_context_text, situational spine, "
@@ -1292,16 +1299,20 @@ class InitiativeService:
             "Use work_scan when present. It contains read-only observations and candidate "
             "proposals from boards, workflows, WhatsApp, Telegram, and future email sources. "
             "Respect situational idle/chat gaps and handoff_peek when proposing follow-ups. "
-            "Based on the context, propose ONE action. "
+            "Based on the context, propose ONE action — or none. "
+            "Prefer action_type \"none\" unless there is a concrete, helpful notice.\n\n"
             "Respond with a JSON object (no markdown fences) with fields:\n"
             "  action_type: suggestion | routine_task | board_triage | ticket_lane_move | "
             "workflow_start | project_cli_task | message_triage | email_triage | "
             "external_comms | file_change | sensitive | none\n"
-            "  description: what the action does (string)\n"
+            "  description: what you would SAY to the user (string). First person. "
+            "Must sound like opening initiative: \"I noticed X. Want me to Y?\" "
+            "Never write an instruction brief, never \"read this\", never pretend the user "
+            "just asked you something, never dump internal task text into description.\n"
             "  rubric: optional object with impact, risk, cost, urgency, confidence (ints 1–5)\n"
             "  payload: optional dict with details (e.g. board_id, ticket_ids, target_lane, workflow_id, project_id)\n"
-            "  draft: optional text draft for the action\n"
-            "  telegram_message: optional notification text\n"
+            "  draft: optional longer note for the same notice (same voice as description)\n"
+            "  telegram_message: short version of the same notice (same voice)\n"
             "  suggested_tool: OPTIONAL. Only if action_type is suggestion or none. "
             "If the user could resolve this by asking the main assistant to run one tool, set "
             '{"name": "<tool>", "args": {}} using ONLY these names: '
@@ -1440,13 +1451,17 @@ class InitiativeService:
     def _situational_suffix(self) -> str:
         from distr.core.initiative.situational import situational_one_liner
 
-        line = situational_one_liner(self._cycle_situational)
+        # Some lightweight callers and test fixtures construct the service
+        # without running a scan cycle. Situational context is optional; its
+        # absence must never break an approval or Telegram notification.
+        line = situational_one_liner(getattr(self, "_cycle_situational", {}) or {})
         return f" [{line}]" if line else ""
 
     def _deliver_suggestion(
         self, action: ProposedAction, settings: dict, tier=None
     ) -> None:
         """Deliver a suggestion via chat and optionally Telegram."""
+        from distr.core.initiative.notice import format_initiative_notice, looks_like_notice
         from distr.core.initiative.tiers import PermissionTier
 
         if tier == PermissionTier.SILENT:
@@ -1455,13 +1470,21 @@ class InitiativeService:
                 action.description,
             )
             return
-        msg = action.description
+        msg = format_initiative_notice(
+            description=action.description,
+            draft=action.draft,
+            telegram_message=action.telegram_message,
+            payload=action.payload if isinstance(action.payload, dict) else {},
+        )
+        if not msg:
+            return
         if action.suggested_tool and isinstance(action.suggested_tool, dict):
             tn = action.suggested_tool.get("name", "")
             if tn:
-                msg = f"{msg} (You can ask me to use the {tn} tool for this.)"
+                msg = f"{msg} (I can use {tn} for this if you want.)"
         msg = f"{msg}{self._situational_suffix()}"
-        self._log_to_chat(f"Suggestion: {msg}", settings)
+        # Chat gets a notice, not "Suggestion: <task brief>" (that reads like a reply to injection).
+        self._log_to_chat(msg, settings)
         if action.action_type in ("board_triage", "message_triage", "email_triage") and not settings.get("initiative_telegram_notify_suggestions", False):
             logger.info(
                 "InitiativeService: suggestion kept in app, not Telegram (%s): %s",
@@ -1469,9 +1492,14 @@ class InitiativeService:
                 action.description,
             )
             return
+        # Only speak when the text already sounds like initiative, not a task dump.
         self._send_telegram_if_allowed(
-            action.telegram_message or f"Suggestion: {msg}",
+            msg,
             settings,
+            kind="initiative_suggestion",
+            requires_response=True,
+            allow_voice=looks_like_notice(msg),
+            voice_body=msg if looks_like_notice(msg) else None,
         )
 
     def _dispatch_kanban(

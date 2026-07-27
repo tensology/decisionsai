@@ -2,17 +2,39 @@
 
 ---
 
-## What's to Come?
+## Welcome to DecisionsAI
 
-The goal is simple: start work wherever you are, and trust DecisionsAI to hold onto it. Chat, Telegram, voice, projects, tickets, workflows, and boards should feel like different doors into the same job — not separate apps you have to manage.
+DecisionsAI is for the moment when asking an AI needs to become letting the work get handled. You can [download or clone the repository](https://github.com/tensology/decisionsai), point it at projects you already have, and begin with something simple: talk to the Oracle on your desktop, type in Chat, or send a request from Telegram. That request can stay a conversation, become a tracked ticket, or move through a workflow with the right model, coding tool, skills, checks, and approvals attached.
 
-Next up is making that easier to leave running. If the computer sleeps, the network drops, a tool fails, or a local model is slow to wake up, DecisionsAI should recover when it can and say clearly when it cannot. If a job needs a different tool, that choice should make sense without turning model picking into homework. If work arrives from another channel, it should land in the right place without treating normal chat as accidental commands.
+The web app is the shared control room rather than another inbox you have to watch. Work can arrive from your desktop, phone, project boards, connected services, or the codebase itself; DecisionsAI keeps the project, ticket, run, evidence, memory, and final report together. You can check in when you want, steer a running job, answer a real decision, or leave it working in the background.
 
-Less busy. More calm. Ask once, check in when you want, get a useful result back where you started.
+If you develop with Codex, the repository can be part of the loop too. Codex can work directly inside the codebase while DecisionsAI coordinates the larger job. The loop can inspect what came back, carry useful context forward, ask for a correction, and steer another pass instead of treating every prompt as an isolated session.
+
+That is the direction of the project: getting closer to genuinely automated work without hiding the consequential decisions from you. One central place where work can arrive, be understood, be routed, be completed, and return with a useful answer.
 
 ---
 
 ## [2.8.5] - 2026-07-17
+
+### A running job now looks like work in progress, not a frozen reply
+
+Some requests need one answer. Others need to inspect a project, call several tools, hand work to a model or coding CLI, wait for evidence, and then explain the result. Chat now understands that difference. It keeps one durable, ordered turn for the whole job and shows the acknowledgement, current phase, elapsed time, useful activity, synthesis, and final state together. You can see that something is moving without being buried under every internal event.
+
+### You can steer the work while it is moving
+
+Long-running work no longer has to be stopped just because the direction needs a small correction. A new message can steer the active job while **Stop** remains a separate, explicit action. Tool calls, workflow activity, background model chains, Ollama, and OpenAI-compatible providers feed the same lifecycle, so the conversation does not split into several unrelated-looking responses when the underlying job is still the same one.
+
+### Reconnecting does not erase the story
+
+The browser can poll for the current turn and rebuild its state after a refresh or a dropped connection. Late events are merged into their proper place instead of being repeated as new messages. If a process fails, stalls, or finishes while the page is away, the visible state can catch up and give you a terminal answer rather than leaving an eternal spinner behind.
+
+### The activity is written for a person
+
+The useful detail is still there when you want to expand it, but raw payloads, duplicate status lines, secrets, and noisy machine output no longer need to dominate the chat. Activity summaries are safer and easier to scan, while the final response remains the part designed to be read or spoken aloud. On smaller screens, the active-work view has also been tightened so steering, stopping, progress, and results remain usable from a phone.
+
+### The real browser path is covered
+
+The release adds lifecycle, identity, merge, reconnect, steering, provider, workflow, and browser coverage around this behaviour. That includes desktop and mobile Playwright checks, so the multi-stage experience is tested as something a person actually uses rather than only as a collection of backend events.
 
 ### It remembers you left five hours ago
 

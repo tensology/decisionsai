@@ -448,6 +448,15 @@ def build_workflow_waiting_nudge(
             "Tap Approve to use the proposed route, or Stop to cancel. No model work has started."
         )
         voice = f"{subject} paused before model work. Say approve to proceed, or stop to cancel."
+    elif kind == "restart_recovery":
+        text = (
+            f"{subject} was safely paused because DecisionsAI restarted while its current step was running. "
+            "The saved ticket, step, and context are intact. Tell me **continue** to retry that step, or **stop** to cancel."
+        )
+        voice = (
+            f"{subject} was safely paused after a restart. "
+            "Say continue to retry the saved step, or stop to cancel."
+        )
     elif kind in {"ide_handoff", "needs_human_input", "worker_needs_input"}:
         text = (
             f"{subject} is waiting on you in the linked IDE or harness. "
@@ -584,7 +593,10 @@ def notify_ticket_workflow_progress(
     decision = service.decide(
         EngagementIntent(
             source="workflow",
-            surface="proactive",
+            # A response-required checkpoint carries Telegram controls. Recent
+            # desktop/remote activity must not reroute it to a surface that
+            # cannot render that keyboard and strand the durable interaction.
+            surface="telegram" if requires_response else "proactive",
             kind="workflow_progress",
             priority=priority,  # type: ignore[arg-type]
             subject_type="ticket_workflow_run",
@@ -649,39 +661,52 @@ def notify_ticket_workflow_progress(
 
                 speak_text_directly_event_queue(outbound)
         elif decision.channel == "telegram":
-            from distr.core.signals import get_agent_event_queue
-
-            queue = get_agent_event_queue()
-            if queue:
-                queue.put(
-                    (
-                        "send_to_telegram",
-                        {
-                            "text": outbound,
-                            "is_done": False,
-                            "explicit_notification_intent": True,
-                            "engagement_kind": "workflow_progress",
-                            "engagement_source": "workflow",
-                            "engagement_priority": priority,
-                            "run_id": run_id,
-                            "step_id": step_id,
-                            "state_fingerprint": state_fingerprint,
-                            "workflow_id": ctx.get("workflow_id"),
-                            "ticket_id": ctx.get("ticket_id"),
-                            "board_id": ctx.get("board_id"),
-                            "ticket_title": ctx.get("ticket_title"),
-                            "requires_response": requires_response,
-                            "interaction_token": interaction.get("token") if interaction else None,
-                            "reply_markup": reply_markup,
-                            "allow_voice": decision.format in {"voice", "desktop_tts", "remote_audio"},
-                        },
-                    ),
-                    block=False,
+            manager = _telegram_manager_from_app()
+            if reply_markup and manager:
+                # Actionable workflow checkpoints must preserve the exact
+                # question, keyboard, and correlation token as one atomic
+                # Telegram payload.  The generic response/TTS event pipeline
+                # is intentionally bypassed here because it may reformat or
+                # split a message before the relay sees its controls.
+                manager.send_to_telegram(
+                    text=outbound,
+                    reply_markup=reply_markup,
+                    interaction_token=interaction.get("token") if interaction else None,
                 )
             else:
-                from distr.core.signals import speak_text_directly_event_queue
+                from distr.core.signals import get_agent_event_queue
 
-                speak_text_directly_event_queue(outbound)
+                queue = get_agent_event_queue()
+                if queue:
+                    queue.put(
+                        (
+                            "send_to_telegram",
+                            {
+                                "text": outbound,
+                                "is_done": False,
+                                "explicit_notification_intent": True,
+                                "engagement_kind": "workflow_progress",
+                                "engagement_source": "workflow",
+                                "engagement_priority": priority,
+                                "run_id": run_id,
+                                "step_id": step_id,
+                                "state_fingerprint": state_fingerprint,
+                                "workflow_id": ctx.get("workflow_id"),
+                                "ticket_id": ctx.get("ticket_id"),
+                                "board_id": ctx.get("board_id"),
+                                "ticket_title": ctx.get("ticket_title"),
+                                "requires_response": requires_response,
+                                "interaction_token": interaction.get("token") if interaction else None,
+                                "reply_markup": reply_markup,
+                                "allow_voice": decision.format in {"voice", "desktop_tts", "remote_audio"},
+                            },
+                        ),
+                        block=False,
+                    )
+                else:
+                    from distr.core.signals import speak_text_directly_event_queue
+
+                    speak_text_directly_event_queue(outbound)
         else:
             from distr.core.signals import speak_text_directly_event_queue
 

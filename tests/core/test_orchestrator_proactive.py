@@ -166,13 +166,15 @@ def test_dispatch_proactive_candidate_runs_project_backend_after_approval(tmp_pa
     result = dispatch_proactive_candidate(candidate_id, approved_by="telegram")
 
     assert result["success"] is True
-    assert result["backend_id"] == "cursor"
+    # Critical UI repair is deliberately promoted beyond the board's normal
+    # frontend preference so Auto mode uses the strongest configured worker.
+    assert result["backend_id"] == "codex"
     assert result["execution_session_id"] == 123
     assert calls[0]["project"] == "Merrypak"
     assert "checkout page is broken" in calls[0]["instruction"]
     assert calls[0]["kwargs"]["ticket_id"] == ids.ticket_id
     assert calls[0]["kwargs"]["origin"] == "proactive_orchestrator"
-    assert calls[0]["kwargs"]["backend_id_override"] == "cursor"
+    assert calls[0]["kwargs"]["backend_id_override"] == "codex"
 
     with _session_ctx(factory) as session:
         event_types = [row.event_type for row in session.query(OrchestratorEvent).order_by(OrchestratorEvent.id).all()]

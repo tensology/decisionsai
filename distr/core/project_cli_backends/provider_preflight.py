@@ -266,8 +266,22 @@ def probe_openrouter_model_readiness(
     *, model: str, api_key: str, timeout_seconds: float = 12.0,
 ) -> ProviderPreflight:
     """Use a minimal completion to prove the selected free model is callable."""
+    def finish(result: ProviderPreflight) -> ProviderPreflight:
+        try:
+            from distr.core.qualification import (
+                ProviderCertificationStore,
+                record_preflight_certification,
+            )
+
+            record_preflight_certification(
+                ProviderCertificationStore(), result, capabilities=["text"]
+            )
+        except Exception:
+            pass
+        return result
+
     if not api_key.strip():
-        return ProviderPreflight("openrouter", model, "blocked", False, "No OpenRouter API key is configured.")
+        return finish(ProviderPreflight("openrouter", model, "blocked", False, "No OpenRouter API key is configured."))
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": "Reply OK"}],
@@ -287,10 +301,10 @@ def probe_openrouter_model_readiness(
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             response.read()
-        return ProviderPreflight(
+        return finish(ProviderPreflight(
             "openrouter", model, "ready", True,
             f"{model} accepted a minimal readiness request.",
-        )
+        ))
     except HTTPError as exc:
         detail = ""
         try:
@@ -304,15 +318,15 @@ def probe_openrouter_model_readiness(
             502: "the selected model endpoint is currently failing",
             503: "no provider endpoint is currently available for this model",
         }.get(exc.code, f"HTTP {exc.code}")
-        return ProviderPreflight(
+        return finish(ProviderPreflight(
             "openrouter", model, "blocked", False,
             f"{model} failed readiness: {reason}.", http_status=exc.code,
-        )
+        ))
     except Exception as exc:
-        return ProviderPreflight(
+        return finish(ProviderPreflight(
             "openrouter", model, "unverified", None,
             f"{model} readiness could not be verified: {type(exc).__name__}.",
-        )
+        ))
 
 
 def _openrouter_preflight(
@@ -435,6 +449,33 @@ def preflight_provider_route(
     """Check a provider without spending tokens or starting model work."""
     provider = str(route.get("model_provider") or "").strip().lower()
     model = str(route.get("model") or "auto").strip()
+    required_capabilities = [
+        str(item or "").strip().lower()
+        for key in ("required_capabilities", "evidence_capabilities")
+        for item in (route.get(key) or [])
+        if str(item or "").strip()
+    ]
+
+    def record(result: ProviderPreflight, capabilities: list[str] | None = None) -> ProviderPreflight:
+        """Persist route readiness without making preflight depend on storage."""
+        if not result.provider:
+            return result
+        try:
+            from distr.core.qualification import (
+                ProviderCertificationStore,
+                record_preflight_certification,
+            )
+
+            record_preflight_certification(
+                ProviderCertificationStore(),
+                result,
+                capabilities=capabilities or ["text"],
+            )
+        except Exception:
+            # Readiness must remain usable on read-only or damaged installs.
+            pass
+        return result
+
     if not provider:
         return ProviderPreflight("", model, "not_required", True, "No metered API provider is selected.")
     if provider == "openrouter":
@@ -448,23 +489,26 @@ def preflight_provider_route(
             complexity=complexity,
             timeout_seconds=timeout_seconds,
         )
+        # A balance/key check proves account access, not that a concrete model
+        # can code, use tools, or even accept a minimal completion.
+        record(financial, ["account_access"])
         if financial.ready is False:
+            record(financial, required_capabilities)
             return financial
-        required_capabilities = [
-            str(item or "").strip()
-            for key in ("required_capabilities", "evidence_capabilities")
-            for item in (route.get(key) or [])
-            if str(item or "").strip()
-        ]
         capability = _openrouter_capability_preflight(
             model=model,
             required_capabilities=required_capabilities,
             timeout_seconds=timeout_seconds,
         )
         if capability is not None and capability.ready is False:
-            return capability
+            vision_capabilities = [
+                item
+                for item in required_capabilities
+                if item in {"vision", "image", "images", "multimodal", "visual_evidence"}
+            ]
+            return record(capability, vision_capabilities or ["vision"])
         if capability is not None and financial.ready is True:
-            return ProviderPreflight(
+            combined = ProviderPreflight(
                 financial.provider,
                 financial.model,
                 financial.status,
@@ -474,9 +518,15 @@ def preflight_provider_route(
                 required_buffer_usd=financial.required_buffer_usd,
                 http_status=financial.http_status,
             )
+            vision_capabilities = [
+                item
+                for item in required_capabilities
+                if item in {"vision", "image", "images", "multimodal", "visual_evidence"}
+            ]
+            return record(combined, vision_capabilities or ["vision"])
         return financial
     # Provider-specific probes can be added without changing workflow routing.
-    return ProviderPreflight(
+    return record(ProviderPreflight(
         provider, model, "unverified", None,
         f"{provider} does not expose a configured credit preflight; authentication will still be checked.",
-    )
+    ), required_capabilities or ["text"])

@@ -209,6 +209,119 @@ def test_routine_workflow_progress_is_feed_only():
     decide.assert_not_called()
 
 
+def test_response_required_workflow_prompt_is_pinned_to_telegram():
+    decision = SimpleNamespace(
+        should_send=False,
+        suppress_reason="test",
+        format="text",
+        channel="silent",
+        final_text=None,
+        final_voice_text=None,
+    )
+    with (
+        patch(
+            "distr.core.kanban.ticket_workflow_engagement._run_context",
+            return_value={
+                "workflow_id": 3,
+                "ticket_id": 4,
+                "board_id": 5,
+                "run_data": {},
+            },
+        ),
+        patch(
+            "distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app",
+            return_value=SimpleNamespace(telegram_user_id=123),
+        ),
+        patch(
+            "distr.core.workflow.interactions.create_workflow_interaction",
+            return_value={
+                "token": "opaque",
+                "allowed_actions": '["continue", "stop"]',
+            },
+        ),
+        patch(
+            "distr.core.workflow.interactions.telegram_reply_markup",
+            return_value={"inline_keyboard": []},
+        ),
+        patch(
+            "distr.core.human_engagement.HumanEngagementService.decide",
+            return_value=decision,
+        ) as decide,
+    ):
+        notify_ticket_workflow_progress(
+            run_id=8,
+            step_id=40,
+            body="Choose whether to continue.",
+            state_fingerprint="waiting:40",
+            requires_response=True,
+            audible=True,
+        )
+
+    intent = decide.call_args.args[0]
+    assert intent.surface == "telegram"
+    assert intent.requires_response is True
+
+
+def test_response_required_workflow_prompt_sends_keyboard_atomically():
+    manager = MagicMock(telegram_user_id=123)
+    decision = SimpleNamespace(
+        should_send=True,
+        suppress_reason="",
+        format="text",
+        channel="telegram",
+        final_text="Choose whether to continue.",
+        final_voice_text=None,
+    )
+    markup = {
+        "inline_keyboard": [[
+            {"text": "Continue", "callback_data": "wf:opaque:continue"},
+            {"text": "Stop", "callback_data": "wf:opaque:stop"},
+        ]],
+    }
+    with (
+        patch(
+            "distr.core.kanban.ticket_workflow_engagement._run_context",
+            return_value={
+                "workflow_id": 3,
+                "ticket_id": 4,
+                "board_id": 5,
+                "run_data": {},
+            },
+        ),
+        patch(
+            "distr.core.kanban.ticket_workflow_engagement._telegram_manager_from_app",
+            return_value=manager,
+        ),
+        patch(
+            "distr.core.workflow.interactions.create_workflow_interaction",
+            return_value={"token": "opaque", "allowed_actions": '["continue", "stop"]'},
+        ),
+        patch(
+            "distr.core.workflow.interactions.telegram_reply_markup",
+            return_value=markup,
+        ),
+        patch(
+            "distr.core.human_engagement.HumanEngagementService.decide",
+            return_value=decision,
+        ),
+        patch("distr.core.orchestration_events.emit_user_notification"),
+    ):
+        notify_ticket_workflow_progress(
+            run_id=8,
+            step_id=40,
+            body="Choose whether to continue.",
+            state_fingerprint="waiting:40",
+            requires_response=True,
+            audible=True,
+        )
+
+    manager.send_to_telegram.assert_called_once_with(
+        text="Choose whether to continue.",
+        reply_markup=markup,
+        interaction_token="opaque",
+    )
+
+
 def test_workflow_voice_text_keeps_the_decision_and_drops_internal_telemetry():
     spoken = prepare_workflow_voice_text(
         "Workflow run #108 for ticket #178 reached step 3 of 7 at 2026-07-19 14:05. "

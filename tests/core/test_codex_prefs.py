@@ -48,6 +48,7 @@ def test_codex_build_command_passes_config_overrides():
         codex_service_tier="flex",
     )
     cmd = backend._build_command("codex", task)
+    assert "--json" in cmd
     assert "--sandbox" in cmd
     assert "workspace-write" in cmd
     assert "-c" in cmd
@@ -89,6 +90,27 @@ def test_codex_read_only_workflow_step_overrides_mutable_sandbox(monkeypatch):
     assert "danger-full-access" not in cmd
 
 
+def test_codex_read_only_test_step_allows_transient_runtime_writes(monkeypatch):
+    monkeypatch.setenv("DECISIONSAI_CODEX_SANDBOX", "danger-full-access")
+    backend = CodexBackend()
+    task = ProjectTask(
+        project_id=1,
+        project_name="demo",
+        folder="/tmp",
+        instruction="Run the named pytest suite without editing project files.",
+        adapter_options={
+            "read_only_expected": True,
+            "allow_transient_test_writes": True,
+        },
+    )
+
+    cmd = backend._build_command("codex", task)
+
+    sandbox_index = cmd.index("--sandbox")
+    assert cmd[sandbox_index + 1] == "workspace-write"
+    assert "danger-full-access" not in cmd
+
+
 def test_codex_result_handoff_keeps_final_contract_without_cli_noise():
     backend = CodexBackend()
     raw = (
@@ -107,6 +129,45 @@ def test_codex_result_handoff_keeps_final_contract_without_cli_noise():
     assert "context_packet: concise evidence" in result
     assert "OpenAI Codex" not in result
     assert "105440" not in result
+
+
+def test_codex_result_handoff_reads_final_agent_message_from_jsonl():
+    backend = CodexBackend()
+    raw = "\n".join(
+        (
+            "MCP startup warning",
+            '{"type":"item.completed","item":{"type":"agent_message","text":"Status: completed\\nSummary: first"}}',
+            '{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"Status: completed\\nSummary: final"}}',
+        )
+    )
+
+    result = backend._result_output(raw)
+
+    assert result == "Status: completed\nSummary: final"
+
+
+def test_codex_usage_normalizes_jsonl_without_inventing_cost():
+    backend = CodexBackend()
+    raw = "\n".join(
+        (
+            "MCP startup warning",
+            '{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"cache_write_input_tokens":5,"output_tokens":10,"reasoning_output_tokens":3}}',
+            '{"type":"turn.completed","usage":{"input_tokens":20,"cached_input_tokens":2,"output_tokens":4}}',
+        )
+    )
+
+    usage = backend._usage_from_output(raw)
+
+    assert usage == {
+        "input": 120,
+        "output": 14,
+        "cacheRead": 42,
+        "cacheWrite": 5,
+        "reasoningOutput": 3,
+        "totalTokens": 134,
+    }
+    assert "cost" not in usage
 
 
 def test_codex_build_command_embeds_decisions_callback(monkeypatch):

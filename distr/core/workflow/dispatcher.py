@@ -617,10 +617,12 @@ def _reconcile_terminal_execution_sessions(db: Any) -> List[int]:
 def _cleanup_orphaned_runs_on_startup() -> None:
     """Reconcile interrupted runs and provider sessions on app startup.
 
-    Running work has lost its in-memory worker and must become terminal. Waiting
-    checkpoints remain durable so a Telegram/web approval can resume after a
-    restart. Provider rows whose run is terminal or missing must never remain
-    visible as queued/running/waiting forever.
+    Running work has lost its in-memory worker. A run with a durable current
+    step becomes an explicit restart-recovery checkpoint so Telegram or the web
+    can resume that same step with its stored context. Malformed runs without a
+    current step become terminal. Existing waiting checkpoints remain durable.
+    Provider rows whose owner is terminal or missing must never remain visible
+    as queued/running/waiting forever.
     """
     with get_session() as db:
         orphans = (
@@ -628,11 +630,34 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             .filter(AutoWorkflowRun.status == "running")
             .all()
         )
-        orphan_ids = [int(run.id) for run in orphans]
+        recoverable = [run for run in orphans if getattr(run, "current_step_id", None)]
+        terminal_orphans = [run for run in orphans if not getattr(run, "current_step_id", None)]
+        recoverable_ids = [int(run.id) for run in recoverable]
+        orphan_ids = [int(run.id) for run in terminal_orphans]
         completed_at = utc_now_naive()
-        for run in orphans:
+        for run in terminal_orphans:
             run.status = "cancelled"
             run.completed_at = completed_at
+        for run in recoverable:
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            run.status = "waiting"
+            run.completed_at = None
+            run_data.update({
+                "waiting_kind": "restart_recovery",
+                "waiting_prompt": (
+                    "DecisionsAI restarted while this step was running. "
+                    "Continue to retry the same step with its saved context, or Stop."
+                ),
+                "restart_recovery": {
+                    "available": True,
+                    "step_id": int(run.current_step_id),
+                    "recovered_at": completed_at.isoformat(),
+                },
+            })
+            run.run_data = json.dumps(run_data)
         from distr.core.db.kanban import KanbanTicket
 
         stale_tickets = (
@@ -661,18 +686,123 @@ def _cleanup_orphaned_runs_on_startup() -> None:
             reason="App restarted before provider completion.",
             event_type="recovered_after_restart",
         )
+        from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+        recovered_execution_ids: list[int] = []
+        if recoverable_ids:
+            executions = (
+                db.query(ProjectExecutionSession)
+                .filter(ProjectExecutionSession.run_id.in_(recoverable_ids))
+                .filter(ProjectExecutionSession.status.in_(["queued", "running", "waiting"]))
+                .all()
+            )
+            for execution in executions:
+                previous_status = str(execution.status or "")
+                execution.status = "waiting"
+                execution.error = "App restarted; the workflow can retry its saved current step."
+                execution.updated_at = completed_at
+                execution.completed_at = None
+                db.add(ProjectExecutionEvent(
+                    session_id=execution.id,
+                    event_type="restart_recovery_available",
+                    status="waiting",
+                    message=execution.error,
+                    payload=json.dumps({
+                        "run_id": execution.run_id,
+                        "previous_status": previous_status,
+                        "recoverable": True,
+                    }),
+                ))
+                recovered_execution_ids.append(int(execution.id))
         reconciled_ids = _reconcile_terminal_execution_sessions(db)
         db.commit()
-        all_execution_ids = sorted(set(execution_ids + reconciled_ids))
-        if orphan_ids or all_execution_ids:
+        all_execution_ids = sorted(set(execution_ids + recovered_execution_ids + reconciled_ids))
+        if orphan_ids or recoverable_ids or all_execution_ids:
             logger.info(
-                "Reconciled %d interrupted workflow run(s) and %d execution "
-                "session(s) from previous session: runs=%s sessions=%s",
-                len(orphans),
+                "Reconciled %d interrupted workflow run(s) (%d recoverable) and %d execution "
+                "session(s) from previous session: terminal_runs=%s recoverable_runs=%s sessions=%s",
+                len(orphans), len(recoverable_ids),
                 len(all_execution_ids),
                 orphan_ids,
+                recoverable_ids,
                 all_execution_ids,
             )
+
+
+def _enter_controlled_restart_recovery(run_id: int, step_id: int) -> bool:
+    """Pause one qualification run at the durable restart boundary.
+
+    This uses the same persisted checkpoint consumed by real startup recovery,
+    but targets only the explicitly tagged qualification run.  It must never
+    reconcile unrelated live work and is disabled unless the process-level
+    qualification switch is enabled.
+    """
+    if os.environ.get("DECISIONS_ENABLE_QUALIFICATION_FAULTS", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return False
+    with get_session() as db:
+        get_row = getattr(db, "get", None)
+        run = (
+            get_row(AutoWorkflowRun, int(run_id))
+            if callable(get_row)
+            else db.query(AutoWorkflowRun).filter(
+                AutoWorkflowRun.id == int(run_id)
+            ).first()
+        )
+        if not run or str(run.status or "").lower() != "running":
+            return False
+        try:
+            run_data = json.loads(getattr(run, "run_data", None) or "{}") or {}
+        except Exception:
+            run_data = {}
+        if not str(run_data.get("qualification_scenario_id") or "").strip():
+            return False
+        if str(run_data.get("qualification_injected_failure") or "").strip().lower() != "process_restart":
+            return False
+        consumed = [str(item) for item in (run_data.get("qualification_faults_consumed") or [])]
+        if any(item == "process_restart" or item.startswith("process_restart:") for item in consumed):
+            return False
+        marker = f"process_restart:active_step:{int(step_id)}"
+        consumed.append(marker)
+        now = utc_now_naive()
+        run.status = "waiting"
+        run.current_step_id = int(step_id)
+        run.completed_at = None
+        run_data.update({
+            "qualification_faults_consumed": consumed[-20:],
+            "qualification_failure_observed": True,
+            "qualification_failure_stage": f"active_step:{int(step_id)}",
+            "waiting_kind": "restart_recovery",
+            "waiting_prompt": (
+                "DecisionsAI restarted while this step was running. "
+                "Continue to retry the same step with its saved context, or Stop."
+            ),
+            "restart_recovery": {
+                "available": True,
+                "step_id": int(step_id),
+                "recovered_at": now.isoformat(),
+                "qualification_fault": True,
+            },
+        })
+        run.run_data = json.dumps(run_data)
+        if run.ticket_id:
+            from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+            ticket = db.get(KanbanTicket, int(run.ticket_id))
+            if ticket:
+                ticket.workflow_status = "waiting"
+        db.commit()
+    record_workflow_chat_event(
+        run_id,
+        "restart_recovery_available",
+        status="waiting",
+        step_id=int(step_id),
+        summary="The active step was interrupted and can resume from its durable checkpoint.",
+    )
+    return True
 
 
 def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
@@ -751,6 +881,9 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
 
     # Sync terminal status back to the linked ticket so the board always
     # reflects the actual workflow outcome without waiting for a lane move.
+    # Keep this authoritative lifecycle write independent from audit/time
+    # telemetry: a locked or malformed telemetry row must never strand a
+    # completed ticket in In Progress.
     try:
         with get_session() as db:
             run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -761,18 +894,6 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 ).first()
                 if ticket:
                     terminal_status = (status or "completed").strip().lower()
-                    append_ticket_audit_entry(
-                        db,
-                        ticket_id=int(run_rec.ticket_id),
-                        run_id=run_id,
-                        step_id=run_rec.current_step_id,
-                        step_result_id=None,
-                        execution_lane="workflow",
-                        status=terminal_status,
-                        final_verdict="pass" if terminal_status == "completed" else "needs_changes",
-                        summary=f"Run finished: {terminal_status}",
-                        details=f"Workflow run {run_id} finished with status {terminal_status}.",
-                    )
                     ticket.workflow_status = status
                     if terminal_status == "completed":
                         # Automated work stops at QA. Only a human may accept
@@ -784,28 +905,51 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                             int(run_rec.ticket_id),
                             "QA",
                         )
-                    try:
-                        from distr.core.kanban.ticket_workflow_engagement import (
-                            record_ticket_workflow_elapsed,
-                        )
-
-                        warning = ""
-                        try:
-                            run_data = json.loads(run_rec.run_data or "{}") or {}
-                            warning = str(run_data.get("terminal_warning") or "")
-                        except Exception:
-                            run_data = {}
-                        record_ticket_workflow_elapsed(
-                            ticket_id=int(run_rec.ticket_id),
-                            run_id=run_id,
-                            status=status,
-                            warning=warning,
-                        )
-                    except Exception:
-                        logger.debug("Could not record ticket workflow elapsed time", exc_info=True)
                     db.commit()
     except Exception:
-        logger.debug("Could not sync workflow_status to ticket for run %d", run_id)
+        logger.error("Could not sync workflow_status to ticket for run %d", run_id, exc_info=True)
+
+    # Terminal audit and elapsed-time records are useful evidence, but they are
+    # deliberately best-effort and run only after the lifecycle commit above.
+    try:
+        with get_session() as db:
+            run_rec = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            if run_rec and run_rec.ticket_id:
+                terminal_status = (status or "completed").strip().lower()
+                append_ticket_audit_entry(
+                    db,
+                    ticket_id=int(run_rec.ticket_id),
+                    run_id=run_id,
+                    step_id=run_rec.current_step_id,
+                    step_result_id=None,
+                    execution_lane="workflow",
+                    status=terminal_status,
+                    final_verdict="pass" if terminal_status == "completed" else "needs_changes",
+                    summary=f"Run finished: {terminal_status}",
+                    details=f"Workflow run {run_id} finished with status {terminal_status}.",
+                )
+                try:
+                    from distr.core.kanban.ticket_workflow_engagement import (
+                        record_ticket_workflow_elapsed,
+                    )
+
+                    warning = ""
+                    try:
+                        run_data = json.loads(run_rec.run_data or "{}") or {}
+                        warning = str(run_data.get("terminal_warning") or "")
+                    except Exception:
+                        run_data = {}
+                    record_ticket_workflow_elapsed(
+                        ticket_id=int(run_rec.ticket_id),
+                        run_id=run_id,
+                        status=status,
+                        warning=warning,
+                    )
+                except Exception:
+                    logger.debug("Could not record ticket workflow elapsed time", exc_info=True)
+                db.commit()
+    except Exception:
+        logger.debug("Could not persist terminal ticket telemetry for run %d", run_id, exc_info=True)
 
     try:
         from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
@@ -857,11 +1001,19 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 next_ticket_id = int(hydrated["ticket_id"])
                 board_id = hydrated.get("board_id")
                 run_metadata = dict(hydrated.get("run_metadata") or {})
+                common_metadata = run_data.get("ticket_group_common_metadata")
+                if isinstance(common_metadata, dict):
+                    run_metadata.update(common_metadata)
                 run_metadata.update({
                     "ticket_group_id": run_data.get("ticket_group_id"),
                     "ticket_group_index": group_index + 1,
                     "ticket_group_size": len(group_items),
                     "ticket_group_items": group_items,
+                    "ticket_group_common_metadata": (
+                        dict(common_metadata)
+                        if isinstance(common_metadata, dict)
+                        else {}
+                    ),
                     "auto_queued_from_run_id": run_id,
                 })
                 group_context = str(hydrated.get("context") or "").strip() or None
@@ -949,6 +1101,7 @@ def start_workflow_ticket_group(
     workflow_id: int,
     ticket_items: List[Dict[str, Any]],
     *,
+    run_metadata: Optional[Dict[str, Any]] = None,
     dispatch_async: bool = True,
 ) -> Dict[str, Any]:
     """Start an explicit group of ticket runs using the workflow queue policy."""
@@ -991,11 +1144,13 @@ def start_workflow_ticket_group(
             errors.append({"ticket_id": ref["ticket_id"], "error": str(exc)})
             continue
         metadata = dict(item["run_metadata"])
+        metadata.update(dict(run_metadata or {}))
         metadata.update({
             "ticket_group_id": group_id,
             "ticket_group_index": index,
             "ticket_group_size": len(normalized),
             "ticket_group_items": group_refs if mode == "sequential" else [],
+            "ticket_group_common_metadata": dict(run_metadata or {}),
         })
         result = start_workflow_run(
             int(workflow_id),
@@ -1220,6 +1375,39 @@ def start_workflow_run(
         if first_step is None:
             first_step = sorted_steps[0]
             start_idx = 0
+        requested_policy = normalized_metadata.get("requested_execution_policy")
+        requested_policy = requested_policy if isinstance(requested_policy, dict) else {}
+        if (
+            start_step_id is None
+            and bool(requested_policy.get("read_only"))
+            and bool(requested_policy.get("verification_only"))
+        ):
+            from distr.core.work_intake.execution_policy import infer_step_role
+
+            for i, candidate in enumerate(sorted_steps):
+                try:
+                    candidate_config = json.loads(candidate.config or "{}") or {}
+                except Exception:
+                    candidate_config = {}
+                role = infer_step_role({
+                    "name": candidate.name,
+                    "description": candidate.description,
+                    "instruction": candidate.instruction,
+                    "step_type": candidate.step_type,
+                    "config": candidate_config,
+                })
+                if role == "review":
+                    first_step = candidate
+                    start_idx = i
+                    normalized_metadata["read_only_fast_path"] = {
+                        "entry_step_id": int(candidate.id),
+                        "skipped_planning_step_ids": [
+                            int(step.id) for step in sorted_steps[:i]
+                        ],
+                    }
+                    for prior_step in sorted_steps[:i]:
+                        prior_step.status = "skipped"
+                    break
         first_step_id = first_step.id
         first_step_name = first_step.name
 
@@ -1465,12 +1653,46 @@ def start_workflow_run(
                 from distr.core.developer_context import build_developer_context
 
                 developer_context = build_developer_context().to_dict()
-                run_data["developer_context"] = _scope_developer_context_to_run(
+                memory_probe = ""
+                if (
+                    os.environ.get("DECISIONS_ENABLE_QUALIFICATION_FAULTS", "").strip().lower()
+                    in {"1", "true", "yes"}
+                    and str(run_data.get("qualification_scenario_id") or "").strip()
+                    and str(run_data.get("qualification_injected_failure") or "").strip().lower()
+                    == "foreign_memory"
+                ):
+                    consumed = [
+                        str(item)
+                        for item in (run_data.get("qualification_faults_consumed") or [])
+                    ]
+                    if not any(
+                        item == "foreign_memory" or item.startswith("foreign_memory:")
+                        for item in consumed
+                    ):
+                        memory_probe = "DECISIONS_QUALIFICATION_FOREIGN_PROJECT_MEMORY"
+                        developer_context = json.loads(json.dumps(developer_context, default=str))
+                        developer_context["user_memory_context"] = memory_probe
+                        developer_context["workspace"] = {
+                            "projection_path": "/foreign/project/.decisions",
+                            "qualification_probe": memory_probe,
+                        }
+                        developer_context["board_notes"] = [{"title": memory_probe}]
+                        consumed.append("foreign_memory:developer_context_scope")
+                        run_data["qualification_faults_consumed"] = consumed[-20:]
+                        run_data["qualification_failure_observed"] = True
+                        run_data["qualification_failure_stage"] = "developer_context_scope"
+                        run_data["foreign_memory_injected"] = True
+                scoped_context = _scope_developer_context_to_run(
                     developer_context,
                     run_data,
                     board_id=board_id,
                     ticket_id=ticket_id,
                 )
+                if memory_probe:
+                    run_data["foreign_memory_blocked"] = (
+                        memory_probe not in json.dumps(scoped_context, default=str)
+                    )
+                run_data["developer_context"] = scoped_context
 
             from distr.core.settings import load_settings_from_db
             from distr.core.workflow.coordination_plan import (
@@ -1707,6 +1929,12 @@ def start_workflow_run(
         return None
 
     def _initialize_then_continue() -> Dict[str, Any]:
+        if normalized_metadata.get("qualification_remote_control_probe"):
+            from distr.core.workflow.interactions import start_telegram_qualification_probe
+
+            with _runs_lock:
+                _initializing_runs.discard(run_id)
+            return start_telegram_qualification_probe(run_id, first_step_id)
         # Provider catalogue discovery may involve network probes. It belongs in
         # the already asynchronous initialization phase so clicking Run returns
         # immediately and cannot freeze the desktop/web event loop. The step
@@ -2108,7 +2336,15 @@ def _resume_worker_needs_input(run_id: int, feedback: str) -> Dict[str, Any]:
             run_data = {}
         step_id = int(step.id)
         workflow_id = run.workflow_id
-        ticket_id = run.ticket_id
+        raw_ticket_id = getattr(run, "ticket_id", None)
+        # Persisted run rows contain an integer or NULL here.  Keep terminal
+        # finalization defensive at the boundary: proxy/mock/sentinel values
+        # must never be interpreted as a real ticket and moved through lanes.
+        ticket_id = (
+            int(raw_ticket_id)
+            if isinstance(raw_ticket_id, int) and not isinstance(raw_ticket_id, bool)
+            else None
+        )
         board_id = run.board_id
         project_id = run_data.get("project_id")
         run.status = "running"
@@ -2189,6 +2425,72 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         return _handle_step_review_response(run_id, optional_input)
     if waiting_kind == "worker_needs_input":
         return _resume_worker_needs_input(run_id, optional_input)
+    if waiting_kind == "restart_recovery":
+        clean = (optional_input or "").strip()
+        if clean.lower() in {"stop", "cancel", "abort"}:
+            cancel_run(run_id)
+            return {"success": True, "action": "end_run", "status": "cancelled"}
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if not run or not run.current_step_id:
+                return {"error": "No saved step is available to recover", "status_code": 409}
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            step_id = int(run.current_step_id)
+            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+            if not step:
+                return {"error": "The saved recovery step no longer exists", "status_code": 409}
+            run.status = "running"
+            step.status = "queued"
+            run_data.pop("waiting_kind", None)
+            run_data.pop("waiting_prompt", None)
+            recovery = dict(run_data.get("restart_recovery") or {})
+            recovery.update({"available": False, "resumed": True})
+            run_data["restart_recovery"] = recovery
+            if clean:
+                run_data["feedback"] = clean[:2000]
+            run.run_data = json.dumps(run_data)
+            # The provider process represented by a pre-restart session no
+            # longer exists.  Close that durable row before the retry creates
+            # a fresh session, otherwise Mission Control shows a ghost worker
+            # waiting forever alongside the recovered work.
+            from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+
+            interrupted = (
+                db.query(ProjectExecutionSession)
+                .filter(ProjectExecutionSession.run_id == int(run_id))
+                .filter(ProjectExecutionSession.status.in_(["queued", "running", "waiting"]))
+                .all()
+            )
+            completed_at = utc_now_naive()
+            for execution in interrupted:
+                execution.status = "cancelled"
+                execution.error = "Superseded by the resumed restart-recovery attempt."
+                execution.updated_at = completed_at
+                execution.completed_at = completed_at
+                db.add(ProjectExecutionEvent(
+                    session_id=int(execution.id),
+                    event_type="restart_recovery_resumed",
+                    status="cancelled",
+                    message=execution.error,
+                    payload=json.dumps({"run_id": int(run_id), "step_id": int(step_id)}),
+                ))
+            db.commit()
+        record_workflow_chat_event(
+            run_id,
+            "resumed",
+            status="running",
+            step_id=step_id,
+            summary="Recovered the saved step after restart.",
+        )
+        return {
+            "success": True,
+            "action": "retry_step",
+            "step_id": step_id,
+            "dispatch": _dispatch_workflow_step(int(run_id), step_id),
+        }
     if waiting_kind == "control_interrupt":
         clean = (optional_input or "").strip()
         lowered = clean.lower()
@@ -2421,7 +2723,15 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         risk_profile = dict(run_data.get("risk_profile") or {})
         workflow_id = run.workflow_id
         board_id = run.board_id
-        ticket_id = run.ticket_id
+        raw_ticket_id = getattr(run, "ticket_id", None)
+        # Persisted run rows contain an integer or NULL here. Keep terminal
+        # finalization defensive at the boundary: proxy/mock/sentinel values
+        # must never be interpreted as a real ticket and moved through lanes.
+        ticket_id = (
+            int(raw_ticket_id)
+            if isinstance(raw_ticket_id, int) and not isinstance(raw_ticket_id, bool)
+            else None
+        )
         project_id = run_data.get("project_id")
         execution_session_id = run_data.get("execution_session_id")
         auto_retry: Dict[str, Any] | None = None
@@ -2470,6 +2780,7 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                     packet=packet,
                     run_status=status,
                     risk_profile=risk_profile,
+                    requires_ui_quality=requires_terminal_ui_quality,
                 )
             from distr.core.workflow.dogfood_gate import enforce_dogfood_exit_gate
 
@@ -2499,6 +2810,52 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                 updated_packet["summary"] = str(run_data["terminal_warning"])
             run_data["result_packet"] = updated_packet
             run.run_data = json.dumps(run_data)
+        if status == "completed":
+            other_active_run = (
+                db.query(AutoWorkflowRun.id)
+                .filter(
+                    AutoWorkflowRun.workflow_id == run.workflow_id,
+                    AutoWorkflowRun.id != run.id,
+                    AutoWorkflowRun.status.in_(["running", "waiting"]),
+                )
+                .first()
+            )
+            if other_active_run is None:
+                # Branches that were not needed must not remain visually pending
+                # after a successful run (for example, a correction step after a
+                # clean independent review).
+                db.query(AutoWorkflowStep).filter(
+                    AutoWorkflowStep.workflow_id == run.workflow_id,
+                    AutoWorkflowStep.status.in_(["pending", "queued"]),
+                ).update(
+                    {AutoWorkflowStep.status: "skipped"},
+                    synchronize_session=False,
+                )
+        # Publish terminal run state and its human-visible ticket lifecycle in
+        # one transaction.  Previously the run became ``completed`` first and
+        # the ticket moved to QA later in ``_finalize_terminal_run``. Pollers
+        # could therefore observe an impossible transient state (completed run
+        # + In Progress ticket) and persist a false qualification failure.
+        if ticket_id:
+            from distr.core.db.kanban import KanbanLane, KanbanTicket
+
+            ticket = db.query(KanbanTicket).filter(
+                KanbanTicket.id == int(ticket_id)
+            ).first()
+            if ticket:
+                ticket.workflow_status = status
+                if status == "completed":
+                    from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
+
+                    current_lane = db.query(KanbanLane).filter(
+                        KanbanLane.id == int(ticket.lane_id)
+                    ).first()
+                    current_lane_name = str(
+                        getattr(current_lane, "name", "") or ""
+                    ).strip()
+                    if current_lane_name not in {"In Progress", "QA"}:
+                        move_ticket_to_delivery_lane(db, int(ticket_id), "In Progress")
+                    move_ticket_to_delivery_lane(db, int(ticket_id), "QA")
         run.status = status
         run.completed_at = None if auto_retry else utc_now_naive()
         db.commit()
@@ -2588,6 +2945,18 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                     )
     except Exception:
         logger.debug("Could not provision post_chain skills for run %s", run_id, exc_info=True)
+    try:
+        from distr.core.qualification import record_workflow_qualification
+
+        record_workflow_qualification(
+            run_data=run_data if isinstance(run_data, dict) else {},
+            status=status,
+            packet=(run_data.get("result_packet") or {}) if isinstance(run_data, dict) else {},
+        )
+    except Exception:
+        # Qualification evidence must never interfere with customer workflow
+        # finalization. The release report will show the missing run instead.
+        logger.debug("Could not record qualification evidence for run %s", run_id, exc_info=True)
     record_workflow_chat_event(
         run_id,
         "completed",
@@ -2844,6 +3213,13 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
             notify_ticket_workflow_step_started(run_id, step_id)
         except Exception:
             logger.debug("Could not send ticket workflow step-start engagement", exc_info=True)
+        if _enter_controlled_restart_recovery(run_id, step_id):
+            return {
+                "success": True,
+                "action": "waiting",
+                "waiting_kind": "restart_recovery",
+                "step_id": int(step_id),
+            }
         try:
             result = self._execute(step_data, run_id=run_id)
         except Exception as exc:

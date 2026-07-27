@@ -147,13 +147,15 @@ def handoff_resume_proposal(situational: dict[str, Any] | None) -> dict[str, Any
     assert isinstance(situational, dict)
     body = _handoff_body_line(str(situational.get("handoff_peek") or ""))
     idle = situational.get("idle_gap") or "a while"
+    peek = (body[:160] + ("…" if len(body) > 160 else "")) if body else "the last project notes"
     description = (
-        f"Resume after {idle} idle — last handoff: {body[:160]}"
+        f"I noticed we left off about {idle} ago. Last notes: {peek}. "
+        "Want me to pick that up?"
     )
     return {
         "action_type": "suggestion",
         "description": description,
-        "draft": str(situational.get("handoff_peek") or body)[:2000],
+        "draft": description,
         "telegram_message": description,
         "payload": {
             "kind": "handoff_resume",

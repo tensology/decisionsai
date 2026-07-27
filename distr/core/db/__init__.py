@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, text as sa_text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, Index, UniqueConstraint, text as sa_text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship, backref
 from sqlalchemy.dialects.sqlite import CHAR
@@ -292,6 +292,40 @@ class Chat(Base):
     children = relationship("Chat", 
                           backref=backref("parent", remote_side=[id]),
                           cascade="all, delete-orphan")
+
+
+class ChatTurnEvent(Base):
+    """Durable, ordered activity for one user-message turn.
+
+    ``turn_id`` is the ``chats.id`` row containing the user message.  Keeping
+    activity outside ``Chat.params`` avoids capped JSON history, lost running
+    states, and read/modify/write races between concurrent tools.
+    """
+
+    __tablename__ = "chat_turn_events"
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_chat_turn_events_event_id"),
+        UniqueConstraint(
+            "chat_id", "turn_id", "sequence", name="uq_chat_turn_events_sequence"
+        ),
+        Index("ix_chat_turn_events_chat_turn", "chat_id", "turn_id", "sequence"),
+        Index("ix_chat_turn_events_chat_status", "chat_id", "status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    turn_id = Column(Integer, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    sequence = Column(Integer, nullable=False)
+    event_id = Column(String(64), nullable=False)
+    event_type = Column(String(32), nullable=False)
+    status = Column(String(24), nullable=False, default="running")
+    title = Column(String(240), nullable=False, default="")
+    summary = Column(Text, nullable=False, default="")
+    detail = Column(Text, nullable=False, default="")
+    metadata_json = Column(Text, nullable=False, default="{}")
+    created_date = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_date = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+    completed_date = Column(DateTime, nullable=True)
 
 class ScreenPosition(Base):
     __tablename__ = 'screen_positions'

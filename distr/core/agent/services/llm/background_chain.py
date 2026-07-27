@@ -210,6 +210,10 @@ class BackgroundChainRunner:
             if func_name in self.service._tools_dict:
                 tool = self.service._tools_dict[func_name]
                 status = "completed"
+                if self.chat_id:
+                    from distr.core.agent.tool_audit import record_tool_start
+
+                    record_tool_start(self.chat_id, func_name, metadata={"background": True})
                 try:
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
@@ -233,10 +237,29 @@ class BackgroundChainRunner:
                 # Try fuzzy match
                 matched = self.service._fuzzy_match_tool(func_name) if hasattr(self.service, '_fuzzy_match_tool') else None
                 if matched:
+                    if self.chat_id:
+                        from distr.core.agent.tool_audit import record_tool_start
+
+                        record_tool_start(
+                            self.chat_id,
+                            matched.name,
+                            instruction_hint=f"Matched from {func_name}",
+                            metadata={"background": True},
+                        )
                     try:
                         result = matched._run(**json.loads(tc["function"].get("arguments", "{}")))
                     except Exception as e:
                         result = f"Error: {e}"
+                    if self.chat_id:
+                        from distr.core.agent.tool_audit import record_tool_execution
+
+                        record_tool_execution(
+                            self.chat_id,
+                            matched.name,
+                            str(result)[:2000],
+                            "failed" if str(result).lower().startswith("error") else "completed",
+                            event_queue=self.event_queue,
+                        )
                 else:
                     result = f"Error: Tool '{func_name}' not found'"
 

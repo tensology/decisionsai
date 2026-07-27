@@ -128,6 +128,24 @@ def extract_required_handoff_fields(
         for item in required_fields
         if str(item or "").strip()
     }
+    aliases = {
+        "final changed files": {"files changed", "drift check"},
+        "command log": {"tests run", "commands run", "command", "host command", "exit code"},
+        "evidence": {
+            "tests run",
+            "test results",
+            "exit code",
+            "drift check",
+            "security",
+            "ui assessment",
+            "browser evidence",
+            "blockers",
+            "ship verdict",
+        },
+        "memory delta": {"summary", "self corrections", "lessons", "remaining risks"},
+    }
+    for name in list(required):
+        required.update(aliases.get(name, set()))
     if not required:
         return ""
     captured: list[str] = []
@@ -234,15 +252,23 @@ class StepHandoffPacket:
             if value not in (None, "", [])
         ]
         sections.append(("identity", "# DecisionsAI step handoff\n\nPacket version: " + str(self.version) + "\n\n## Identity\n" + "\n".join(identity_lines)))
+
+        # The worker must learn what it is doing before it sees supporting
+        # project material.  In particular, tool-free synthesis steps can be
+        # derailed by an early AGENTS.md or artifact reference: smaller models
+        # try to inspect the reference before reaching the actual guardrail.
+        # Keep the current instruction immediately after identity in both the
+        # normal and compacted packet layouts.
+        step_title = _clean(self.current_step.get("title") or "Current step")
+        step_instruction = _bounded(self.current_step.get("instruction"), 2_200)
+        sections.append(("current_step", f"## Current step: {step_title}\n{step_instruction}"))
+
         sections.append(("objective", "## Objective and ticket context\n" + _bounded(self.objective, 3_200)))
         if _clean(self.ticket_contract):
             sections.append(("ticket_contract", "## Non-negotiable ticket contract\n" + _bounded(self.ticket_contract, 2_200)))
         if _clean(self.required_context):
             sections.append(("required_context", "## Required upstream context\n" + _bounded(self.required_context, 2_400)))
 
-        step_title = _clean(self.current_step.get("title") or "Current step")
-        step_instruction = _bounded(self.current_step.get("instruction"), 2_200)
-        sections.append(("current_step", f"## Current step: {step_title}\n{step_instruction}"))
         if _clean(self.workflow_map):
             sections.append(("workflow_map", "## Whole-run coordination map\n" + _bounded(self.workflow_map, 1_800)))
 
@@ -309,7 +335,10 @@ class StepHandoffPacket:
             # Put the actual ticket objective ahead of supporting file paths.
             # Cheaper models otherwise tend to exhaust their inspection budget
             # walking references before they have read what the user asked for.
-            ordered = [critical_map.get("identity", "")]
+            ordered = [
+                critical_map.get("identity", ""),
+                critical_map.get("current_step", ""),
+            ]
             if optional_text:
                 ordered.extend([marker, optional_text])
             if critical_map.get("ticket_contract"):
@@ -318,7 +347,6 @@ class StepHandoffPacket:
                 ordered.append(critical_map["required_context"])
             if critical_map.get("human_steering"):
                 ordered.append(critical_map["human_steering"])
-            ordered.append(critical_map.get("current_step", ""))
             if critical_map.get("references"):
                 ordered.append(critical_map["references"])
             ordered.append(critical_map.get("return_contract", ""))

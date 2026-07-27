@@ -3,6 +3,52 @@ from types import SimpleNamespace
 from distr.core.workflow.verification import _run_verification, ticket_acceptance_findings
 
 
+def test_read_only_test_ticket_accepts_exact_passing_process_evidence(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.orchestrator_validator.run_orchestrator_validator_judgment",
+        lambda **kwargs: {"passed": False, "rationale": "subjective disagreement"},
+    )
+    step = type("Step", (), {
+        "id": 2056,
+        "name": "Independently review and validate the change",
+        "validation_type": "llm_judgment",
+        "validation_prompt": "Independent review reports no unresolved findings.",
+        "config": "{}",
+    })()
+    ticket = (
+        "Run tests/core/test_work_intake.py and report the result without editing project files."
+    )
+    result = (
+        "Status: completed\n"
+        "Tests run: python -m pytest tests/core/test_work_intake.py\n"
+        "Result: 35 passed in 1.2s; exit code 0.\n"
+        "Files changed: None\nBlockers: None\nUI assessment: N/A"
+    )
+
+    assert _run_verification(step, result, True, ticket_context=ticket)
+
+
+def test_read_only_test_ticket_accepts_markdown_formatted_exit_code(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.orchestrator_validator.run_orchestrator_validator_judgment",
+        lambda **kwargs: {"passed": False, "rationale": "subjective disagreement"},
+    )
+    step = type("Step", (), {
+        "id": 2056,
+        "name": "Independently review and validate the change",
+        "validation_type": "llm_judgment",
+        "validation_prompt": "Independent review reports no unresolved findings.",
+        "config": "{}",
+    })()
+    ticket = "Run tests/core/test_example.py without editing project files."
+    result = (
+        "Tests run: 7 passed in 0.55s\nExit code: `0`\n"
+        "Files changed: none\nBlockers: none\nUI assessment: N/A"
+    )
+
+    assert _run_verification(step, result, True, ticket_context=ticket)
+
+
 def _review_step():
     return SimpleNamespace(
         id=4,

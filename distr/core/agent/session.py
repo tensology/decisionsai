@@ -1515,6 +1515,11 @@ class AgentSession:
             if pending:
                 self._pending_text_inputs = []
                 for item in pending:
+                    if isinstance(item, dict):
+                        from .command_handler import _cmd_process_text_input
+
+                        _cmd_process_text_input(self, item)
+                        continue
                     if len(item) == 5:
                         text, is_telegram, uploaded_image_path, speaker_override, telegram_input_type = item
                     else:

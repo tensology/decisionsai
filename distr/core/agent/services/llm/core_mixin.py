@@ -1692,6 +1692,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 try:
                     if 'text' not in args:
                         args['text'] = text
+                    from distr.core.agent.tool_audit import record_tool_start
+
+                    record_tool_start(current_chat_id, tool.name, instruction_hint=text[:160])
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
                         None, lambda t=tool, a=args: t._run(**a)

@@ -12239,26 +12239,36 @@
                         var eventId = card && card.getAttribute("data-event-id");
                         var action = btn.getAttribute("data-action") || "";
                         if (!eventId || !action) return;
-                        var message = "";
-                        if (action === "steer") {
-                            message = window.prompt("Steer this run:") || "";
-                            if (!message.trim()) return;
+                        function submitInboxAction(message) {
+                            fetch("/api/settings/workflows/intake/inbox/" + encodeURIComponent(eventId) + "/action", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ action: action, message: message || "" })
+                            }).then(function (r) { return r.json(); }).then(function (result) {
+                                if (result && result.success === false) {
+                                    snack(result.error || "Inbox action failed", "error");
+                                    return;
+                                }
+                                snack("Inbox: " + action, "success");
+                                loadWorkIntakeInbox({ quiet: true });
+                                loadActiveRuns();
+                            }).catch(function () {
+                                snack("Inbox action failed", "error");
+                            });
                         }
-                        fetch("/api/settings/workflows/intake/inbox/" + encodeURIComponent(eventId) + "/action", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ action: action, message: message })
-                        }).then(function (r) { return r.json(); }).then(function (result) {
-                            if (result && result.success === false) {
-                                snack(result.error || "Inbox action failed", "error");
-                                return;
-                            }
-                            snack("Inbox: " + action, "success");
-                            loadWorkIntakeInbox({ quiet: true });
-                            loadActiveRuns();
-                        }).catch(function () {
-                            snack("Inbox action failed", "error");
-                        });
+                        if (action === "steer") {
+                            showInputModal({
+                                title: "Steer this run",
+                                message: "Tell the orchestrator what should change while preserving the ticket goal.",
+                                placeholder: "Add a correction, constraint, or new direction…",
+                                confirmLabel: "Send steer",
+                                onConfirm: function (message) {
+                                    if (String(message || "").trim()) submitInboxAction(message);
+                                }
+                            });
+                            return;
+                        }
+                        submitInboxAction("");
                     });
                 });
             })

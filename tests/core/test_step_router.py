@@ -237,6 +237,7 @@ def test_bounded_validation_retry_reuses_approved_route_and_compact_correction()
         run,
         verified_passed=False,
         validation_snapshot={"correction_hint": "Preserve commerce/; inventory risks only."},
+        result="context_packet: valid existing fields",
     )
 
     assert decision == {
@@ -251,12 +252,30 @@ def test_bounded_validation_retry_reuses_approved_route_and_compact_correction()
     assert data["step_retry_counts"] == {"7": 1}
     assert data["approved_route_override"]["backend"] == "codex"
     assert "Preserve commerce/" in data["feedback"]
+    assert "context_packet: valid existing fields" in data["feedback"]
+    assert data["last_validation_correction"]["prior_result"] == "context_packet: valid existing fields"
     assert StepRouter._bounded_validation_retry(
         step,
         run,
         verified_passed=False,
         validation_snapshot={"correction_hint": "Preserve commerce/."},
+        result="second attempt",
     ) is None
+
+
+def test_backend_only_review_satisfies_conditional_ui_and_release_fields_with_na():
+    result = """
+    Tests run: 6 passed, exit code 0.
+    Security: No security findings.
+    UI assessment: N/A — backend-only test ticket.
+    Files changed: none.
+    Blockers: none.
+    """
+
+    assert _missing_expected_outputs(
+        result,
+        ["project_release_findings", "browser_evidence", "visual_claim_verdicts"],
+    ) == []
 
 
 # ── Parse routing response tests ───────────────────────────────────

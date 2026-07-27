@@ -1124,8 +1124,7 @@ class TelegramMessagesMixin:
             # conversation continues to the agent below.
             from distr.core.work_intake import WorkIntake, WorkIntakeAttachment, get_work_intake_service
 
-            decision = get_work_intake_service().ingest(
-                WorkIntake(
+            intake = WorkIntake(
                     source="telegram",
                     user_text=combined if input_type != "voice" else "",
                     transcript=combined if input_type == "voice" else "",
@@ -1138,11 +1137,16 @@ class TelegramMessagesMixin:
                         "source_message_ids": list(dict.fromkeys(source_message_ids)),
                     },
                 )
-            )
+            decision = get_work_intake_service().ingest(intake)
             if decision.handled:
                 self._stop_typing_loop()
                 self.send_to_telegram(decision.response_text or "Your request was routed.")
                 return
+            # Correlate the normal agent's eventual final answer with the exact
+            # durable answer_directly decision. The outbound event layer clears
+            # these fields only after the response event is persisted.
+            self._pending_work_intake_uid = intake.intake_uid
+            self._pending_work_intake_thread_id = intake.source_thread_id
         except Exception:
             logger.exception("[Telegram] Request routing failed; falling back to conversational agent")
 
