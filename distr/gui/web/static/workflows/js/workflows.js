@@ -90,6 +90,8 @@
     // as a workflow-design overview, but it does not carry enough evidence to
     // explain a live run by itself.
     var workflowLoopViewMode = "list";
+    var workflowRingViewPromise = null;
+    var workflowWorkspaceMemoryLoadedFor = null;
     var workflowLoopStepModalState = null;
     var workflowLoopStepModalBound = false;
     var workflowLoopSkillsCatalog = null;
@@ -5565,12 +5567,10 @@
             syncWorkflowRunsTabVisibility();
             scheduleWorkflowTabMarquees();
             syncWorkflowHarnessHandoffButton();
-            api("GET", "/workflows/" + id + "/workspace-memory").then(function (mem) {
-                var el = document.getElementById("wf-config-agent-map");
-                if (!el) return;
-                var paths = (mem && mem.workspace && mem.workspace.companion_paths) || {};
-                el.value = paths.workflow ? (paths.workflow + "/agents.md") : "";
-            }).catch(function () {});
+            workflowWorkspaceMemoryLoadedFor = null;
+            if (targetTab === "loop" || targetTab === "cli") {
+                requestAnimationFrame(loadWorkflowWorkspaceMemory);
+            }
             syncWorkflowCliAreaPresence({ reason: "load-detail", eager: eagerCliData });
             if (restoreTabAfterLoad) {
                 if (activeRunsPromise && typeof activeRunsPromise.then === "function") {
@@ -5580,6 +5580,21 @@
                 }
             }
         }).catch(function () { snack("Failed to load workflow", "error"); });
+    }
+
+    function loadWorkflowWorkspaceMemory() {
+        if (!currentWorkflowId || String(workflowWorkspaceMemoryLoadedFor) === String(currentWorkflowId)) {
+            return Promise.resolve();
+        }
+        var requestedId = currentWorkflowId;
+        return api("GET", "/workflows/" + requestedId + "/workspace-memory").then(function (mem) {
+            if (String(currentWorkflowId) !== String(requestedId)) return;
+            workflowWorkspaceMemoryLoadedFor = requestedId;
+            var el = document.getElementById("wf-config-agent-map");
+            if (!el) return;
+            var paths = (mem && mem.workspace && mem.workspace.companion_paths) || {};
+            el.value = paths.workflow ? (paths.workflow + "/agents.md") : "";
+        }).catch(function () {});
     }
 
     function normalizeWorkflowBoardOption(source, board) {
@@ -10746,15 +10761,6 @@
         return "";
     }
 
-    function loopRingNodePosition(index, total) {
-        var angle = (-Math.PI / 2) + ((2 * Math.PI * index) / total);
-        var radius = 40;
-        return {
-            left: (50 + radius * Math.cos(angle)).toFixed(2) + "%",
-            top: (50 + radius * Math.sin(angle)).toFixed(2) + "%"
-        };
-    }
-
     function loopStepInstructionPreview(step) {
         var text = String((step && (step.instruction || step.description)) || "").replace(/\s+/g, " ").trim();
         if (!text) return "No instruction yet";
@@ -10864,33 +10870,38 @@
     function renderLoopRingView(steps) {
         var el = document.getElementById("wf-loop-ring-view");
         if (!el) return;
-        if (!steps.length) {
-            el.innerHTML = '<div class="wf-loop-empty text-sm text-gray-500 py-10 text-center">No steps yet. Add the first step to start building the loop.</div>';
-            return;
-        }
-        var nodesHtml = steps.map(function (step, index) {
-            var pos = loopRingNodePosition(index, steps.length);
-            var selected = expandedStepId === step.id;
-            var statusCls = loopStepStatusClass(step.status);
-            return '<button type="button" class="wf-loop-ring-node' + (selected ? " is-selected" : "") + (statusCls ? " " + statusCls : "") + '" data-step-id="' + step.id + '" style="left:' + pos.left + ";top:" + pos.top + '">' +
-                '<div class="wf-loop-ring-node-head">' +
-                    '<span class="wf-loop-ring-node-ball" aria-label="Step ' + (index + 1) + '">' + (index + 1) + "</span>" +
-                    loopStepToolIconsHtml(step) +
-                "</div>" +
-                '<span class="wf-loop-ring-node-title">' + esc(step.name || ("Step " + (index + 1))) + "</span>" +
-                '<span class="wf-loop-ring-node-preview">' + esc(loopStepInstructionPreview(step)) + "</span>" +
-            "</button>";
-        }).join("");
-        el.innerHTML =
-            '<div class="wf-loop-ring-stage">' +
-                '<svg class="wf-loop-ring-track" viewBox="0 0 200 200" aria-hidden="true">' +
-                    '<circle cx="100" cy="100" r="76" fill="none" stroke="rgba(249,115,22,0.28)" stroke-width="2"></circle>' +
-                "</svg>" +
-                '<div class="wf-loop-ring-center-label" aria-label="Orchestrator">' + SVG_ORCHESTRATOR_BOT + '<span>Orchestrator</span></div>' +
-                '<div class="wf-loop-ring-nodes">' + nodesHtml + "</div>" +
-            "</div>";
+        el.innerHTML = '<div class="wf-loop-empty text-sm text-gray-500 py-10 text-center">Loading ring view…</div>';
+        ensureWorkflowRingView().then(function (view) {
+            if (workflowLoopViewMode !== "ring") return;
+            view.render({
+                element: el,
+                steps: steps,
+                expandedStepId: expandedStepId,
+                toolIcons: loopStepToolIconsHtml,
+                escape: esc,
+                orchestratorIcon: SVG_ORCHESTRATOR_BOT,
+                syncSelection: syncLoopStepSelectionUi
+            });
+        }).catch(function () {
+            el.innerHTML = '<div class="wf-loop-empty text-sm text-red-300 py-10 text-center">The ring view could not be loaded. Use Timeline to continue.</div>';
+        });
+    }
 
-        syncLoopStepSelectionUi();
+    function ensureWorkflowRingView() {
+        if (window.DecisionsWorkflowRingView) return Promise.resolve(window.DecisionsWorkflowRingView);
+        if (workflowRingViewPromise) return workflowRingViewPromise;
+        workflowRingViewPromise = new Promise(function (resolve, reject) {
+            var script = document.createElement("script");
+            script.src = "/workflows/static/js/ring_view.js";
+            script.async = true;
+            script.onload = function () {
+                if (window.DecisionsWorkflowRingView) resolve(window.DecisionsWorkflowRingView);
+                else reject(new Error("Ring view did not register"));
+            };
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+        return workflowRingViewPromise;
     }
 
     function renderLoopListView(steps) {
@@ -11147,58 +11158,16 @@
 
     function enableLoopRingStepDragAndDrop(steps) {
         var ringEl = document.getElementById("wf-loop-ring-view");
-        if (!ringEl || workflowHasActiveRuns()) return;
-
-        var draggingStepId = null;
-        var ringDidDrag = false;
-        ringEl.querySelectorAll(".wf-loop-ring-node").forEach(function (node) {
-            var stepId = parseInt(node.dataset.stepId, 10);
-            if (!stepId) return;
-
-            node.setAttribute("draggable", "true");
-            node.addEventListener("dragstart", function (evt) {
-                ringDidDrag = false;
-                draggingStepId = stepId;
-                node.classList.add("wf-loop-step-dragging");
-                if (evt.dataTransfer) {
-                    evt.dataTransfer.effectAllowed = "move";
-                    evt.dataTransfer.setData("text/plain", String(stepId));
-                }
-            });
-            node.addEventListener("drag", function () {
-                ringDidDrag = true;
-            });
-            node.addEventListener("dragend", function () {
-                draggingStepId = null;
-                ringEl.querySelectorAll(".wf-loop-step-drop-target").forEach(function (el) {
-                    el.classList.remove("wf-loop-step-drop-target");
-                });
-                ringEl.querySelectorAll(".wf-loop-step-dragging").forEach(function (el) {
-                    el.classList.remove("wf-loop-step-dragging");
-                });
-                window.setTimeout(function () { ringDidDrag = false; }, 0);
-            });
-            node.addEventListener("dragover", function (evt) {
-                if (!draggingStepId || draggingStepId === stepId) return;
-                evt.preventDefault();
-                node.classList.add("wf-loop-step-drop-target");
-                if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
-            });
-            node.addEventListener("dragleave", function () {
-                node.classList.remove("wf-loop-step-drop-target");
-            });
-            node.addEventListener("drop", function (evt) {
-                evt.preventDefault();
-                node.classList.remove("wf-loop-step-drop-target");
-                if (!draggingStepId || draggingStepId === stepId) return;
-                applyLoopStepReorder(steps, draggingStepId, stepId);
-            });
-            node.addEventListener("click", function (evt) {
-                if (ringDidDrag) {
-                    evt.preventDefault();
-                    return;
-                }
-                selectLoopStep(stepId, steps);
+        if (!ringEl) return;
+        ensureWorkflowRingView().then(function (view) {
+            if (workflowLoopViewMode !== "ring") return;
+            view.bind({
+                element: ringEl,
+                locked: workflowHasActiveRuns(),
+                reorder: function (draggedId, targetId) {
+                    applyLoopStepReorder(steps, draggedId, targetId);
+                },
+                select: function (stepId) { selectLoopStep(stepId, steps); }
             });
         });
     }
@@ -13616,6 +13585,7 @@
         var runAllBtn = document.getElementById("wf-run-all-btn");
         if (runAllBtn) runAllBtn.classList.toggle("hidden", tab !== "tickets");
         if (tab === "loop" && currentWorkflow) {
+            loadWorkflowWorkspaceMemory();
             workflowRunsFilterTicketId = selectedWorkflowQueueTicketId;
             renderSteps(currentWorkflow.steps || []);
             restoreLoopFeedExpandedState();
@@ -13623,6 +13593,7 @@
             syncLoopFeedPanelHeight();
         }
         if (tab === "cli") {
+            loadWorkflowWorkspaceMemory();
             refreshWorkflowCliTab();
             loadWorkflowExecutionSessions({ quiet: true });
             requestAnimationFrame(syncWorkflowCliLayoutHeight);
@@ -14411,7 +14382,11 @@
 
         loadList();
         loadWorkflowBoards();
-        checkPresetsExist();
+        if (typeof window.requestIdleCallback === "function") {
+            window.requestIdleCallback(checkPresetsExist, { timeout: 1500 });
+        } else {
+            window.setTimeout(checkPresetsExist, 500);
+        }
         connectWebSocket();
         // Start version polling as initial fallback until WebSocket connects
         startVersionPolling();

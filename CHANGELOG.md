@@ -28,6 +28,20 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ---
 
+## Unreleased
+
+### Long-running installs keep the evidence without keeping every noisy update
+
+DecisionsAI now performs conservative storage maintenance in the background. It keeps final worker results, validation, summaries, and ticket evidence. Older high-frequency progress payloads are compacted, and old executor updates from finished sessions can be pruned after their retention window. WhatsApp media is removed only when it is old and no WhatsApp message or ticket file refers to it. The defaults are intentionally cautious and can be adjusted through the documented environment settings in the runtime module.
+
+SQLite now checkpoints its write-ahead log automatically and applies a size limit, with a final safe checkpoint when the application closes. Telegram and macOS launcher diagnostics use bounded log rotation. Machine-activity compaction and storage maintenance run outside the web event loop, so routine housekeeping does not freeze Chat or Workflows. Runtime diagnostics show the active policy and the latest maintenance result alongside the current database, WAL, log, process, version, and disk information without exposing settings or secrets.
+
+### Workflows open with less hidden work
+
+Timeline remains the default workflow view. The visual Ring implementation is no longer parsed on every visit and loads only when Ring is selected. Workspace-memory details wait until Loop or CLI needs them, and preset discovery waits for browser idle time. This reduces the work performed during the first useful paint while preserving the detailed views when you ask for them.
+
+---
+
 ## [2.8.5] - 2026-07-17
 
 ### A running job now looks like work in progress, not a frozen reply
@@ -49,10 +63,6 @@ The useful detail is still there when you want to expand it, but raw payloads, d
 ### The real browser path is covered
 
 The release adds lifecycle, identity, merge, reconnect, steering, provider, workflow, and browser coverage around this behaviour. That includes desktop and mobile Playwright checks, so the multi-stage experience is tested as something a person actually uses rather than only as a collection of backend events.
-
-### Long-running installs are easier to diagnose
-
-Support no longer has to guess which data folder or database a running copy is using. A safe runtime diagnostic now reports the active data and database paths, version, process, database and log sizes, and available disk space without exposing settings or secrets. Append-only Telegram and macOS launcher logs are also rotated before they grow indefinitely. This keeps useful evidence while preventing months of ordinary use from turning one diagnostic file into a storage problem.
 
 ### It remembers you left five hours ago
 

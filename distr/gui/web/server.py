@@ -944,13 +944,28 @@ def create_app() -> FastAPI:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
 
     @app.on_event("startup")
-    async def _compact_orchestrator_machine_activity():
+    async def _schedule_background_maintenance():
+        """Run bounded database maintenance without blocking the web UI loop."""
         try:
+            import asyncio
             from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
+            from distr.core.storage_maintenance import run_storage_maintenance
 
-            run_weekly_machine_activity_compaction()
+            async def _run():
+                try:
+                    await asyncio.to_thread(run_weekly_machine_activity_compaction)
+                except Exception as exc:
+                    logger.debug("Orchestrator machine activity compaction skipped: %s", exc)
+                try:
+                    await asyncio.to_thread(run_storage_maintenance)
+                except Exception as exc:
+                    logger.warning("Storage maintenance failed safely: %s", exc)
+
+            app.state.background_maintenance_task = asyncio.create_task(
+                _run()
+            )
         except Exception as e:
-            logger.debug("Orchestrator machine activity compaction skipped: %s", e)
+            logger.debug("Background maintenance could not be scheduled: %s", e)
 
     @app.on_event("startup")
     async def _bind_unified_server_loop():

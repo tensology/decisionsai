@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 
 from distr.core.paths import DATA_DIR, DB_DIR
+from distr.core.storage_maintenance import read_storage_maintenance_state, storage_policy
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ def runtime_diagnostics() -> dict:
         "decisions_log_bytes": _file_size(db_root / "logs" / "decisions.log"),
         "launcher_log_bytes": _file_size(Path.home() / ".decisions" / "logs" / "launcher.log"),
         "disk_free_bytes": disk_free_bytes,
+        "storage_policy": storage_policy(),
+        "storage_maintenance": read_storage_maintenance_state(db_root),
     }
 
 

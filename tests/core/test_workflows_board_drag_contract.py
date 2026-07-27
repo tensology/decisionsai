@@ -114,6 +114,7 @@ def test_workflow_create_modal_is_compact_with_large_description():
 def test_workflow_loop_ui_has_ring_and_list_views():
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
     js = WORKFLOWS_JS.read_text(encoding="utf-8")
+    ring_js = (ROOT / "distr/gui/web/static/workflows/js/ring_view.js").read_text(encoding="utf-8")
 
     assert 'id="wf-loop-ring-view"' in html
     assert 'id="wf-loop-list-view"' in html
@@ -133,7 +134,8 @@ def test_workflow_loop_ui_has_ring_and_list_views():
     assert 'id="wf-loop-step-skills-list"' in html
     assert 'id="wf-loop-step-tools-list"' in html
     assert "wf-loop-step-tools-grid" in js
-    assert "wf-loop-ring-node-head" in js
+    assert "wf-loop-ring-node-head" in ring_js
+    assert 'script.src = "/workflows/static/js/ring_view.js"' in js
     assert 'emoji: "🎭"' in js
     assert "wf-loop-step-layout" in html
     assert "function openLoopStepModal(opts)" in js

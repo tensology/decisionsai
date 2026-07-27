@@ -226,6 +226,27 @@ class TestWorkflowsBasicLoad:
         print_diagnostics(cl, nl, "BASIC LOAD")
         page.close()
 
+    def test_ring_visualization_is_lazy_loaded(self, browser_context):
+        page = browser_context.new_page()
+        requested_urls = []
+        page.on("request", lambda request: requested_urls.append(request.url))
+        page.add_init_script("localStorage.removeItem('wf_loop_view_v2')")
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
+
+        page.locator("#wf-list [data-id]").first.wait_for(state="visible", timeout=5000)
+        page.locator("#wf-list [data-id]").first.click()
+        page.locator('.wf-tab[data-tab="loop"]').click()
+        page.wait_for_timeout(250)
+        assert not any(url.endswith("/workflows/static/js/ring_view.js") for url in requested_urls)
+
+        with page.expect_request_finished(
+            predicate=lambda request: request.url.endswith("/workflows/static/js/ring_view.js"),
+            timeout=5000,
+        ):
+            page.locator('.wf-loop-view-toggle[data-loop-view="ring"]').click()
+        expect(page.locator("#wf-loop-ring-view")).to_be_visible()
+        page.close()
+
 
     def test_workflow_list_populates(self, browser_context):
         page = browser_context.new_page()

@@ -582,6 +582,8 @@ def on_connect(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA wal_autocheckpoint=1000")
+    cursor.execute("PRAGMA journal_size_limit=67108864")
     cursor.close()
     logger = logging.getLogger(__name__)
     pool = engine.pool
@@ -966,6 +968,8 @@ def _cleanup_connections():
     """Cleanup database connections on application exit"""
     try:
         engine.dispose()
+        from distr.core.storage_maintenance import checkpoint_database
+        checkpoint_database(db_path, truncate=True)
         logging.getLogger(__name__).debug("Database connections disposed on exit")
     except Exception:
         pass  # Ignore errors during shutdown
