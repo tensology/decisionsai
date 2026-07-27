@@ -1462,13 +1462,12 @@
             </div>
             <div class="border-t border-white/10 pt-4">
                 <h4 class="text-xs text-gray-400 uppercase tracking-wide mb-2">WhatsApp</h4>
-                <p class="text-xs text-gray-500 mb-3">Choose the WhatsApp chat this board should listen to. The link is saved with the board.</p>
+                <p class="text-xs text-gray-500 mb-3">Choose every WhatsApp chat or group this board should listen to. Hold Command or Control to select more than one.</p>
                 <div>
                     <label class="text-xs text-gray-500">Chat Group</label>
                     <div class="flex items-center gap-2 min-w-0">
                         <div id="kb-bm-wa-chat-select-wrap" class="w-full min-w-0">
-                            <select id="kb-bm-wa-chat-select" class="w-full min-w-0">
-                                <option value="">Select chat...</option>
+                            <select id="kb-bm-wa-chat-select" multiple size="5" class="w-full min-w-0 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
                             </select>
                         </div>
                         <button type="button" id="kb-bm-wa-refresh-candidates" class="shrink-0 px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh List</button>

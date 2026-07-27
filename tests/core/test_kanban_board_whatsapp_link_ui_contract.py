@@ -8,13 +8,14 @@ BOARD_JS = ROOT / "distr/gui/web/static/kanban/js/kanban_board.js"
 WHATSAPP_JS = ROOT / "distr/gui/web/static/kanban/js/kanban_whatsapp.js"
 
 
-def test_board_advanced_whatsapp_link_is_saved_from_single_chat_selector():
+def test_board_advanced_whatsapp_link_supports_multiple_chat_selector():
     template = KANBAN_TEMPLATE.read_text()
     kanban_js = KANBAN_JS.read_text()
     board_js = BOARD_JS.read_text()
     whatsapp_js = WHATSAPP_JS.read_text()
 
     assert "kb-bm-wa-chat-select" in template
+    assert "multiple size=\"5\"" in template
     assert "Chat Group" in template
     assert "kb-bm-wa-refresh-candidates" in template
     assert "kb-bm-wa-chat-select-wrap" in template
@@ -36,10 +37,13 @@ def test_board_advanced_whatsapp_link_is_saved_from_single_chat_selector():
     assert "saveSelectedBoardWaLink" in kanban_js
     assert "saveSelectedBoardWaLink(boardId)" in board_js
     assert "saveSelectedWaLinkForBoard" in whatsapp_js
+    assert "selectedOptions" in whatsapp_js
+    assert "Promise.all(removals.concat(additions))" in whatsapp_js
     assert "unlinkAllBoardWaLinks" in whatsapp_js
+    assert "return unlinkAllBoardWaLinks(boardId).then" not in whatsapp_js
     assert "handleBoardWaChatSelectChange" in whatsapp_js
     assert "Linked - " not in whatsapp_js
-    assert "setLinkedValues" in whatsapp_js
+    assert "opt.selected = isLinked" in whatsapp_js
     assert "kb-bm-wa-link-dot" not in whatsapp_js
     assert "setWaChatLinkContext" in whatsapp_js
     assert "waMsgCtxLinkToBoard" in whatsapp_js

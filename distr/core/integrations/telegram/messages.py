@@ -355,6 +355,19 @@ class TelegramMessagesMixin:
             text_lower = text.lower().strip()
 
             try:
+                from distr.core.kanban.whatsapp_work_lifecycle import handle_telegram_reply
+
+                whatsapp_review = handle_telegram_reply(text, chat_id=chat_id)
+                if whatsapp_review:
+                    self.send_to_telegram(
+                        whatsapp_review.get("text") or "WhatsApp draft updated.",
+                        reply_markup=whatsapp_review.get("reply_markup"),
+                    )
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] WhatsApp reply review routing failed: %s", exc, exc_info=True)
+
+            try:
                 from distr.core.workflow.interactions import (
                     handle_telegram_workflow_reply,
                     workflow_reply_message,

@@ -139,8 +139,6 @@
         function syncWaChatSelectLinkedState() {
             var chatSelect = document.getElementById("kb-bm-wa-chat-select");
             if (!chatSelect) return;
-            var selected = String(chatSelect.value || "").trim();
-            var firstLinkedJid = "";
             var linkedValues = {};
             Array.prototype.forEach.call(chatSelect.options, function(opt) {
                 if (!opt.value) return;
@@ -151,22 +149,16 @@
                 opt.dataset.linked = isLinked ? "1" : "";
                 if (isLinked) {
                     linkedValues[opt.value] = true;
-                    if (!firstLinkedJid) firstLinkedJid = opt.value;
                 }
+                opt.selected = isLinked;
             });
-            if (!selected && firstLinkedJid) chatSelect.value = firstLinkedJid;
-            if (window.KanbanCustomSelect) {
-                var custom = chatSelect._kbCustomSelect || window.KanbanCustomSelect.upgradeById("kb-bm-wa-chat-select", { placeholder: "Select chat..." });
-                if (custom) custom.setLinkedValues(linkedValues);
-                else window.KanbanCustomSelect.refresh(chatSelect);
-            }
         }
 
         function populateWaChatSelect(chats) {
             var chatSelect = document.getElementById("kb-bm-wa-chat-select");
             if (!chatSelect) return;
             waBoardLinkCandidatesByJid = {};
-            chatSelect.innerHTML = '<option value="">Select chat...</option>';
+            chatSelect.innerHTML = '';
             (chats || []).forEach(function(chat) {
                 var jid = String(chat.id || "").trim();
                 var name = String(chat.name || "").trim();
@@ -221,8 +213,7 @@
                 deps.showSnackbar("Missing WhatsApp chat data", "error");
                 return;
             }
-            unlinkAllBoardWaLinks(boardId).then(function() {
-                return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
+            deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({
@@ -231,8 +222,7 @@
                         contact_name: waCtxMenuData.name,
                         auto_snapshot: autoSnapshot,
                     })
-                });
-            }).then(function(r) {
+                }).then(function(r) {
                 if (r && r.success) {
                     waBoardLinkedByJid[waCtxMenuData.jid] = {
                         id: r.id,
@@ -362,16 +352,12 @@
             }
             return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links").then(function(links) {
                 waBoardLinkedByJid = {};
-                var boardLinkedJid = "";
                 (links || []).forEach(function(l) {
                     var jid = String(l.phone_jid || "").trim();
                     if (jid) {
                         waBoardLinkedByJid[jid] = l;
-                        if (!boardLinkedJid) boardLinkedJid = jid;
                     }
                 });
-                var chatSelect = document.getElementById("kb-bm-wa-chat-select");
-                if (chatSelect && boardLinkedJid) chatSelect.value = boardLinkedJid;
                 syncWaChatSelectLinkedState();
                 return links || [];
             });
@@ -379,38 +365,29 @@
 
         function saveSelectedWaLinkForBoard(boardId) {
             var chatSelect = document.getElementById("kb-bm-wa-chat-select");
-            var selectedJid = chatSelect ? String(chatSelect.value || "").trim() : "";
+            var selectedJids = chatSelect ? Array.prototype.map.call(chatSelect.selectedOptions || [], function(opt) { return String(opt.value || "").trim(); }).filter(Boolean) : [];
             if (!boardId) return Promise.reject(new Error("Save the board before linking WhatsApp"));
-            if (!selectedJid) return unlinkAllBoardWaLinks(boardId).then(function() { return { skipped: true, unlinked: true }; });
-            var selectedChat = waBoardLinkCandidatesByJid[selectedJid] || null;
-            if (!selectedChat) return Promise.reject(new Error("Invalid WhatsApp chat selection"));
-            if (waBoardLinkedByJid[selectedJid]) return Promise.resolve({ skipped: true, linked: true });
-            var linkJid = selectedChat.jid;
-            var linkPhone = selectedChat.phone || linkJid.split("@")[0].split(":")[0];
-            var linkName = selectedChat.name;
-
-            return unlinkAllBoardWaLinks(boardId).then(function() {
+            var invalid = selectedJids.filter(function(jid) { return !waBoardLinkCandidatesByJid[jid]; });
+            if (invalid.length) return Promise.reject(new Error("Invalid WhatsApp chat selection"));
+            var removals = Object.keys(waBoardLinkedByJid).filter(function(jid) { return selectedJids.indexOf(jid) < 0; }).map(function(jid) {
+                return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links/" + waBoardLinkedByJid[jid].id, { method: "DELETE" });
+            });
+            var additions = selectedJids.filter(function(jid) { return !waBoardLinkedByJid[jid]; }).map(function(jid) {
+                var selectedChat = waBoardLinkCandidatesByJid[jid];
                 return deps.apiFetch("/api/tickets/boards/" + boardId + "/whatsapp-links", {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({
-                        phone_jid: linkJid,
-                        phone_number: linkPhone,
-                        contact_name: linkName,
+                        phone_jid: selectedChat.jid,
+                        phone_number: selectedChat.phone || selectedChat.jid.split("@")[0].split(":")[0],
+                        contact_name: selectedChat.name,
                     })
                 });
-            }).then(function(r) {
-                if (r && r.success) {
-                    waBoardLinkedByJid[linkJid] = {
-                        id: r.id,
-                        board_id: boardId,
-                        phone_jid: linkJid,
-                        phone_number: linkPhone,
-                        contact_name: linkName,
-                    };
-                    syncWaChatSelectLinkedState();
-                }
-                return r;
+            });
+            return Promise.all(removals.concat(additions)).then(function() {
+                return loadBoardWaLinks(boardId).then(function(links) {
+                    return { success: true, count: links.length, unlinked: links.length === 0 };
+                });
             });
         }
 
@@ -428,7 +405,6 @@
 
         function handleBoardWaChatSelectChange(boardId, selectedJid) {
             if (!boardId) return Promise.resolve();
-            if (!selectedJid) return unlinkAllBoardWaLinks(boardId);
             return Promise.resolve();
         }
 

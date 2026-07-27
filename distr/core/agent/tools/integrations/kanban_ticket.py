@@ -3043,7 +3043,15 @@ class KanbanTicketTool(BaseTool):
             try:
                 import asyncio
                 import concurrent.futures
+                import time
                 from distr.core.project_cli_backends import run_project_task
+
+                cli_started_at = time.monotonic()
+                try:
+                    from distr.core.kanban.whatsapp_work_lifecycle import mark_execution_started
+                    mark_execution_started(ticket_id=ticket_id_val, execution_kind="cli", run_id=audit_id)
+                except Exception:
+                    logger.debug("No WhatsApp lifecycle to mark for CLI ticket", exc_info=True)
 
                 with self._get_session() as s:
                     from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
@@ -3085,8 +3093,15 @@ class KanbanTicketTool(BaseTool):
                 if result.success:
                     try:
                         with self._get_session() as s:
+                            from distr.core.kanban.ticket_time_tracking import add_time_spent_seconds
                             from distr.core.kanban.lifecycle import move_ticket_to_delivery_lane
 
+                            tracked_ticket = orm_get_by_id(s, KanbanTicket, ticket_id_val)
+                            if tracked_ticket:
+                                tracked_ticket.time_spent = add_time_spent_seconds(
+                                    tracked_ticket.time_spent,
+                                    max(1, int(time.monotonic() - cli_started_at)),
+                                )
                             move_ticket_to_delivery_lane(s, ticket_id_val, "QA")
                             s.commit()
                     except ValueError:
@@ -3094,6 +3109,18 @@ class KanbanTicketTool(BaseTool):
                             "Ticket %s changed lanes during direct CLI execution",
                             ticket_id_val,
                         )
+                    try:
+                        from distr.core.kanban.whatsapp_work_lifecycle import notify_telegram_review, prepare_completed_reply
+                        review = prepare_completed_reply(
+                            ticket_id=ticket_id_val,
+                            run_id=int(audit_id or 0),
+                            status="completed",
+                            result_summary=str(result.output or "")[:1200],
+                        )
+                        if review:
+                            notify_telegram_review(review)
+                    except Exception:
+                        logger.exception("Could not prepare WhatsApp CLI completion draft")
                     return voice_then_reference(
                         f"The work has finished and is ready for your review in {project_name}.",
                         (
@@ -3101,6 +3128,16 @@ class KanbanTicketTool(BaseTool):
                             f"Complexity: {route['complexity']}\nModel: {route['model'] or 'default'}"
                         ),
                     )
+                try:
+                    from distr.core.kanban.whatsapp_work_lifecycle import prepare_completed_reply
+                    prepare_completed_reply(
+                        ticket_id=ticket_id_val,
+                        run_id=int(audit_id or 0),
+                        status="failed",
+                        result_summary=str(result.error or result.output or "")[:1200],
+                    )
+                except Exception:
+                    logger.debug("Could not record WhatsApp CLI failure", exc_info=True)
                 return voice_then_reference(
                     "The project CLI did not accept that run; the error detail is below.",
                     f"[{route['backend']} — {project_name}] Ticket #{ticket_id_val} failed: {result.error or result.output}",
@@ -3955,7 +3992,7 @@ class KanbanTicketTool(BaseTool):
             )
         messages = self._collect_whatsapp_feed_messages(scope, limit=limit)
         messages = self._select_whatsapp_messages_for_request(messages, text)
-        board_names = ", ".join(b["board"]["name"] for b in scope["boards"])
+        board_names = ", ".join(dict.fromkeys(b["board"]["name"] for b in scope["boards"]))
         if not messages:
             return voice_then_reference(
                 f"I do not see unticketed WhatsApp messages for {board_names}.",
@@ -4008,7 +4045,7 @@ class KanbanTicketTool(BaseTool):
         if not message_ids:
             messages = self._select_whatsapp_messages_for_request(messages, text)
         if not messages:
-            board_names = ", ".join(b["board"]["name"] for b in scope["boards"])
+            board_names = ", ".join(dict.fromkeys(b["board"]["name"] for b in scope["boards"]))
             return voice_then_reference(
                 f"I do not see unticketed WhatsApp messages for {board_names}.",
                 "No WhatsApp messages available to snapshot.",
@@ -4279,6 +4316,17 @@ class KanbanTicketTool(BaseTool):
                     "No WhatsApp messages found for snapshot.",
                 )
 
+            # Telegram, desktop, and web intake must produce the same portable
+            # evidence. Enrich voice/video captions before composing the ticket
+            # so transcripts are not lost simply because intake began remotely.
+            try:
+                from distr.gui.web.routes.kanban import _ensure_whatsapp_messages_enriched
+
+                _ensure_whatsapp_messages_enriched(msgs)
+                s.flush()
+            except Exception:
+                logger.warning("WhatsApp media enrichment failed during agent snapshot", exc_info=True)
+
             lane_obj = orm_get_by_id(s, KanbanLane, lane["id"])
             if not lane_obj:
                 return voice_then_reference(
@@ -4311,6 +4359,9 @@ class KanbanTicketTool(BaseTool):
                 source_thread_id=msgs[-1].jid or base_phone,
                 source_contact=msgs[-1].sender_push_name or msgs[-1].sender_phone or base_phone,
                 source_label="WhatsApp",
+                linked_project_id=board.get("default_project_id"),
+                linked_workflow_id=board.get("default_workflow_id"),
+                send_to_cli=bool(board.get("send_to_cli")),
             )
             s.add(ticket)
             s.flush()
@@ -4331,6 +4382,24 @@ class KanbanTicketTool(BaseTool):
 
             created_id = ticket.id
             created_title = ticket.title
+            source_jid = msgs[-1].jid or ""
+            source_contact = msgs[-1].sender_push_name or msgs[-1].sender_phone or base_phone
+            lifecycle_message_ids = [int(m.id) for m in msgs]
+
+        try:
+            from distr.core.kanban.whatsapp_work_lifecycle import record_ticket_created
+
+            record_ticket_created(
+                ticket_id=created_id,
+                board_id=board["id"],
+                project_id=board.get("default_project_id"),
+                source_jid=source_jid,
+                source_phone=base_phone,
+                source_contact=source_contact,
+                message_ids=lifecycle_message_ids,
+            )
+        except Exception:
+            logger.warning("Could not persist WhatsApp work lifecycle", exc_info=True)
 
         ref = (
             f"Created ticket #{created_id} on board '{board['name']}' from {len(msgs)} WhatsApp messages: {created_title}\n"

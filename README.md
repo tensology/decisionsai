@@ -39,6 +39,8 @@ Its local web interface is the control deck. That is where you chat, organize pr
 
 Telegram is the remote control. From your phone, you can send the same agent a message, voice note, screenshot, or document; approve a decision; steer work already in progress; and receive the result when it is done.
 
+WhatsApp can be a source of client work. Link one or more contacts or groups to an existing ticket board, then ask the agent from Telegram to check what came in. DecisionsAI can collect the relevant messages, media, and voice transcriptions, show you what it found, and wait for approval before creating tracked work. When approved work reaches QA, it can prepare a WhatsApp reply and return it to Telegram for you to send, revise, or leave as a draft. It does not send merely because a worker finished, and only you move the ticket from QA to Complete.
+
 DecisionsAI is **model-agnostic, provider-agnostic, and CLI-agnostic**. It does not lock your projects or memory to one AI company. Start with a local model, connect a cloud provider, use Codex, Cursor, Claude Code, Pi, or another coding CLI, and swap them later without rebuilding the way you work.
 
 Start with the voice agent. Add projects, tickets, Telegram, and workflows when you need them.

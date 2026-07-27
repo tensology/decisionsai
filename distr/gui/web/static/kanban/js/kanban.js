@@ -3582,9 +3582,6 @@
                 waManagement.loadWaLinkCandidates();
             });
         }
-        if (window.KanbanCustomSelect) {
-            window.KanbanCustomSelect.upgradeById("kb-bm-wa-chat-select", { placeholder: "Select chat...", emptyLabel: "Select chat..." });
-        }
         waManagement.loadWaLinkCandidates(true);
     }
 

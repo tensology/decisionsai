@@ -5800,6 +5800,23 @@ source: kanban_ticket_{t.id}
                     "source_message_ids": source_message_ids,
                 },
             )
+            # Commit the ticket and message batch before the lifecycle service
+            # opens its own short transaction.
+            s.commit()
+            try:
+                from distr.core.kanban.whatsapp_work_lifecycle import record_ticket_created
+
+                record_ticket_created(
+                    ticket_id=int(ticket.id),
+                    board_id=int(board.id),
+                    project_id=board.default_project_id,
+                    source_jid=last_msg.jid or link.phone_jid or "",
+                    source_phone=last_msg.jid_phone or link.phone_number or "",
+                    source_contact=source_contact,
+                    message_ids=source_message_ids,
+                )
+            except Exception:
+                logger.warning("Could not persist WhatsApp work lifecycle", exc_info=True)
             return JSONResponse({
                 "success": True,
                 "id": ticket.id,

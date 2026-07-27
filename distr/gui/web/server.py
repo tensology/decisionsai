@@ -950,6 +950,7 @@ def create_app() -> FastAPI:
             import asyncio
             from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
             from distr.core.storage_maintenance import run_storage_maintenance
+            from distr.core.kanban.whatsapp_binding_integrity import audit_and_repair_whatsapp_bindings
 
             async def _run():
                 try:
@@ -960,6 +961,12 @@ def create_app() -> FastAPI:
                     await asyncio.to_thread(run_storage_maintenance)
                 except Exception as exc:
                     logger.warning("Storage maintenance failed safely: %s", exc)
+                try:
+                    report = await asyncio.to_thread(audit_and_repair_whatsapp_bindings)
+                    if any(report.values()):
+                        logger.info("WhatsApp binding integrity: %s", report)
+                except Exception as exc:
+                    logger.warning("WhatsApp binding integrity repair failed safely: %s", exc)
 
             app.state.background_maintenance_task = asyncio.create_task(
                 _run()

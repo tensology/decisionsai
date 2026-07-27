@@ -30,6 +30,14 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ## Unreleased
 
+### A client message can stay connected to the work it started
+
+WhatsApp work no longer has to become a loose ticket with no reliable way home. A board can listen to several contacts or groups, and a request made through Telegram can collect the relevant messages, media, and voice transcriptions before you decide whether it should become work. The ticket keeps the source chat and message evidence, inherits the project and workflow route, and follows the normal Backlog, In Progress, and QA lifecycle.
+
+When approved work finishes, DecisionsAI records the workflow or direct CLI time and prepares a client-facing WhatsApp reply from the verified result. Telegram shows the draft with **Send**, **Revise**, and **Leave draft** choices. It never sends merely because a worker finished, and it never moves the ticket from QA to Complete for you. The lifecycle is durable, so the source messages, ticket, execution, result, and reply decision can be recovered instead of depending on one uninterrupted chat turn.
+
+Existing project-board relationships are checked conservatively in the background. A missing board that is still referenced by a real project can be recovered, project-level WhatsApp links are made visible on the project's primary board, and only orphan duplicates with a confirmed valid copy are removed. This also repairs the current Merrypak and Player1Sport routing without treating those project names as product logic.
+
 ### Long-running installs keep the evidence without keeping every noisy update
 
 DecisionsAI now performs conservative storage maintenance in the background. It keeps final worker results, validation, summaries, and ticket evidence. Older high-frequency progress payloads are compacted, and old executor updates from finished sessions can be pruned after their retention window. WhatsApp media is removed only when it is old and no WhatsApp message or ticket file refers to it. The defaults are intentionally cautious and can be adjusted through the documented environment settings in the runtime module.

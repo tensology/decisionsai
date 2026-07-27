@@ -178,7 +178,7 @@ def test_sequential_queue_auto_starts_next_ticket(tmp_path):
             with _runs_lock:
                 for run_id in list(_active_runs.keys()):
                     ctx = _active_runs.pop(run_id, None)
-                    if ctx:
+                    if ctx and ctx.event_loop is not None:
                         ctx.event_loop.call_soon_threadsafe(ctx.event_loop.stop)
     finally:
         if original_pi is not None:

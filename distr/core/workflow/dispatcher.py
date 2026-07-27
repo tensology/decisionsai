@@ -951,6 +951,42 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     except Exception:
         logger.debug("Could not persist terminal ticket telemetry for run %d", run_id, exc_info=True)
 
+    # A ticket created from WhatsApp keeps its source relationship through the
+    # run. Successful, validated work produces an unsent client draft and a
+    # Telegram review decision; failed work records the failure without
+    # pretending a reply is ready.
+    try:
+        with get_session() as db:
+            lifecycle_run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            lifecycle_ticket_id = int(lifecycle_run.ticket_id) if lifecycle_run and lifecycle_run.ticket_id else None
+        if lifecycle_ticket_id:
+            from distr.core.kanban.whatsapp_work_lifecycle import (
+                notify_telegram_review,
+                prepare_completed_reply,
+            )
+
+            result_summary = ""
+            if isinstance(run_result, dict):
+                packet = run_result.get("result_packet") or {}
+                if isinstance(packet, dict):
+                    result_summary = str(packet.get("human_summary") or packet.get("summary") or "")
+                if not result_summary:
+                    completed_steps = run_result.get("steps_summary") or []
+                    if completed_steps:
+                        result_summary = str((completed_steps[-1] or {}).get("result") or "")
+            elif run_result:
+                result_summary = str(run_result)
+            review = prepare_completed_reply(
+                ticket_id=lifecycle_ticket_id,
+                run_id=run_id,
+                status=status,
+                result_summary=result_summary[:1200],
+            )
+            if review:
+                notify_telegram_review(review)
+    except Exception:
+        logger.exception("Could not prepare WhatsApp completion draft for run %d", run_id)
+
     try:
         from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
         WorkflowAgentBridge().on_workflow_completed(workflow_id, run_result)

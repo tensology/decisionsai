@@ -190,7 +190,6 @@
             if (!window.KanbanCustomSelect) return;
             window.KanbanCustomSelect.upgradeById("kb-board-def-workflow", { placeholder: "None", emptyLabel: "None" });
             window.KanbanCustomSelect.upgradeById("kb-board-def-project", { placeholder: "None", emptyLabel: "None" });
-            window.KanbanCustomSelect.upgradeById("kb-bm-wa-chat-select", { placeholder: "Select chat...", emptyLabel: "Select chat..." });
         }
 
         function loadBoardDefaults(data) {
