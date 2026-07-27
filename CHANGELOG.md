@@ -50,6 +50,10 @@ The useful detail is still there when you want to expand it, but raw payloads, d
 
 The release adds lifecycle, identity, merge, reconnect, steering, provider, workflow, and browser coverage around this behaviour. That includes desktop and mobile Playwright checks, so the multi-stage experience is tested as something a person actually uses rather than only as a collection of backend events.
 
+### Long-running installs are easier to diagnose
+
+Support no longer has to guess which data folder or database a running copy is using. A safe runtime diagnostic now reports the active data and database paths, version, process, database and log sizes, and available disk space without exposing settings or secrets. Append-only Telegram and macOS launcher logs are also rotated before they grow indefinitely. This keeps useful evidence while preventing months of ordinary use from turning one diagnostic file into a storage problem.
+
 ### It remembers you left five hours ago
 
 If you talk to DecisionsAI in the morning, go do something else, and come back at night, it should not act like you are a stranger. It now notices the gap. It can see what you were last working on — the project, the ticket, the notes left behind — and pick up from there instead of changing the subject to random board stuff.

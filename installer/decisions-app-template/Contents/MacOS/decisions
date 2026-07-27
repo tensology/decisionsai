@@ -12,6 +12,15 @@ VENV_PYTHON="${VENV_PYTHON:-$HOME/.virtualenvs/decisions/bin/python}"
 
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
+# Keep repeated Dock launches from growing one unbounded diagnostic file.
+# Rotate before this process opens the file so no active writer is renamed.
+if [ -f "$LOG_FILE" ] && [ "$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)" -gt 10485760 ]; then
+    rm -f "$LOG_FILE.3"
+    [ ! -f "$LOG_FILE.2" ] || mv "$LOG_FILE.2" "$LOG_FILE.3"
+    [ ! -f "$LOG_FILE.1" ] || mv "$LOG_FILE.1" "$LOG_FILE.2"
+    mv "$LOG_FILE" "$LOG_FILE.1"
+fi
+
 export DECISIONS_DOCK_APP=1
 export DECISIONS_APP_BUNDLE="$APP_ROOT"
 

@@ -41,6 +41,7 @@ from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 from distr.core.integrations.telegram.sender import TelegramSenderMixin
 from distr.core.integrations.telegram.remote_control import TelegramRemoteControlMixin
 from distr.core.integrations.base import IntegrationReconnectMixin
+from distr.core.log_retention import rotate_oversize_file
 
 # How often to repeat the same "not connected" summary in the main log.
 _CONNECT_FAILURE_LOG_INTERVAL_S = 300.0
@@ -409,6 +410,7 @@ class TelegramWebSocketManager(
             log_dir = Path.home() / ".decisions" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             self._detailed_log_file = log_dir / "telegram_websocket_detailed.log"
+            rotate_oversize_file(self._detailed_log_file)
             # Ensure file exists
             if not self._detailed_log_file.exists():
                 with open(self._detailed_log_file, "w") as f:
