@@ -68,3 +68,16 @@ def test_invoice_creation_stops_before_api_without_explicit_approval():
         )
     assert "Approval required" in result
     fake_client.post.assert_not_called()
+
+
+def test_mail_aliases_use_canonical_gateway_actions():
+    fake_client = MagicMock()
+    fake_client.get.return_value = {"emails": []}
+    with patch(
+        "distr.core.agent.tools.integrations.tensology_workspace.configured_tensology_client",
+        return_value=fake_client,
+    ):
+        result = TensologyWorkspaceTool()._run(action="check_inbox", params={"limit": 3})
+
+    assert json.loads(result) == {"emails": []}
+    fake_client.get.assert_called_once_with("mail/messages", {"limit": 3})

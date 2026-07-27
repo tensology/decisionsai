@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -38,7 +38,32 @@ class TensologyWorkspaceTool(BaseTool):
     )
     args_schema: type[BaseModel] = TensologyWorkspaceInput
 
+    _ACTION_ALIASES: ClassVar[dict[str, str]] = {
+        "check_inbox": "list_mail",
+        "mail_inbox": "list_mail",
+        "list_inbox": "list_mail",
+        "check_mail": "list_mail",
+        "read_emails": "list_mail",
+        "read_email": "read_mail",
+        "get_email": "read_mail",
+        "draft_email": "save_draft",
+        "create_draft": "save_draft",
+        "send_email": "send_mail",
+    }
+
+    @classmethod
+    def _canonical_action(cls, action: str) -> str:
+        return cls._ACTION_ALIASES.get(str(action or "").strip().lower(), str(action or "").strip())
+
+    def normalize_tool_args(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Canonicalize common mail vocabulary before schema validation."""
+        normalized = dict(arguments or {})
+        if "action" in normalized:
+            normalized["action"] = self._canonical_action(normalized["action"])
+        return normalized
+
     def _run(self, action: str, params: dict | None = None, approved: bool = False, idempotency_key: str = "") -> str:
+        action = self._canonical_action(action)
         params = dict(params or {})
         client = configured_tensology_client(source=str(params.pop("source", "decisionsai")))
         mutation_key = idempotency_key or f"decisionsai-{uuid.uuid4()}"

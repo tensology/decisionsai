@@ -425,9 +425,49 @@ class OllamaResponseMixin:
                 }
                 continue
 
-            # 6. Gmail request_tool guard: if Gmail/email intent is detected and
-            # google_workspace is active, bypass request_tool and call
-            # google_workspace directly with a Gmail query.
+            # 6. Provider-aware mail guard. Explicit Tensology/Mailshot intent
+            # wins over the generic Gmail fallback.
+            tensology_mail_intent = any(
+                k in user_lower for k in ['tensology mail', 'tensology inbox', 'mailshot']
+            )
+            if name == 'request_tool' and tensology_mail_intent:
+                if 'tensology_workspace' in getattr(self, '_tools_dict', {}):
+                    tool_calls[i] = {
+                        'function': {
+                            'name': 'tensology_workspace',
+                            'arguments': {'action': 'list_mail', 'params': {'limit': 50}},
+                        }
+                    }
+                continue
+
+            explicit_google_mail = any(k in user_lower for k in ['gmail', 'google mail', 'google workspace'])
+            generic_mail_read = (
+                any(k in user_lower for k in ['mail', 'email', 'inbox'])
+                and any(k in user_lower for k in ['check', 'read', 'show', 'list', 'new', 'unread', 'inbox'])
+                and not any(k in user_lower for k in ['send', 'draft', 'reply', 'write'])
+            )
+            if name == 'request_tool' and generic_mail_read and not explicit_google_mail:
+                connected = getattr(self, '_tools_dict', {})
+                replacement_calls = []
+                if 'tensology_workspace' in connected:
+                    replacement_calls.append({
+                        'function': {
+                            'name': 'tensology_workspace',
+                            'arguments': {'action': 'list_mail', 'params': {'limit': 50}},
+                        }
+                    })
+                if 'google_workspace' in connected:
+                    replacement_calls.append({
+                        'function': {
+                            'name': 'google_workspace',
+                            'arguments': {'action': 'check_inbox', 'params': {'query': 'in:inbox', 'max_results': 50}},
+                        }
+                    })
+                if replacement_calls:
+                    tool_calls[i] = replacement_calls[0]
+                    tool_calls.extend(replacement_calls[1:])
+                continue
+
             if name == 'request_tool' and any(k in user_lower for k in ['gmail', 'email', 'inbox']):
                 if 'google_workspace' in getattr(self, '_tools_dict', {}):
                     query_parts = ['in:inbox']

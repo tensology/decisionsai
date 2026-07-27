@@ -215,9 +215,10 @@ class BackgroundChainRunner:
 
                     record_tool_start(self.chat_id, func_name, metadata={"background": True})
                 try:
+                    safe_func_args = self.service._normalize_tool_kwargs(tool, func_args)
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
-                        None, lambda t=tool, a=func_args: t._run(**a)
+                        None, lambda t=tool, a=safe_func_args: t._run(**a)
                     )
                 except asyncio.CancelledError:
                     raise
@@ -247,7 +248,9 @@ class BackgroundChainRunner:
                             metadata={"background": True},
                         )
                     try:
-                        result = matched._run(**json.loads(tc["function"].get("arguments", "{}")))
+                        matched_args = json.loads(tc["function"].get("arguments", "{}"))
+                        matched_args = self.service._normalize_tool_kwargs(matched, matched_args)
+                        result = matched._run(**matched_args)
                     except Exception as e:
                         result = f"Error: {e}"
                     if self.chat_id:

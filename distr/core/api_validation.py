@@ -337,18 +337,28 @@ def validate_pixazo(api_key: str) -> tuple[bool, str]:
 
 
 def validate_tensology(api_key: str) -> tuple[bool, str]:
-    """Validate a DecisionsAI audience key against Tensology."""
+    """Validate the key audience and required central-workspace capabilities."""
     try:
-        req = urllib.request.Request(
-            "https://www.tensology.com/api/integrations/v1/identity",
-            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=15) as response:
-            body = json.loads(response.read().decode("utf-8"))
-            identity = body.get("data") or {}
-            if response.status == 200 and identity.get("audience") == "decisionsai":
-                return True, ""
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+
+        def fetch(endpoint: str) -> dict:
+            request = urllib.request.Request(
+                f"https://www.tensology.com/api/integrations/v1/{endpoint}",
+                headers=headers,
+            )
+            with urllib.request.urlopen(request, timeout=15) as response:
+                body = json.loads(response.read().decode("utf-8"))
+                return body.get("data") or {}
+
+        identity = fetch("identity")
+        if identity.get("audience") != "decisionsai":
             return False, "Use a DecisionsAI key generated in Tensology admin"
+        capabilities = fetch("capabilities")
+        if not capabilities.get("mail"):
+            return False, "The Tensology key does not include mail access"
+        if not capabilities.get("workshop"):
+            return False, "The Tensology key does not include workshop access"
+        return True, ""
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return False, "Invalid or incorrectly scoped Tensology API key"

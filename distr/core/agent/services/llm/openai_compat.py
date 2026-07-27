@@ -797,7 +797,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
                     record_tool_start(chat_id, matched.name, instruction_hint=f"Matched from {func_name}")
                     try:
-                        result = matched._run(**json.loads(tc["function"].get("arguments", "{}")))
+                        matched_args = json.loads(tc["function"].get("arguments", "{}"))
+                        matched_args = self._normalize_tool_kwargs(matched, matched_args)
+                        result = matched._run(**matched_args)
                         status = "completed"
                     except Exception as e:
                         result = f"Error: {e}"

@@ -59,9 +59,10 @@ class FastActionMixin:
 
             # --- execute ---
             logger.info("Fast exec: %s(%s)", tool.name, fast_action.tool_args)
+            safe_tool_args = self._normalize_tool_kwargs(tool, fast_action.tool_args)
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
-                None, lambda t=tool, a=fast_action.tool_args: t._run(**a)
+                None, lambda t=tool, a=safe_tool_args: t._run(**a)
             )
             logger.debug("LLM: Fast action result: %s", str(result)[:100])
 

@@ -177,9 +177,7 @@ def _build_chat_tool_event(
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     normalized_tool = (tool_name or "tool").strip()
-    normalized_status = (status or "completed").lower()
-    if _looks_like_error(result):
-        normalized_status = "failed"
+    normalized_status = classify_tool_result_status(result, status)
     activity_style = _tool_activity_style(normalized_tool, result, instruction_hint)
     title = _tool_activity_title(normalized_tool, result, instruction_hint)
     event = {
@@ -207,7 +205,35 @@ def _build_chat_tool_event(
 
 def _looks_like_error(result: Optional[str]) -> bool:
     lowered = (result or "").strip().lower()
-    return lowered.startswith(("error:", "error executing", "failed:", "traceback"))
+    if lowered.startswith(
+        (
+            "error:", "error executing", "failed:", "traceback",
+            "unsupported ", "unknown action", "missing required",
+            "could not ", "unable to ", "tensology error",
+        )
+    ):
+        return True
+    try:
+        payload = json.loads(result or "")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    status = str(payload.get("status") or "").lower()
+    return bool(payload.get("error")) or status in {"error", "failed", "failure"}
+
+
+def classify_tool_result_status(result: Optional[str], requested_status: str = "completed") -> str:
+    """Return the truthful terminal state for a model-visible tool result."""
+    requested = (requested_status or "completed").strip().lower()
+    if requested in {"failed", "error", "cancelled", "canceled"}:
+        return "cancelled" if requested in {"cancelled", "canceled"} else "failed"
+    lowered = (result or "").strip().lower()
+    if lowered.startswith("approval required") or "[action required" in lowered:
+        return "waiting_for_user"
+    if _looks_like_error(result):
+        return "failed"
+    return requested
 
 
 def _chat_title(tool_name: str, result: Optional[str], instruction_hint: Optional[str]) -> str:
@@ -386,6 +412,7 @@ def record_tool_execution(
     """Record a tool execution to the chat-local audit log."""
     if not chat_id:
         return
+    status = classify_tool_result_status(result, status)
     # New durable lifecycle. Providers which call ``record_tool_start`` before
     # execution update that exact event here; legacy completion-only callers
     # still get a valid start→terminal pair instead of losing activity.
@@ -397,6 +424,7 @@ def record_tool_execution(
             finish_tool,
             recently_finished_tool_event,
             start_tool,
+            update_event,
         )
 
         lifecycle_event_id = find_running_tool_event(int(chat_id), tool_name)
@@ -411,14 +439,23 @@ def record_tool_execution(
                 metadata={"routing_path": routing_hint or routing_path or ""},
             )
         if lifecycle_event_id:
-            finish_tool(
-                lifecycle_event_id,
-                success=(status or "completed").lower() not in {"failed", "error", "cancelled"}
-                and not _looks_like_error(result),
-                summary=_preview_result(result, 420),
-                detail=_full_result_for_chat(result),
-                metadata={"routing_path": routing_hint or routing_path or ""},
-            )
+            if status == "waiting_for_user":
+                update_event(
+                    lifecycle_event_id,
+                    event_type="tool_waiting",
+                    status="waiting_for_user",
+                    summary=_preview_result(result, 420),
+                    detail=_full_result_for_chat(result),
+                    metadata={"routing_path": routing_hint or routing_path or ""},
+                )
+            else:
+                finish_tool(
+                    lifecycle_event_id,
+                    success=status not in {"failed", "error", "cancelled"},
+                    summary=_preview_result(result, 420),
+                    detail=_full_result_for_chat(result),
+                    metadata={"routing_path": routing_hint or routing_path or ""},
+                )
     except StopIteration:
         pass
     except Exception:

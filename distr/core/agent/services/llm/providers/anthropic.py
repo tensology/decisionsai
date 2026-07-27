@@ -359,9 +359,10 @@ class AnthropicLLMService(BaseLLMService):
                     if tool:
                         try:
                             logger.info("🔧 Anthropic tool: %s (round %d)", tu["name"], round_num)
+                            safe_input = self._normalize_tool_kwargs(tool, tu["input"])
                             loop = asyncio.get_running_loop()
                             result = await loop.run_in_executor(
-                                None, lambda t=tool, inp=tu["input"]: t._run(**inp)
+                                None, lambda t=tool, inp=safe_input: t._run(**inp)
                             )
                             tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": str(result)})
                             chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None

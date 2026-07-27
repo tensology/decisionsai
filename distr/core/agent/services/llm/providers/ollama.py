@@ -1058,6 +1058,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                                     break
 
                     loop = asyncio.get_running_loop()
+                    args_dict = self._normalize_tool_kwargs(tool, args_dict)
                     result = await loop.run_in_executor(
                         None, lambda t=tool, a=args_dict: t._run(**a)
                     )
@@ -1080,6 +1081,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     record_tool_start(chat_id, matched.name, instruction_hint=f"Matched from {tool_name}")
                     try:
                         loop = asyncio.get_running_loop()
+                        args_dict = self._normalize_tool_kwargs(matched, args_dict)
                         result = await loop.run_in_executor(
                             None, lambda t=matched, a=args_dict: t._run(**a)
                         )

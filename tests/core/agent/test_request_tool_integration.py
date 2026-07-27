@@ -194,7 +194,8 @@ def test_gmail_query_uses_existing_google_workspace_when_already_active(
     msg = rtt._run(text="gmail inbox count for django errors")
 
     assert len(harness._tools) == n_tools
-    assert "already" in msg.lower() and "google_workspace" in msg.lower()
+    assert "mailbox read results" in msg.lower()
+    assert "google_workspace" in msg.lower()
 
     payload = None
     for r in reversed(caplog.records):

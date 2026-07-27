@@ -434,7 +434,7 @@ def recently_finished_tool_event(
             .filter(
                 ChatTurnEvent.chat_id == root_id,
                 ChatTurnEvent.turn_id == resolved,
-                ChatTurnEvent.event_type.in_(("tool_completed", "tool_failed")),
+                ChatTurnEvent.event_type.in_(("tool_completed", "tool_failed", "tool_waiting")),
             )
             .order_by(ChatTurnEvent.sequence.desc())
             .limit(8)

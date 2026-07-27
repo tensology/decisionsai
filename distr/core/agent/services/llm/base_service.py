@@ -189,7 +189,14 @@ class BaseLLMService(LLMSharedMixin, LLMService):
 
     @staticmethod
     def _normalize_tool_kwargs(tool, tool_args: dict) -> dict:
-        """Normalize tool-call arguments against the tool._run signature."""
+        """Normalize and validate model-supplied arguments before invoking a tool.
+
+        Provider adapters historically called ``_run`` directly.  That bypassed
+        LangChain/Pydantic validation, allowing invented enum values (for example
+        ``check_inbox``) to reach a tool and later be reported as successful work.
+        Keep signature compatibility here, but make this the common validation
+        boundary for every provider execution path.
+        """
         if not isinstance(tool_args, dict):
             return {}
 
@@ -208,10 +215,11 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             if allow_var_kwargs or name in params
         }
 
-        if allow_var_kwargs:
-            return normalized
+        argument_normalizer = getattr(tool, "normalize_tool_args", None)
+        if callable(argument_normalizer):
+            normalized = argument_normalizer(normalized)
 
-        missing = [
+        missing = [] if allow_var_kwargs else [
             param.name
             for param in params.values()
             if param.name != "self"
@@ -247,6 +255,20 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             raise TypeError(
                 f"{tool_name}._run() missing required argument(s): {', '.join(missing)}"
             )
+
+        schema = getattr(tool, "args_schema", None)
+        if schema is not None:
+            try:
+                if hasattr(schema, "model_validate"):
+                    schema.model_validate(normalized)
+                else:
+                    schema.parse_obj(normalized)
+            except Exception as exc:
+                tool_name = getattr(tool, "name", tool.__class__.__name__)
+                detail = str(exc).replace("\n", " ").strip()
+                raise TypeError(
+                    f"Invalid arguments for tool '{tool_name}': {detail}"
+                ) from exc
 
         return normalized
 

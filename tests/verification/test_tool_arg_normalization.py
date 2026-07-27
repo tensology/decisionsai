@@ -1,4 +1,5 @@
 from distr.core.agent.services.llm.base_service import BaseLLMService
+from distr.core.agent.tools.integrations.tensology_workspace import TensologyWorkspaceTool
 
 
 def test_normalize_tool_kwargs_raises_on_missing_required():
@@ -42,3 +43,20 @@ def test_normalize_tool_kwargs_keeps_known_arguments():
     assert args["input_path"] == "a.md"
     assert args["output_format"] == "pdf"
     assert args["extra"] == "y"
+
+
+def test_normalize_tool_kwargs_validates_pydantic_schema():
+    tool = TensologyWorkspaceTool()
+
+    try:
+        BaseLLMService._normalize_tool_kwargs(tool, {"action": "made_up_action"})
+    except TypeError as exc:
+        assert "Invalid arguments for tool 'tensology_workspace'" in str(exc)
+    else:
+        raise AssertionError("Expected invalid enum value to be rejected")
+
+
+def test_normalize_tool_kwargs_canonicalizes_known_mail_alias():
+    tool = TensologyWorkspaceTool()
+    args = BaseLLMService._normalize_tool_kwargs(tool, {"action": "check_inbox"})
+    assert args["action"] == "list_mail"

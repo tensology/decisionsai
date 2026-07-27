@@ -893,14 +893,23 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if msg.exec() == QtWidgets.QMessageBox.StandardButton.Yes:
             self.enable_tray()
 
+    def _sync_hands_free_menu_state(self):
+        """Keep the explicit label and check state aligned with runtime state."""
+        action = getattr(self, "hands_free_action", None)
+        if action is None:
+            return
+        enabled = bool(self.is_hands_free)
+        action.setChecked(enabled)
+        action.setText(f"Hands-Free Mode: {'ON' if enabled else 'OFF'}")
+
     def enable_hands_free(self, *, persist: bool = True):
         """Enable hands-free mode and start the glow (oracle only — avatar skins have glow: false)."""
         if not self.is_listening:
             logging.warning("Cannot enable hands-free mode when listening is disabled")
+            self._sync_hands_free_menu_state()
             return
         self.is_hands_free = True
-        if hasattr(self, 'hands_free_action'):
-            self.hands_free_action.setChecked(True)
+        self._sync_hands_free_menu_state()
         signal_manager.hands_free_mode_changed.emit(True)
         if persist:
             self.save_hands_free_state()
@@ -920,8 +929,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         Oracle back up unexpectedly.
         """
         self.is_hands_free = False
-        if hasattr(self, 'hands_free_action'):
-            self.hands_free_action.setChecked(False)
+        self._sync_hands_free_menu_state()
         # Revert the hands-free hook now that the mode is off
         self._event_dispatcher.revert_hook("hands_free_listening", trigger="oracle:disable_hands_free")
         if clear_pending_restore:

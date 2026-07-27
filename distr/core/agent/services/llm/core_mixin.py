@@ -151,6 +151,56 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             qnorm = (query or "").strip()
             qlow = qnorm.lower()
 
+            latest_user_text = ""
+            for message in reversed(getattr(self, "_messages", []) or []):
+                if message.get("role") == "user":
+                    latest_user_text = str(message.get("content") or "")
+                    break
+            mail_context = f"{latest_user_text} {qnorm}".lower()
+            mail_read_intent = (
+                any(token in mail_context for token in ("mail", "email", "inbox"))
+                and any(token in mail_context for token in ("check", "read", "show", "list", "new", "unread", "inbox"))
+                and not any(token in mail_context for token in ("send", "draft", "reply", "write"))
+            )
+
+            def _execute_mail_reads(tool_names: tuple[str, ...]) -> tuple[bool, str, bool]:
+                """Execute a read request now when a model unnecessarily asks for an active mail tool."""
+                results = {}
+                for tool_name in tool_names:
+                    tool = self._tools_dict.get(tool_name) or _tool_cache.get(tool_name)
+                    if tool is None:
+                        results[tool_name] = "Not connected or unavailable."
+                        continue
+                    arguments = (
+                        {"action": "list_mail", "params": {"folder": "inbox", "limit": 10}}
+                        if tool_name == "tensology_workspace"
+                        else {"action": "check_inbox", "params": {"query": "in:inbox", "max_results": 10}}
+                    )
+                    try:
+                        normalizer = getattr(self, "_normalize_tool_kwargs", None)
+                        safe_arguments = normalizer(tool, arguments) if callable(normalizer) else arguments
+                        result = str(tool._run(**safe_arguments))
+                    except Exception as exc:
+                        result = f"Error executing tool: {exc}"
+                    results[tool_name] = result
+                    try:
+                        from distr.core.agent.tool_audit import record_tool_execution
+
+                        chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                        record_tool_execution(chat_id, tool_name, result, event_queue=self.event_queue)
+                    except Exception:
+                        logger.debug("Could not audit delegated mail read", exc_info=True)
+                msg = "Mailbox read results (summarize by source):\n" + json.dumps(results, ensure_ascii=False)
+                log_request_tool_event(
+                    query=qnorm,
+                    success=True,
+                    injected_tool_name=",".join(tool_names),
+                    model_name=_mn,
+                    injection_performed=False,
+                    message="Executed provider-aware mailbox read.",
+                )
+                return (True, msg, False)
+
             if not qnorm:
                 msg = "Provide a tool name or short description of the capability you need."
                 log_request_tool_event(
@@ -185,9 +235,46 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 )
                 return (False, msg, False)
 
-            # Deterministic Gmail routing guard:
-            # If the query is clearly about Gmail/email, always route to
-            # google_workspace when available instead of fuzzy fallback.
+            # Deterministic provider-aware mail routing. Explicit Tensology or
+            # Mailshot requests must never be swallowed by the legacy Gmail
+            # catch-all merely because they also contain "mail" or "inbox".
+            tensology_mail_tokens = ("tensology mail", "tensology inbox", "mailshot")
+            if any(token in mail_context for token in tensology_mail_tokens):
+                if mail_read_intent:
+                    return _execute_mail_reads(("tensology_workspace",))
+                tensology_tool = self._tools_dict.get("tensology_workspace") or _tool_cache.get("tensology_workspace")
+                if tensology_tool is not None:
+                    injected = tensology_tool.name not in self._tools_dict
+                    if injected:
+                        self._tools.append(tensology_tool)
+                        self._tools_dict[tensology_tool.name] = tensology_tool
+                        self._sticky_tool_names = set(getattr(self, "_sticky_tool_names", set()))
+                        self._sticky_tool_names.add(tensology_tool.name)
+                    msg = (
+                        "Use 'tensology_workspace' for this mailbox request. "
+                        "Use action='list_mail' to inspect the inbox and 'read_mail' for one message."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="tensology_workspace",
+                        model_name=_mn,
+                        injection_performed=injected,
+                        message=msg,
+                    )
+                    return (True, msg, injected)
+
+            explicit_google_mail = any(
+                token in mail_context for token in ("gmail", "google mail", "google workspace")
+            )
+            if mail_read_intent and explicit_google_mail:
+                return _execute_mail_reads(("google_workspace",))
+
+            if mail_read_intent:
+                return _execute_mail_reads(("tensology_workspace", "google_workspace"))
+
+            # Explicit Gmail and otherwise-unspecified email retain the existing
+            # Google Workspace route for backwards compatibility.
             gmail_query_tokens = ("gmail", "email", "inbox", "google workspace")
             if any(token in qlow for token in gmail_query_tokens):
                 gw_tool = self._tools_dict.get("google_workspace")
@@ -525,10 +612,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             sticky_names = set(getattr(self, "_sticky_tool_names", set()))
             sticky = [t for t in self._tools if t.name not in retrieved_names and t.name in sticky_names]
 
-            # Gmail/email exposure repair:
-            # If user intent is Gmail-related and google_workspace is active in
-            # this session, force-expose it even when semantic retrieval missed it.
+            # Provider-aware mail exposure repair.
             qlow = (last_user_message or "").lower()
+            tensology_mail_keywords = ("tensology mail", "tensology inbox", "mailshot")
             gmail_keywords = ("gmail", "email", "inbox", "google workspace")
             calendar_keywords = (
                 "google calendar",
@@ -540,8 +626,31 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 "bulk event",
                 "recurring event",
             )
+            explicit_tensology_mail = any(k in qlow for k in tensology_mail_keywords)
+            explicit_google_mail = any(k in qlow for k in ("gmail", "google mail", "google workspace"))
+            generic_mail_read = (
+                any(k in qlow for k in ("mail", "email", "inbox"))
+                and any(k in qlow for k in ("check", "read", "show", "list", "new", "unread", "inbox"))
+                and not any(k in qlow for k in ("send", "draft", "reply", "write"))
+            )
+            if explicit_tensology_mail and "tensology_workspace" in self._tools_dict:
+                tensology_tool = self._tools_dict["tensology_workspace"]
+                if tensology_tool.name not in retrieved_names:
+                    retrieved.append(tensology_tool)
+                    retrieved_names.add(tensology_tool.name)
+            if generic_mail_read and not explicit_tensology_mail and not explicit_google_mail:
+                for mail_tool_name in ("tensology_workspace", "google_workspace"):
+                    mail_tool = self._tools_dict.get(mail_tool_name)
+                    if mail_tool is not None and mail_tool.name not in retrieved_names:
+                        retrieved.append(mail_tool)
+                        retrieved_names.add(mail_tool.name)
             workspace_exposure_keywords = gmail_keywords + calendar_keywords
-            if any(k in qlow for k in workspace_exposure_keywords) and "google_workspace" in self._tools_dict:
+            if (
+                not explicit_tensology_mail
+                and not generic_mail_read
+                and any(k in qlow for k in workspace_exposure_keywords)
+                and "google_workspace" in self._tools_dict
+            ):
                 gw_tool = self._tools_dict["google_workspace"]
                 if gw_tool.name not in retrieved_names:
                     retrieved.append(gw_tool)
@@ -1695,6 +1804,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     from distr.core.agent.tool_audit import record_tool_start
 
                     record_tool_start(current_chat_id, tool.name, instruction_hint=text[:160])
+                    args = self._normalize_tool_kwargs(tool, args)
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
                         None, lambda t=tool, a=args: t._run(**a)

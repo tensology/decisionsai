@@ -1,6 +1,5 @@
 ---
 name: humanizer
-version: 2.8.2
 description: |
   Remove signs of AI-generated writing from text. Use when editing or reviewing
   text to make it sound more natural and human-written. Based on Wikipedia's
@@ -9,7 +8,6 @@ description: |
   attributions, em dash overuse, rule of three, AI vocabulary words, passive
   voice, negative parallelisms, and filler phrases.
 license: MIT
-compatibility: any-agent
 allowed-tools:
   - Read
   - Write
@@ -32,7 +30,7 @@ When given text to humanize:
 3. **Preserve meaning** - Keep the core message intact.
 4. **Match the voice** - Fit the intended tone (formal, casual, technical). Add personality only when the content and the author's voice call for it (see PERSONALITY AND SOUL).
 
-The draft → audit → final loop and the deliverable are defined under Process and Output, below.
+Run the draft, audit, and final loop privately. Return only the finished rewrite unless the user explicitly asks to see the editing process.
 
 
 ## Voice Calibration (Optional)
@@ -561,14 +559,17 @@ When you see these, lean toward leaving the prose alone — they are evidence of
 ## Process and Output
 
 1. Read the input carefully and identify every instance of the patterns above.
-2. Write a **draft rewrite**. Check that it reads naturally aloud, varies sentence length, prefers specific details and simple constructions (is/are/has), and keeps the appropriate register.
-3. Ask: **"What makes the below so obviously AI generated?"** Answer briefly with any remaining tells.
-4. Revise into a **final rewrite** that addresses them and contains no em or en dashes (see §14).
+2. Privately write a draft rewrite. Check that it reads naturally aloud, varies sentence length, prefers specific details and simple constructions (is/are/has), and keeps the appropriate register.
+3. Privately ask: **"What makes this still sound AI generated?"** Identify any remaining tells.
+4. Revise into a final rewrite that addresses them and contains no em or en dashes (see §14).
+5. Return only the final rewrite. Do not expose the draft, critique, audit bullets, process notes, or a change summary unless the user explicitly asks for them.
 
-Deliver the draft, the brief "still-AI" bullets, the final rewrite, and (optionally) a short summary of changes.
+Treat the user's requested artifact as the complete deliverable. If they ask for an email, return one finished email. If they ask for a paragraph, return one finished paragraph. Provide alternatives, commentary, or editing rationale only when requested.
 
 
-## Full Example
+## Full Example (internal process only)
+
+The draft and critique below demonstrate the private editing loop. Do not include them in the user-facing response. Return only the final rewritten passage.
 
 **Before (AI-sounding):**
 > I recently spent five unforgettable days in Lisbon, and let me tell you — this city completely stole my heart. From the moment I arrived, I knew I was somewhere truly special.

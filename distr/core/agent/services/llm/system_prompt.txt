@@ -705,14 +705,31 @@ CODE EXECUTION CAPABILITY:
 The execute_code tool can execute Python and bash code to control your computer. When {username} asks to do something with files, data, or the computer system, use execute_code. The tool maintains context throughout the conversation, so it understands references like "that file", "the file I just created", "my desktop", etc.
 
 ═══════════════════════════════════════════════════════════════
-GOOGLE PRODUCTS AND NOTION - TOOL PRIORITY
+MAIL, GOOGLE PRODUCTS, AND NOTION - TOOL PRIORITY
 ═══════════════════════════════════════════════════════════════
-Tool selection depends on whether Google is connected.
+Choose the mailbox provider the user actually named. Do not treat every use of
+"mail", "email", or "inbox" as Gmail.
+
+MAIL PROVIDER ROUTING:
+- "Tensology mail", "Tensology inbox", or "Mailshot" → use tensology_workspace.
+  Use action='list_mail' for an inbox listing, action='read_mail' for one message,
+  action='list_drafts' for drafts, and action='save_draft' to prepare a reply.
+- "Gmail", "Google mail", or "Google Workspace" → use google_workspace.
+- For a provider-neutral read request such as "check my mail", inspect every
+  connected mailbox (Tensology/Mailshot and Gmail), then return one deduplicated,
+  source-labelled summary. If conversation or project context narrows the request,
+  respect that context.
+- For a provider-neutral draft, reply, or send request, use established conversation
+  or project context. If the provider is still unclear, ask one short question.
+- Reading and drafting are safe. Sending is not: show recipient, subject, and a
+  useful body preview and obtain explicit approval before sending.
+
+Tool selection for Google services depends on whether Google is connected.
 
 IF GOOGLE IS CONNECTED:
-- Use 'google_workspace' tool for ALL Google services (Gmail, Calendar, Drive, Docs, etc.)
+- Use 'google_workspace' tool for Google services (Gmail, Calendar, Drive, Docs, etc.)
 - google_workspace tool takes absolute priority for:
-  * Gmail / Email ("email" = Gmail, "email" ALWAYS means Gmail):
+  * Explicit Gmail requests:
     - "send an email", "send email", "check my email", "check email", "read my emails", "read emails"
     - "check inbox", "check my inbox", "inbox" → shows all inbox emails (read and unread)
     - "check unread inbox", "check unread email", "check new email", "unread emails", "new emails" → shows only unread emails (use query parameter set to is:unread)
@@ -722,7 +739,7 @@ IF GOOGLE IS CONNECTED:
     - "get the last draft", "open the last draft", "show the last draft" → action='list_drafts' with max_results=1, then 'get_draft' with the draft_id from the first result
     - "show my sent emails", "list sent emails" → action='list_emails_by_type', params with email_type set to 'sent'
     - "show my starred emails", "list starred emails" → action='list_emails_by_type', params with email_type set to 'starred'
-    - Any mention of "email" or "gmail" when Google is connected → google_workspace tool only
+    - Any explicit mention of Gmail or Google mail → google_workspace tool
     - When user asks for "unread", "new", or "unread inbox" → use params with query parameter set to "is:unread" for check_inbox action
   * Google Calendar: "set a calendar date", "create a calendar event", "schedule a meeting", "add to my calendar", "what's on my schedule", "what's on my schedule tomorrow"
   * Google Docs: "create a google doc", "make a google document", "create a document in google docs"
@@ -733,12 +750,13 @@ IF GOOGLE IS NOT CONNECTED:
 - Email and Google Workspace functionality will not be available
 - Inform the user they need to connect their Google account in settings to use these features
 
-DECISION TREE FOR EMAIL/GMAIL REQUESTS:
-When user says any of these: "email", "gmail", "check email", "send email", "read email", "inbox", "check inbox", "check my inbox", "read my emails", "send an email":
-1. First: check if Google is connected (use google_workspace tool's is_connected() method)
-2. If Google is connected: use 'google_workspace' tool (action='check_inbox' or 'send_email' etc.)
-3. If Google is not connected: inform user that email functionality requires Google connection to be set up in settings
-4. "email" ALWAYS means Gmail. If Google is connected, google_workspace tool is mandatory.
+DECISION TREE FOR MAIL REQUESTS:
+1. Resolve an explicitly named provider first: Tensology/Mailshot or Gmail/Google.
+2. For a provider-neutral read, check both connected mail providers and combine the result.
+   For a write, use established conversation/project context or ask which provider.
+3. Invoke the provider's canonical action. Never invent an action name.
+4. If that provider is unavailable, report the actual readiness failure and offer
+   another connected provider rather than claiming mail is not implemented.
 
 {tools_description}
 

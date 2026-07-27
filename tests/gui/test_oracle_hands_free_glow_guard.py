@@ -26,7 +26,7 @@ def test_dictation_suspend_does_not_persist_hands_free_off():
     assert "self.disable_hands_free(persist=False)" in start_block
 
 
-def test_oracle_defaults_to_ptt_and_menu_uses_checkbox_as_state():
+def test_oracle_defaults_to_ptt_and_menu_shows_explicit_state():
     window_source = Path("distr/gui/oracle/window.py").read_text(encoding="utf-8")
     menu_source = Path("distr/gui/oracle/menu.py").read_text(encoding="utf-8")
     settings_source = Path("distr/core/settings.py").read_text(encoding="utf-8")
@@ -35,6 +35,35 @@ def test_oracle_defaults_to_ptt_and_menu_uses_checkbox_as_state():
     assert "self.settings.get('hands_free_mode', False)" in window_source
     assert "'hands_free_mode': False" in settings_source
     assert "hands_free_mode = Column(Boolean, default=False)" in db_source
-    assert 'QAction("Hands-Free Mode", self.menu)' in menu_source
-    assert "Hands-Free Mode: ON" not in window_source
-    assert "Hands-Free Mode: OFF" not in window_source
+    assert 'hands_free_label = f"Hands-Free Mode: {' in menu_source
+    assert 'action.setText(f"Hands-Free Mode: {' in window_source
+    assert "self._sync_hands_free_menu_state()" in window_source
+
+
+def test_hands_free_menu_syncs_label_and_check_state():
+    from distr.gui.oracle.window import OracleWindow
+
+    class Action:
+        def __init__(self):
+            self.checked = None
+            self.text = None
+
+        def setChecked(self, value):
+            self.checked = value
+
+        def setText(self, value):
+            self.text = value
+
+    class Harness:
+        hands_free_action = Action()
+        is_hands_free = False
+
+    harness = Harness()
+    OracleWindow._sync_hands_free_menu_state(harness)
+    assert harness.hands_free_action.checked is False
+    assert harness.hands_free_action.text == "Hands-Free Mode: OFF"
+
+    harness.is_hands_free = True
+    OracleWindow._sync_hands_free_menu_state(harness)
+    assert harness.hands_free_action.checked is True
+    assert harness.hands_free_action.text == "Hands-Free Mode: ON"
