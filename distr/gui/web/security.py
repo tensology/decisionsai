@@ -145,6 +145,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "pixazo_key",
         "masko_key",
         "rube_token",
+        "tensology_key",
     ]
     response: Dict[str, Any] = {
         "ollama_url": settings.get("ollama_url", "http://localhost:11434/"),
@@ -161,6 +162,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "pixazo_enabled": settings.get("pixazo_enabled", False),
         "masko_enabled": settings.get("masko_enabled", False),
         "composio_enabled": settings.get("rube_enabled", False),
+        "tensology_enabled": settings.get("tensology_enabled", False),
     }
     for field in secret_fields:
         raw = (settings.get(field) or "").strip()

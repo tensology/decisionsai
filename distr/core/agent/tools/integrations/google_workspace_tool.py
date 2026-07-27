@@ -146,7 +146,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- Google Docs (create from markdown)\n"
         "- ANY Google Workspace product or service\n"
         "\n"
-        "CRITICAL RULE: When user says 'email', 'check email', 'send email', 'read email', 'inbox' - they mean Gmail.\n"
+        "Use this tool when the user explicitly says Gmail or Google Workspace. For email without a named provider, prefer a project-linked source; configured Tensology Mail is handled by TensologyWorkspaceTool.\n"
         "If Google is connected, ALWAYS use this tool for email/Gmail.\n"
         "\n"
         "AVAILABLE ACTIONS:\n"
@@ -842,4 +842,3 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         """Async run method"""
         self._ensure_initialized()
         return self._run(action, params, events, **kwargs)
-

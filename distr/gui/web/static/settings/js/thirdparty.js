@@ -1,5 +1,16 @@
 const PROVIDERS = [
     {
+        id: 'tensology',
+        name: 'Tensology API',
+        keyField: 'key',
+        blurb: 'Connect DecisionsAI to Tensology mail, customers, projects, time entries, and invoices.',
+        docsLabel: 'Tensology Admin',
+        docsUrl: 'https://www.tensology.com/admin/integrations/integrationcredential/',
+        helper: 'Generate a DecisionsAI audience key in Tensology admin, then validate and save it here.',
+        infoHtml: 'Open <a href="https://www.tensology.com/admin/integrations/integrationcredential/" target="_blank">Tensology Admin</a>, create a DecisionsAI API connection linked to your developer account, and copy the one-time key here.',
+        color: 'from-orange-400/25 to-blue-500/10'
+    },
+    {
         id: 'openai',
         name: 'OpenAI',
         keyField: 'key',

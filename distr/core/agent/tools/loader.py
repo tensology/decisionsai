@@ -222,6 +222,7 @@ def _get_tool_definitions(
         ("ConvertDocumentTool", dict(chat_manager=chat_manager)),
         # Google Workspace
         ("GoogleWorkspaceTool", {}),
+        ("TensologyWorkspaceTool", {}),
         ("DelegatedWorkflowTool", {}),
         # Markdown to Google Doc
         ("MarkdownToGoogleDocTool", {}),
@@ -501,6 +502,7 @@ TOOL_REGISTRY = {
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
     "ShowMermaidDiagramTool":  ("chat.show_mermaid_diagram", "ShowMermaidDiagramTool"),
     "YtdlpDownloadTool":       ("integrations.ytdlp_download", "YtdlpDownloadTool"),
+    "TensologyWorkspaceTool":  ("integrations.tensology_workspace", "TensologyWorkspaceTool"),
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "BenchmarkModelsTool":     ("system.benchmark_models", "BenchmarkModelsTool"),
@@ -691,6 +693,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "for many events in one call, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week), "
         "Google Drive, Google Docs. Use create_calendar_events_batch for multi-day protocols and bulk slots when "
         "Google is connected."
+    ),
+    "TensologyWorkspaceTool": (
+        "Use the configured Tensology API for Mailshot inbox and drafts, customer/project synchronization, "
+        "calendar time entries, and invoices. Draft mail by default and require explicit user approval before send."
     ),
     "DelegatedWorkflowTool": (
         "Plan and record complex delegated remote workflows from Telegram, desktop, or chat: email/document intake, "

@@ -2157,6 +2157,9 @@ def run_migrations():
     for _wcol, _wtype, _wdef in [
         ("masko_enabled", "BOOLEAN", "0"),
         ("masko_key", "VARCHAR", "''"),
+        ("tensology_enabled", "BOOLEAN", "0"),
+        ("tensology_url", "VARCHAR", "'https://www.tensology.com'"),
+        ("tensology_key", "VARCHAR", "''"),
     ]:
         try:
             with Session() as s:

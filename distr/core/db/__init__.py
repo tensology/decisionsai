@@ -265,6 +265,9 @@ class Settings(Base):
     # Masko (AI skin generation)
     masko_enabled = Column(Boolean, default=False)
     masko_key = Column(String, default='')
+    tensology_enabled = Column(Boolean, default=False)
+    tensology_url = Column(String, default='https://www.tensology.com')
+    tensology_key = Column(String, default='')
 
 
 class Chat(Base):
@@ -651,6 +654,9 @@ try:
                 # Masko (AI skin generation)
                 ("masko_enabled", "BOOLEAN DEFAULT 0"),
                 ("masko_key", "VARCHAR DEFAULT ''"),
+                ("tensology_enabled", "BOOLEAN DEFAULT 0"),
+                ("tensology_url", "VARCHAR DEFAULT 'https://www.tensology.com'"),
+                ("tensology_key", "VARCHAR DEFAULT ''"),
             ]:
                 if _col not in _existing:
                     try:

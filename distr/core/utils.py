@@ -36,6 +36,7 @@ SECRET_SETTINGS_FIELDS = {
     "gemini_key",
     "nvidia_key",
     "pixazo_key",
+    "tensology_key",
 }
 CONNECTED_ACCOUNT_SECRET_FIELDS = {
     "api_token",

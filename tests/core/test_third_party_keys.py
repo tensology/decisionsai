@@ -28,3 +28,16 @@ def test_redact_maps_rube_token_to_composio_key():
     assert out["composio_enabled"] is True
     assert out["composio_key_set"] is True
     assert out["composio_key"] == ""
+
+
+def test_redact_never_returns_tensology_key():
+    from distr.gui.web.security import redact_thirdparty_settings
+
+    out = redact_thirdparty_settings({
+        "tensology_enabled": True,
+        "tensology_key": "tns_decisionsai_do-not-return",
+    })
+    assert out["tensology_enabled"] is True
+    assert out["tensology_key"] == ""
+    assert out["tensology_key_set"] is True
+    assert "do-not-return" not in str(out)

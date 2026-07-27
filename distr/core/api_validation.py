@@ -336,6 +336,27 @@ def validate_pixazo(api_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def validate_tensology(api_key: str) -> tuple[bool, str]:
+    """Validate a DecisionsAI audience key against Tensology."""
+    try:
+        req = urllib.request.Request(
+            "https://www.tensology.com/api/integrations/v1/identity",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            identity = body.get("data") or {}
+            if response.status == 200 and identity.get("audience") == "decisionsai":
+                return True, ""
+            return False, "Use a DecisionsAI key generated in Tensology admin"
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return False, "Invalid or incorrectly scoped Tensology API key"
+        return False, f"Tensology returned HTTP {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def validate_provider(provider: str, key: str) -> tuple[bool, str]:
     """
     Validate API key for any provider.
@@ -360,6 +381,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "nvidia": validate_nvidia,
         "masko": validate_masko,
         "pixazo": validate_pixazo,
+        "tensology": validate_tensology,
     }
 
     validator = validators.get(provider.lower())

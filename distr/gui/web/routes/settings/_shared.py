@@ -124,6 +124,8 @@ class ThirdPartySettings(BaseModel):
     masko_key: str = ""
     composio_enabled: bool = False
     composio_key: str = ""
+    tensology_enabled: bool = False
+    tensology_key: str = ""
 
 
 class ValidateRequest(BaseModel):

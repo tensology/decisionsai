@@ -724,6 +724,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("nvidia_enabled", "nvidia_key"),
         ("pixazo_enabled", "pixazo_key"),
         ("masko_enabled", "masko_key"),
+        ("tensology_enabled", "tensology_key"),
     ]:
         enabled_field, key_field = field_pair
         settings[enabled_field] = getattr(data, enabled_field)
