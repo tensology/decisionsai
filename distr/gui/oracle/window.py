@@ -239,7 +239,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Initialize state variables BEFORE creating menu
         self.is_listening = self.settings.get('last_listening_state', True)
-        self.is_hands_free = self.settings.get('hands_free_mode', True)
+        self.is_hands_free = self.settings.get('hands_free_mode', False)
 
         # Initialize menu items before creating menu
         self.menu = None
@@ -372,7 +372,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             should_listen = True  # Default to listening if something goes wrong
         
         # Initialize hands-free state
-        should_hands_free = self.settings.get('hands_free_mode', True)
+        should_hands_free = self.settings.get('hands_free_mode', False)
         
         # Update the UI and states
         if should_listen:
@@ -893,7 +893,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if msg.exec() == QtWidgets.QMessageBox.StandardButton.Yes:
             self.enable_tray()
 
-    def enable_hands_free(self):
+    def enable_hands_free(self, *, persist: bool = True):
         """Enable hands-free mode and start the glow (oracle only — avatar skins have glow: false)."""
         if not self.is_listening:
             logging.warning("Cannot enable hands-free mode when listening is disabled")
@@ -901,13 +901,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.is_hands_free = True
         if hasattr(self, 'hands_free_action'):
             self.hands_free_action.setChecked(True)
-            self.hands_free_action.setText("Hands-Free Mode: ON")
         signal_manager.hands_free_mode_changed.emit(True)
-        self.save_hands_free_state()
+        if persist:
+            self.save_hands_free_state()
         # Fire the hands-free hook — oracle skins will glow, avatar skins won't (glow: false in skin.json)
         self._event_dispatcher.fire_hook("hands_free_listening", trigger="oracle:enable_hands_free")
 
-    def disable_hands_free(self, *, clear_pending_restore: bool = False):
+    def disable_hands_free(
+        self,
+        *,
+        clear_pending_restore: bool = False,
+        persist: bool = True,
+    ):
         """Disable hands-free mode.
 
         When the user explicitly turns hands-free off, also clear any pending
@@ -917,15 +922,24 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.is_hands_free = False
         if hasattr(self, 'hands_free_action'):
             self.hands_free_action.setChecked(False)
-            self.hands_free_action.setText("Hands-Free Mode: OFF")
         # Revert the hands-free hook now that the mode is off
         self._event_dispatcher.revert_hook("hands_free_listening", trigger="oracle:disable_hands_free")
         if clear_pending_restore:
             if getattr(self, '_hands_free_before_dictation', False):
                 logging.info("[ORACLE] Clearing pending hands-free restore after explicit manual disable")
             self._hands_free_before_dictation = False
+            # The agent process keeps its own dictation restore snapshot. Tell
+            # it that this was an explicit user choice so a late dictation-stop
+            # event cannot switch hands-free back on.
+            app = QtWidgets.QApplication.instance()
+            if app is not None and hasattr(app, '_send_command_to_agent'):
+                app._send_command_to_agent(
+                    'set_hands_free',
+                    {'enabled': False, 'clear_pending_restore': True},
+                )
         signal_manager.hands_free_mode_changed.emit(False)
-        self.save_hands_free_state()
+        if persist:
+            self.save_hands_free_state()
 
     def save_hands_free_state(self):
         """Save the current hands-free state to settings"""
@@ -943,7 +957,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.enable_hands_free()
         else:
             self.disable_hands_free(clear_pending_restore=True)
-        self.save_hands_free_state()
 
     def start_hold_to_talk(self):
         """
@@ -2623,7 +2636,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         self._hands_free_before_dictation = self.is_hands_free
         if self.is_hands_free:
-            self.disable_hands_free()
+            self.disable_hands_free(persist=False)
         
         # Skin system handles the visual (yellow glow for oracle, working.webm for avatars)
         self._event_dispatcher.fire_hook("dictation", trigger="oracle:dictation_started")
@@ -2635,7 +2648,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 self.enable_hands_free()
         else:
             if self.is_hands_free:
-                self.disable_hands_free()
+                self.disable_hands_free(persist=not self.is_dictating)
     
     def on_dictation_stopped(self):
         """Handle dictation stopped signal"""
@@ -2651,11 +2664,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Restore hands-free mode if it was enabled before dictation
         if self._hands_free_before_dictation and self.is_listening:
-            self.is_hands_free = True
-            if hasattr(self, 'hands_free_action'):
-                self.hands_free_action.setChecked(True)
-                self.hands_free_action.setText("Hands-Free Mode: ON")
-            signal_manager.hands_free_mode_changed.emit(True)
+            self.enable_hands_free()
         
         self._hands_free_before_dictation = False
     

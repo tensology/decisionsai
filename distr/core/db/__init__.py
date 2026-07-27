@@ -167,7 +167,7 @@ class Settings(Base):
     pixazo_dit_steps = Column(Integer, default=6)
 
     last_listening_state = Column(Boolean, default=True)
-    hands_free_mode = Column(Boolean, default=True)
+    hands_free_mode = Column(Boolean, default=False)
     global_ptt_hotkey_enabled = Column(Boolean, default=True)
     global_ptt_hotkey_combo = Column(String, default=HOTKEY_DEFAULTS['global_ptt_hotkey_combo'])
     oracle_size_hotkey_decrease_modifier = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_modifier'])

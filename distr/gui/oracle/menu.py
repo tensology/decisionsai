@@ -375,7 +375,7 @@ class MenuTrayMixin:
         self.menu.addAction(self.listen_action)
 
         # Add hands-free action after listening action
-        self.hands_free_action = QAction("Hands-Free Mode: OFF", self.menu)
+        self.hands_free_action = QAction("Hands-Free Mode", self.menu)
         self.hands_free_action.setCheckable(True)
         self.hands_free_action.setChecked(self.is_hands_free)
         self.hands_free_action.triggered.connect(self.toggle_hands_free)

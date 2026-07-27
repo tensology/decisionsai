@@ -552,6 +552,7 @@ def _cmd_set_listening(session, params):
 
 def _cmd_set_hands_free(session, params):
     enabled = params.get('enabled', False)
+    clear_pending_restore = bool(params.get('clear_pending_restore', False))
     old_value = session.is_hands_free
     session.is_hands_free = enabled
     session.logger.info(f"Hands-free mode changed: {old_value} -> {enabled} (PTT mode: {not enabled})")
@@ -560,6 +561,9 @@ def _cmd_set_hands_free(session, params):
     else:
         session.logger.debug("STT service not yet available - cannot update hands-free mode (expected during startup)")
     if hasattr(session, 'llm_service') and session.llm_service:
+        if clear_pending_restore:
+            session.llm_service._hands_free_before_dictation = False
+            session.logger.info("Cleared pending hands-free restore after explicit user disable")
         session.llm_service.set_hands_free(enabled)
     if hasattr(session, 'tts_service') and session.tts_service:
         session.tts_service.set_hands_free(enabled)

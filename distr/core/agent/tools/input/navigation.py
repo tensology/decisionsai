@@ -505,7 +505,7 @@ class ModeControlTool(BaseTool):
             if action == "toggle":
                 from distr.core.utils import load_settings_from_db
                 settings = load_settings_from_db()
-                current_mode = settings.get('hands_free_mode', True)
+                current_mode = settings.get('hands_free_mode', False)
                 # Toggle: if currently hands-free (continuous), switch to PTT
                 new_mode = not current_mode
             elif action.lower() == "ptt":
@@ -783,4 +783,3 @@ class ShortcutTool(BaseTool):
     
     async def _arun(self, shortcut: str = "", text: str = "", **kwargs) -> str:
         return self._run(shortcut=shortcut, text=text)
-

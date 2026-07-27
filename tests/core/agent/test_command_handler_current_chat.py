@@ -4,6 +4,29 @@ from unittest.mock import MagicMock
 from distr.core.agent import command_handler
 
 
+def test_explicit_hands_free_disable_clears_worker_dictation_restore():
+    llm_service = MagicMock()
+    llm_service._hands_free_before_dictation = True
+    session = SimpleNamespace(
+        is_hands_free=True,
+        stt_service=MagicMock(),
+        llm_service=llm_service,
+        tts_service=MagicMock(),
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_set_hands_free(
+        session,
+        {"enabled": False, "clear_pending_restore": True},
+    )
+
+    assert session.is_hands_free is False
+    assert llm_service._hands_free_before_dictation is False
+    session.stt_service.set_hands_free.assert_called_once_with(False)
+    llm_service.set_hands_free.assert_called_once_with(False)
+    session.tts_service.set_hands_free.assert_called_once_with(False)
+
+
 def test_process_text_input_honors_requested_chat_before_appending(monkeypatch):
     monkeypatch.setattr(command_handler, "_chat_id_exists_for_input", lambda chat_id: True)
     chat_manager = MagicMock()

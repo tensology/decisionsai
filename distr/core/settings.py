@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     'sphere_size': 180,
     'playback_speed': 1.0,
     'startup_listening_state': 'remember',
+    'hands_free_mode': False,
     'oracle_position': 'Custom',
     'assemblyai_enabled': False,
     'assemblyai_key': '',

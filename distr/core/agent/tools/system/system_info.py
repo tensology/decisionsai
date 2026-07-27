@@ -106,7 +106,7 @@ def _build_voice_friendly_config_summary(info: dict, voice_display: str) -> str:
         parts.append(f"Your speech-to-text choice in Settings is {tm}.")
 
     mode = settings.get("mode") or {}
-    hf = mode.get("hands_free", True)
+    hf = mode.get("hands_free", False)
     if isinstance(hf, str):
         hf = hf.lower() in ("1", "true", "yes", "on")
     parts.append(
@@ -305,7 +305,7 @@ class SystemInfoTool(BaseTool):
                     'output_device': settings.get('output_device', 'Not set'),
                 },
                 'mode': {
-                    'hands_free': settings.get('hands_free_mode', True),
+                    'hands_free': settings.get('hands_free_mode', False),
                     'listening': settings.get('last_listening_state', True),
                 }
             }
@@ -443,7 +443,7 @@ class SystemInfoTool(BaseTool):
         # Mode
         mode = settings.get('mode', {})
         lines.append("MODE:")
-        lines.append(f"  Hands-Free: {'Enabled' if mode.get('hands_free', True) else 'Disabled (PTT mode)'}")
+        lines.append(f"  Hands-Free: {'Enabled' if mode.get('hands_free', False) else 'Disabled (PTT mode)'}")
         lines.append(f"  Listening: {'Enabled' if mode.get('listening', True) else 'Disabled'}")
         lines.append("")
         
