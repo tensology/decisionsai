@@ -11,6 +11,7 @@ This tool provides comprehensive access to Google Workspace services including:
 import json
 import logging
 import os
+import re
 from typing import Optional, Dict, Any
 
 from langchain.tools import BaseTool
@@ -190,6 +191,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- 'check my inbox' or 'check inbox' -> action='check_inbox' (shows all inbox emails)\n"
         "- 'check my unread inbox' or 'check unread email' or 'check new email' -> action='check_inbox', params={'query': 'is:unread'} (shows only unread emails)\n"
         "- 'read my emails' or 'read emails' -> action='check_inbox' (shows all inbox emails)\n"
+        "- 'read the latest email from Alice' -> action='check_inbox', params={'query': 'in:inbox from:\"Alice\"', 'max_results': 1}, then read_email with the returned Message ID\n"
         "- 'download the attachment from that email' -> action='read_email' with message_id to list attachments, then action='download_email_attachment' or action='download_email_attachments'\n"
         "- 'send email' or 'send an email' -> action='send_email' (email = Gmail)\n"
         "- 'send email to john@example.com' -> action='send_email', params={'to': 'john@example.com', 'subject': '...', 'body': '...'}\n"
@@ -216,6 +218,50 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
 
     def _lazy_init(self):
         object.__setattr__(self, 'connector', GoogleWorkspaceConnector())
+
+    def normalize_tool_args(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Canonicalize model arguments before Pydantic validates the tool call."""
+        normalized = dict(arguments or {})
+        raw_params = normalized.get("params")
+        if isinstance(raw_params, str):
+            try:
+                parsed = json.loads(raw_params)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, dict):
+                normalized["params"] = parsed
+
+        params = normalized.get("params")
+        if not isinstance(params, dict):
+            params = {}
+            normalized["params"] = params
+
+        action = _resolve_google_workspace_action(
+            normalized.get("action"),
+            params,
+            normalized,
+            normalized.get("events"),
+        )
+        if action:
+            normalized["action"] = action
+
+        from distr.core.human_engagement import remote_user_reply_text
+
+        user_text = remote_user_reply_text(normalized.get("last_user_message", ""))
+        sender_match = re.search(
+            r"(?i)\b(?:latest|last|newest)?\s*(?:email|message|one)?\s*from\s+"
+            r"([^\n,.!?]+)",
+            user_text,
+        )
+        if action == "check_inbox" and sender_match:
+            sender_hint = re.sub(r"\s+", " ", sender_match.group(1)).strip(" '\"")
+            if sender_hint:
+                query = str(params.get("query") or "in:inbox").strip()
+                if "from:" not in query.lower():
+                    params["query"] = f'{query} from:"{sender_hint}"'.strip()
+                if re.search(r"(?i)\b(latest|last|newest)\b", user_text):
+                    params["max_results"] = 1
+        return normalized
 
     @staticmethod
     def _default_downloads_dir() -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -152,6 +153,10 @@ def handoff_resume_proposal(situational: dict[str, Any] | None) -> dict[str, Any
         f"I noticed we left off about {idle} ago. Last notes: {peek}. "
         "Want me to pick that up?"
     )
+    project_folder = situational.get("project_folder") or ""
+    handoff_fingerprint = hashlib.sha256(
+        f"{project_folder}|{body}".encode("utf-8")
+    ).hexdigest()
     return {
         "action_type": "suggestion",
         "description": description,
@@ -160,7 +165,8 @@ def handoff_resume_proposal(situational: dict[str, Any] | None) -> dict[str, Any
         "payload": {
             "kind": "handoff_resume",
             "idle_gap": idle,
-            "project_folder": situational.get("project_folder") or "",
+            "project_folder": project_folder,
+            "state_fingerprint": f"handoff:{handoff_fingerprint}",
         },
     }
 

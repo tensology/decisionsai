@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 AgentTextSink = Callable[..., None]
 ChatIdProvider = Callable[[], int | None]
+ChatIdValidator = Callable[[int], bool]
 
 
 @dataclass
@@ -69,6 +70,7 @@ class IntegrationMessageBus:
         self._thread_to_chat: dict[str, int] = {}
         self._text_sink: AgentTextSink | None = None
         self._chat_id_provider: ChatIdProvider | None = None
+        self._chat_id_validator: ChatIdValidator | None = None
         self._pending_sink_calls: list[tuple[str, bool, str | None, Any, str]] = []
         self._load_mapping()
 
@@ -87,6 +89,22 @@ class IntegrationMessageBus:
     def set_chat_id_provider(self, provider: ChatIdProvider | None) -> None:
         """Return current internal chat id for mapping persistence."""
         self._chat_id_provider = provider
+
+    def set_chat_id_validator(self, validator: ChatIdValidator | None) -> None:
+        """Validate persisted chat mappings before routing new connector input."""
+        self._chat_id_validator = validator
+
+    def _mapped_chat_is_valid(self, chat_id: int | None) -> bool:
+        if chat_id is None:
+            return False
+        validator = self._chat_id_validator
+        if validator is None:
+            return True
+        try:
+            return bool(validator(int(chat_id)))
+        except Exception:
+            logger.debug("message bus chat_id_validator failed", exc_info=True)
+            return False
 
     def _load_mapping(self) -> None:
         p = self._mapping_path
@@ -249,8 +267,19 @@ class IntegrationMessageBus:
         queued = False
         with self._route_lock:
             cid: int | None = None
+            mapping_key = None
             if telegram_chat_id is not None:
-                cid = self._thread_to_chat.get(f"telegram:{int(telegram_chat_id)}")
+                mapping_key = f"telegram:{int(telegram_chat_id)}"
+                cid = self._thread_to_chat.get(mapping_key)
+                if cid is not None and not self._mapped_chat_is_valid(cid):
+                    logger.warning(
+                        "IntegrationMessageBus: removing stale Telegram chat mapping %s -> %s",
+                        telegram_chat_id,
+                        cid,
+                    )
+                    self._thread_to_chat.pop(mapping_key, None)
+                    self._persist_mapping_unlocked()
+                    cid = None
             if cid is None:
                 prov = self._chat_id_provider
                 if prov:
@@ -258,8 +287,8 @@ class IntegrationMessageBus:
                         cid = prov()
                     except Exception:
                         logger.debug("message bus chat_id_provider failed", exc_info=True)
-                if telegram_chat_id is not None and cid is not None:
-                    self._thread_to_chat[f"telegram:{int(telegram_chat_id)}"] = int(cid)
+                if mapping_key is not None and cid is not None:
+                    self._thread_to_chat[mapping_key] = int(cid)
                     self._persist_mapping_unlocked()
             self._set_target_chat_metadata(metadata, cid)
             sink = self._text_sink

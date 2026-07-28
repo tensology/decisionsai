@@ -3,6 +3,7 @@ from distr.core.human_engagement import (
     mark_workflow_engagement_answered,
     record_remote_reply_context,
     reset_remote_reply_context,
+    remote_user_reply_text,
 )
 
 
@@ -172,3 +173,35 @@ def test_answered_workflow_context_is_not_reused():
         platform="telegram",
         thread_id="answered-thread",
     ) == "A later unrelated message"
+
+
+def test_generic_proactive_update_does_not_pollute_remote_command():
+    reset_remote_reply_context()
+    record_remote_reply_context(
+        platform="telegram",
+        channel="remote",
+        thread_id="remote-user",
+        outbound_text="I noticed we left off two hours ago. Want me to pick that up?",
+        metadata={
+            "requires_response": True,
+            "engagement_kind": "initiative_suggestion",
+            "engagement_source": "initiative",
+        },
+    )
+
+    assert build_remote_reply_context_preamble(
+        "Read what's on the screen.",
+        platform="telegram",
+        thread_id="remote-user",
+    ) == "Read what's on the screen."
+
+
+def test_remote_user_reply_text_removes_operational_envelope_for_tool_intent():
+    wrapped = (
+        "[Remote reply context]\n"
+        "Workflow: Mail triage workflow\n"
+        "Treat the reply as steering or feedback for this ticket/workflow.\n\n"
+        "User reply:\nOkay, read what's on the screen."
+    )
+
+    assert remote_user_reply_text(wrapped) == "Okay, read what's on the screen."

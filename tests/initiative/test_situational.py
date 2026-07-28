@@ -119,6 +119,10 @@ def test_handoff_resume_proposal_preferred_shape():
     assert raw is not None
     assert raw["action_type"] == "suggestion"
     assert raw["payload"]["kind"] == "handoff_resume"
+    assert raw["payload"]["state_fingerprint"].startswith("handoff:")
+
+    later = handoff_resume_proposal({**sit, "idle_gap": "5h 13m"})
+    assert later["payload"]["state_fingerprint"] == raw["payload"]["state_fingerprint"]
     # Short idle must not produce a resume proposal even with handoff text
     sit_short = {**sit, "idle_gap_seconds": 60, "idle_gap": "1m"}
     assert handoff_resume_proposal(sit_short) is None

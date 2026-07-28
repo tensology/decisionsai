@@ -378,6 +378,19 @@ class SignalBridgeMixin:
                     return None
 
             bus.set_chat_id_provider(_integration_bus_chat_id_provider)
+
+            def _integration_bus_chat_id_validator(chat_id):
+                try:
+                    from distr.core.db import Chat, get_session
+
+                    with get_session() as db:
+                        return db.get(Chat, int(chat_id)) is not None
+                except Exception:
+                    logger.debug("Integration message bus chat validation failed", exc_info=True)
+                    return False
+
+            if hasattr(bus, "set_chat_id_validator"):
+                bus.set_chat_id_validator(_integration_bus_chat_id_validator)
             logger.info("Integration message bus wired (text sink + chat_id provider)")
         except Exception as e:
             logger.warning("Failed to wire integration message bus: %s", e)

@@ -123,6 +123,34 @@ def test_deliver_telegram_user_input_prefers_existing_thread_mapping_over_curren
     assert IntegrationMessageBus(mapping_path=mapping).resolve_mapped_chat_id("telegram", "777001") == 42
 
 
+def test_deliver_telegram_user_input_repairs_stale_thread_mapping(tmp_path: Path) -> None:
+    mapping = tmp_path / "stale_telegram.json"
+    bus = IntegrationMessageBus(mapping_path=mapping)
+    received: list[tuple] = []
+    bus.remember_thread_chat("telegram", "777001", 321)
+    bus.set_chat_id_validator(lambda chat_id: chat_id != 321)
+    bus.set_chat_id_provider(lambda: 89)
+    bus.set_text_sink(
+        lambda text, is_telegram, img, speak: received.append((text, is_telegram, img, speak))
+    )
+
+    bus.deliver_telegram_user_input(
+        text="route to the live chat",
+        telegram_chat_id=777001,
+        speak=False,
+    )
+
+    assert received == [
+        (
+            "route to the live chat",
+            True,
+            None,
+            {"speak": False, "surface": "telegram", "chat_id": 89},
+        )
+    ]
+    assert IntegrationMessageBus(mapping_path=mapping).resolve_mapped_chat_id("telegram", "777001") == 89
+
+
 def test_ingest_incoming_maps_platform_thread_and_calls_sink(tmp_path: Path) -> None:
     mapping = tmp_path / "ingest.json"
     bus = IntegrationMessageBus(mapping_path=mapping)

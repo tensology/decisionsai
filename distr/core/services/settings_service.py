@@ -727,8 +727,13 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("tensology_enabled", "tensology_key"),
     ]:
         enabled_field, key_field = field_pair
-        settings[enabled_field] = getattr(data, enabled_field)
-        incoming_key = getattr(data, key_field)
+        # Older clients and partial update payloads may not know about a newly
+        # added provider yet. Preserve its persisted state instead of rejecting
+        # the entire settings save with AttributeError.
+        settings[enabled_field] = getattr(
+            data, enabled_field, settings.get(enabled_field, False)
+        )
+        incoming_key = getattr(data, key_field, "")
         if not settings[enabled_field] and not (incoming_key or "").strip():
             settings[key_field] = ""
         else:

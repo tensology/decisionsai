@@ -1840,6 +1840,8 @@ class ScreenshotAnalyzerTool(BaseTool):
             kwargs.get('transcription', '') or
             kwargs.get('original_text', '')
         )
+        from distr.core.human_engagement import remote_user_reply_text
+        original_text = remote_user_reply_text(original_text)
         # Multi-target pointer sequencing:
         # "move to A then move to B" should execute deterministically in order.
         if not kwargs.get("_is_pointer_substep", False):

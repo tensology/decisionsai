@@ -1,5 +1,6 @@
 from distr.core.agent.services.llm.base_service import BaseLLMService
 from distr.core.agent.tools.integrations.tensology_workspace import TensologyWorkspaceTool
+from distr.core.agent.tools.integrations.google_workspace_tool import GoogleWorkspaceTool
 
 
 def test_normalize_tool_kwargs_raises_on_missing_required():
@@ -60,3 +61,33 @@ def test_normalize_tool_kwargs_canonicalizes_known_mail_alias():
     tool = TensologyWorkspaceTool()
     args = BaseLLMService._normalize_tool_kwargs(tool, {"action": "check_inbox"})
     assert args["action"] == "list_mail"
+
+
+def test_google_workspace_normalizes_json_string_params_before_validation():
+    tool = GoogleWorkspaceTool()
+
+    args = BaseLLMService._normalize_tool_kwargs(tool, {
+        "action": "check_inbox",
+        "params": '{"max_results":5,"query":"in:inbox"}',
+    })
+
+    assert args["params"] == {"max_results": 5, "query": "in:inbox"}
+
+
+def test_google_workspace_targets_latest_sender_from_remote_reply():
+    tool = GoogleWorkspaceTool()
+    wrapped = (
+        "[Remote reply context]\n"
+        "Last update sent to user: The newest message was from OpenRouter.\n"
+        "Treat the reply as steering or feedback.\n\n"
+        "User reply:\nI'm talking about the latest one from Shirot."
+    )
+
+    args = BaseLLMService._normalize_tool_kwargs(tool, {
+        "action": "check_inbox",
+        "params": {"query": "in:inbox", "max_results": 9},
+        "last_user_message": wrapped,
+    })
+
+    assert args["params"]["query"] == 'in:inbox from:"Shirot"'
+    assert args["params"]["max_results"] == 1

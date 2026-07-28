@@ -454,14 +454,32 @@ def build_remote_reply_context_preamble(
         except Exception:
             metadata = {}
 
-    lines = [
-        "[Remote reply context]",
-        f"The user is replying from {platform or 'a remote integration'} to the most recent DecisionsAI update.",
-    ]
     goal_hint = (
         (ctx.get("engagement_goal_hint") or "")
         or str((metadata or {}).get("engagement_goal_hint", "") or "").strip()
     )
+    has_actionable_scope = bool(
+        goal_hint
+        or ctx.get("ticket_id")
+        or ctx.get("workflow_id")
+        or ctx.get("run_id")
+        or ctx.get("step_id")
+        or ctx.get("project_id")
+        or ctx.get("execution_session_id")
+        or ctx.get("ticket_title")
+        or ctx.get("workflow_title")
+        or ctx.get("step_title")
+    )
+    if not has_actionable_scope:
+        # Ordinary remote conversation already lives in the mapped chat history.
+        # Wrapping it with the latest generic/proactive notification pollutes tool
+        # intent and can turn a screen or mail request into unrelated ticket work.
+        return clean
+
+    lines = [
+        "[Remote reply context]",
+        f"The user is replying from {platform or 'a remote integration'} to the most recent DecisionsAI update.",
+    ]
     if goal_hint:
         lines.append(f"Goal: {goal_hint}")
     if ctx.get("ticket_title"):
@@ -490,6 +508,15 @@ def build_remote_reply_context_preamble(
         clean,
     ])
     return "\n".join(lines)
+
+
+def remote_user_reply_text(text: str) -> str:
+    """Return only the user's text from an optional remote context envelope."""
+    clean = str(text or "").strip()
+    if "[Remote reply context]" not in clean or "User reply:" not in clean:
+        return clean
+    reply = clean.rsplit("User reply:", 1)[-1].strip()
+    return reply or clean
 
 
 def _ledger_row(dedupe_key: str) -> dict[str, Any] | None:

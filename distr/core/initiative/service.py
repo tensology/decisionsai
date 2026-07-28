@@ -1497,6 +1497,7 @@ class InitiativeService:
             msg,
             settings,
             kind="initiative_suggestion",
+            state_fingerprint=str((action.payload or {}).get("state_fingerprint") or "") or None,
             requires_response=True,
             allow_voice=looks_like_notice(msg),
             voice_body=msg if looks_like_notice(msg) else None,
