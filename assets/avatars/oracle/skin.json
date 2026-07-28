@@ -28,7 +28,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "hands_free_listening": {
       "animation": "13.webm",
@@ -43,7 +43,7 @@
       "glow_speed": 875,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "ptt_active": {
       "animation": "13.webm",
@@ -58,7 +58,7 @@
       "glow_speed": 875,
       "glow_style": "pulse",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "dictation": {
       "animation": "13.webm",
@@ -73,7 +73,7 @@
       "glow_speed": 1000,
       "glow_style": "fade",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "ticket_dictation": {
       "animation": "13.webm",
@@ -88,7 +88,7 @@
       "glow_speed": 900,
       "glow_style": "pulse",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "recording_action": {
       "animation": "13.webm",
@@ -103,7 +103,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "recording",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "file_drop_success": {
       "animation": "13.webm",
@@ -118,7 +118,7 @@
       "glow_speed": 650,
       "glow_style": "flash",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "tts_response": {
       "animation": "13.webm",
@@ -133,7 +133,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "running_action": {
       "animation": "13.webm",
@@ -148,7 +148,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "running_step_runner": {
       "animation": "13.webm",
@@ -163,7 +163,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "snippet_copied": {
       "animation": "13.webm",
@@ -178,7 +178,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "thinking": {
       "animation": "13.webm",
@@ -193,7 +193,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     },
     "needs_attention": {
       "animation": "13.webm",
@@ -208,7 +208,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "loop"
+      "playback": "pingpong"
     }
   },
   "transitions": {}
