@@ -94,7 +94,10 @@ def flash_alpha(elapsed_ms: int, speed_ms: int, num_cycles: int = 2) -> float | 
 # GlowEngine
 # ---------------------------------------------------------------------------
 
-_TICK_MS = 16  # ~60 fps
+# Glow periods are measured in hundreds of milliseconds, so 30 fps remains
+# visually smooth while halving translucent-window repaints during continuous
+# hands-free and dictation modes.
+_TICK_MS = 33  # ~30 fps
 
 
 class GlowEngine(QObject):

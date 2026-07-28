@@ -38,7 +38,7 @@ class GifPlayer(QObject):
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._advance)
-        self._interval_ms: int = 42  # ~24 fps default
+        self._interval_ms: int = 66  # cap tiny tray animation work at ~15 fps
         self._last_advance_at: float | None = None
         self._size: QSize | None = None
 
@@ -82,7 +82,7 @@ class GifPlayer(QObject):
             if i == 0:
                 delay = movie.nextFrameDelay()
                 if delay > 0:
-                    self._interval_ms = delay
+                    self._interval_ms = max(66, delay)
 
             if not movie.jumpToNextFrame():
                 break

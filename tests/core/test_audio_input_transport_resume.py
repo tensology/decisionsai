@@ -59,6 +59,7 @@ def _transport():
         transport._input_callback_count = 0
         transport._input_callback_bytes = 0
         transport._input_callback_errors = 0
+        transport._input_idle_callback_count = 0
         transport._input_last_callback_at = 0.0
         transport._input_last_callback_peak = 0
     transport._sample_rate = 16000
@@ -170,6 +171,34 @@ def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
     assert health["bytes"] == len(audio)
     assert health["last_peak"] == 1024
     assert health["callback_errors"] == 0
+
+
+def test_audio_callback_does_no_numpy_or_async_work_while_idle(monkeypatch):
+    transport = _transport()
+    transport.pause_idle_input()
+
+    monkeypatch.setattr(
+        "distr.core.agent.transport.InputAudioRawFrame",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("idle callback must not build a frame")
+        ),
+    )
+    monkeypatch.setattr(
+        asyncio,
+        "run_coroutine_threadsafe",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("idle callback must not schedule a coroutine")
+        ),
+    )
+
+    audio = np.array([0, 512, -1024, 256], dtype=np.int16).tobytes()
+    result = transport._audio_in_callback(audio, frame_count=4, time_info={}, status=None)
+
+    assert result == (None, transport._pa_continue())
+    health = transport.get_input_health()
+    assert health["callbacks"] == 1
+    assert health["idle_callbacks"] == 1
+    assert health["last_peak"] == 0
 
 
 def test_resume_input_clears_paused_flag():

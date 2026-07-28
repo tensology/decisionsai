@@ -589,12 +589,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         self.health_check_timer.start(30000)  # 30 seconds in milliseconds
         logger.info("Started periodic agent health check (interval: 30 seconds)")
         
-        # Start periodic screen info update (every 2 seconds) to keep cache fresh
+        # Screen geometry rarely changes, and explicit screen-change/remote
+        # requests refresh immediately.  A slower safety refresh avoids costly
+        # multiprocessing-manager writes on the UI thread while idle.
         self.screen_info_timer = QTimer()
         self.screen_info_timer.timeout.connect(
             lambda: self._run_ui_callback_timed("screen_info_cache", self._update_screen_info_cache)
         )
-        self.screen_info_timer.start(2000)  # 2 seconds
+        self.screen_info_timer.start(10000)  # 10 seconds
         # Update immediately
         QTimer.singleShot(100, self._update_screen_info_cache)
         
@@ -1496,18 +1498,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
     def _update_screen_info_cache(self):
         """Update the global screen info cache for cross-process access"""
         try:
-            from distr.core.screen_utils import get_all_screens_info, update_screen_info_cache
+            from distr.core.screen_utils import get_all_screens_info
             
             # Get screen info using Qt (only works in main process)
             screen_info_list = get_all_screens_info()
             
-            # Update the Manager dict directly (cross-process shared)
-            if screen_info_list and hasattr(self, 'screen_info_cache'):
-                self.screen_info_cache['screens'] = screen_info_list
-                logger.debug(f"Updated Manager dict with {len(screen_info_list)} screen(s)")
-            
-            # Also update the module-level cache (for backwards compatibility)
-            update_screen_info_cache(screen_info_list)
+            # get_all_screens_info() already updates the configured module cache,
+            # which is the same Manager dict shared with the worker.  Reassigning
+            # it here used to serialize the same payload two additional times.
             logger.debug(f"Screen info cache updated: {len(screen_info_list)} screen(s)")
         except Exception as e:
             logger.error(f"Error updating screen info cache: {e}", exc_info=True)

@@ -42,6 +42,7 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         self._input_callback_count = 0
         self._input_callback_bytes = 0
         self._input_callback_errors = 0
+        self._input_idle_callback_count = 0
         self._input_last_callback_at = 0.0
         self._input_last_callback_peak = 0
         self._input_stream_opened_at = 0.0
@@ -137,6 +138,15 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         self._input_last_callback_at = time.time()
         if status:
             logger.warning("Audio input callback status: %s", status)
+
+        # Keep CoreAudio warm for instant PTT, but do no Python audio work while
+        # capture is logically idle.  Without this guard we converted every
+        # buffer with NumPy and scheduled about 50 coroutines per second even
+        # though Pipecat would later discard the frames.
+        if not bool(getattr(self._params, "audio_in_enabled", True)):
+            self._input_idle_callback_count += 1
+            self._input_last_callback_peak = 0
+            return (None, self._pa_continue())
 
         if in_data:
             try:
@@ -245,6 +255,7 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
             "last_peak": self._input_last_callback_peak,
             "last_callback_age_ms": None if callback_age is None else int(callback_age * 1000),
             "callback_errors": self._input_callback_errors,
+            "idle_callbacks": self._input_idle_callback_count,
             "stream_callbacks_stale": bool(stream_active and self._input_stream_callbacks_stale()),
             "audio_task_alive": task_alive,
         }

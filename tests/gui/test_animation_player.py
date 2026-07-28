@@ -155,3 +155,52 @@ class TestAnimationPlayerFormatDetection:
         player.load("animation.GIF")
 
         MockGifPlayer.assert_called_once()
+
+
+class TestWebMPlayerResourceLimits:
+    class _Image:
+        def scaled(self, *args, **kwargs):
+            return self
+
+    class _Pixmap:
+        def __init__(self, image):
+            self.image = image
+            self.dpr = 1.0
+
+        @classmethod
+        def fromImage(cls, image):
+            return cls(image)
+
+        def setDevicePixelRatio(self, value):
+            self.dpr = value
+
+        def toImage(self):
+            return self.image
+
+    @patch("distr.gui.oracle.webm_player.QPixmap", _Pixmap)
+    @patch("distr.gui.oracle.webm_player._extract_frames_imageio")
+    def test_load_caps_frame_rate_and_releases_decoded_images(self, extract):
+        from distr.gui.oracle.webm_player import WebMPlayer
+
+        extract.return_value = ([self._Image(), self._Image()], 60.0)
+        player = WebMPlayer()
+        player.set_size(80, 80)
+
+        player.load("small-oracle.webm")
+
+        assert player._interval_ms == 66
+        assert len(player._frames) == 2
+        assert player._source_images == []
+
+    @patch("distr.gui.oracle.webm_player.QPixmap", _Pixmap)
+    def test_resize_reuses_rendered_frames_without_retaining_sources(self):
+        from distr.gui.oracle.webm_player import WebMPlayer
+
+        player = WebMPlayer()
+        player._source_images = [self._Image()]
+        player._rebuild_frames()
+
+        player.set_size(120, 120)
+
+        assert len(player._frames) == 1
+        assert player._source_images == []

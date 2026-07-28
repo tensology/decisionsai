@@ -180,7 +180,7 @@ def _extract_frames_cv2(path: str) -> Tuple[List[QImage], float]:
 # WebMPlayer
 # ---------------------------------------------------------------------------
 
-_DEFAULT_INTERVAL_MS = 42  # ~24 fps fallback
+_DEFAULT_INTERVAL_MS = 66  # ~15 fps fallback and maximum render rate
 
 
 class WebMPlayer(QObject):
@@ -249,7 +249,7 @@ class WebMPlayer(QObject):
         self._rebuild_frames()
 
         if fps > 0:
-            self._interval_ms = max(1, int(1000.0 / fps))
+            self._interval_ms = max(_DEFAULT_INTERVAL_MS, int(1000.0 / fps))
         else:
             self._interval_ms = _DEFAULT_INTERVAL_MS
 
@@ -270,7 +270,7 @@ class WebMPlayer(QObject):
     def set_size(self, width: int, height: int) -> None:
         """Set the display size. Rescales existing frames if loaded."""
         self._size = QSize(width, height)
-        if self._source_images:
+        if self._source_images or self._frames:
             self._rebuild_frames()
 
     def set_device_pixel_ratio(self, dpr: float) -> None:
@@ -279,7 +279,7 @@ class WebMPlayer(QObject):
         if abs(safe_dpr - self._device_pixel_ratio) < 0.001:
             return
         self._device_pixel_ratio = safe_dpr
-        if self._source_images:
+        if self._source_images or self._frames:
             self._rebuild_frames()
 
     # ------------------------------------------------------------------
@@ -309,7 +309,12 @@ class WebMPlayer(QObject):
         rebuilt: List[QPixmap] = []
         target_size = self._size
         dpr = max(1.0, float(self._device_pixel_ratio or 1.0))
-        for qimg in self._source_images:
+        # The decoded source video can be hundreds of megabytes even for a
+        # tiny 80px oracle.  Use existing pixmaps as resize sources after the
+        # initial build, then release decoded QImages instead of retaining two
+        # full frame sets for the lifetime of the app.
+        source_images = self._source_images or [px.toImage() for px in self._frames]
+        for qimg in source_images:
             out = qimg
             if target_size is not None:
                 physical_size = QSize(
@@ -325,5 +330,6 @@ class WebMPlayer(QObject):
             px.setDevicePixelRatio(dpr)
             rebuilt.append(px)
         self._frames = rebuilt
+        self._source_images = []
         if self._frames:
             self._current_index = max(0, min(self._current_index, len(self._frames) - 1))
