@@ -52,6 +52,78 @@ def test_duplicate_ptt_stop_does_not_authorize_a_transcript(monkeypatch):
     llm.set_ptt_active.assert_called_once_with(False, expect_transcript=False)
 
 
+def test_agent_ptt_authorization_does_not_depend_on_stale_dictation_state(monkeypatch):
+    """A completed dictation must not make the next agent PTT transcript invalid."""
+    monkeypatch.setattr(command_handler, "_set_audio_input_active", MagicMock())
+    monkeypatch.setattr(command_handler, "_schedule_audio_input_idle_pause", MagicMock())
+    llm = MagicMock()
+    session = SimpleNamespace(
+        is_listening=True,
+        is_hands_free=False,
+        is_dictating=True,
+        ptt_active=False,
+        stt_service=None,
+        llm_service=llm,
+        tts_service=None,
+        transport=None,
+        runner=SimpleNamespace(_loop=None),
+        _main_loop=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_push_to_talk_start(session, {})
+    command_handler._cmd_push_to_talk_stop(session, {})
+
+    assert session._ptt_for_dictation is False
+    assert llm.set_ptt_active.call_args_list[-1].kwargs == {"expect_transcript": True}
+
+
+def test_dictation_ptt_release_does_not_authorize_agent_transcript(monkeypatch):
+    monkeypatch.setattr(command_handler, "_set_audio_input_active", MagicMock())
+    monkeypatch.setattr(command_handler, "_schedule_audio_input_idle_pause", MagicMock())
+    llm = MagicMock()
+    session = SimpleNamespace(
+        is_listening=True,
+        is_hands_free=False,
+        is_dictating=True,
+        ptt_active=False,
+        stt_service=None,
+        llm_service=llm,
+        tts_service=None,
+        transport=None,
+        runner=SimpleNamespace(_loop=None),
+        _main_loop=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_push_to_talk_start(session, {"for_dictation": True})
+    command_handler._cmd_push_to_talk_stop(session, {})
+
+    assert llm.set_ptt_active.call_args_list[-1].kwargs == {"expect_transcript": False}
+
+
+def test_dictation_hotkey_release_stops_worker_capture_without_waiting_for_ui(monkeypatch):
+    monkeypatch.setattr(command_handler, "_schedule_audio_input_idle_pause", MagicMock())
+    llm = MagicMock()
+    stt = MagicMock()
+    session = SimpleNamespace(
+        is_dictating=True,
+        ptt_active=True,
+        stt_service=stt,
+        llm_service=llm,
+        tts_service=None,
+        transport=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_dictation_hotkey_released(session, {})
+
+    assert session.is_dictating is False
+    stt.set_ptt_active.assert_called_once_with(False)
+    stt.set_dictating.assert_called_once_with(False)
+    llm._finish_dictation_after_pending_transcript.assert_called_once_with()
+
+
 def test_explicit_hands_free_disable_clears_worker_dictation_restore():
     llm_service = MagicMock()
     llm_service._hands_free_before_dictation = True

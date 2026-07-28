@@ -1,10 +1,12 @@
 """Regression tests for PTT / dictation mic resume after idle pause."""
 
+import inspect
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from distr.core.agent import command_handler
+from distr.core.agent.session import AgentSession
 
 
 def _session_with_input_transport(input_transport):
@@ -15,6 +17,14 @@ def _session_with_input_transport(input_transport):
         logger=MagicMock(),
     )
     return session
+
+
+def test_pipeline_start_keeps_input_enabled_until_transport_is_warm():
+    source = inspect.getsource(AgentSession._run_pipeline)
+
+    assert '_schedule_audio_input_idle_pause(' in source
+    assert '"pipeline_start_warmup"' in source
+    assert '_sync_audio_input_power(self, "pipeline_start")' not in source
 
 
 def test_set_audio_input_active_skips_resume_when_healthy():

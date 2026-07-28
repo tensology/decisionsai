@@ -1503,8 +1503,19 @@ class AgentSession:
             # Create pipeline (no loop needed - will use current running loop)
             self._create_pipeline()
             try:
-                from .command_handler import _sync_audio_input_power
-                _sync_audio_input_power(self, "pipeline_start")
+                from .command_handler import _schedule_audio_input_idle_pause
+
+                # LocalAudioTransportParams starts with audio input enabled. Let
+                # Pipecat consume its StartFrame and create the input queue/task
+                # before applying the idle PTT power policy. Otherwise the first
+                # PTT capture after launch must lazily initialize that task and
+                # can lose the opening audio. Dictation appeared to "unlock" PTT
+                # only because its activation performed the missing warm-up.
+                _schedule_audio_input_idle_pause(
+                    self,
+                    "pipeline_start_warmup",
+                    delay=0.75,
+                )
             except Exception as e:
                 self.logger.debug("Initial audio input power sync failed: %s", e)
 

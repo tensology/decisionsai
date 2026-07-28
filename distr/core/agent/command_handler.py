@@ -817,6 +817,10 @@ def _cmd_push_to_talk_start(session, params):
         for_dictation,
     )
     session.ptt_active = True
+    # Capture the mode for this specific press. The session-level dictation
+    # flag can remain true while an asynchronous dictation transcript drains;
+    # using it at release time can therefore reject a later, valid agent PTT.
+    session._ptt_for_dictation = for_dictation
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, 'set_ptt_active'):
         session.llm_service.set_ptt_active(True)
     # Resume mic forwarding before STT arms capture or pipeline interruption runs.
@@ -916,12 +920,13 @@ def _cmd_push_to_talk_start(session, params):
 def _cmd_push_to_talk_stop(session, params):
     session.logger.debug("PTT: Push-to-talk STOP received")
     was_ptt_active = bool(getattr(session, 'ptt_active', False))
-    was_dictating = bool(getattr(session, 'is_dictating', False))
+    was_dictation_ptt = bool(getattr(session, '_ptt_for_dictation', False))
     session.ptt_active = False
+    session._ptt_for_dictation = False
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, 'set_ptt_active'):
         session.llm_service.set_ptt_active(
             False,
-            expect_transcript=was_ptt_active and not was_dictating,
+            expect_transcript=was_ptt_active and not was_dictation_ptt,
         )
     if hasattr(session, 'tts_service') and session.tts_service and hasattr(session.tts_service, 'set_ptt_active'):
         session.tts_service.set_ptt_active(False)
@@ -975,6 +980,16 @@ def _cmd_dictation_hotkey_released(session, params):
     """End hold-to-dictate capture using the actual hotkey release state."""
     session.logger.debug("Dictation hotkey: released")
     _cmd_push_to_talk_stop(session, params)
+    # Stop continuous mic capture immediately in the worker. The buffered PTT
+    # flush has already been scheduled by set_ptt_active(False), and the LLM's
+    # release-pending state keeps that one transcript routed as dictation. Do
+    # not wait for the GUI event_queue round trip to clear these flags: if that
+    # event is delayed or deduplicated, STT otherwise keeps transcribing room
+    # audio while the UI correctly appears to be out of hands-free mode.
+    session.is_dictating = False
+    stt = getattr(session, 'stt_service', None)
+    if stt and hasattr(stt, 'set_dictating'):
+        stt.set_dictating(False)
     try:
         llm = getattr(session, 'llm_service', None)
         if llm and hasattr(llm, '_finish_dictation_after_pending_transcript'):
