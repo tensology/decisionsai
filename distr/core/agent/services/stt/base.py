@@ -100,6 +100,10 @@ class BaseSTTService(STTService):
         self._pending_interruption: bool = False
         self._pending_ptt_process: bool = False
         self._ptt_flush_scheduled: bool = False
+        # Invalidates VAD/dictation work that was started in a continuous mode.
+        # PTT flushes use their own accumulator and are intentionally allowed to
+        # finish after the physical key is released.
+        self._continuous_capture_epoch: int = 0
 
         # AEC reference buffer — used to gate VAD interruptions during TTS playback.
         # When TTS is playing (ref_buf.is_active), VAD may fire on residual echo
@@ -202,12 +206,29 @@ class BaseSTTService(STTService):
         connect/disconnect a streaming API when the mode changes."""
         old = self._is_hands_free
         self._is_hands_free = enabled
+        if not enabled and not self._is_dictating and not self._ptt_active:
+            self._cancel_continuous_capture("hands-free disabled")
         logger.info(f"STT hands-free mode: {old} -> {enabled}")
 
     def set_dictating(self, enabled: bool):
         old = self._is_dictating
         self._is_dictating = enabled
+        if not enabled and not self._is_hands_free and not self._ptt_active:
+            self._cancel_continuous_capture("dictation disabled")
         logger.info(f"STT dictation mode: {old} -> {enabled}")
+
+    def _cancel_continuous_capture(self, reason: str):
+        """Invalidate and clear any VAD capture that no longer has a voice mode."""
+        self._continuous_capture_epoch += 1
+        had_audio = bool(self._audio_buffer or self._pre_buffer or self._user_speaking)
+        self._audio_buffer = []
+        self._pre_buffer.clear()
+        self._user_speaking = False
+        self._pending_bargein_check = False
+        self._bargein_consecutive_count = 0
+        self._tts_interrupted = False
+        if had_audio:
+            logger.info("STT: Discarded stale continuous capture (%s)", reason)
 
     def set_vad_threshold(self, threshold: int):
         """Tune hands-free echo-gate sensitivity from the shared VAD slider.

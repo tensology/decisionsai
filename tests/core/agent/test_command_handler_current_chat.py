@@ -4,6 +4,54 @@ from unittest.mock import MagicMock
 from distr.core.agent import command_handler
 
 
+def test_delayed_ptt_resume_is_ignored_after_key_release(monkeypatch):
+    scheduled = []
+    loop = MagicMock()
+    loop.is_running.return_value = True
+    loop.call_later.side_effect = lambda _delay, callback: scheduled.append(callback)
+    set_audio = MagicMock()
+    monkeypatch.setattr(command_handler, "_set_audio_input_active", set_audio)
+    session = SimpleNamespace(
+        is_listening=True,
+        is_hands_free=False,
+        is_dictating=False,
+        ptt_active=False,
+        stt_service=None,
+        llm_service=None,
+        tts_service=None,
+        runner=SimpleNamespace(_loop=loop),
+        _main_loop=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_push_to_talk_start(session, {})
+    assert len(scheduled) == 1
+    set_audio.reset_mock()
+
+    session.ptt_active = False
+    scheduled[0]()
+
+    set_audio.assert_not_called()
+
+
+def test_duplicate_ptt_stop_does_not_authorize_a_transcript(monkeypatch):
+    monkeypatch.setattr(command_handler, "_schedule_audio_input_idle_pause", MagicMock())
+    llm = MagicMock()
+    session = SimpleNamespace(
+        is_dictating=False,
+        ptt_active=False,
+        stt_service=None,
+        llm_service=llm,
+        tts_service=None,
+        transport=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_push_to_talk_stop(session, {})
+
+    llm.set_ptt_active.assert_called_once_with(False, expect_transcript=False)
+
+
 def test_explicit_hands_free_disable_clears_worker_dictation_restore():
     llm_service = MagicMock()
     llm_service._hands_free_before_dictation = True

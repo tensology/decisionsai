@@ -303,11 +303,18 @@ class WhisperSTTService(BaseSTTService):
         """Process accumulated audio when user stops speaking."""
         if not self._audio_buffer:
             return
+        capture_epoch = self._continuous_capture_epoch
         audio_bytes = b"".join(self._audio_buffer)
         self._audio_buffer = []
         duration_ms = (len(audio_bytes) / (16000 * 2)) * 1000
         logger.debug(f"STT: Processing hands-free audio: {duration_ms:.0f}ms ({len(audio_bytes)} bytes)")
         async for result_frame in self.run_stt(audio_bytes):
+            if (
+                capture_epoch != self._continuous_capture_epoch
+                or not (self._is_hands_free or self._is_dictating)
+            ):
+                logger.info("STT: Discarding transcript from disabled continuous capture")
+                break
             if self._stt_cancelled:
                 break
             if isinstance(result_frame, TranscriptionFrame):

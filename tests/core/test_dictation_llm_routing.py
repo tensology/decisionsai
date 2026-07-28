@@ -78,3 +78,37 @@ def test_released_hold_dictation_transcript_still_routes_to_typing(monkeypatch):
     assert harness.typed == ["late flushed dictation"]
     assert harness._dictation_release_pending is False
     assert not hasattr(harness, "_last_ptt_transcription_text")
+
+
+def test_transcript_without_active_voice_capture_is_rejected(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    harness = _Harness()
+    harness._is_dictating = False
+    harness._voice_capture_pending = False
+    harness._ptt_active = False
+
+    asyncio.run(harness.process_frame(_FakeTranscriptionFrame("ambient speech"), None))
+
+    assert harness.typed == []
+    assert not hasattr(harness, "_last_ptt_transcription_text")
+    assert harness.event_queue.items == []
+
+
+def test_completed_ptt_reserves_exactly_one_transcript(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    harness = _Harness()
+    harness._is_dictating = False
+    harness._voice_capture_pending = True
+    harness._ptt_active = False
+    harness._messages = [{"role": "user", "content": "captured speech"}]
+
+    asyncio.run(harness.process_frame(_FakeTranscriptionFrame("captured speech"), None))
+
+    assert harness._voice_capture_pending is False
+    assert harness._last_ptt_transcription_text == "captured speech"

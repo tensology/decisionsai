@@ -47,6 +47,21 @@ def test_empty_dictation_capture_queues_stop_dictation():
     queue.put.assert_called_once_with(("stop_dictation", {}), block=False)
 
 
+def test_disabling_last_continuous_mode_clears_stale_audio():
+    stt = _DummySTT(is_hands_free=True)
+    stt._audio_buffer = [b"speech"]
+    stt._pre_buffer.append(b"lead-in")
+    stt._user_speaking = True
+    old_epoch = stt._continuous_capture_epoch
+
+    stt.set_hands_free(False)
+
+    assert stt._audio_buffer == []
+    assert list(stt._pre_buffer) == []
+    assert stt._user_speaking is False
+    assert stt._continuous_capture_epoch == old_epoch + 1
+
+
 def test_dictation_hotkey_starts_hold_mode_before_capture():
     from pathlib import Path
 

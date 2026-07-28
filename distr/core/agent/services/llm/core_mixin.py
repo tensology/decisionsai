@@ -1315,6 +1315,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
     def set_hands_free(self, enabled: bool):
         self._is_hands_free = enabled
+        if not enabled and not getattr(self, '_ptt_active', False):
+            self._voice_capture_pending = False
+
+    def set_ptt_active(self, active: bool, *, expect_transcript: bool = False):
+        """Track whether an agent transcript is authorized by a PTT capture."""
+        self._ptt_active = bool(active)
+        if active:
+            self._voice_capture_pending = False
+        elif expect_transcript:
+            self._voice_capture_pending = True
 
     def set_speaker_enabled(self, enabled: bool):
         self._speaker_enabled = enabled
@@ -1682,6 +1692,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             self._cancelled = False
             text = frame.text.strip()
             if not text:
+                if hasattr(self, '_voice_capture_pending'):
+                    self._voice_capture_pending = False
                 logger.info("LLM: Received empty TranscriptionFrame — ignoring")
                 return
 
@@ -1709,6 +1721,25 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 if getattr(self, '_dictation_one_shot', False) or release_pending:
                     self._stop_dictation()
                 return
+
+            # Defense in depth: a raw STT frame must belong to an active
+            # hands-free/PTT capture. PTT results normally arrive just after
+            # key release, so command_handler reserves exactly one pending
+            # transcript for that completed capture.
+            if hasattr(self, '_voice_capture_pending'):
+                voice_authorized = bool(
+                    self._is_hands_free
+                    or getattr(self, '_ptt_active', False)
+                    or self._voice_capture_pending
+                )
+                if not voice_authorized:
+                    logger.warning(
+                        "LLM: Rejected transcript without active voice capture: '%s'",
+                        text[:100],
+                    )
+                    return
+                if self._voice_capture_pending:
+                    self._voice_capture_pending = False
 
             logger.info("LLM: Received transcription: '%s'", text[:100])
             # Drop duplicate frames (e.g. PTT / pipeline emits the same utterance twice in a row)

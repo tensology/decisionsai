@@ -816,6 +816,8 @@ def _cmd_push_to_talk_start(session, params):
         for_dictation,
     )
     session.ptt_active = True
+    if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, 'set_ptt_active'):
+        session.llm_service.set_ptt_active(True)
     # Resume mic forwarding before STT arms capture or pipeline interruption runs.
     _set_audio_input_active(session, True, "push_to_talk_start", force=True)
 
@@ -832,6 +834,9 @@ def _cmd_push_to_talk_start(session, params):
     target_loop = getattr(getattr(session, 'runner', None), '_loop', None) or getattr(session, '_main_loop', None)
     if target_loop and getattr(target_loop, 'is_running', lambda: False)() is True:
         def _retry_resume():
+            if not _audio_input_should_be_active(session):
+                session.logger.debug("PTT: Skipping stale audio-input resume after release")
+                return
             _set_audio_input_active(session, True, "push_to_talk_start_retry", force=True)
             try:
                 health = session.transport.input().get_input_health()
@@ -909,7 +914,14 @@ def _cmd_push_to_talk_start(session, params):
 
 def _cmd_push_to_talk_stop(session, params):
     session.logger.debug("PTT: Push-to-talk STOP received")
+    was_ptt_active = bool(getattr(session, 'ptt_active', False))
+    was_dictating = bool(getattr(session, 'is_dictating', False))
     session.ptt_active = False
+    if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, 'set_ptt_active'):
+        session.llm_service.set_ptt_active(
+            False,
+            expect_transcript=was_ptt_active and not was_dictating,
+        )
     if hasattr(session, 'tts_service') and session.tts_service and hasattr(session.tts_service, 'set_ptt_active'):
         session.tts_service.set_ptt_active(False)
     if hasattr(session, 'stt_service') and session.stt_service:

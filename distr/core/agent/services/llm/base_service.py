@@ -58,6 +58,8 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._model_name = model_name or self.DEFAULT_MODEL
         self._is_hands_free = False
         self._is_listening = is_listening
+        self._ptt_active = False
+        self._voice_capture_pending = False
         self._is_dictating = False
         self._one_shot_dictation_armed = False
         self._dictation_one_shot = False  # True for command-driven one-shot dictation.
