@@ -674,7 +674,7 @@ def _apply_requested_chat_for_input(session, params):
 
 def _cmd_process_text_input(session, params):
     text = params.get('text', '')
-    _apply_requested_chat_for_input(session, params)
+    requested_chat_id = _apply_requested_chat_for_input(session, params)
     # Cancel welcome message task — but wait briefly for TTS to finish
     # the current sentence so we don't leave the player window open
     if session._welcome_task and not session._welcome_task.done():
@@ -761,6 +761,7 @@ def _cmd_process_text_input(session, params):
                         speaker_enabled=speaker_override,
                         telegram_input_type=telegram_input_type,
                         skip_user_persist=skip_user_persist,
+                        requested_chat_id=requested_chat_id,
                     )
                 finally:
                     if intake_context_token is not None:

@@ -97,7 +97,7 @@ def _install_fake_signals(monkeypatch, emit_fn):
     monkeypatch.setitem(sys.modules, "distr.core.signals", fake_signals_mod)
 
 
-def _patch_message_bus_deliver(monkeypatch, emits):
+def _patch_message_bus_deliver(monkeypatch, emits, *, accepted=None):
     """Remote control routes via ``IntegrationMessageBus.deliver_telegram_user_input``."""
 
     class _Bus:
@@ -108,8 +108,10 @@ def _patch_message_bus_deliver(monkeypatch, emits):
             image_path=None,
             telegram_chat_id=None,
             speak=None,
+            allow_queue=True,
         ):
             emits.append((text, True, image_path, speak))
+            return accepted
 
     monkeypatch.setattr(
         "distr.core.integrations.bus.get_integration_message_bus",
@@ -144,6 +146,47 @@ def test_instruction_command_routes_as_telegram_without_desktop_tts(monkeypatch)
 
     assert emits
     assert emits[-1] == ("open browser", True, None, False)
+
+
+def test_instruction_reports_failure_and_discards_response_route_when_handoff_fails(monkeypatch):
+    host = _Host()
+    emits = []
+
+    _patch_message_bus_deliver(monkeypatch, emits, accepted=False)
+    host._handle_remote_control_command(
+        {
+            "command": "instruction",
+            "request_id": "ins-failed",
+            "data": {"text": "read the screen"},
+        }
+    )
+
+    assert host._pending_remote_agent_responses == []
+    assert host._pending_remote_agent_response is None
+    assert "handoff failed" in (host.responses[-1].get("error") or "").lower()
+
+
+def test_failed_remote_chat_api_relay_discards_response_route(monkeypatch):
+    host = _Host()
+
+    def _raise_connection_error(*_args, **_kwargs):
+        raise RuntimeError("local API unavailable")
+
+    monkeypatch.setattr("requests.post", _raise_connection_error)
+    host._dispatch_api_relay(
+        {
+            "request_id": "relay-failed",
+            "data": {
+                "method": "POST",
+                "path": "/api/chats/89/send-to-agent",
+                "body": {"text": "hello", "speak": True},
+            },
+        }
+    )
+
+    assert host._pending_remote_agent_responses == []
+    assert host._pending_remote_agent_response is None
+    assert "local API unavailable" in (host.responses[-1].get("error") or "")
 
 
 def test_voice_transcribe_reports_agent_not_available(monkeypatch):
@@ -190,6 +233,17 @@ def test_remote_agent_interrupt_cancels_pending_context_and_agent_work(monkeypat
     assert _App.agent_command_queue.items == [("interrupt_tts", {})]
     assert host._pending_remote_agent_responses == [{"request_id": "keep-turn"}]
     assert host.responses[-1]["data"]["success"] is True
+
+
+def test_new_remote_agent_turn_supersedes_canceled_response_route():
+    host = _Host()
+
+    host._mark_remote_agent_response_context("old-turn", "instruction")
+    host._mark_remote_agent_response_context("new-turn", "instruction")
+
+    assert len(host._pending_remote_agent_responses) == 1
+    assert host._pending_remote_agent_responses[0]["request_id"] == "new-turn"
+    assert host._pending_remote_agent_response["request_id"] == "new-turn"
 
 
 def test_voice_text_input_can_disable_enter_for_dictation():

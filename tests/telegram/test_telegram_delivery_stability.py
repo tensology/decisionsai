@@ -76,9 +76,19 @@ class DummyTelegramSender(TelegramSenderMixin):
         self._dedup_window = 30
         self._recent_messages = {}
         self._message_queue = queue.Queue()
+        self._outbound_retry_message = None
+        self.connected = True
+        self.websocket_attempts = []
 
     def _stop_typing_loop(self):
         pass
+
+    def is_connected(self):
+        return self.connected
+
+    def _send_websocket_message(self, message):
+        self.websocket_attempts.append(message)
+        return self.connected
 
 
 def test_telegram_delivery_worker_has_no_artificial_post_send_delay():
@@ -593,6 +603,36 @@ def test_sender_rate_limit_defers_message_instead_of_dropping(monkeypatch):
     assert queued.get("_not_before", 0) >= sender._last_send_time + sender._min_send_interval
 
 
+def test_sender_retains_message_when_socket_drops_during_queue_processing():
+    sender = DummyTelegramSender()
+    sender.send_to_telegram("retain this response")
+    sender.connected = True
+    sender._send_websocket_message = lambda _message: False
+
+    sender._process_message_queue()
+
+    assert sender._outbound_retry_message is not None
+    assert sender._outbound_retry_message["text"] == "retain this response"
+
+    delivered = []
+    sender._send_websocket_message = lambda message: delivered.append(message) or True
+    sender._process_message_queue()
+
+    assert [message["text"] for message in delivered] == ["retain this response"]
+    assert sender._outbound_retry_message is None
+
+
+def test_sender_rejects_full_outbound_queue_without_blocking_or_poisoning_dedup():
+    sender = DummyTelegramSender()
+    sender._message_queue = queue.Queue(maxsize=1)
+    assert sender.send_to_telegram("first") is True
+
+    assert sender.send_to_telegram("second") is False
+
+    sender._message_queue.get_nowait()
+    assert sender.send_to_telegram("second") is True
+
+
 class DummyTelegramMessages(TelegramMessagesMixin):
     def __init__(self):
         self._processed_message_ids = set()
@@ -866,3 +906,35 @@ def test_flushed_ticket_request_preserves_durable_telegram_source_identity(monke
     assert intake.metadata["source_message_ids"] == ["201", "202"]
     assert intake.source_thread_id == "12345"
     assert manager.sent == ["Ticket created"]
+
+
+def test_failed_batch_handoff_notifies_user_instead_of_logging_false_success(monkeypatch):
+    manager = DummyTelegramMessages()
+    manager.telegram_user_id = 12345
+    manager._telegram_batch_thread_id = 12345
+    manager._telegram_batch_buffer = [
+        ("Read the latest email", False, None, "text", 301),
+    ]
+
+    class _IntakeService:
+        def ingest(self, _intake):
+            return SimpleNamespace(handled=False, response_text="")
+
+    class _Bus:
+        def deliver_telegram_user_input(self, **_kwargs):
+            return False
+
+    monkeypatch.setattr(
+        "distr.core.work_intake.get_work_intake_service", lambda: _IntakeService()
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus", lambda: _Bus()
+    )
+
+    manager._flush_telegram_batch()
+
+    assert manager.sent == [
+        "I received that, but could not hand it to the agent. Please try again."
+    ]
+    assert manager._pending_work_intake_uid is None
+    assert manager._pending_work_intake_thread_id is None

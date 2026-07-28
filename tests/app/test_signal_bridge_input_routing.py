@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 import inspect
+import time
 
 from distr.app.signals import SignalBridgeMixin
 
@@ -168,6 +169,66 @@ def test_web_create_chat_initial_message_skips_second_persist(monkeypatch):
             "skip_user_persist": True,
         },
     )
+
+
+def test_recent_remote_activity_without_pending_request_does_not_relabel_web_chat(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+    host = _Host()
+    host.telegram_manager = SimpleNamespace(_pending_remote_agent_response=None)
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_send_to_agent_requested.emit(
+        89, "ordinary browser chat", True, None, None, None
+    )
+
+    command, params = host.sent_commands[-1]
+    assert command == "process_text_input"
+    assert params["text"] == "ordinary browser chat"
+    assert params["speak"] is True
+    assert params["chat_id"] == 89
+    assert "is_telegram" not in params
+
+
+def test_exact_pending_remote_request_relabels_web_api_turn(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+    host = _Host()
+    host.telegram_manager = SimpleNamespace(
+        _pending_remote_agent_response={"request_id": "remote-1", "created_at": time.time()}
+    )
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_send_to_agent_requested.emit(
+        89, "remote browser chat", True, None, None, None
+    )
+
+    command, params = host.sent_commands[-1]
+    assert command == "process_text_input"
+    assert params["text"] == "remote browser chat"
+    assert params["speak"] is True
+    assert params["chat_id"] == 89
+    assert params["is_telegram"] is True
 
 
 def test_web_send_preserves_durable_intake_identity(monkeypatch):

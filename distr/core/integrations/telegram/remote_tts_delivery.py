@@ -14,7 +14,8 @@ from distr.core.integrations.telegram.remote_audio_stream import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REMOTE_ACTIVE_WINDOW_S = 1800.0
+DEFAULT_REMOTE_ACTIVE_WINDOW_S = 300.0
+DEFAULT_REMOTE_CONTEXT_MAX_AGE_S = 180.0
 
 
 def _pending_remote_contexts(manager: Any) -> list[dict]:
@@ -44,6 +45,21 @@ def _manager_connected(manager: Any) -> bool:
         return bool(manager.is_connected())
     except Exception:
         return False
+
+
+def has_live_pending_remote_context(manager: Any, *, now: float | None = None) -> bool:
+    """True only for an exact, unexpired remote command awaiting its answer."""
+    current_time = float(now if now is not None else time.time())
+    for ctx in _pending_remote_contexts(manager):
+        request_id = str(ctx.get("request_id") or "").strip()
+        created_at = float(ctx.get("created_at", 0) or 0)
+        if (
+            request_id
+            and created_at
+            and 0 <= current_time - created_at <= DEFAULT_REMOTE_CONTEXT_MAX_AGE_S
+        ):
+            return True
+    return False
 
 
 def is_remote_delivery_available(
@@ -106,7 +122,22 @@ def resolve_remote_delivery_context(
         or payload.get("explicit_notification_intent")
     )
 
-    pending_queue = _pending_remote_contexts(manager)
+    now = time.time()
+    pending_queue = []
+    stale_request_ids = []
+    for ctx in _pending_remote_contexts(manager):
+        created_at = float(ctx.get("created_at", 0) or 0)
+        if created_at and now - created_at > DEFAULT_REMOTE_CONTEXT_MAX_AGE_S:
+            stale_request_ids.append(str(ctx.get("request_id") or ""))
+            continue
+        pending_queue.append(ctx)
+    if stale_request_ids:
+        _store_pending_remote_contexts(manager, pending_queue)
+        logger.warning(
+            "[REMOTE TTS] Dropped %d stale response context(s): %s",
+            len(stale_request_ids),
+            ", ".join(value for value in stale_request_ids if value) or "unknown",
+        )
     pending = pending_queue[0] if pending_queue else None
     if isinstance(pending, dict) and pending.get("request_id"):
         if proactive:
@@ -125,7 +156,10 @@ def resolve_remote_delivery_context(
             return pending
         return pending
 
-    if is_remote_delivery_available(manager):
+    # Recent remote-page presence alone must not steal an ordinary Telegram
+    # response. Only explicitly proactive remote events may synthesize a route;
+    # command responses require their exact pending request context.
+    if proactive and is_remote_delivery_available(manager):
         return build_synthetic_remote_context(payload)
     return None
 

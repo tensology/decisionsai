@@ -278,7 +278,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
     async def process_chat_input(self, text: str, is_telegram: bool = False,
                                   uploaded_image_path: str = None, speaker_enabled=None,
                                   telegram_input_type: str = None,
-                                  skip_user_persist: bool = False):
+                                  skip_user_persist: bool = False,
+                                  requested_chat_id: int | None = None):
         """Override to handle Ollama's special image format in messages."""
         t_start = time.time()
         from distr.core.agent.services.llm.image_utils import (
@@ -288,6 +289,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
         self._cancelled = False
         await asyncio.sleep(0.05)
+        self._activate_requested_chat_for_turn(requested_chat_id)
         if speaker_enabled is not None:
             self._speaker_enabled = bool(speaker_enabled)
 

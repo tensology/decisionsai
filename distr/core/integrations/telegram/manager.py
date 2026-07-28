@@ -324,7 +324,8 @@ class TelegramWebSocketManager(
         self._health_check_timer.start(3 * 60 * 1000)  # Every 3 minutes
 
         # Message Queue (for offline/burst handling)
-        self._message_queue = queue.Queue()
+        self._message_queue = queue.Queue(maxsize=100)
+        self._outbound_retry_message = None
         self._send_timer = QTimer()
         self._send_timer.timeout.connect(self._process_message_queue)
         self._send_timer.start(100)  # Check queue every 100ms

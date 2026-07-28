@@ -738,11 +738,13 @@ class SignalBridgeMixin:
                 mgr = getattr(self, 'telegram_manager', None)
                 if speak_bool and mgr is not None:
                     from distr.core.integrations.telegram.remote_tts_delivery import (
-                        is_remote_delivery_available,
+                        has_live_pending_remote_context,
                     )
 
-                    pending = getattr(mgr, '_pending_remote_agent_response', None)
-                    if is_remote_delivery_available(mgr) or isinstance(pending, dict):
+                    # The remote API relay creates an exact response context
+                    # before invoking this web route. Mere recent remote-page
+                    # activity must not relabel an ordinary browser chat turn.
+                    if has_live_pending_remote_context(mgr):
                         params['is_telegram'] = True
                 if opts.get('skip_user_persist'):
                     params['skip_user_persist'] = True

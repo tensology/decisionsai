@@ -1499,15 +1499,35 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             )                                                 #
     # ------------------------------------------------------------------ #
 
+    def _activate_requested_chat_for_turn(self, requested_chat_id: int | None) -> None:
+        """Reassert chat affinity inside the async turn, after scheduling delays."""
+        if requested_chat_id is None or not getattr(self, "chat_manager", None):
+            return
+        try:
+            requested = int(requested_chat_id)
+            current = self.chat_manager.get_current_chat()
+            if current != requested:
+                self.chat_manager.set_current_chat(requested)
+            if hasattr(self, "on_chat_changed"):
+                self.on_chat_changed(requested)
+        except Exception:
+            logger.warning(
+                "Could not activate requested chat %s for input turn",
+                requested_chat_id,
+                exc_info=True,
+            )
+
     async def process_chat_input(self, text: str, is_telegram: bool = False,
                                   uploaded_image_path: str = None, speaker_enabled=None,
                                   telegram_input_type: str = None,
-                                  skip_user_persist: bool = False):
+                                  skip_user_persist: bool = False,
+                                  requested_chat_id: int | None = None):
         """Process text input from chat window. Unified for all providers."""
         self._cancelled = False
         if hasattr(self, '_generation_requested_at'):
             self._generation_requested_at = time.monotonic()
         await asyncio.sleep(0.05)
+        self._activate_requested_chat_for_turn(requested_chat_id)
 
         if speaker_enabled is not None:
             self._speaker_enabled = bool(speaker_enabled)

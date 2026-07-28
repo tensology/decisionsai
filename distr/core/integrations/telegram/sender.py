@@ -564,7 +564,14 @@ class TelegramSenderMixin:
             )
 
         # Enqueue
-        self._message_queue.put(msg)
+        try:
+            self._message_queue.put_nowait(msg)
+        except queue.Full:
+            self._recent_messages.pop(message_hash, None)
+            logger.error(
+                "[Telegram] Outbound queue is full; rejected message instead of exhausting memory"
+            )
+            return False
         # Update last message time when sending (connection is active)
         self._last_message_time = time.time()
         return True
@@ -576,12 +583,16 @@ class TelegramSenderMixin:
             return
 
         try:
-            while not self._message_queue.empty():
-                msg = self._message_queue.get_nowait()
+            while getattr(self, "_outbound_retry_message", None) is not None or not self._message_queue.empty():
+                msg = getattr(self, "_outbound_retry_message", None)
+                if msg is not None:
+                    self._outbound_retry_message = None
+                else:
+                    msg = self._message_queue.get_nowait()
                 not_before = float(msg.get("_not_before") or 0)
                 now = time.time()
                 if not_before and now < not_before:
-                    self._message_queue.put(msg)
+                    self._outbound_retry_message = msg
                     break
                 msg.pop("_not_before", None)
                 json_str = json.dumps(msg)
@@ -659,7 +670,16 @@ class TelegramSenderMixin:
                                 f"[Telegram] ❌ ERROR: Document base64 is INVALID: {e}"
                             )
 
-                self._send_websocket_message(msg)
+                sent = self._send_websocket_message(msg)
+                if not sent:
+                    # The socket can disconnect after the loop-level connection
+                    # check. Retain the exact payload at the front of the logical
+                    # queue so reconnect processing cannot silently lose or reorder it.
+                    self._outbound_retry_message = msg
+                    logger.warning(
+                        "[Telegram] WebSocket became unavailable while sending; retained message for retry"
+                    )
+                    break
                 self._last_send_time = time.time()
                 # Update last message time when sending (connection is active)
                 self._last_message_time = time.time()

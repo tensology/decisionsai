@@ -83,6 +83,7 @@ class TelegramRemoteControlMixin:
         api_path = command_data.get("path", "")
         api_body = command_data.get("body")
         response_type = (command_data.get("response_type") or "json").lower()
+        marked_remote_context = False
         if not api_path:
             self._send_websocket_message({
                 "type": "remote_control_response",
@@ -109,6 +110,7 @@ class TelegramRemoteControlMixin:
                     source_command="remote_chat",
                     mode="chat",
                 )
+                marked_remote_context = True
 
         try:
             import requests as _req
@@ -148,6 +150,8 @@ class TelegramRemoteControlMixin:
                     resp_data = resp.json()
                 except Exception:
                     resp_data = {"text": resp.text}
+            if resp.status_code >= 400 and marked_remote_context:
+                self._discard_remote_agent_response_context(request_id)
             self._send_websocket_message({
                 "type": "remote_control_response",
                 "command": "api_relay",
@@ -155,6 +159,8 @@ class TelegramRemoteControlMixin:
                 "data": {"status": resp.status_code, "response": resp_data},
             })
         except Exception as e:
+            if marked_remote_context:
+                self._discard_remote_agent_response_context(request_id)
             logger.error(f"API relay error: {e}", exc_info=True)
             self._send_websocket_message({
                 "type": "remote_control_response",
@@ -1096,12 +1102,16 @@ class TelegramRemoteControlMixin:
                             )
                             if hasattr(self, "_current_input_type"):
                                 self._current_input_type = "text"
-                            get_integration_message_bus().deliver_telegram_user_input(
+                            accepted = get_integration_message_bus().deliver_telegram_user_input(
                                 text=str(instruction_text),
                                 image_path=None,
                                 telegram_chat_id=self._telegram_thread_id_for_message_bus(),
                                 speak=False,
+                                allow_queue=False,
                             )
+                            if accepted is False:
+                                self._discard_remote_agent_response_context(request_id)
+                                raise RuntimeError("Agent input handoff failed")
                             logger.info(
                                 f"Forwarded instruction to agent via message bus: '{instruction_text[:50]}...'"
                             )
@@ -1244,12 +1254,16 @@ class TelegramRemoteControlMixin:
                             )
                             if hasattr(self, "_current_input_type"):
                                 self._current_input_type = "text"
-                            get_integration_message_bus().deliver_telegram_user_input(
+                            accepted = get_integration_message_bus().deliver_telegram_user_input(
                                 text=str(text),
                                 image_path=None,
                                 telegram_chat_id=self._telegram_thread_id_for_message_bus(),
                                 speak=False,
+                                allow_queue=False,
                             )
+                            if accepted is False:
+                                self._discard_remote_agent_response_context(request_id)
+                                raise RuntimeError("Agent input handoff failed")
                         elif mode == "dictate":
                             self._type_text_quick(
                                 text,
@@ -1353,11 +1367,7 @@ class TelegramRemoteControlMixin:
                                     transcript = result_holder.get("transcript", "")
                                     error = result_holder.get("error")
                                     if transcript:
-                                        self._send_websocket_message({
-                                            "type": "remote_control_response", "command": "voice_transcribe",
-                                            "request_id": request_id,
-                                            "data": {"text": transcript, "mode": mode},
-                                        })
+                                        handoff_ok = True
                                         # For command mode, also send the text to the agent as input
                                         if mode == "command":
                                             from distr.core.integrations.bus import (
@@ -1378,12 +1388,29 @@ class TelegramRemoteControlMixin:
                                             )
                                             if hasattr(self, "_current_input_type"):
                                                 self._current_input_type = "text"
-                                            get_integration_message_bus().deliver_telegram_user_input(
+                                            accepted = get_integration_message_bus().deliver_telegram_user_input(
                                                 text=str(transcript),
                                                 image_path=None,
                                                 telegram_chat_id=self._telegram_thread_id_for_message_bus(),
                                                 speak=False,
+                                                allow_queue=False,
                                             )
+                                            if accepted is False:
+                                                handoff_ok = False
+                                                self._discard_remote_agent_response_context(request_id)
+                                                self._send_websocket_message({
+                                                    "type": "remote_control_response",
+                                                    "command": "voice_transcribe",
+                                                    "request_id": request_id,
+                                                    "error": "Agent input handoff failed",
+                                                    "data": {"text": transcript, "mode": mode},
+                                                })
+                                        if handoff_ok:
+                                            self._send_websocket_message({
+                                                "type": "remote_control_response", "command": "voice_transcribe",
+                                                "request_id": request_id,
+                                                "data": {"text": transcript, "mode": mode},
+                                            })
                                     else:
                                         self._send_websocket_message({
                                             "type": "remote_control_response", "command": "voice_transcribe",
@@ -1406,6 +1433,7 @@ class TelegramRemoteControlMixin:
                                     pass
 
                             except Exception as e:
+                                self._discard_remote_agent_response_context(request_id)
                                 logger.error("voice_transcribe error: %s", e, exc_info=True)
                                 self._send_websocket_message({
                                     "type": "remote_control_response", "command": "voice_transcribe",
@@ -1455,12 +1483,20 @@ class TelegramRemoteControlMixin:
                 "press_enter": bool(press_enter),
                 "created_at": time.time(),
             }
-            pending_queue = list(
-                getattr(self, "_pending_remote_agent_responses", []) or []
-            )
-            pending_queue.append(ctx)
-            if len(pending_queue) > 25:
-                pending_queue = pending_queue[-25:]
+            pending_queue = list(getattr(self, "_pending_remote_agent_responses", []) or [])
+            superseded = [
+                item for item in pending_queue
+                if str((item or {}).get("request_id") or "") != str(request_id or "")
+            ]
+            if superseded:
+                logger.info(
+                    "Remote response context superseded by newer agent turn: old=%s new=%s",
+                    ",".join(str((item or {}).get("request_id") or "") for item in superseded),
+                    request_id,
+                )
+            # Agent generation is latest-wins. Keeping older request routes here
+            # would correlate the new response with a canceled remote command.
+            pending_queue = [ctx]
             self._pending_remote_agent_responses = pending_queue
             self._pending_remote_agent_response = ctx
             logger.info(
@@ -1472,6 +1508,17 @@ class TelegramRemoteControlMixin:
             )
         except Exception:
             logger.exception("Failed to set remote response context")
+
+    def _discard_remote_agent_response_context(self, request_id: Optional[str]) -> None:
+        """Remove a response route when its input never reached the agent."""
+        target = str(request_id or "")
+        pending_queue = [
+            item
+            for item in list(getattr(self, "_pending_remote_agent_responses", []) or [])
+            if str((item or {}).get("request_id") or "") != target
+        ]
+        self._pending_remote_agent_responses = pending_queue
+        self._pending_remote_agent_response = pending_queue[-1] if pending_queue else None
 
     def _track_recent_remote_voice_command(
         self, request_id: Optional[str], transcript: str

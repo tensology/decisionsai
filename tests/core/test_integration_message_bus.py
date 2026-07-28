@@ -247,3 +247,52 @@ def test_ingest_incoming_without_chat_provider_still_calls_sink(tmp_path: Path) 
     )
     bus.ingest_incoming(IncomingMessage(platform="discord", thread_id="7", text="z"))
     assert received == [("z", True, None, {"speak": None, "surface": "discord"})]
+
+
+def test_delivery_reports_sink_failure_instead_of_silently_succeeding(tmp_path: Path) -> None:
+    bus = IntegrationMessageBus(mapping_path=tmp_path / "failure.json")
+    bus.set_text_sink(lambda *_args: (_ for _ in ()).throw(RuntimeError("sink down")))
+
+    accepted = bus.deliver_telegram_user_input(text="do not lose this")
+
+    assert accepted is False
+
+
+def test_startup_flush_requeues_input_when_sink_raises(tmp_path: Path) -> None:
+    bus = IntegrationMessageBus(mapping_path=tmp_path / "flush-retry.json")
+    bus.deliver_telegram_user_input(text="queued during startup")
+    bus.set_text_sink(lambda *_args: (_ for _ in ()).throw(RuntimeError("not ready")))
+
+    received = []
+    bus.set_text_sink(lambda text, *_args: received.append(text))
+
+    assert received == ["queued during startup"]
+
+
+def test_remote_control_can_require_live_sink_instead_of_false_queue_ack(tmp_path: Path) -> None:
+    bus = IntegrationMessageBus(mapping_path=tmp_path / "live-required.json")
+
+    accepted = bus.deliver_telegram_user_input(
+        text="interactive command",
+        allow_queue=False,
+    )
+
+    assert accepted is False
+    assert bus._pending_sink_calls == []
+
+
+def test_connector_input_repairs_stale_thread_mapping(tmp_path: Path) -> None:
+    mapping = tmp_path / "stale-connector.json"
+    bus = IntegrationMessageBus(mapping_path=mapping)
+    bus.remember_thread_chat("slack", "C-stale", 321)
+    bus.set_chat_id_validator(lambda chat_id: chat_id != 321)
+    bus.set_chat_id_provider(lambda: 89)
+    received = []
+    bus.set_text_sink(lambda text, _remote, _img, metadata: received.append((text, metadata)))
+
+    assert bus.ingest_incoming(
+        IncomingMessage(platform="slack", thread_id="C-stale", text="repair me")
+    ) is True
+
+    assert received == [("repair me", {"speak": None, "surface": "slack", "chat_id": 89})]
+    assert IntegrationMessageBus(mapping_path=mapping).resolve_mapped_chat_id("slack", "C-stale") == 89

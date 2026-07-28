@@ -84,7 +84,17 @@ class IntegrationMessageBus:
                 self._pending_sink_calls.clear()
         if sink is not None:
             for text, is_telegram, image_path, speak, platform in pending:
-                self._deliver_to_sink(sink, text, is_telegram, image_path, speak, platform)
+                if not self._deliver_to_sink(
+                    sink, text, is_telegram, image_path, speak, platform
+                ):
+                    with self._route_lock:
+                        self._queue_pending_sink_call_unlocked(
+                            text=text,
+                            is_telegram=is_telegram,
+                            image_path=image_path,
+                            speak=speak,
+                            platform=platform,
+                        )
 
     def set_chat_id_provider(self, provider: ChatIdProvider | None) -> None:
         """Return current internal chat id for mapping persistence."""
@@ -195,6 +205,10 @@ class IntegrationMessageBus:
         self._pending_sink_calls.append((text, is_telegram, image_path, speak, platform))
         overflow = len(self._pending_sink_calls) - self.MAX_PENDING_SINK_CALLS
         if overflow > 0:
+            logger.error(
+                "IntegrationMessageBus: pending input queue overflow; dropping %d oldest message(s)",
+                overflow,
+            )
             del self._pending_sink_calls[:overflow]
 
     @staticmethod
@@ -222,11 +236,13 @@ class IntegrationMessageBus:
         image_path: str | None,
         speak: Any,
         platform: str,
-    ) -> None:
+    ) -> bool:
         try:
             sink(text, is_telegram, image_path, speak)
+            return True
         except Exception:
             logger.exception("IntegrationMessageBus: text sink raised (%s)", platform)
+            return False
 
     @staticmethod
     def _with_recent_reply_context(
@@ -254,7 +270,8 @@ class IntegrationMessageBus:
         telegram_chat_id: int | None = None,
         speak: bool | None = None,
         input_type: str | None = None,
-    ) -> None:
+        allow_queue: bool = True,
+    ) -> bool:
         """Locked mapping update + delegate to Qt/agent sink (outside lock)."""
         sink: AgentTextSink | None
         thread_id = str(telegram_chat_id).strip() if telegram_chat_id is not None else None
@@ -293,22 +310,30 @@ class IntegrationMessageBus:
             self._set_target_chat_metadata(metadata, cid)
             sink = self._text_sink
             if sink is None:
-                self._queue_pending_sink_call_unlocked(
-                    text=routed_text,
-                    is_telegram=True,
-                    image_path=image_path,
-                    speak=metadata,
-                    platform="telegram",
-                )
-                queued = True
+                if allow_queue:
+                    self._queue_pending_sink_call_unlocked(
+                        text=routed_text,
+                        is_telegram=True,
+                        image_path=image_path,
+                        speak=metadata,
+                        platform="telegram",
+                    )
+                    queued = True
+                else:
+                    logger.error(
+                        "IntegrationMessageBus: live sink required but unavailable for Telegram input"
+                    )
+                    return False
         if queued:
             logger.warning(
                 "IntegrationMessageBus: text sink not configured — Telegram input queued"
             )
-            return
-        self._deliver_to_sink(sink, routed_text, True, image_path, metadata, "telegram")
+            return True
+        return self._deliver_to_sink(
+            sink, routed_text, True, image_path, metadata, "telegram"
+        )
 
-    def ingest_incoming(self, msg: IncomingMessage) -> None:
+    def ingest_incoming(self, msg: IncomingMessage) -> bool:
         """Route normalized inbound text to the agent (Discord / Slack / WhatsApp / etc.).
 
         Uses the same Qt/agent sink as Telegram: ``is_telegram=True`` means
@@ -325,8 +350,20 @@ class IntegrationMessageBus:
         queued = False
         with self._route_lock:
             cid: int | None = None
+            mapping_key = None
             if msg.thread_id:
-                cid = self._thread_to_chat.get(f"{msg.platform}:{msg.thread_id}")
+                mapping_key = f"{msg.platform}:{msg.thread_id}"
+                cid = self._thread_to_chat.get(mapping_key)
+                if cid is not None and not self._mapped_chat_is_valid(cid):
+                    logger.warning(
+                        "IntegrationMessageBus: removing stale %s chat mapping %s -> %s",
+                        msg.platform,
+                        msg.thread_id,
+                        cid,
+                    )
+                    self._thread_to_chat.pop(mapping_key, None)
+                    self._persist_mapping_unlocked()
+                    cid = None
             if cid is None:
                 prov = self._chat_id_provider
                 if prov:
@@ -334,8 +371,8 @@ class IntegrationMessageBus:
                         cid = prov()
                     except Exception:
                         logger.debug("message bus chat_id_provider failed", exc_info=True)
-                if cid is not None and msg.thread_id:
-                    self._thread_to_chat[f"{msg.platform}:{msg.thread_id}"] = int(cid)
+                if cid is not None and mapping_key is not None:
+                    self._thread_to_chat[mapping_key] = int(cid)
                     self._persist_mapping_unlocked()
             self._set_target_chat_metadata(metadata, cid)
             sink = self._text_sink
@@ -350,8 +387,8 @@ class IntegrationMessageBus:
                 queued = True
         if queued:
             logger.warning("IntegrationMessageBus: text sink not configured — %s input queued", msg.platform)
-            return
-        self._deliver_to_sink(sink, routed_text, True, img, metadata, msg.platform)
+            return True
+        return self._deliver_to_sink(sink, routed_text, True, img, metadata, msg.platform)
 
 
 def get_integration_message_bus() -> IntegrationMessageBus:

@@ -1170,13 +1170,25 @@ class TelegramMessagesMixin:
                 "[Telegram] 📤 Flushing batch (%d messages, input_type=%s) to agent: '%s'",
                 len(items), input_type, combined[:80],
             )
-            get_integration_message_bus().deliver_telegram_user_input(
+            accepted = get_integration_message_bus().deliver_telegram_user_input(
                 text=combined,
                 image_path=image_path,
                 telegram_chat_id=getattr(self, "_telegram_batch_thread_id", None),
                 speak=None,
                 input_type=input_type,
             )
+            if accepted is False:
+                self._pending_work_intake_uid = None
+                self._pending_work_intake_thread_id = None
+                self._stop_typing_loop()
+                self.send_to_telegram(
+                    "I received that, but could not hand it to the agent. Please try again."
+                )
+                logger.error(
+                    "[Telegram] Batch handoff to agent failed (input_type=%s)",
+                    input_type,
+                )
+                return
             logger.info("[Telegram] ✅ Batch flushed to agent (input_type=%s)", input_type)
         except Exception as e:
             logger.error("Failed to flush Telegram batch: %s", e, exc_info=True)

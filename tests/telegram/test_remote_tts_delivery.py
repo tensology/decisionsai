@@ -94,6 +94,39 @@ def test_resolve_remote_delivery_context_consumes_fifo_queue():
     assert manager._pending_remote_agent_response["request_id"] == "agent-2"
 
 
+def test_resolve_remote_delivery_context_drops_stale_command_routes():
+    manager = DummyManager()
+    manager._pending_remote_agent_responses = [
+        {
+            "request_id": "stale-command",
+            "created_at": time.time() - 600,
+            "source_command": "instruction",
+            "mode": "command",
+        }
+    ]
+    manager._pending_remote_agent_response = manager._pending_remote_agent_responses[-1]
+
+    ctx = resolve_remote_delivery_context(manager, consume_pending=True)
+
+    assert ctx is None
+    assert manager._pending_remote_agent_responses == []
+    assert manager._pending_remote_agent_response is None
+
+
+def test_recent_remote_presence_does_not_steal_ordinary_telegram_response():
+    reset_notification_activity()
+    manager = DummyManager()
+    record_surface_activity("remote", at=time.time())
+
+    ctx = resolve_remote_delivery_context(
+        manager,
+        {"text": "ordinary Telegram answer", "input_type": "text"},
+        consume_pending=True,
+    )
+
+    assert ctx is None
+
+
 def test_deliver_remote_tts_sends_text_before_audio(tmp_path):
     manager = DummyManager()
     ogg_path = tmp_path / "voice.ogg"
