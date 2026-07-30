@@ -462,6 +462,10 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Don't create a persistent session - use load_settings_from_db() which manages its own session
         self.settings = load_settings_from_db()
         self.current_playback_speed = self.settings.get('playback_speed', 1.0)
+
+        # Monk Mode affects the computer only while DecisionsAI is running. Its
+        # saved preference remains untouched on quit and is restored here.
+        self._restore_monk_mode_after_startup()
         
         # Note: hide_player_window debounce is handled by SignalManager.emit_hide_player_window()
         # which uses timestamp-based debouncing (simpler and race-condition free)
@@ -1616,6 +1620,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             return
             
         self._quitting = True
+        self._suspend_monk_mode_for_exit()
         if not read_exit_intent():
             write_exit_intent(
                 "app_quit",
@@ -1732,6 +1737,36 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             
             # Now quit
             super().quit()
+
+    @staticmethod
+    def _restore_monk_mode_after_startup():
+        try:
+            from distr.core.monk_mode import get_monk_mode_service
+
+            state = get_monk_mode_service().restore_after_startup()
+            logging.getLogger(__name__).info(
+                "Restored Monk Mode startup state (enabled=%s, applied=%s)",
+                state.get("enabled"),
+                state.get("hosts_applied"),
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Could not restore Monk Mode during startup: %s", exc, exc_info=True
+            )
+
+    @staticmethod
+    def _suspend_monk_mode_for_exit():
+        try:
+            from distr.core.monk_mode import get_monk_mode_service
+
+            get_monk_mode_service().suspend_for_shutdown()
+            logging.getLogger(__name__).info(
+                "Suspended Monk Mode system blocking for application exit"
+            )
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Could not suspend Monk Mode during shutdown: %s", exc, exc_info=True
+            )
 
     def _quit_fast(self):
         """Exit quickly; heavy process cleanup runs in bin/decisions-cleanup.sh."""

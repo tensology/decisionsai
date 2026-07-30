@@ -254,3 +254,59 @@ def test_service_crud_toggle_and_manual_override_until_boundary(tmp_path) -> Non
     state = service.remove_site(site_id)
     assert state["sites"] == []
     assert HOSTS_BLOCK_BEGIN not in hosts.read_text(encoding="utf-8")
+
+
+def test_shutdown_suspends_blocking_and_startup_restores_saved_preference(tmp_path) -> None:
+    hosts = tmp_path / "hosts"
+    hosts.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+    service = MonkModeService(HostsFileController(hosts))
+    stored = {
+        "enabled": True,
+        "sites": [
+            {
+                "id": "focus-site",
+                "url": "https://focus.example",
+                "hostname": "focus.example",
+                "label": "",
+            }
+        ],
+        "schedule_enabled": False,
+        "schedule": [],
+        "schedule_state": None,
+    }
+    service._load = lambda: deepcopy(stored)  # type: ignore[method-assign]
+    service._save = lambda config: stored.update(deepcopy(config))  # type: ignore[method-assign]
+
+    service.restore_after_startup()
+    assert HOSTS_BLOCK_BEGIN in hosts.read_text(encoding="utf-8")
+
+    service.suspend_for_shutdown()
+    assert HOSTS_BLOCK_BEGIN not in hosts.read_text(encoding="utf-8")
+    assert stored["enabled"] is True
+
+    state = service.restore_after_startup()
+    assert state["enabled"] is True
+    assert state["hosts_applied"] is True
+    assert HOSTS_BLOCK_BEGIN in hosts.read_text(encoding="utf-8")
+
+
+def test_startup_clears_stale_block_when_saved_preference_is_off(tmp_path) -> None:
+    hosts = tmp_path / "hosts"
+    hosts.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+    controller = HostsFileController(hosts)
+    sites = [{"url": "focus.example", "hostname": "focus.example"}]
+    controller.apply(True, sites)
+    service = MonkModeService(controller)
+    stored = {
+        "enabled": False,
+        "sites": sites,
+        "schedule_enabled": False,
+        "schedule": [],
+        "schedule_state": None,
+    }
+    service._load = lambda: deepcopy(stored)  # type: ignore[method-assign]
+
+    state = service.restore_after_startup()
+    assert state["enabled"] is False
+    assert state["hosts_applied"] is True
+    assert HOSTS_BLOCK_BEGIN not in hosts.read_text(encoding="utf-8")

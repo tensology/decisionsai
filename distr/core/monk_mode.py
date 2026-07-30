@@ -306,6 +306,10 @@ class HostsFileController:
             except OSError as exc:
                 raise MonkModeError(f"Monk Mode could not start its local DNS blocker: {exc}") from exc
 
+    def stop_runtime(self) -> None:
+        if platform.system() == "Darwin" and self.hosts_path == system_hosts_path():
+            get_monk_dns_server().stop()
+
     def ensure_schedule_support(self, enabled: bool, sites: Iterable[dict[str, Any]]) -> None:
         """Install the macOS launchd helper before relying on unattended changes."""
         if platform.system() == "Darwin" and self.hosts_path == system_hosts_path() and not os.access(self.hosts_path, os.W_OK):
@@ -590,6 +594,22 @@ class MonkModeService:
             config["whole_domain_blocking"] = platform.system() == "Darwin"
             config["scheduled_active_now"] = schedule_is_active(config["schedule"]) if config["schedule_enabled"] else None
             return config
+
+    def restore_after_startup(self) -> dict[str, Any]:
+        """Restore the saved preference as live system state for this app session."""
+        with self._lock:
+            config = self._load()
+            self.controller.apply(bool(config["enabled"]), config["sites"])
+            return self.get_state()
+
+    def suspend_for_shutdown(self) -> None:
+        """Remove live blocking without changing the saved on/off preference."""
+        with self._lock:
+            config = self._load()
+            try:
+                self.controller.apply(False, config["sites"])
+            finally:
+                self.controller.stop_runtime()
 
     def replace_sites(self, sites: Iterable[dict[str, Any]]) -> dict[str, Any]:
         with self._lock:
