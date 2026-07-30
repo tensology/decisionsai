@@ -40,7 +40,7 @@ function clearAllSnackbars() {
 }
 window.clearAllSnackbars = clearAllSnackbars;
 
-var SETTINGS_TABS = ['general', 'thirdparty', 'llms', 'initiative', 'shortcuts', 'skins', 'advanced', 'logs', 'downloads', 'mermaid'];
+var SETTINGS_TABS = ['general', 'thirdparty', 'llms', 'initiative', 'shortcuts', 'monk', 'skins', 'advanced', 'logs', 'downloads', 'mermaid'];
 
 function getTabFromHash() {
     var hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
@@ -77,7 +77,7 @@ function switchTab(tabName) {
     var saveBtn = document.getElementById('btn_save');
     if (saveBtn && !saveBtn.dataset.busy) {
         saveBtn.textContent = 'Save';
-        saveBtn.style.display = (tab === 'skins' || tab === 'initiative' || tab === 'thirdparty' || tab === 'llms' || tab === 'shortcuts' || tab === 'logs' || tab === 'downloads' || tab === 'mermaid' || tab === 'advanced') ? 'none' : '';
+        saveBtn.style.display = (tab === 'skins' || tab === 'initiative' || tab === 'thirdparty' || tab === 'llms' || tab === 'shortcuts' || tab === 'monk' || tab === 'logs' || tab === 'downloads' || tab === 'mermaid' || tab === 'advanced') ? 'none' : '';
     }
     var reloadBtn = document.getElementById('btn_cancel');
     if (reloadBtn && !reloadBtn.dataset.busy) {
@@ -91,6 +91,7 @@ function switchTab(tabName) {
         if (tab === 'downloads' && typeof window.loadDownloadsSection === 'function') setTimeout(window.loadDownloadsSection, 0);
         if (tab === 'mermaid' && typeof window.loadMermaidHistorySection === 'function') setTimeout(window.loadMermaidHistorySection, 0);
         if (tab === 'llms' && typeof window.loadLLMsSettings === 'function') setTimeout(window.loadLLMsSettings, 0);
+        if (tab === 'monk' && typeof window.loadMonkMode === 'function') setTimeout(window.loadMonkMode, 0);
     }
 }
 window.switchTab = switchTab;

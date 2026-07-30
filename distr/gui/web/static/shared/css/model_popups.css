@@ -473,9 +473,16 @@
 }
 
 /* Provider model info button */
+.model-info-control {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
+}
+
 .model-info-btn {
     width: 34px;
-    height: 34px;
+    height: auto;
+    align-self: stretch;
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-left: none;
     border-radius: 0 8px 8px 0;

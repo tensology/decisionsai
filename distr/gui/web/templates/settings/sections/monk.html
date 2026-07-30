@@ -1,0 +1,74 @@
+<section id="monk-settings" aria-labelledby="monk-heading">
+    <header class="monk-page-header">
+        <div class="monk-page-copy">
+            <div class="monk-title-line">
+                <h2 id="monk-heading">Monk Mode</h2>
+                <span id="monk-status-badge" class="monk-status">Loading</span>
+            </div>
+            <p>Block selected domains and every subdomain across every browser on this computer.</p>
+        </div>
+        <label class="monk-master-toggle">
+            <span id="monk-toggle-label">Monk Mode off</span>
+            <span class="monk-switch">
+                <input id="monk-enabled" type="checkbox" aria-label="Enable Monk Mode">
+                <span class="monk-switch-track"><span class="monk-switch-thumb"></span></span>
+            </span>
+        </label>
+    </header>
+
+    <p class="monk-permission-note">The first activation asks once for your computer password.</p>
+
+    <section class="monk-section" aria-labelledby="monk-schedule-heading">
+        <div class="monk-section-header">
+            <div>
+                <h3 id="monk-schedule-heading">Schedule</h3>
+                <p>Automatically turn Monk Mode on during one weekly time window.</p>
+            </div>
+            <label class="monk-inline-toggle">
+                <input id="monk-schedule-enabled" type="checkbox">
+                <span>Use schedule</span>
+            </label>
+        </div>
+
+        <div id="monk-schedule-editor" class="monk-schedule-editor is-hidden">
+            <div class="monk-schedule-days-field">
+                <span class="monk-field-label">Switches on</span>
+                <div id="monk-schedule-days" class="monk-schedule-days" aria-label="Scheduled days"></div>
+            </div>
+            <div class="monk-schedule-time-fields">
+                <label>
+                    <span class="monk-field-label">From</span>
+                    <input id="monk-schedule-start" type="time" value="09:00" aria-label="Schedule start time">
+                </label>
+                <label>
+                    <span class="monk-field-label">Until</span>
+                    <input id="monk-schedule-end" type="time" value="17:00" aria-label="Schedule end time">
+                </label>
+            </div>
+        </div>
+        <p id="monk-schedule-off-copy" class="monk-schedule-off-copy">Monk Mode follows the manual toggle.</p>
+        <div id="monk-schedule-actions" class="monk-section-actions is-hidden">
+            <button id="monk-save-schedule" type="button" class="monk-button monk-button-primary">Save schedule</button>
+        </div>
+    </section>
+
+    <section class="monk-section monk-websites-section" aria-labelledby="monk-websites-heading">
+        <div class="monk-section-header">
+            <div>
+                <h3 id="monk-websites-heading">Blocked websites</h3>
+                <p>Add one address per row. Its entire domain, including every subdomain, will be blocked.</p>
+            </div>
+            <button id="monk-add-site" type="button" class="monk-button monk-button-primary">Add websites</button>
+        </div>
+
+        <div class="monk-sites-table" role="table" aria-label="Blocked websites">
+            <div class="monk-sites-head" role="row">
+                <div role="columnheader">#</div>
+                <div role="columnheader">Website</div>
+                <div role="columnheader"><span class="sr-only">Actions</span></div>
+            </div>
+            <div id="monk-sites-list" class="monk-sites-body" role="rowgroup"></div>
+            <div id="monk-sites-empty" class="monk-empty-row">No websites added yet.</div>
+        </div>
+    </section>
+</section>

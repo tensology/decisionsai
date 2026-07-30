@@ -1644,6 +1644,7 @@ function handleChatEventStreamFinished(msg) {
                 if (!lastPlain || !hasRenderedMessagePlain('assistant', lastPlain)) {
                     renderMessages(messages, false);
                 }
+                renderTurnState(data.active_turn, data.turns || []);
                 syncRenderedMessageCountFromDom();
                 _suppressChatUpdatedFetchUntil = Date.now() + 2500;
                 updateChatSettingsDisplay({
@@ -1673,6 +1674,7 @@ function handleChatEventStreamFinished(msg) {
     sendButton.disabled = !isLoadedView || !messageInput.value.trim();
     setViewOnlyChrome(!isLoadedView);
     setSendButtonStreaming(false);
+    refreshTurnStateAfterResponse(msg.chat_id);
 }
 
 function handleChatEventStreamError(msg) {
@@ -3258,6 +3260,21 @@ function turnIsTerminal(turn) {
     return turn && ['completed', 'failed', 'cancelled'].includes(String(turn.status || '').toLowerCase());
 }
 
+function turnHasWorkActivity(turn) {
+    const events = Array.isArray(turn?.events) ? turn.events : [];
+    return events.some(event => {
+        const type = String(event?.event_type || '').toLowerCase();
+        const metadata = event?.metadata || {};
+        return type.startsWith('tool_')
+            || metadata.source === 'workflow'
+            || metadata.run_id != null;
+    });
+}
+
+function turnHasActiveWork(turn) {
+    return Boolean(turn && !turnIsTerminal(turn) && turnHasWorkActivity(turn));
+}
+
 function turnEventPhase(event) {
     const type = String(event?.event_type || 'turn_started');
     if (type === 'acknowledgment' || type === 'turn_started') return 'Preparing';
@@ -3357,6 +3374,10 @@ function insertTurnPanel(panel, turnId) {
 function upsertTurnPanel(turn) {
     if (!turn || turn.turn_id == null || !chatMessages) return;
     const prior = document.getElementById(`turnPanel-${Number(turn.turn_id)}`);
+    if (!turnHasWorkActivity(turn)) {
+        if (prior) prior.remove();
+        return;
+    }
     const replacement = createTurnPanel(turn);
     if (prior) {
         const priorDetails = prior.querySelector('.turn-panel-details');
@@ -3379,7 +3400,7 @@ function upsertTurnPanel(turn) {
 }
 
 function updateTurnComposerState() {
-    const active = currentActiveTurn && !turnIsTerminal(currentActiveTurn);
+    const active = turnHasActiveWork(currentActiveTurn);
     const stop = document.getElementById('turnStopButton');
     if (stop) stop.hidden = !active;
     if (messageInput && loadedChatId === currentChatId) {
@@ -3396,7 +3417,7 @@ function updateTurnComposerState() {
 function scheduleTurnElapsedUpdates() {
     if (turnElapsedTimer) clearInterval(turnElapsedTimer);
     turnElapsedTimer = null;
-    if (!currentActiveTurn || turnIsTerminal(currentActiveTurn)) return;
+    if (!turnHasActiveWork(currentActiveTurn)) return;
     turnElapsedTimer = setInterval(() => {
         document.querySelectorAll('.turn-panel:not(.turn-panel--completed):not(.turn-panel--failed):not(.turn-panel--cancelled)').forEach(panel => {
             const elapsed = panel.querySelector('.turn-panel-elapsed');
@@ -3464,6 +3485,17 @@ function handleChatTurnEvent(msg) {
         announcement.textContent = event.summary || event.title || '';
     }
     scrollToBottom();
+}
+
+function refreshTurnStateAfterResponse(chatId) {
+    fetch(`${API_BASE}/chats/${Number(chatId)}`)
+        .then(response => response.ok ? response.json() : null)
+        .then(data => {
+            if (data && Number(currentChatId) === Number(chatId)) {
+                renderTurnState(data.active_turn, data.turns || []);
+            }
+        })
+        .catch(() => {});
 }
 
 function formatTime(seconds) {
@@ -4127,7 +4159,7 @@ function formatMessage(text) {
 async function sendMessage() {
     const message = messageInput.value.trim();
     if (!message) return;
-    if (currentActiveTurn && !turnIsTerminal(currentActiveTurn)) {
+    if (turnHasActiveWork(currentActiveTurn)) {
         const turnId = Number(currentActiveTurn.turn_id);
         messageInput.value = '';
         messageInput.style.height = 'auto';
@@ -4576,7 +4608,7 @@ function setSendButtonStreaming(streaming) {
     // separate action rather than replacing Send.
     if (modalCreate) modalCreate.disabled = streaming;
     const stop = document.getElementById('turnStopButton');
-    if (stop) stop.hidden = !(streaming || currentActiveTurn);
+    if (stop) stop.hidden = !turnHasActiveWork(currentActiveTurn);
     if (messageInput && loadedChatId === currentChatId) messageInput.disabled = false;
     handleInputChange();
 }

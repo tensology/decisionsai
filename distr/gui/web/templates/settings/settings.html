@@ -4,7 +4,7 @@
 
 {% block head_styles %}
 {{ super() }}
-<link rel="stylesheet" href="/settings/static/css/settings.css">
+<link rel="stylesheet" href="/settings/static/css/settings.css?v=20260730c">
 <link rel="stylesheet" href="/static/shared/css/downloads.css">
 {% endblock %}
 
@@ -21,6 +21,7 @@
 <script src="/settings/static/js/initiative.js"></script>
 <script src="/settings/static/js/logs.js"></script>
 <script src="/settings/static/js/mermaid_history.js"></script>
+<script src="/settings/static/js/monk.js?v=20260730c"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 <script src="/static/shared/js/downloads.js"></script>
 {% endblock %}
@@ -48,6 +49,9 @@
                 <hr class="settings-nav-divider" aria-hidden="true">
                 <a href="#shortcuts" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="shortcuts">
                     <span class="font-medium">Shortcuts</span>
+                </a>
+                <a href="#monk" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="monk">
+                    <span class="font-medium">Monk Mode</span>
                 </a>
                 <a href="#skins" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="skins">
                     <span class="font-medium">Skins</span>
@@ -87,6 +91,9 @@
                 </div>
                 <div id="tab-shortcuts" class="tab-content">
                     {% include "settings/sections/shortcuts.html" %}
+                </div>
+                <div id="tab-monk" class="tab-content">
+                    {% include "settings/sections/monk.html" %}
                 </div>
                 <div id="tab-skins" class="tab-content">
                     {% include "settings/sections/skins.html" %}

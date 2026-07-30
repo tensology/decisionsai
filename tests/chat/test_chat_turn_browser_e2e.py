@@ -91,6 +91,27 @@ def _seed_turn() -> tuple[int, int, str]:
     return root_id, turn_id, event_id
 
 
+def _seed_plain_turn() -> tuple[int, int]:
+    with _runtime_session() as session:
+        root = Chat(
+            title="Plain chat turn browser acceptance",
+            provider="OpenAI",
+            model_name="gpt-5.2",
+            voice_provider="kokoro",
+            voice_model="af_heart",
+        )
+        session.add(root)
+        session.commit()
+        turn = Chat(parent_id=root.id, input="Are you ready?", response="")
+        session.add(turn)
+        session.commit()
+        root.params = json.dumps({"active_turn_chat_row_id": int(turn.id)})
+        session.commit()
+        root_id, turn_id = int(root.id), int(turn.id)
+    chat_turns.ensure_turn_started(root_id, turn_id)
+    return root_id, turn_id
+
+
 def _notify(page: Page, payload: dict) -> None:
     token = page.locator('meta[name="decisionsai-internal-api-token"]').get_attribute("content") or ""
     response = page.request.post(
@@ -107,6 +128,31 @@ def _cleanup(root_id: int) -> None:
         session.query(Chat).filter(Chat.parent_id == root_id).delete()
         session.query(Chat).filter(Chat.id == root_id).delete()
         session.commit()
+
+
+def test_plain_conversation_does_not_show_work_controls(page: Page) -> None:
+    root_id, turn_id = _seed_plain_turn()
+    try:
+        page.goto(
+            f"{BASE_URL}/chat/?id={root_id}&from_create=1",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        expect(page.locator(f"#turnPanel-{turn_id}")).to_have_count(0)
+        expect(page.locator("#turnStopButton")).to_be_hidden()
+        expect(page.locator("#messageInput")).to_have_attribute("placeholder", "Send message…")
+
+        terminal = chat_turns.complete_turn(
+            root_id,
+            turn_id=turn_id,
+            display_text="Yes, I am ready.",
+            speech_text="Yes, I am ready.",
+        )
+        _notify(page, terminal)
+        expect(page.locator(f"#turnPanel-{turn_id}")).to_have_count(0)
+        expect(page.locator("#turnStopButton")).to_be_hidden()
+    finally:
+        _cleanup(root_id)
 
 
 @pytest.mark.parametrize(

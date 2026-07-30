@@ -87,6 +87,11 @@ DEFAULT_SETTINGS = {
     'orchestrator_correction_provider': '',
     'orchestrator_correction_model': '',
     'orchestrator_memory_export_enabled': False,
+    'monk_mode_enabled': False,
+    'monk_sites': [],
+    'monk_schedule_enabled': False,
+    'monk_schedule': [],
+    'monk_schedule_state': None,
     # Telegram response format settings
     'telegram_text_only_override': False,
     'telegram_auto_match_mode': True,

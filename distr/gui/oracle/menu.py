@@ -535,6 +535,16 @@ class MenuTrayMixin:
         )
         self.preferences_submenu.addAction(self.manage_preferences_action)
         self.preferences_submenu.addSeparator()
+        self.monk_mode_action = QAction("Monk Mode", self.preferences_submenu)
+        self.monk_mode_action.setCheckable(True)
+        self.monk_mode_action.triggered.connect(self._toggle_monk_mode_from_menu)
+        self.preferences_submenu.addAction(self.monk_mode_action)
+        self.manage_monk_mode_action = QAction("Manage Monk Mode", self.preferences_submenu)
+        self.manage_monk_mode_action.triggered.connect(
+            lambda: self._open_web_url("/settings#monk")
+        )
+        self.preferences_submenu.addAction(self.manage_monk_mode_action)
+        self.preferences_submenu.addSeparator()
         preference_section_groups = [
             [
                 ("General && Audio", "/settings#general"),
@@ -586,7 +596,47 @@ class MenuTrayMixin:
         self._snippet_focus_timer.timeout.connect(remember_frontmost_app_if_external)
         self._snippet_focus_timer.start()
 
+        # Keep weekly Monk Mode boundaries active even when Preferences is not open.
+        self._monk_schedule_timer = QtCore.QTimer(self)
+        self._monk_schedule_timer.setInterval(30_000)
+        self._monk_schedule_timer.timeout.connect(self._reconcile_monk_schedule)
+        self._monk_schedule_timer.start()
+        QtCore.QTimer.singleShot(2_000, self._reconcile_monk_schedule)
+
         return self.menu
+
+    def _toggle_monk_mode_from_menu(self, checked: bool) -> None:
+        """Apply the tray toggle and restore the tick if permission is declined."""
+        try:
+            from distr.core.monk_mode import get_monk_mode_service
+
+            state = get_monk_mode_service().set_enabled(bool(checked))
+            self.monk_mode_action.setChecked(bool(state["enabled"]))
+        except Exception as exc:
+            logger.warning("Could not toggle Monk Mode from tray: %s", exc)
+            self.monk_mode_action.blockSignals(True)
+            self.monk_mode_action.setChecked(not bool(checked))
+            self.monk_mode_action.blockSignals(False)
+            QtWidgets.QMessageBox.warning(self, "Monk Mode", str(exc))
+
+    def _reconcile_monk_schedule(self) -> None:
+        """Apply a schedule transition once, avoiding repeated permission prompts."""
+        try:
+            from distr.core.monk_mode import get_monk_mode_service
+
+            service = get_monk_mode_service()
+            state = service.get_state()
+            desired = state.get("scheduled_active_now")
+            if desired is None or state.get("schedule_state") == desired:
+                return
+            if getattr(self, "_monk_last_schedule_attempt", None) == desired:
+                return
+            self._monk_last_schedule_attempt = desired
+            state = service.reconcile_schedule()
+            if getattr(self, "monk_mode_action", None):
+                self.monk_mode_action.setChecked(bool(state["enabled"]))
+        except Exception as exc:
+            logger.warning("Scheduled Monk Mode transition failed: %s", exc)
 
     def _show_about_from_menu(self) -> None:
         """Show About window and play splash sound (same as chat llama click)."""
@@ -638,6 +688,10 @@ class MenuTrayMixin:
 
         # Update cached settings
         self.settings = fresh_settings
+        if getattr(self, "monk_mode_action", None):
+            self.monk_mode_action.blockSignals(True)
+            self.monk_mode_action.setChecked(bool(fresh_settings.get("monk_mode_enabled", False)))
+            self.monk_mode_action.blockSignals(False)
 
         # Update skin submenu labels from active skin name
         self._update_skin_submenu_items()
@@ -672,6 +726,8 @@ class MenuTrayMixin:
             self.skin_increase_size_action,
             self.preferences_menu_action,
             self.manage_preferences_action,
+            self.monk_mode_action,
+            self.manage_monk_mode_action,
             *self._preferences_section_actions,
             self.hands_free_action,
         ]

@@ -1196,3 +1196,370 @@ textarea:focus-visible {
     height: 16px;
     line-height: 1;
 }
+/* Monk Mode: compact Preferences layout aligned with editable Snippet rows. */
+#monk-settings {
+    width: 100%;
+    color: #ececf1;
+}
+
+.monk-page-header,
+.monk-section-header,
+.monk-section-actions,
+.monk-master-toggle,
+.monk-inline-toggle,
+.monk-schedule-time-fields,
+.monk-site-actions {
+    display: flex;
+    align-items: center;
+}
+
+.monk-page-header {
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.monk-page-copy,
+.monk-section-header > div {
+    min-width: 0;
+}
+
+.monk-title-line {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.monk-title-line h2 {
+    margin: 0;
+    color: #f3f4f6;
+    font-size: 1.25rem;
+    font-weight: 650;
+    line-height: 1.35;
+}
+
+.monk-page-copy p,
+.monk-section-header p {
+    margin: 5px 0 0;
+    color: #aeb4c2;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.monk-status {
+    color: #aeb4c2;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.monk-status.is-on { color: #86efac; }
+.monk-status.is-warning { color: #fbbf24; }
+
+.monk-master-toggle {
+    flex-shrink: 0;
+    gap: 12px;
+    color: #d7dae2;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.monk-switch { position: relative; }
+.monk-switch input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.monk-switch-track {
+    display: block;
+    width: 46px;
+    height: 26px;
+    padding: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 999px;
+    background: #4a4f61;
+    cursor: pointer;
+    transition: background 150ms ease, border-color 150ms ease;
+}
+
+.monk-switch-thumb {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #f3f4f6;
+    transition: transform 150ms ease;
+    box-shadow: 0 1px 3px rgba(5, 8, 20, 0.45);
+}
+
+.monk-switch input:checked + .monk-switch-track {
+    border-color: #f97316;
+    background: #f97316;
+}
+.monk-switch input:checked + .monk-switch-track .monk-switch-thumb { transform: translateX(20px); }
+.monk-switch input:focus-visible + .monk-switch-track { outline: 2px solid #fb923c; outline-offset: 2px; }
+.monk-switch input:disabled + .monk-switch-track { opacity: 0.55; cursor: wait; }
+
+.monk-permission-note {
+    margin: 12px 0 0;
+    color: #858c9d;
+    font-size: 0.76rem;
+}
+
+.monk-section {
+    margin-top: 28px;
+    padding-top: 26px;
+    border-top: 1px solid rgba(255, 255, 255, 0.11);
+}
+
+.monk-section-header {
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 18px;
+}
+
+.monk-section-header h3 {
+    margin: 0;
+    color: #f3f4f6;
+    font-size: 1rem;
+    font-weight: 650;
+}
+
+.monk-inline-toggle {
+    flex-shrink: 0;
+    gap: 8px;
+    color: #d7dae2;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.monk-inline-toggle input,
+.monk-day-chip input {
+    width: 16px;
+    height: 16px;
+    accent-color: #f97316;
+}
+
+.monk-button,
+.monk-row-action {
+    border-radius: 7px;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 80ms ease;
+}
+
+.monk-button:active,
+.monk-row-action:active { transform: translateY(1px); }
+.monk-button.is-busy,
+.monk-row-action.is-busy { opacity: 0.6; cursor: wait; }
+
+.monk-button {
+    min-height: 36px;
+    padding: 0 13px;
+    border: 1px solid transparent;
+    font-size: 0.8rem;
+}
+
+.monk-button-primary {
+    border-color: #f97316;
+    background: #f97316;
+    color: #f9fafb;
+}
+.monk-button-primary:hover { border-color: #ea580c; background: #ea580c; }
+
+.monk-button-secondary {
+    border-color: rgba(255, 255, 255, 0.2);
+    background: #171c35;
+    color: #e5e7eb;
+}
+.monk-button-secondary:hover { border-color: rgba(249, 115, 22, 0.7); color: #f9fafb; }
+
+.monk-section-actions {
+    justify-content: flex-end;
+    gap: 9px;
+    margin-top: 14px;
+}
+.monk-section-actions.is-hidden { display: none; }
+
+.monk-schedule-editor {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) auto;
+    align-items: end;
+    gap: 28px;
+    padding: 16px 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.monk-schedule-editor.is-hidden { display: none; }
+
+.monk-schedule-days-field,
+.monk-schedule-time-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.monk-field-label {
+    color: #aeb4c2;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.monk-schedule-days {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.monk-day-chip { position: relative; }
+.monk-day-chip input { position: absolute; opacity: 0; }
+.monk-day-chip span {
+    display: block;
+    min-width: 36px;
+    padding: 5px 7px;
+    border: 1px solid #4e5466;
+    border-radius: 6px;
+    color: #b8bdc9;
+    font-size: 0.7rem;
+    text-align: center;
+    cursor: pointer;
+}
+.monk-day-chip input:checked + span { border-color: #f97316; background: rgba(249, 115, 22, 0.14); color: #f3f4f6; }
+.monk-day-chip input:focus-visible + span { outline: 2px solid #fb923c; outline-offset: 2px; }
+
+.monk-schedule-time-fields { gap: 12px; }
+
+#tab-monk #monk-schedule-start,
+#tab-monk #monk-schedule-end,
+#tab-monk .monk-site-input {
+    box-sizing: border-box;
+    border: 1px solid #4f5568 !important;
+    border-radius: 6px !important;
+    background: #11162d !important;
+    color: #f3f4f6 !important;
+    -webkit-text-fill-color: #f3f4f6 !important;
+    caret-color: #fb923c;
+    color-scheme: dark;
+    outline: none;
+}
+
+#tab-monk #monk-schedule-start,
+#tab-monk #monk-schedule-end {
+    width: 104px;
+    height: 34px;
+    padding: 0 9px;
+    font-size: 0.78rem;
+}
+
+#tab-monk .monk-site-input {
+    width: 100%;
+    height: 38px;
+    padding: 0 11px;
+    font-size: 0.86rem;
+}
+
+#tab-monk .monk-site-input::placeholder {
+    color: #7f8798 !important;
+    -webkit-text-fill-color: #7f8798 !important;
+    opacity: 1;
+}
+
+#tab-monk #monk-schedule-start:focus,
+#tab-monk #monk-schedule-end:focus,
+#tab-monk .monk-site-input:focus {
+    border-color: #f97316 !important;
+    box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.16);
+}
+
+#tab-monk .monk-site-input:-webkit-autofill,
+#tab-monk .monk-site-input:-webkit-autofill:hover,
+#tab-monk .monk-site-input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #f3f4f6 !important;
+    -webkit-box-shadow: 0 0 0 1000px #11162d inset !important;
+}
+
+.monk-schedule-off-copy {
+    margin: 0;
+    padding: 14px 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: #858c9d;
+    font-size: 0.8rem;
+}
+.monk-schedule-off-copy.is-hidden { display: none; }
+
+.monk-sites-table {
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    background: rgba(13, 18, 42, 0.46);
+}
+
+.monk-sites-head,
+.monk-site-row {
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr) 154px;
+    align-items: center;
+}
+
+.monk-sites-head {
+    min-height: 34px;
+    padding: 0 12px;
+    background: rgba(12, 17, 39, 0.75);
+    color: #8f96a7;
+    font-size: 0.69rem;
+    font-weight: 650;
+    letter-spacing: 0.03em;
+}
+
+.monk-site-row {
+    min-height: 58px;
+    padding: 9px 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.monk-site-number {
+    color: #7f8798;
+    font-size: 0.72rem;
+}
+
+.monk-site-address { min-width: 0; }
+.monk-site-actions { justify-content: flex-end; gap: 7px; }
+
+.monk-row-action {
+    min-height: 31px;
+    padding: 0 10px;
+    border: 1px solid #4d5365;
+    background: #171c35;
+    color: #dfe2e9;
+    font-size: 0.72rem;
+}
+.monk-row-save:hover { border-color: rgba(249, 115, 22, 0.72); color: #f9fafb; }
+.monk-row-remove { border-color: rgba(248, 113, 113, 0.3); color: #fca5a5; }
+.monk-row-remove:hover { border-color: rgba(248, 113, 113, 0.58); background: rgba(127, 29, 29, 0.18); color: #fecaca; }
+
+.monk-empty-row {
+    padding: 16px 12px;
+    color: #7f8798;
+    font-size: 0.8rem;
+}
+.monk-empty-row.is-hidden { display: none; }
+
+@media (max-width: 960px) {
+    .monk-schedule-editor {
+        grid-template-columns: 1fr auto;
+    }
+}
+
+@media (max-width: 700px) {
+    .monk-page-header,
+    .monk-section-header { align-items: flex-start; flex-direction: column; }
+    .monk-master-toggle { align-self: flex-start; }
+    .monk-schedule-editor { grid-template-columns: 1fr; }
+    .monk-schedule-time-fields { justify-content: flex-start; }
+    .monk-sites-head { display: none; }
+    .monk-site-row { grid-template-columns: 36px minmax(0, 1fr); }
+    .monk-site-actions { grid-column: 2; justify-content: flex-start; margin-top: 7px; }
+}

@@ -51,6 +51,33 @@ def _bearer_token(request: Request) -> str:
     raise HTTPException(status_code=403, detail="Missing chat token")
 
 
+async def _request_bridge_token(client: httpx.AsyncClient, base: str) -> str:
+    token_resp = await client.post(
+        f"{base}/api/telegram/ws-token",
+        headers={**_relay_internal_headers(), "Content-Type": "application/json"},
+        json={"app_user_id": "local-ui"},
+    )
+    if token_resp.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Relay token failed: HTTP {token_resp.status_code}")
+    bridge_token = token_resp.json().get("token")
+    if not bridge_token:
+        raise HTTPException(status_code=502, detail="Relay token response was empty")
+    return bridge_token
+
+
+async def _request_chat_session(
+    client: httpx.AsyncClient,
+    base: str,
+    authorization: str,
+    payload: dict,
+) -> httpx.Response:
+    return await client.post(
+        f"{base}/api/chat/session",
+        headers={"Authorization": authorization, "Content-Type": "application/json"},
+        json=payload,
+    )
+
+
 def create_routes() -> APIRouter:
     router = APIRouter()
 
@@ -63,31 +90,29 @@ def create_routes() -> APIRouter:
         update_display_name = bool(body.get("update_display_name"))
         base = _relay_base()
         browser_auth = (request.headers.get("authorization") or "").strip()
+        session_payload = {
+            "display_name": display_name,
+            "app_user_id": "local-ui",
+            "admin_code": admin_code,
+            "client_id": client_id,
+            "update_display_name": update_display_name,
+        }
         async with httpx.AsyncClient(timeout=10.0) as client:
-            bridge_token = ""
-            if not browser_auth.lower().startswith("bearer "):
-                token_resp = await client.post(
-                    f"{base}/api/telegram/ws-token",
-                    headers={**_relay_internal_headers(), "Content-Type": "application/json"},
-                    json={"app_user_id": "local-ui"},
+            session_resp = None
+            if browser_auth.lower().startswith("bearer "):
+                session_resp = await _request_chat_session(
+                    client, base, browser_auth, session_payload
                 )
-                if token_resp.status_code >= 400:
-                    raise HTTPException(status_code=502, detail=f"Relay token failed: HTTP {token_resp.status_code}")
-                bridge_token = token_resp.json().get("token")
-                if not bridge_token:
-                    raise HTTPException(status_code=502, detail="Relay token response was empty")
 
-            session_resp = await client.post(
-                f"{base}/api/chat/session",
-                headers={"Authorization": browser_auth or f"Bearer {bridge_token}", "Content-Type": "application/json"},
-                json={
-                    "display_name": display_name,
-                    "app_user_id": "local-ui",
-                    "admin_code": admin_code,
-                    "client_id": client_id,
-                    "update_display_name": update_display_name,
-                },
-            )
+            # A cached browser chat token may have expired or been invalidated.
+            # Refresh through the trusted local relay bridge and retry instead of
+            # trapping the join dialog in a permanent Unauthorized state.
+            if session_resp is None or session_resp.status_code in {401, 403}:
+                bridge_token = await _request_bridge_token(client, base)
+                session_resp = await _request_chat_session(
+                    client, base, f"Bearer {bridge_token}", session_payload
+                )
+
             if session_resp.status_code >= 400:
                 detail = f"Chat session failed: HTTP {session_resp.status_code}"
                 try:

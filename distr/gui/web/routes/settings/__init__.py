@@ -25,6 +25,7 @@ from . import (
     workflows,
     skins,
     masko,
+    monk,
 )
 
 _MODULES = [
@@ -44,6 +45,7 @@ _MODULES = [
     workflows,
     skins,
     masko,
+    monk,
 ]
 
 

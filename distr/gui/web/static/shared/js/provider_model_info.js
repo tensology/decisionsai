@@ -66,7 +66,8 @@
 
         styleInjected = true;
         var css = [
-            '.model-info-btn{background:#1a1f3a;border:1px solid #565869;border-left:none;border-radius:0 6px 6px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;box-sizing:border-box}',
+            '.model-info-control{display:flex;align-items:stretch;width:100%}',
+            '.model-info-btn{width:34px;height:auto;align-self:stretch;background:#1a1f3a;border:1px solid #565869;border-left:none;border-radius:0 6px 6px 0;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;box-sizing:border-box}',
             '.model-info-btn:hover{border-color:#10a37f;color:#10a37f}',
             '.model-info-btn svg{width:14px;height:14px;pointer-events:none}'
         ].join('\n');
@@ -114,14 +115,10 @@
             if (!parent || parent.querySelector('.model-info-btn')) continue;
 
             var target = PROVIDER_BENCHMARK_SELECTS[id];
-            var selHeight = sel.offsetHeight || sel.getBoundingClientRect().height;
             var wrapper = document.createElement('div');
             var btn = createInfoButton(sel, target);
 
-            wrapper.style.cssText = 'display:flex;align-items:stretch;width:100%';
-            if (selHeight) {
-                btn.style.height = selHeight + 'px';
-            }
+            wrapper.className = 'model-info-control';
 
             sel.style.borderRadius = '6px 0 0 6px';
             sel.style.borderRight = 'none';

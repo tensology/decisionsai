@@ -1,0 +1,13 @@
+{
+  "status": "completed",
+  "session_key": "default",
+  "run_name": "monk-single-schedule-default",
+  "final_url": "http://127.0.0.1:8765/settings#monk",
+  "viewport": {
+    "width": 1280,
+    "height": 800,
+    "device_scale_factor": 1.0
+  },
+  "screenshot_path": "artifacts/screenshot-20260730-170144-2ada660e/claim-01/screenshot.webp",
+  "summary": "Captured the current page state successfully."
+}

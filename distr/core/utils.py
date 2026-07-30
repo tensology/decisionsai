@@ -190,6 +190,9 @@ def save_settings_to_db(settings_dict: Dict[str, Any]) -> None:
             normalized_settings['indexed_folders'] = json.dumps(normalized_settings['indexed_folders'])
         if 'connected_accounts' in normalized_settings:
             normalized_settings['connected_accounts'] = json.dumps(normalized_settings['connected_accounts'])
+        for json_list_field in ('monk_sites', 'monk_schedule'):
+            if json_list_field in normalized_settings and not isinstance(normalized_settings[json_list_field], str):
+                normalized_settings[json_list_field] = json.dumps(normalized_settings[json_list_field])
         
         # Update all settings from the dictionary
         for key, value in normalized_settings.items():
@@ -241,7 +244,7 @@ def load_settings_from_db() -> Dict[str, Any]:
                 try:
                     value = getattr(settings, column.name)
                     # Parse JSON strings back to lists
-                    if column.name in ['indexed_folders', 'connected_accounts'] and value:
+                    if column.name in ['indexed_folders', 'connected_accounts', 'monk_sites', 'monk_schedule'] and value:
                         try:
                             value = json.loads(value)
                         except json.JSONDecodeError:

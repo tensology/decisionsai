@@ -48,6 +48,20 @@ def _chat_html_source() -> str:
     return CHAT_HTML.read_text(encoding="utf-8")
 
 
+def test_stop_work_control_is_reserved_for_tool_or_workflow_activity() -> None:
+    script = CHAT_JS.read_text(encoding="utf-8")
+    html = _chat_html_source()
+
+    assert "function turnHasWorkActivity(turn)" in script
+    assert "type.startsWith('tool_')" in script
+    assert "metadata.source === 'workflow'" in script
+    assert "if (stop) stop.hidden = !turnHasActiveWork(currentActiveTurn)" in script
+    assert "streaming || currentActiveTurn" not in script
+    assert "refreshTurnStateAfterResponse(msg.chat_id)" in script
+    assert ">Stop work</span>" in html
+    assert 'title="Stop active tool or workflow work"' in html
+
+
 def _chat_css_source() -> str:
     return CHAT_CSS.read_text(encoding="utf-8")
 

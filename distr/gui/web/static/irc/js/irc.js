@@ -449,7 +449,14 @@
             connectWs();
             loadMessages(state.activeRoom);
         }).catch(function (err) {
-            el.modalError.textContent = err.message || String(err);
+            var message = err && err.message ? err.message : String(err);
+            if (state.token && /unauthorized/i.test(message)) {
+                state.token = "";
+                localStorage.removeItem(tokenKey);
+                startSession(name, adminCode, updateDisplayName);
+                return;
+            }
+            el.modalError.textContent = message;
             openNameModal();
         });
     }

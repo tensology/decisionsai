@@ -133,6 +133,15 @@ class Settings(Base):
     indexed_folders = Column(String, default='[]')  # JSON string of folders
     connected_accounts = Column(String, default='[]')  # JSON string of connected accounts
 
+    # Monk Mode website blocking
+    monk_mode_enabled = Column(Boolean, default=False)
+    monk_sites = Column(Text, default='[]')  # JSON list of managed website entries
+    monk_schedule_enabled = Column(Boolean, default=False)
+    monk_schedule = Column(Text, default='[]')  # JSON list of weekly schedule windows
+    # Last schedule state applied. This lets a manual toggle hold until the next
+    # schedule boundary instead of being immediately overwritten by the timer.
+    monk_schedule_state = Column(Boolean, default=None, nullable=True)
+
     # Provider States
     assemblyai_enabled = Column(Boolean, default=False)
     speechmatics_enabled = Column(Boolean, default=False)
@@ -657,6 +666,12 @@ try:
                 ("tensology_enabled", "BOOLEAN DEFAULT 0"),
                 ("tensology_url", "VARCHAR DEFAULT 'https://www.tensology.com'"),
                 ("tensology_key", "VARCHAR DEFAULT ''"),
+                # Monk Mode
+                ("monk_mode_enabled", "BOOLEAN DEFAULT 0"),
+                ("monk_sites", "TEXT DEFAULT '[]'"),
+                ("monk_schedule_enabled", "BOOLEAN DEFAULT 0"),
+                ("monk_schedule", "TEXT DEFAULT '[]'"),
+                ("monk_schedule_state", "BOOLEAN DEFAULT NULL"),
             ]:
                 if _col not in _existing:
                     try:

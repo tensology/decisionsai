@@ -936,6 +936,8 @@
 }
 
 .turn-panel--failed { border-color: rgba(248, 113, 113, 0.42); }
+.turn-panel--completed,
+.turn-panel--cancelled { border: 0; }
 .turn-panel--cancelled { opacity: 0.78; }
 
 .turn-panel-head {
