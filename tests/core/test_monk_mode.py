@@ -56,14 +56,14 @@ def test_hosts_block_is_reversible_and_preserves_unrelated_content() -> None:
 
 def test_common_redirect_hostnames_are_blocked_with_the_saved_site() -> None:
     facebook_hosts = expanded_hostnames([{"hostname": "www.facebook.com"}])
-    assert facebook_hosts == [
+    assert {
         "facebook.com",
         "m.facebook.com",
         "mbasic.facebook.com",
-        "touch.facebook.com",
-        "web.facebook.com",
+        "static.xx.fbcdn.net",
         "www.facebook.com",
-    ]
+    } - set(facebook_hosts) == {"static.xx.fbcdn.net"}
+    assert {"facebook.net", "fb.com", "fbcdn.net", "fbsbx.com", "messenger.com"} <= set(facebook_hosts)
 
     content = build_hosts_content("127.0.0.1 localhost\n", enabled=True, sites=[{"hostname": "facebook.com"}])
     assert "127.0.0.1 m.facebook.com" in content
@@ -71,7 +71,14 @@ def test_common_redirect_hostnames_are_blocked_with_the_saved_site() -> None:
 
 
 def test_saved_www_address_becomes_a_whole_domain_suffix() -> None:
-    assert blocked_domains([{"hostname": "www.facebook.com"}]) == ["facebook.com"]
+    assert blocked_domains([{"hostname": "www.facebook.com"}]) == [
+        "facebook.com",
+        "facebook.net",
+        "fb.com",
+        "fbcdn.net",
+        "fbsbx.com",
+        "messenger.com",
+    ]
     assert blocked_domains([{"hostname": "news.example.com"}]) == ["news.example.com"]
 
 
@@ -231,6 +238,10 @@ def test_service_crud_toggle_and_manual_override_until_boundary(tmp_path) -> Non
     stored["schedule_state"] = False
     state = service.reconcile_schedule(datetime(2026, 7, 27, 9, 0))
     assert state["enabled"] is True
+    hosts.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+    state = service.reconcile_schedule(datetime(2026, 7, 27, 12, 0))
+    assert state["hosts_applied"] is True
+    assert "updates.example" in hosts.read_text(encoding="utf-8")
     service.set_enabled(False)  # manual override inside the active Monday window
     state = service.reconcile_schedule(datetime(2026, 7, 27, 12, 0))
     assert state["enabled"] is False

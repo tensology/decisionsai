@@ -51,6 +51,14 @@ _COMMON_HOST_ALIASES: dict[str, tuple[str, ...]] = {
     "instagram.com": ("www", "m"),
 }
 
+# Large social sites serve enough of the logged-in experience from companion
+# domains that blocking only the address-bar hostname can leave an existing
+# browser session usable. Treat these first-party service domains as one block.
+_RELATED_DOMAIN_TREES: dict[str, tuple[str, ...]] = {
+    "facebook.com": ("facebook.net", "fb.com", "fbcdn.net", "fbsbx.com", "messenger.com"),
+    "instagram.com": ("cdninstagram.com", "fbcdn.net"),
+}
+
 
 class MonkModeError(RuntimeError):
     """A user-actionable Monk Mode failure."""
@@ -131,6 +139,9 @@ def expanded_hostnames(sites: Iterable[dict[str, Any]]) -> list[str]:
             if hostname == base or hostname.endswith(f".{base}"):
                 hosts.add(base)
                 hosts.update(f"{alias}.{base}" for alias in aliases)
+                for related in _RELATED_DOMAIN_TREES.get(base, ()):
+                    hosts.add(related)
+                    hosts.add(f"www.{related}")
     return sorted(hosts)
 
 
@@ -139,7 +150,12 @@ def blocked_domains(sites: Iterable[dict[str, Any]]) -> list[str]:
     domains: set[str] = set()
     for site in sites:
         hostname = normalize_hostname(str(site.get("hostname") or site.get("url") or ""))
-        domains.add(hostname[4:] if hostname.startswith("www.") else hostname)
+        domain = hostname[4:] if hostname.startswith("www.") else hostname
+        domains.add(domain)
+        for base, related_domains in _RELATED_DOMAIN_TREES.items():
+            if domain == base or domain.endswith(f".{base}"):
+                domains.add(base)
+                domains.update(related_domains)
     return sorted(domains)
 
 
@@ -305,9 +321,16 @@ class HostsFileController:
         self.ensure_runtime(enabled)
         current = self.read()
         desired = build_hosts_content(current, enabled=enabled, sites=sites)
+        managed_macos_hosts = (
+            platform.system() == "Darwin"
+            and self.hosts_path == system_hosts_path()
+            and not os.access(self.hosts_path, os.W_OK)
+        )
         if desired == current:
-            return False
-        if platform.system() == "Darwin" and self.hosts_path == system_hosts_path() and not os.access(self.hosts_path, os.W_OK):
+            applied = self.is_applied(sites) if enabled else self.is_disabled_applied()
+            if applied:
+                return False
+        if managed_macos_hosts:
             domains = blocked_domains(sites) if enabled else []
             self._apply_with_macos_helper(enabled, expanded_hostnames(sites) if enabled else [], domains)
             deadline = time.monotonic() + 12
@@ -645,7 +668,9 @@ class MonkModeService:
             if not config["schedule_enabled"]:
                 return self.get_state()
             desired = schedule_is_active(config["schedule"], now=now)
-            if config.get("schedule_state") is None or bool(config["schedule_state"]) != desired:
+            applied = self.controller.is_applied(config["sites"]) if desired else self.controller.is_disabled_applied()
+            needs_repair = bool(config["enabled"]) == desired and not applied
+            if config.get("schedule_state") is None or bool(config["schedule_state"]) != desired or needs_repair:
                 return self.set_enabled(desired, schedule_state=desired)
             return self.get_state()
 

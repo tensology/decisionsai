@@ -627,12 +627,19 @@ class MenuTrayMixin:
             service = get_monk_mode_service()
             state = service.get_state()
             desired = state.get("scheduled_active_now")
-            if desired is None or state.get("schedule_state") == desired:
+            if desired is None or (state.get("schedule_state") == desired and state.get("hosts_applied")):
                 return
-            if getattr(self, "_monk_last_schedule_attempt", None) == desired:
+            attempt = (
+                bool(desired),
+                tuple(site.get("hostname", "") for site in state.get("sites", [])),
+                bool(state.get("hosts_applied")),
+            )
+            if getattr(self, "_monk_last_schedule_attempt", None) == attempt:
                 return
-            self._monk_last_schedule_attempt = desired
+            self._monk_last_schedule_attempt = attempt
             state = service.reconcile_schedule()
+            if state.get("hosts_applied"):
+                self._monk_last_schedule_attempt = None
             if getattr(self, "monk_mode_action", None):
                 self.monk_mode_action.setChecked(bool(state["enabled"]))
         except Exception as exc:
