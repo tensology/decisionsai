@@ -32,38 +32,31 @@ def test_set_tts_service_refreshes_warmed_save_audio_tool(monkeypatch) -> None:
 
 
 def test_save_audio_honours_mp3_and_downloads(monkeypatch, tmp_path) -> None:
-    import numpy as np
     from distr.core.agent.tools.media import save_audio as save_audio_module
 
-    class _FakeKokoro:
-        @staticmethod
-        def create(text, voice, speed):
-            assert text == "Clipboard narration"
-            return np.array([0.0, 0.25, -0.25], dtype=np.float32), 24000
-
     class _FakeSpeechService:
-        kokoro = _FakeKokoro()
-        voice = "test-voice"
-        _voice_cloning_enabled = False
+        _provider_id = "pixazo"
+        voice_id = "custom_7"
 
-    written = []
+    generated = []
     converted = []
+    source_wav = tmp_path / "generated.wav"
+    source_wav.write_bytes(b"wav")
     monkeypatch.setattr(save_audio_module, "get_clipboard_content", lambda: "Clipboard narration")
     monkeypatch.setattr(save_audio_module, "get_output_path", lambda destination: str(tmp_path))
-    monkeypatch.setattr(save_audio_module, "SCIPY_AVAILABLE", True)
 
-    def _write_wav(path, sample_rate, audio):
-        written.append((path, sample_rate, audio))
-        with open(path, "wb") as handle:
-            handle.write(b"wav")
+    def _generate(text, provider, voice, speed):
+        generated.append((text, provider, voice, speed))
+        return str(source_wav)
 
     def _convert(wav_path, mp3_path):
         converted.append((wav_path, mp3_path))
-        with open(mp3_path, "wb") as handle:
-            handle.write(b"mp3")
+        from pathlib import Path
+
+        Path(mp3_path).write_bytes(b"mp3")
         return mp3_path
 
-    monkeypatch.setattr(save_audio_module.wavfile, "write", _write_wav)
+    monkeypatch.setattr("distr.core.audio.tts_handler.generate_tts_audio", _generate)
     monkeypatch.setattr("distr.core.audio.tts_handler.wav_to_mp3", _convert)
 
     tool = SaveAudioTool(tts_service=_FakeSpeechService())
@@ -75,6 +68,5 @@ def test_save_audio_honours_mp3_and_downloads(monkeypatch, tmp_path) -> None:
 
     assert "Successfully saved audio" in result
     assert result.endswith(".mp3")
-    assert len(written) == 1
+    assert generated == [("Clipboard narration", "pixazo", "custom_7", 1.0)]
     assert len(converted) == 1
-    assert not (tmp_path / converted[0][0]).exists()

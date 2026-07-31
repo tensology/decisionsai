@@ -160,13 +160,17 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
 
     # Each descriptor's create_service() returns a fully initialised service
     # (including set_hands_free).
-    return descriptor.create_service(
+    service = descriptor.create_service(
         tts_config,
         settings=settings,
         stt_service=stt_service,
         is_hands_free=is_hands_free,
         models_dir=models_dir,
     )
+    # Consumers such as clipboard audio export need the provider identity,
+    # regardless of the provider-specific service implementation.
+    service._provider_id = descriptor.id
+    return service
 
 
 def resolve_elevenlabs_voice(api_key, voice_id_or_name):

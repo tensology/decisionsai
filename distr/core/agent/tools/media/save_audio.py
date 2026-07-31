@@ -11,14 +11,11 @@ import logging
 import time
 import os
 import platform
+import shutil
 import subprocess
 from datetime import datetime
-import numpy as np
 from distr.core.agent.tools.base import get_platform_modifier_key
-from distr.core.agent.libs import (
-    pyautogui, sf, SOUNDFILE_AVAILABLE,
-    wavfile, SCIPY_AVAILABLE
-)
+from distr.core.agent.libs import pyautogui
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +122,24 @@ class SaveAudioTool(BaseTool):
     def set_tts_service(self, tts_service) -> None:
         """Refresh the runtime TTS dependency after the tool cache is warmed."""
         self._tts_service = tts_service
+
+    def _active_voice(self) -> tuple[Optional[str], Optional[str]]:
+        """Return provider and voice metadata from any active TTS service."""
+        service = self._tts_service
+        if service is None:
+            return None, None
+        provider = getattr(service, "_provider_id", None)
+        if not provider:
+            module_name = type(service).__module__.rsplit(".", 1)[-1].lower()
+            provider = module_name if module_name in {
+                "coqui", "elevenlabs", "kokoro", "openai", "pixazo", "supertonic"
+            } else None
+        voice = (
+            getattr(service, "voice_id", None)
+            or getattr(service, "voice", None)
+            or getattr(service, "voice_name", None)
+        )
+        return provider, voice
     
     def _run(
         self,
@@ -167,39 +182,21 @@ class SaveAudioTool(BaseTool):
             
             logger.info(f"Save audio: Got clipboard content ({len(clipboard_text)} chars)")
             
-            # Step 3: Generate audio using TTS
-            if not self._tts_service:
-                return "Error: TTS service not available"
-            
+            # Step 3: Generate audio through the shared provider registry.
             try:
-                # Use Kokoro TTS to generate audio
-                # The TTS service has a kokoro instance that can create audio
                 text_to_save = clipboard_text.strip()
-                
-                # Generate audio synchronously
                 logger.info(f"Save audio: Generating audio for {len(text_to_save)} characters")
-                # Normalize smart quotes for correct pronunciation
-                from distr.core.agent.services.tts.kokoro import _normalize_text_for_tts
-                text_to_save = _normalize_text_for_tts(text_to_save)
-                audio, sample_rate = self._tts_service.kokoro.create(
-                    text_to_save, 
-                    voice=self._tts_service.voice, 
-                    speed=1.0
+                from distr.core.audio.tts_handler import generate_tts_audio, wav_to_mp3
+
+                provider, voice = self._active_voice()
+                generated_wav = generate_tts_audio(
+                    text_to_save,
+                    provider=provider,
+                    voice=voice,
+                    speed=1.0,
                 )
-                
-                if audio is None or len(audio) == 0:
+                if not generated_wav or not os.path.exists(generated_wav):
                     return "Error: Failed to generate audio"
-                
-                # Apply Kanade voice conversion for custom voices
-                if getattr(self._tts_service, '_voice_cloning_enabled', False):
-                    ref_path = getattr(self._tts_service, '_reference_voice_path', None)
-                    if ref_path:
-                        try:
-                            from distr.core.audio.voice_cloner import convert_voice, get_output_sample_rate
-                            audio = convert_voice(audio, sample_rate, ref_path)
-                            sample_rate = get_output_sample_rate()
-                        except Exception as vc_err:
-                            logger.error(f"Voice cloning failed in save_audio, using base voice: {vc_err}")
                 
                 # Step 4: Save audio in the requested format and folder.
                 output_format = str(audio_format or "mp3").strip().lower()
@@ -209,30 +206,11 @@ class SaveAudioTool(BaseTool):
                 os.makedirs(output_dir, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 stem = f"clipboard_speech_{timestamp}"
-                wav_path = os.path.join(output_dir, f"{stem}.wav")
-                
-                # Convert audio to int16 and save as WAV
-                audio_int16 = (audio * 32767).astype(np.int16)
-                
-                # Use scipy.io.wavfile to save WAV file
-                if SCIPY_AVAILABLE:
-                    wavfile.write(wav_path, sample_rate, audio_int16)
-                elif SOUNDFILE_AVAILABLE:
-                    # Fallback: use soundfile if scipy not available
-                    sf.write(wav_path, audio_int16, sample_rate)
-                else:
-                    return "Error: Neither scipy nor soundfile is available. Please install one: pip install scipy or pip install soundfile"
-
-                output_path = wav_path
+                output_path = os.path.join(output_dir, f"{stem}.{output_format}")
                 if output_format == "mp3":
-                    from distr.core.audio.tts_handler import wav_to_mp3
-
-                    output_path = os.path.join(output_dir, f"{stem}.mp3")
-                    wav_to_mp3(wav_path, output_path)
-                    try:
-                        os.remove(wav_path)
-                    except OSError:
-                        logger.debug("Could not remove temporary WAV file: %s", wav_path)
+                    wav_to_mp3(generated_wav, output_path)
+                else:
+                    shutil.copyfile(generated_wav, output_path)
 
                 logger.info("Save audio: Saved audio file to %s", output_path)
                 return f"Successfully saved audio to {output_path}"
