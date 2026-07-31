@@ -25,6 +25,10 @@ from distr.core.agent.libs import (
     UserStoppedSpeakingFrame, SpeakingStartedFrames, SpeakingStoppedFrames,
 )
 from distr.core.agent.services.stt.base import BaseSTTService
+from distr.core.agent.constants import (
+    DEFAULT_OPENAI_LIVE_TRANSCRIPTION_MODEL,
+    DEFAULT_OPENAI_WHISPER_MODEL,
+)
 
 try:
     from queue import Full
@@ -63,14 +67,14 @@ def suppress_stderr():
 
 
 class OpenAIWhisperSTTService(BaseSTTService):
-    """OpenAI Whisper API-based STT service using Pipecat
+    """OpenAI transcription API-based STT service using Pipecat.
     
     Uses:
     - Batch API for PTT mode (complete utterance after button release)
     - Realtime API for hands-free mode (streaming audio via WebSocket)
     """
 
-    def __init__(self, api_key: str, model: str = "whisper-1", event_queue=None, is_hands_free=False, **kwargs):
+    def __init__(self, api_key: str, model: str = DEFAULT_OPENAI_WHISPER_MODEL, event_queue=None, is_hands_free=False, **kwargs):
         if not PIPECAT_AVAILABLE:
             raise ImportError("Pipecat is required for OpenAIWhisperSTTService")
         if not OPENAI_AVAILABLE:
@@ -94,7 +98,7 @@ class OpenAIWhisperSTTService(BaseSTTService):
         self._realtime_lock = asyncio.Lock()
 
         # Realtime API configuration
-        self._realtime_model = "gpt-4o-transcribe"
+        self._realtime_model = DEFAULT_OPENAI_LIVE_TRANSCRIPTION_MODEL
         self._realtime_url = "wss://api.openai.com/v1/realtime"
 
         logger.info(f"OpenAIWhisperSTTService initialized with model: {model}, is_hands_free={is_hands_free} (PTT mode: {not is_hands_free})")
@@ -106,6 +110,24 @@ class OpenAIWhisperSTTService(BaseSTTService):
     # =========================================================================
     # Realtime API Methods (for hands-free streaming)
     # =========================================================================
+
+    def _realtime_session_config(self) -> dict:
+        """Build the current Realtime transcription session update event."""
+        return {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 24000},
+                        "transcription": {"model": self._realtime_model},
+                        # DecisionsAI already detects speech boundaries locally.
+                        # gpt-live-transcribe accepts explicit buffer commits.
+                        "turn_detection": None,
+                    }
+                },
+            },
+        }
     
     async def _connect_realtime(self):
         """Connect to OpenAI Realtime API for streaming transcription"""
@@ -117,11 +139,12 @@ class OpenAIWhisperSTTService(BaseSTTService):
             return True
         
         try:
-            # Use gpt-4o-realtime model for real-time transcription
-            ws_url = f"{self._realtime_url}?model=gpt-4o-realtime-preview"
+            # Transcription sessions use the transcription intent handshake.
+            # Passing a general Realtime model here creates an incompatible
+            # voice session that rejects transcription session updates.
+            ws_url = f"{self._realtime_url}?intent=transcription"
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
-                "OpenAI-Beta": "realtime=v1",
             }
             
             logger.info(f"Connecting to OpenAI Realtime API: {ws_url}")
@@ -130,28 +153,15 @@ class OpenAIWhisperSTTService(BaseSTTService):
             # Wait for session.created
             response = await asyncio.wait_for(self._realtime_ws.recv(), timeout=10.0)
             event = json.loads(response)
+            if event.get("type") == "error":
+                raise RuntimeError(f"Realtime API rejected the session: {event.get('error', {})}")
             if event.get("type") != "session.created":
-                logger.warning(f"Unexpected first event: {event.get('type')}")
-            else:
-                logger.info("✅ OpenAI Realtime API session created")
+                raise RuntimeError(f"Unexpected first Realtime event: {event.get('type')}")
+            logger.info("✅ OpenAI Realtime API session created")
             
-            # Configure session for audio input transcription only (no output)
-            session_config = {
-                "type": "session.update",
-                "session": {
-                    "modalities": ["text"],  # Only text output (transcriptions)
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {
-                        "model": self._realtime_model
-                    },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 500,
-                    },
-                }
-            }
+            # The live transcription model accepts 24 kHz PCM. DecisionsAI's
+            # capture pipeline is 16 kHz, so chunks are resampled before send.
+            session_config = self._realtime_session_config()
             await self._realtime_ws.send(json.dumps(session_config))
             logger.info("✅ OpenAI Realtime API session configured for transcription")
             
@@ -242,8 +252,8 @@ class OpenAIWhisperSTTService(BaseSTTService):
             return
         
         try:
-            # Base64 encode the audio
-            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+            audio_24khz = self._resample_pcm16_16khz_to_24khz(audio_bytes)
+            audio_b64 = base64.b64encode(audio_24khz).decode('utf-8')
             event = {
                 "type": "input_audio_buffer.append",
                 "audio": audio_b64
@@ -252,6 +262,28 @@ class OpenAIWhisperSTTService(BaseSTTService):
         except Exception as e:
             logger.warning(f"Failed to send audio to Realtime API: {e}")
             self._realtime_connected = False
+
+    async def _commit_audio_realtime(self):
+        """Commit the current live buffer after DecisionsAI's local VAD ends a turn."""
+        if not self._realtime_connected or not self._realtime_ws:
+            return
+        try:
+            await self._realtime_ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        except Exception as e:
+            logger.warning(f"Failed to commit audio to Realtime API: {e}")
+            self._realtime_connected = False
+
+    @staticmethod
+    def _resample_pcm16_16khz_to_24khz(audio_bytes: bytes) -> bytes:
+        """Resample mono PCM16 from DecisionsAI's 16 kHz capture rate to 24 kHz."""
+        samples = np.frombuffer(audio_bytes, dtype=np.int16)
+        if samples.size < 2:
+            return audio_bytes
+        target_size = (samples.size * 3) // 2
+        source_positions = np.arange(samples.size, dtype=np.float64)
+        target_positions = np.arange(target_size, dtype=np.float64) * (2.0 / 3.0)
+        resampled = np.interp(target_positions, source_positions, samples)
+        return np.clip(np.rint(resampled), -32768, 32767).astype(np.int16).tobytes()
     
     async def _process_pending_transcripts(self, direction):
         """Process any pending transcripts from Realtime API"""
@@ -370,7 +402,7 @@ class OpenAIWhisperSTTService(BaseSTTService):
     # =========================================================================
     
     async def run_stt(self, audio: bytes):
-        """Process audio bytes using OpenAI Whisper batch API"""
+        """Process audio bytes using the configured OpenAI file model."""
         self._stt_cancelled = False
         
         sample_rate = 16000
@@ -407,7 +439,6 @@ class OpenAIWhisperSTTService(BaseSTTService):
                     transcript = self.client.audio.transcriptions.create(
                         model=self.model,
                         file=("audio.wav", wav_buffer.read(), "audio/wav"),
-                        language="en"
                     )
                     return transcript.text if transcript else None
                 except Exception as e:
@@ -566,9 +597,11 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 # If not connected, fall back to batch processing
                 if self._audio_buffer:
                     if self._is_hands_free and self._realtime_connected:
-                        # Audio was already streamed to Realtime API
-                        # Transcripts will arrive via _realtime_listener
-                        logger.debug("STT: Audio was streamed to Realtime API - awaiting transcription")
+                        # Audio was already streamed. Commit at the boundary
+                        # reported by DecisionsAI's local VAD.
+                        await self._commit_audio_realtime()
+                        self._audio_buffer = []
+                        logger.debug("STT: Committed Realtime audio - awaiting transcription")
                     else:
                         # Fall back to batch API
                         audio_bytes = b"".join(self._audio_buffer)
@@ -621,7 +654,7 @@ class OpenAIWhisperSTTService(BaseSTTService):
         return 16000
     
     def transcribe_file(self, audio_file_path: str) -> Optional[str]:
-        """Transcribe an audio file using the OpenAI Whisper API."""
+        """Transcribe an audio file using the configured OpenAI file model."""
         try:
             logger.info(f"OpenAIWhisperSTTService: Transcribing file {audio_file_path}")
             
@@ -629,7 +662,6 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 transcript = self.client.audio.transcriptions.create(
                     model=self.model,
                     file=audio_file,
-                    language="en"
                 )
                 text = transcript.text if transcript else None
                 logger.info(f"OpenAIWhisperSTTService: Transcription complete ({len(text) if text else 0} chars)")

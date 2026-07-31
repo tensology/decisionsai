@@ -23,6 +23,7 @@ from distr.core.agent.libs import (
     SpeakingStartedFrames, SpeakingStoppedFrames,
 )
 from distr.core.agent.services.stt.base import BaseSTTService
+from distr.core.agent.constants import DEFAULT_ASSEMBLYAI_MODEL
 
 try:
     from queue import Full
@@ -66,7 +67,7 @@ class AssemblyAISTTService(BaseSTTService):
 
         # AssemblyAI-specific state
         self.api_key = api_key
-        self.speech_model = model or "universal"
+        self.speech_model = model or DEFAULT_ASSEMBLYAI_MODEL
         aai.settings.api_key = api_key
 
         # V3 streaming state
@@ -85,6 +86,21 @@ class AssemblyAISTTService(BaseSTTService):
     # =========================================================================
     # V3 Streaming API Methods
     # =========================================================================
+
+    def _streaming_parameters(self):
+        """Build parameters for the selected AssemblyAI streaming model."""
+        return StreamingParameters(
+            sample_rate=16000,
+            speech_model=self.speech_model,
+            language_detection=True,
+        )
+
+    def _batch_config(self):
+        """Build a multilingual batch request for the selected model."""
+        return aai.TranscriptionConfig(
+            speech_models=[self.speech_model],
+            language_detection=True,
+        )
     
     def _on_begin(self, client, event: 'BeginEvent'):
         """Callback when v3 streaming session begins"""
@@ -155,10 +171,7 @@ class AssemblyAISTTService(BaseSTTService):
             await loop.run_in_executor(
                 None,
                 lambda: self._streaming_client.connect(
-                    StreamingParameters(
-                        sample_rate=16000,
-                        formatted_finals=True,
-                    )
+                    self._streaming_parameters()
                 )
             )
             
@@ -196,7 +209,12 @@ class AssemblyAISTTService(BaseSTTService):
             return
         
         try:
-            self._streaming_client.send_audio(audio_bytes)
+            stream = getattr(self._streaming_client, "stream", None)
+            if callable(stream):
+                stream(audio_bytes)
+            else:
+                # Compatibility with older v3 SDK releases.
+                self._streaming_client.send_audio(audio_bytes)
         except Exception as e:
             logger.warning(f"AssemblyAI v3: Error sending audio: {e}")
             self._streaming_connected = False
@@ -342,7 +360,7 @@ class AssemblyAISTTService(BaseSTTService):
                     return None
                 try:
                     transcriber = aai.Transcriber()
-                    config = aai.TranscriptionConfig(language_code="en")
+                    config = self._batch_config()
                     transcript = transcriber.transcribe(wav_buffer, config=config)
                     return transcript.text if transcript and transcript.text else None
                 except Exception as e:
@@ -544,7 +562,7 @@ class AssemblyAISTTService(BaseSTTService):
         try:
             logger.info(f"AssemblyAISTTService: Transcribing file {audio_file_path}")
             transcriber = aai.Transcriber()
-            config = aai.TranscriptionConfig(language_code="en")
+            config = self._batch_config()
             transcript = transcriber.transcribe(audio_file_path, config=config)
             text = transcript.text if transcript else None
             logger.info(f"AssemblyAISTTService: Transcription complete ({len(text) if text else 0} chars)")

@@ -234,9 +234,16 @@ VAD_BARGEIN_CONSECUTIVE_MIN = 6
 VAD_BARGEIN_CONSECUTIVE_MAX = 14
 
 # --- STT Defaults ---
-DEFAULT_OPENAI_WHISPER_MODEL = "whisper-1"
-DEFAULT_ASSEMBLYAI_MODEL = "universal-2"
-VALID_ASSEMBLYAI_MODELS = ["universal-2", "nano", "best"]
+DEFAULT_OPENAI_WHISPER_MODEL = "gpt-transcribe"
+DEFAULT_OPENAI_LIVE_TRANSCRIPTION_MODEL = "gpt-live-transcribe"
+VALID_OPENAI_TRANSCRIPTION_MODELS = [
+    "gpt-transcribe",
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+    "whisper-1",
+]
+DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
+VALID_ASSEMBLYAI_MODELS = ["universal-3-5-pro", "universal-2", "nano", "best"]
 DEFAULT_VOSK_MODEL_DIR = "vosk-model-en-us-0.22"
 
 # --- Misc ---

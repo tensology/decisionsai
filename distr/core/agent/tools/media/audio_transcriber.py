@@ -40,6 +40,7 @@ def _transcribe_with_assemblyai(audio_file_path: str, api_key: str) -> Optional[
         transcript = transcriber.transcribe(
             audio_file_path,
             config=aai.TranscriptionConfig(
+                speech_models=["universal-3-5-pro"],
                 speaker_labels=True,  # Enable diarization
                 language_detection=True
             )
@@ -376,4 +377,3 @@ class AudioTranscriberTool(BaseTool):
     async def _arun(self, audio_file_path: Optional[str] = None, use_assemblyai: bool = True, transcribe_all: bool = False, last_user_message: str = None, **kwargs) -> str:
         """Async version of _run."""
         return self._run(audio_file_path, use_assemblyai, transcribe_all, last_user_message, **kwargs)
-

@@ -143,7 +143,9 @@ def transcribe_wav_for_configured_engine(
             return "AssemblyAI", "ERROR: assemblyai_enabled / assemblyai_key not set in settings"
         from distr.core.agent.services.stt.assemblyai import AssemblyAISTTService
 
-        model = (stt_cfg.get("model") if isinstance(stt_cfg, dict) else None) or "universal-2"
+        from distr.core.agent.constants import DEFAULT_ASSEMBLYAI_MODEL
+
+        model = (stt_cfg.get("model") if isinstance(stt_cfg, dict) else None) or DEFAULT_ASSEMBLYAI_MODEL
         svc = AssemblyAISTTService(
             api_key=(settings.get("assemblyai_key") or "").strip(),
             model=model,
@@ -155,10 +157,11 @@ def transcribe_wav_for_configured_engine(
 
     if engine == "openai_whisper":
         if not settings.get("openai_enabled") or not (settings.get("openai_key") or "").strip():
-            return "OpenAI Whisper", "ERROR: openai_enabled / openai_key not set in settings"
+            return "OpenAI", "ERROR: openai_enabled / openai_key not set in settings"
         from distr.core.agent.services.stt.openai import OpenAIWhisperSTTService
+        from distr.core.agent.constants import DEFAULT_OPENAI_WHISPER_MODEL
 
-        model = (stt_cfg.get("model") if isinstance(stt_cfg, dict) else None) or "whisper-1"
+        model = (stt_cfg.get("model") if isinstance(stt_cfg, dict) else None) or DEFAULT_OPENAI_WHISPER_MODEL
         svc = OpenAIWhisperSTTService(
             api_key=(settings.get("openai_key") or "").strip(),
             model=model,
@@ -166,7 +169,7 @@ def transcribe_wav_for_configured_engine(
             is_hands_free=False,
         )
         text = svc.transcribe_file(os.path.abspath(wav_path)) or ""
-        return f"OpenAI Whisper ({model}, file)", (text or "").strip()
+        return f"OpenAI ({model}, file)", (text or "").strip()
 
     return str(engine or "unknown"), f"ERROR: no automated file transcribe for engine={engine!r}"
 

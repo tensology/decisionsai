@@ -13,7 +13,7 @@ from typing import Optional, List, Tuple
 
 from .constants import (
     DEFAULT_ASSEMBLYAI_MODEL, DEFAULT_OPENAI_WHISPER_MODEL,
-    VALID_ASSEMBLYAI_MODELS,
+    VALID_ASSEMBLYAI_MODELS, VALID_OPENAI_TRANSCRIPTION_MODELS,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,13 +88,17 @@ def resolve_stt_config(transcription_model: str) -> dict:
             result['model'] = model_part if model_part in VALID_ASSEMBLYAI_MODELS else DEFAULT_ASSEMBLYAI_MODEL
         else:
             result['model'] = DEFAULT_ASSEMBLYAI_MODEL
-    elif 'OpenAI Whisper' in transcription_model:
+    elif 'OpenAI' in transcription_model:
         result['engine'] = 'openai_whisper'
         if '(' in transcription_model and ')' in transcription_model:
             start = transcription_model.find('(') + 1
             end = transcription_model.find(')')
-            model_part = transcription_model[start:end]
-            result['model'] = model_part if 'whisper' in model_part else DEFAULT_OPENAI_WHISPER_MODEL
+            model_part = transcription_model[start:end].split('+', 1)[0].strip()
+            result['model'] = (
+                model_part
+                if model_part in VALID_OPENAI_TRANSCRIPTION_MODELS
+                else DEFAULT_OPENAI_WHISPER_MODEL
+            )
         else:
             result['model'] = DEFAULT_OPENAI_WHISPER_MODEL
     elif 'Whisper' in transcription_model or 'whisper' in transcription_model.lower():

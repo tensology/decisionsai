@@ -101,8 +101,8 @@ def register_routes(router, templates):
     _STT_CHOICES = {
         "vosk": "Vosk (Local & Offline)",
         "whisper": "Whisper.cpp (Local & Offline)",
-        "assemblyai": "AssemblyAI (universal-2)",
-        "openai_whisper": "OpenAI Whisper (whisper-1)",
+        "assemblyai": "AssemblyAI (universal-3-5-pro)",
+        "openai_whisper": "OpenAI (gpt-transcribe + gpt-live-transcribe)",
     }
 
     def _stt_short_from_full(raw: str) -> str:
@@ -111,9 +111,11 @@ def register_routes(router, templates):
             "vosk (local & offline)": "vosk",
             "whisper.cpp (local & offline)": "whisper",
             "assemblyai (universal-2)": "assemblyai",
+            "assemblyai (universal-3-5-pro)": "assemblyai",
             "assemblyai (nano)": "assemblyai",
             "assemblyai (best)": "assemblyai",
             "openai whisper (whisper-1)": "openai_whisper",
+            "openai (gpt-transcribe + gpt-live-transcribe)": "openai_whisper",
         }
         lowered = raw.lower()
         return stt_map_to_short.get(
@@ -133,7 +135,7 @@ def register_routes(router, templates):
         if stt_id == "openai_whisper":
             if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip():
                 return True, ""
-            return False, "OpenAI Whisper needs an enabled OpenAI API key in API Keys."
+            return False, "OpenAI transcription needs an enabled OpenAI API key in API Keys."
         return True, ""
 
     def _available_stt_options(settings: dict) -> tuple[list[dict], dict]:

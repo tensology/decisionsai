@@ -73,6 +73,7 @@ class AssemblyAIBackend(TranscriptionBackend):
             transcriber = aai.Transcriber()
             
             config = aai.TranscriptionConfig(
+                speech_models=["universal-3-5-pro"],
                 speaker_labels=options.get('speaker_labels', True) if options else True,
                 language_detection=options.get('language_detection', True) if options else True
             )
@@ -183,13 +184,13 @@ class WhisperCppBackend(TranscriptionBackend):
 
 
 class OpenAIWhisperBackend(TranscriptionBackend):
-    """OpenAI Whisper API backend"""
+    """OpenAI transcription API backend."""
     
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key
     
     def get_name(self) -> str:
-        return "OpenAI Whisper API"
+        return "OpenAI Transcription API"
     
     def is_available(self) -> Tuple[bool, str]:
         if not self.api_key:
@@ -213,26 +214,25 @@ class OpenAIWhisperBackend(TranscriptionBackend):
             
             # Read audio file and convert to format OpenAI expects
             # OpenAI accepts: mp3, mp4, mpeg, mpga, m4a, wav, webm
-            logger.info(f"OpenAI Whisper: Transcribing {audio_path}...")
+            logger.info(f"OpenAI: Transcribing {audio_path}...")
             
             with open(audio_path, 'rb') as audio_file:
                 transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
+                    model="gpt-transcribe",
                     file=audio_file,
-                    language=options.get('language', 'en') if options else 'en'
                 )
             
             metadata = {
-                'backend': 'OpenAI Whisper API',
-                'model': 'whisper-1',
+                'backend': 'OpenAI Transcription API',
+                'model': 'gpt-transcribe',
                 'status': 'success'
             }
             
-            logger.info(f"OpenAI Whisper: Transcription completed ({len(transcript.text)} chars)")
+            logger.info(f"OpenAI: Transcription completed ({len(transcript.text)} chars)")
             return transcript.text, metadata
             
         except Exception as e:
-            error_msg = f"OpenAI Whisper API error: {e}"
+            error_msg = f"OpenAI transcription API error: {e}"
             logger.error(error_msg, exc_info=True)
             return None, {'error': error_msg}
 
@@ -419,11 +419,11 @@ def check_transcription_backends(assemblyai_key: Optional[str] = None, openai_ke
         'reason': reason
     })
     
-    # Check OpenAI Whisper
+    # Check OpenAI transcription
     openai_backend = OpenAIWhisperBackend(api_key=openai_key)
     available, reason = openai_backend.is_available()
     backends.append({
-        'name': 'OpenAI Whisper API',
+        'name': 'OpenAI Transcription API',
         'available': available,
         'reason': reason
     })

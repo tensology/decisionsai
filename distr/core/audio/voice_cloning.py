@@ -116,7 +116,7 @@ def transcribe_audio_file(file_path: str) -> str:
 
     Priority:
     1) Already-loaded agent STT service (no model reload).
-    2) OpenAI Whisper API.
+    2) OpenAI transcription API.
     3) Cached local whisper model.
     """
     # 1) Try loaded agent STT service first (prevents reloading local models).
@@ -124,7 +124,7 @@ def transcribe_audio_file(file_path: str) -> str:
     if via_agent:
         return via_agent
 
-    # 2) Try OpenAI Whisper API.
+    # 2) Try the OpenAI transcription API.
     try:
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
@@ -133,10 +133,10 @@ def transcribe_audio_file(file_path: str) -> str:
             import openai
             client = openai.OpenAI(api_key=openai_key)
             with open(file_path, "rb") as f:
-                result = client.audio.transcriptions.create(model="whisper-1", file=f)
+                result = client.audio.transcriptions.create(model="gpt-transcribe", file=f)
             return result.text.strip()
     except Exception as e:
-        logger.warning("OpenAI Whisper transcription failed, trying fallback: %s", e)
+        logger.warning("OpenAI transcription failed, trying fallback: %s", e)
 
     # 3) Fallback: local whisper with in-memory model cache.
     try:
