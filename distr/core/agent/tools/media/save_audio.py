@@ -11,6 +11,7 @@ import logging
 import time
 import os
 import platform
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -18,6 +19,80 @@ from distr.core.agent.tools.base import get_platform_modifier_key
 from distr.core.agent.libs import pyautogui
 
 logger = logging.getLogger(__name__)
+
+EXPORT_CHUNK_MAX_ATTEMPTS = 3
+EXPORT_RETRY_DELAYS_SEC = (2.0, 5.0)
+
+
+def split_export_text(text: str, max_chars: int = 800) -> list[str]:
+    """Split long narration into provider-safe chunks at natural boundaries."""
+    value = str(text or "").strip()
+    if not value:
+        return []
+    sentences = re.split(r"(?<=[.!?])\s+|\n+", value)
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        sentence = sentence.strip()
+        while len(sentence) > max_chars:
+            split_at = sentence.rfind(" ", 0, max_chars + 1)
+            if split_at < max_chars // 2:
+                split_at = max_chars
+            piece, sentence = sentence[:split_at].strip(), sentence[split_at:].strip()
+            if current:
+                chunks.append(current)
+                current = ""
+            if piece:
+                chunks.append(piece)
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def generate_export_chunk(
+    text: str,
+    *,
+    provider: Optional[str],
+    voice: Optional[str],
+    max_attempts: int = EXPORT_CHUNK_MAX_ATTEMPTS,
+) -> str:
+    """Generate one resumable export chunk, retrying transient provider failures."""
+    from distr.core.audio.tts_handler import generate_tts_audio
+
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            generated_wav = generate_tts_audio(
+                text,
+                provider=provider,
+                voice=voice,
+                speed=1.0,
+            )
+            if generated_wav and os.path.exists(generated_wav):
+                return generated_wav
+            raise RuntimeError("TTS provider did not produce an audio file")
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            delay = EXPORT_RETRY_DELAYS_SEC[min(attempt - 1, len(EXPORT_RETRY_DELAYS_SEC) - 1)]
+            logger.warning(
+                "Save audio: Chunk attempt %d/%d failed (%s); retrying in %.1fs",
+                attempt,
+                max_attempts,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+    raise RuntimeError(
+        f"TTS provider failed after {max_attempts} attempts: {last_error}"
+    ) from last_error
 
 
 def get_clipboard_content():
@@ -156,7 +231,7 @@ class SaveAudioTool(BaseTool):
             has_audio = "audio" in text_lower or "sound" in text_lower
             
             # Only proceed if both "save" and "audio" are present (explicit command)
-            if not (has_save and has_audio):
+            if text_lower and not (has_save and has_audio):
                 logger.warning(f"Save audio: Invalid command - missing 'save' or 'audio' in: '{text}'")
                 return "Error: This tool should only be called for explicit 'save this as audio' or 'save clipboard to audio' commands."
             
@@ -186,31 +261,60 @@ class SaveAudioTool(BaseTool):
             try:
                 text_to_save = clipboard_text.strip()
                 logger.info(f"Save audio: Generating audio for {len(text_to_save)} characters")
-                from distr.core.audio.tts_handler import generate_tts_audio, wav_to_mp3
+                from distr.core.audio.tts_handler import wav_to_mp3
 
                 provider, voice = self._active_voice()
-                generated_wav = generate_tts_audio(
-                    text_to_save,
-                    provider=provider,
-                    voice=voice,
-                    speed=1.0,
-                )
-                if not generated_wav or not os.path.exists(generated_wav):
-                    return "Error: Failed to generate audio"
+                chunks = split_export_text(text_to_save)
+                generated_wavs = []
+                for index, chunk in enumerate(chunks, start=1):
+                    logger.info(
+                        "Save audio: Generating chunk %d/%d (%d characters)",
+                        index,
+                        len(chunks),
+                        len(chunk),
+                    )
+                    generated_wav = generate_export_chunk(
+                        chunk,
+                        provider=provider,
+                        voice=voice,
+                    )
+                    generated_wavs.append(generated_wav)
                 
                 # Step 4: Save audio in the requested format and folder.
                 output_format = str(audio_format or "mp3").strip().lower()
+                if "wav" in text_lower:
+                    output_format = "wav"
                 if output_format not in {"mp3", "wav"}:
                     return "Error: Audio format must be MP3 or WAV."
-                output_dir = get_output_path(destination)
+                resolved_destination = "desktop" if "desktop" in text_lower else destination
+                output_dir = get_output_path(resolved_destination)
                 os.makedirs(output_dir, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 stem = f"clipboard_speech_{timestamp}"
                 output_path = os.path.join(output_dir, f"{stem}.{output_format}")
+                source_wav = generated_wavs[0]
+                combined_wav = None
+                if len(generated_wavs) > 1:
+                    from pydub import AudioSegment
+
+                    combined = AudioSegment.empty()
+                    pause = AudioSegment.silent(duration=120)
+                    for index, wav_path in enumerate(generated_wavs):
+                        if index:
+                            combined += pause
+                        combined += AudioSegment.from_wav(wav_path)
+                    combined_wav = os.path.join(output_dir, f".{stem}.wav")
+                    combined.export(combined_wav, format="wav")
+                    source_wav = combined_wav
                 if output_format == "mp3":
-                    wav_to_mp3(generated_wav, output_path)
+                    wav_to_mp3(source_wav, output_path)
                 else:
-                    shutil.copyfile(generated_wav, output_path)
+                    shutil.copyfile(source_wav, output_path)
+                if combined_wav:
+                    try:
+                        os.remove(combined_wav)
+                    except OSError:
+                        logger.debug("Could not remove combined temporary WAV: %s", combined_wav)
 
                 logger.info("Save audio: Saved audio file to %s", output_path)
                 return f"Successfully saved audio to {output_path}"

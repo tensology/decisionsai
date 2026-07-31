@@ -1,5 +1,9 @@
 from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
-from distr.core.agent.tools.media.save_audio import SaveAudioTool
+from distr.core.agent.tools.media.save_audio import (
+    SaveAudioTool,
+    generate_export_chunk,
+    split_export_text,
+)
 
 
 class _DummyLlm(LLMSharedMixin):
@@ -14,6 +18,42 @@ class _DummyLlm(LLMSharedMixin):
 
     def _wire_request_tool_callback(self) -> None:
         pass
+
+
+def test_long_export_text_is_split_at_natural_boundaries() -> None:
+    text = "First sentence. " + ("long words " * 120) + "Final sentence."
+    chunks = split_export_text(text, max_chars=160)
+
+    assert len(chunks) > 2
+    assert all(0 < len(chunk) <= 160 for chunk in chunks)
+    assert " ".join(chunks).replace("  ", " ") == text.strip().replace("  ", " ")
+
+
+def test_export_chunk_retries_a_transient_provider_failure(monkeypatch, tmp_path) -> None:
+    generated_wav = tmp_path / "generated.wav"
+    generated_wav.write_bytes(b"wav")
+    attempts = []
+
+    def _generate(text, provider, voice, speed):
+        attempts.append((text, provider, voice, speed))
+        if len(attempts) == 1:
+            raise RuntimeError("temporary provider error")
+        return str(generated_wav)
+
+    monkeypatch.setattr("distr.core.audio.tts_handler.generate_tts_audio", _generate)
+    monkeypatch.setattr(
+        "distr.core.agent.tools.media.save_audio.time.sleep",
+        lambda _: None,
+    )
+
+    result = generate_export_chunk(
+        "Narration chunk",
+        provider="pixazo",
+        voice="custom_14",
+    )
+
+    assert result == str(generated_wav)
+    assert len(attempts) == 2
 
 
 def test_set_tts_service_refreshes_warmed_save_audio_tool(monkeypatch) -> None:

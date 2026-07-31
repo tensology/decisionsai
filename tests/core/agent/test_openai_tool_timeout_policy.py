@@ -7,6 +7,12 @@ def test_normal_tool_keeps_short_outer_ceiling():
     ) == 90.0
 
 
+def test_save_audio_allows_long_form_synthesis():
+    assert OpenAICompatibleLLMService._tool_execution_timeout_seconds(
+        "save_audio", {}
+    ) == 1800.0
+
+
 def test_pi_tool_has_cold_start_safe_fallback(monkeypatch):
     class BrokenSession:
         def __enter__(self):

@@ -112,6 +112,7 @@ VOXCPM_CLONE_URL = f"{GATEWAY_BASE}/voxcpm/v1/voice-cloning"
 VOXCPM_DIT_STEPS_MIN = 4
 VOXCPM_DIT_STEPS_MAX = 30
 VOXCPM_DIT_STEPS_DEFAULT = 6
+VOXCPM_REQUEST_TIMEOUT_SEC = 300
 
 
 def pixazo_dit_steps_from_settings(settings: dict | None = None) -> int:
@@ -270,11 +271,16 @@ def download_url_to_bytes(url: str, timeout: int = 120) -> bytes:
         raise
 
 
-def _post_json(api_key: str, url: str, body: dict[str, Any]) -> dict[str, Any]:
+def _post_json(
+    api_key: str,
+    url: str,
+    body: dict[str, Any],
+    timeout: int = VOXCPM_REQUEST_TIMEOUT_SEC,
+) -> dict[str, Any]:
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=_auth_headers(api_key), method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=120) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
@@ -343,4 +349,4 @@ def voxcpm_synthesize_wav_bytes(
         )
     else:
         media_url = voxcpm_text_to_speech_url(api_key, text, dit_steps=steps)
-    return download_url_to_bytes(media_url)
+    return download_url_to_bytes(media_url, timeout=VOXCPM_REQUEST_TIMEOUT_SEC)

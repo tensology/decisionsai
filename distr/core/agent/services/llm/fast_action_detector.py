@@ -826,8 +826,15 @@ class FastActionDetector:
              ActionType.FUNCTION_KEY, "function_key", {"key": "__FKEY_MATCH__", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             
             # === SAVE AUDIO ===
-            # "save clipboard to audio", "save clipboard as audio"
-            (re.compile(r'\bsave\s+(the\s+)?clipboard\s+(to|as)\s+audio\.?$', re.IGNORECASE), 
+            # Explicit clipboard narration requests, including polite wording,
+            # format, destination, and "entire clipboard" variants.
+            (re.compile(
+                r'^(?:(?:can|could|would)\s+you\s+)?save\s+(?:the\s+)?(?:entire\s+)?clipboard\s+'
+                r'(?:to|as)\s+(?:an?\s+)?audio(?:\s+file)?'
+                r'(?:\s+as\s+(?:an?\s+)?(?:mp3|wav))?'
+                r'(?:\s+(?:in|into|to)\s+(?:my\s+)?(?:downloads?|desktop)(?:\s+folder)?)?[?.]?$',
+                re.IGNORECASE,
+            ),
              ActionType.SAVE_AUDIO, "save_audio", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "save this as audio", "save as audio"
             (re.compile(r'\bsave\s+(this\s+)?as\s+audio\.?$', re.IGNORECASE), 

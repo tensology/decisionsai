@@ -43,6 +43,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
     _TOOL_EXECUTION_TIMEOUT_SEC = 90.0
+    _LONG_RUNNING_TOOL_TIMEOUTS = {"save_audio": 1800.0}
     _tool_execution_in_progress = False
     _DIRECT_SPEECH_TOOLS = {"speak_on_desktop"}
     _GENERIC_TOOL_COMPLETIONS = {"done", "done.", "finished", "finished."}
@@ -116,6 +117,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
         local-model loading).  The former blanket 90 second wrapper cancelled
         Pi before that policy could do its job.
         """
+        if func_name in cls._LONG_RUNNING_TOOL_TIMEOUTS:
+            return cls._LONG_RUNNING_TOOL_TIMEOUTS[func_name]
         if func_name != "pi_agent":
             return cls._TOOL_EXECUTION_TIMEOUT_SEC
 
