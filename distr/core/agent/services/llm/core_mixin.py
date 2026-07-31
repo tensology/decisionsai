@@ -1365,6 +1365,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     command_queue=self.command_queue,
                     confirmation_results_dict=self.confirmation_results_dict,
                 )
+            for tool in self._tools:
+                refresh_tts = getattr(tool, "set_tts_service", None)
+                if callable(refresh_tts):
+                    refresh_tts(tts_service)
             self._tools_dict = {tool.name: tool for tool in self._tools}
             self._wire_request_tool_callback()
             logger.debug(f"Reloaded {len(self._tools)} tools with TTS service")

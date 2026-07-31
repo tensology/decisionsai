@@ -1,7 +1,7 @@
 """
 Save Audio Tool for LangChain.
 
-This tool saves clipboard content as an audio file using TTS.
+This tool saves clipboard content as a WAV or MP3 file using TTS.
 """
 
 from typing import Any, Optional
@@ -74,10 +74,14 @@ def get_clipboard_content():
         return None
 
 
-def get_desktop_path():
-    """Get the desktop path for the current user."""
-    home = os.path.expanduser("~")
-    return os.path.join(home, "Desktop")
+def get_output_path(destination: str) -> str:
+    """Resolve the supported user-facing output folder names."""
+    folder = str(destination or "downloads").strip().lower()
+    if folder in {"download", "downloads"}:
+        return os.path.join(os.path.expanduser("~"), "Downloads")
+    if folder == "desktop":
+        return os.path.join(os.path.expanduser("~"), "Desktop")
+    raise ValueError("Choose Downloads or Desktop as the audio destination.")
 
 
 class SaveAudioTool(BaseTool):
@@ -97,7 +101,7 @@ class SaveAudioTool(BaseTool):
     - For "save this as audio": Copies current selection (Cmd+C), then gets clipboard content
     - For "save clipboard to audio": Uses clipboard directly (no copy needed)
     - Generates audio using TTS
-    - Saves audio file to Desktop
+    - Saves an MP3 or WAV file to Downloads or Desktop
     
     REQUIRED CALLS (EXPLICIT COMMANDS ONLY):
     - "save this as audio" -> CALL immediately
@@ -117,8 +121,18 @@ class SaveAudioTool(BaseTool):
     def __init__(self, tts_service=None, **kwargs):
         super().__init__(**kwargs)
         self._tts_service = tts_service
+
+    def set_tts_service(self, tts_service) -> None:
+        """Refresh the runtime TTS dependency after the tool cache is warmed."""
+        self._tts_service = tts_service
     
-    def _run(self, text: str = "", **kwargs) -> str:
+    def _run(
+        self,
+        text: str = "",
+        audio_format: str = "mp3",
+        destination: str = "downloads",
+        **kwargs,
+    ) -> str:
         """Execute save audio action."""
         try:
             # Validate that this is actually a save audio command
@@ -187,27 +201,41 @@ class SaveAudioTool(BaseTool):
                         except Exception as vc_err:
                             logger.error(f"Voice cloning failed in save_audio, using base voice: {vc_err}")
                 
-                # Step 4: Save audio to desktop
-                desktop_path = get_desktop_path()
+                # Step 4: Save audio in the requested format and folder.
+                output_format = str(audio_format or "mp3").strip().lower()
+                if output_format not in {"mp3", "wav"}:
+                    return "Error: Audio format must be MP3 or WAV."
+                output_dir = get_output_path(destination)
+                os.makedirs(output_dir, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"audio_{timestamp}.wav"
-                filepath = os.path.join(desktop_path, filename)
+                stem = f"clipboard_speech_{timestamp}"
+                wav_path = os.path.join(output_dir, f"{stem}.wav")
                 
                 # Convert audio to int16 and save as WAV
                 audio_int16 = (audio * 32767).astype(np.int16)
                 
                 # Use scipy.io.wavfile to save WAV file
                 if SCIPY_AVAILABLE:
-                    wavfile.write(filepath, sample_rate, audio_int16)
-                    logger.info(f"Save audio: Saved audio file to {filepath}")
-                    return f"Successfully saved audio to {filename} on Desktop"
+                    wavfile.write(wav_path, sample_rate, audio_int16)
                 elif SOUNDFILE_AVAILABLE:
                     # Fallback: use soundfile if scipy not available
-                    sf.write(filepath, audio_int16, sample_rate)
-                    logger.info(f"Save audio: Saved audio file to {filepath}")
-                    return f"Successfully saved audio to {filename} on Desktop"
+                    sf.write(wav_path, audio_int16, sample_rate)
                 else:
                     return "Error: Neither scipy nor soundfile is available. Please install one: pip install scipy or pip install soundfile"
+
+                output_path = wav_path
+                if output_format == "mp3":
+                    from distr.core.audio.tts_handler import wav_to_mp3
+
+                    output_path = os.path.join(output_dir, f"{stem}.mp3")
+                    wav_to_mp3(wav_path, output_path)
+                    try:
+                        os.remove(wav_path)
+                    except OSError:
+                        logger.debug("Could not remove temporary WAV file: %s", wav_path)
+
+                logger.info("Save audio: Saved audio file to %s", output_path)
+                return f"Successfully saved audio to {output_path}"
                 
             except Exception as e:
                 logger.error(f"Error generating audio: {e}", exc_info=True)
@@ -217,7 +245,16 @@ class SaveAudioTool(BaseTool):
             logger.error(f"Error in SaveAudioTool: {e}", exc_info=True)
             return f"Error executing save audio: {str(e)}"
     
-    async def _arun(self, text: str = "", **kwargs) -> str:
+    async def _arun(
+        self,
+        text: str = "",
+        audio_format: str = "mp3",
+        destination: str = "downloads",
+        **kwargs,
+    ) -> str:
         # Filter out any unexpected arguments
-        return self._run(text=text)
-
+        return self._run(
+            text=text,
+            audio_format=audio_format,
+            destination=destination,
+        )
