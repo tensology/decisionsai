@@ -583,8 +583,8 @@ class FastActionDetector:
              ActionType.WORKFLOW_CONTINUE, "continue_workflow", {"user_input": ""}, False, "llm_response"),
             
             # === EXIT ===
-            (re.compile(r'^(exit|quit|goodbye|bye|close)\s*(app|application|decisions)?\.?$', re.IGNORECASE), 
-             ActionType.EXIT_APP, "exit_app", {}, False, "llm_response"),
+            (re.compile(r'^(?:(exit|quit)(?:\s+(?:the\s+)?(app|application|decisions))?|close\s+(?:the\s+)?(app|application|decisions))\.?$', re.IGNORECASE),
+             ActionType.EXIT_APP, "exit_app", {"text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
             
             # === FOCUS / SWITCH APP (smart_open — always-on in tool retrieval) ===
             # Polite phrasing must not hit conversational_patterns ("can you ...") without these rows.

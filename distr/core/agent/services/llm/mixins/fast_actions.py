@@ -182,9 +182,9 @@ class FastActionMixin:
             return first[:300] if first else "I couldn't complete that screen action just now."
 
         first_line = body.split("\n")[0].strip()
-        if first_line and len(first_line) <= 160:
-            return first_line
-        return brief_tool_completion_message("screenshot_analyzer")
+        if first_line:
+            return first_line[:300]
+        return "I captured the screen, but couldn't produce a useful visual summary."
 
     @staticmethod
     def _fa_is_screenshot_pointer_request(original_text: str) -> bool:
@@ -205,7 +205,7 @@ class FastActionMixin:
             return False
         return bool(
             re.search(
-                r"\b(what|describe|read|tell me|show me|look at|analyze|analyse|identify|explain)\b",
+                r"\b(what|see|describe|read|tell me|show me|look at|analyze|analyse|identify|explain)\b",
                 text,
             )
         )

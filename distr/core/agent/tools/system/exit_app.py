@@ -8,8 +8,16 @@ from typing import Any, Optional
 from langchain.tools import BaseTool
 from pydantic import Field
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+
+_EXPLICIT_EXIT_RE = re.compile(
+    r"^(?:(?:exit|quit)(?:\s+(?:the\s+)?(?:app|application|decisions(?:ai)?))?"
+    r"|close\s+(?:the\s+)?(?:app|application|decisions(?:ai)?))\.?$",
+    re.IGNORECASE,
+)
 
 
 class ExitAppTool(BaseTool):
@@ -51,6 +59,10 @@ class ExitAppTool(BaseTool):
     
     def _run(self, text: str = "", **kwargs) -> str:
         try:
+            if not _EXPLICIT_EXIT_RE.fullmatch((text or "").strip()):
+                logger.warning("Exit app: ignored non-explicit request: %r", text)
+                return "I didn't close DecisionsAI because the request wasn't an explicit exit command."
+
             logger.info("Exit app: requesting exit")
             eq = self._event_queue
             if not eq and self._llm_service and hasattr(self._llm_service, 'event_queue'):

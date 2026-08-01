@@ -692,6 +692,20 @@ class ChatManagerCore:
                     logger.info("ChatManagerCore: skipping duplicate user message")
                     return
 
+            prior_turn_id = _load_chat_params(root.params).get("active_turn_chat_row_id")
+            if prior_turn_id:
+                try:
+                    from distr.core.chat_turns import terminal_turn
+
+                    terminal_turn(
+                        int(root_id),
+                        "turn_cancelled",
+                        turn_id=int(prior_turn_id),
+                        summary="Superseded by a new request.",
+                    )
+                except Exception:
+                    logger.debug("Could not cancel superseded chat turn", exc_info=True)
+
             if root_id not in self.chat_histories:
                 self.get_chat_history(root_id)
             entry: dict[str, Any] = {"role": "user", "content": cleaned_text}

@@ -504,7 +504,7 @@ def brief_tool_completion_message(tool_name: Optional[str]) -> str:
         "pause_action": "Paused the action.",
         "resume_action": "Resumed the action.",
     }
-    return table.get(key, "I've finished that step.")
+    return table.get(key, "The action completed.")
 
 
 def normalize_text(text: str) -> str:
