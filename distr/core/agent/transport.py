@@ -388,9 +388,17 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         from distr.core.agent.config_loader import resolve_system_default_output_device
 
         fresh_index, fresh_name = resolve_system_default_output_device()
-        if fresh_index is not None:
+        if fresh_name:
             self._resolved_default_output_name = fresh_name
-            return fresh_index
+            current_index = self._find_output_device_index_by_name(fresh_name)
+            if current_index is not None:
+                return current_index
+            logger.warning(
+                "Transport: Fresh system default '%s' (index %s) is not present in the "
+                "active PyAudio device list; ignoring the incompatible fresh index",
+                fresh_name,
+                fresh_index,
+            )
 
         try:
             info = self._py_audio.get_default_output_device_info()
@@ -416,12 +424,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             if int(info.get("maxOutputChannels") or 0) > 0:
                 yield int(info.get("index", index)), str(info.get("name") or ""), info
 
-    def _resolve_configured_output_device_index(self) -> Optional[int]:
-        configured_name = _normalize_output_device_name(self._output_device_name)
-        if configured_name == "System Default":
-            return self._get_default_output_device_index()
-
-        wanted = configured_name.lower()
+    def _find_output_device_index_by_name(self, configured_name: str) -> Optional[int]:
+        wanted = configured_name.strip().lower()
         output_devices = list(self._iter_output_devices())
         for index, name, _info in output_devices:
             if name == configured_name:
@@ -439,20 +443,28 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     index,
                 )
                 return index
+        return None
+
+    def _resolve_configured_output_device_index(self) -> Optional[int]:
+        configured_name = _normalize_output_device_name(self._output_device_name)
+        if configured_name == "System Default":
+            return self._get_default_output_device_index()
+
+        current_index = self._find_output_device_index_by_name(configured_name)
+        if current_index is not None:
+            return current_index
 
         try:
             from distr.core.agent.config_loader import resolve_device_index
 
             fresh_index = resolve_device_index(configured_name, is_input=False, sd_module=sd)
             if fresh_index is not None:
-                self._resolved_default_output_name = None
-                logger.info(
-                    "Transport: Output device match from fresh resolver: requested '%s' -> index %d (%s)",
+                logger.warning(
+                    "Transport: Output device '%s' exists only in the fresh device list at index %d; "
+                    "ignoring that index because the active PyAudio list does not contain the device",
                     configured_name,
                     fresh_index,
-                    self._describe_output_device(fresh_index),
                 )
-                return fresh_index
         except Exception as exc:
             logger.debug("Transport: Fresh output resolver failed for '%s': %s", configured_name, exc)
 
@@ -534,7 +546,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._output_stream_is_active()
             and getattr(self, "_failed_output_device_index", None) == target_index
             and not default_name_changed
-            and not channel_count_changed
         ):
             return
 
@@ -1405,18 +1416,24 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
         # Reopen on the PortAudio executor so we never close the stream while a
         # write is in flight (causes crackling / PortAudio -9986 errors).
+        def _switch_output_stream():
+            if self._reopen_output_stream(target_index):
+                return
+            self._failed_output_device_index = target_index
+            self._try_fallback_output_stream(target_index)
+
         if hasattr(self, '_executor'):
             try:
                 loop = asyncio.get_running_loop()
                 loop.run_in_executor(
                     self._executor,
-                    lambda: self._reopen_output_stream(target_index),
+                    _switch_output_stream,
                 )
                 return
             except RuntimeError:
                 pass
 
-        self._reopen_output_stream(target_index)
+        _switch_output_stream()
 
 
 class HotSwappableLocalAudioTransport(LocalAudioTransport):

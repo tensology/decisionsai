@@ -110,6 +110,21 @@ class EventHookDispatcher(QObject):
             logger.info("[Dispatcher] detail: priority hook '%s' active", old_hook)
             return
 
+        # Re-emitting the active hook may be useful to refresh its visual, but
+        # it must not replace the saved return state with itself. Otherwise a
+        # duplicate hands-free-listening event makes disable revert from
+        # hands_free_listening straight back to hands_free_listening.
+        if hook == old_hook:
+            self._log_avatar_state(old_hook, hook, trigger=trigger)
+            logger.debug(
+                "[Dispatcher] repeated hook preserves previous=%s",
+                self._previous_hook,
+            )
+            self.event_hook_fired.emit(hook, old_hook)
+            if hook == "thinking":
+                self._thinking_timer.start(self.THINKING_TIMEOUT_MS)
+            return
+
         if hook in TEMPORARY_HOOKS:
             self._previous_hook = self._current_hook
         else:

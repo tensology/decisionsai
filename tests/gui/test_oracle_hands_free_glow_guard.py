@@ -16,6 +16,7 @@ def test_manual_disable_clears_pending_hands_free_restore():
     assert "self._hands_free_before_dictation = False" in disable_block
     assert "self.disable_hands_free(clear_pending_restore=True)" in toggle_block
     assert "'clear_pending_restore': True" in disable_block
+    assert 'force_idle("hands_free_disable_safety")' in disable_block
 
 
 def test_dictation_suspend_does_not_persist_hands_free_off():
@@ -67,3 +68,36 @@ def test_hands_free_menu_syncs_label_and_check_state():
     OracleWindow._sync_hands_free_menu_state(harness)
     assert harness.hands_free_action.checked is True
     assert harness.hands_free_action.text == "Hands-Free Mode: ON"
+
+
+def test_disable_hands_free_forces_idle_when_revert_stack_is_stale():
+    from distr.gui.oracle.window import OracleWindow
+
+    class Dispatcher:
+        current_hook = "hands_free_listening"
+        forced_reasons = []
+
+        def revert_hook(self, _hook, *, trigger=None):
+            return None
+
+        def get_current_hook(self):
+            return self.current_hook
+
+        def force_idle(self, reason):
+            self.current_hook = "idle"
+            self.forced_reasons.append(reason)
+
+    class Harness:
+        is_hands_free = True
+        _event_dispatcher = Dispatcher()
+
+        def _sync_hands_free_menu_state(self):
+            return None
+
+    harness = Harness()
+
+    OracleWindow.disable_hands_free(harness, persist=False)
+
+    assert harness.is_hands_free is False
+    assert harness._event_dispatcher.current_hook == "idle"
+    assert harness._event_dispatcher.forced_reasons == ["hands_free_disable_safety"]

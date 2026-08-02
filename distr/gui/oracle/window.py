@@ -932,6 +932,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._sync_hands_free_menu_state()
         # Revert the hands-free hook now that the mode is off
         self._event_dispatcher.revert_hook("hands_free_listening", trigger="oracle:disable_hands_free")
+        if self._event_dispatcher.get_current_hook() == "hands_free_listening":
+            logging.warning("[ORACLE] hands-free hook still active after disable - forcing idle")
+            self._event_dispatcher.force_idle("hands_free_disable_safety")
         if clear_pending_restore:
             if getattr(self, '_hands_free_before_dictation', False):
                 logging.info("[ORACLE] Clearing pending hands-free restore after explicit manual disable")

@@ -217,3 +217,23 @@ def test_tts_response_reverts_to_previous_state(
         f"Expected revert to '{initial_hook}' after tts_response, "
         f"got '{dispatcher.get_current_hook()}'"
     )
+
+
+def test_repeated_hook_preserves_state_needed_for_revert() -> None:
+    dispatcher = EventHookDispatcher()
+    transitions = []
+    dispatcher.event_hook_fired.connect(
+        lambda current, previous: transitions.append((current, previous))
+    )
+
+    dispatcher.fire_hook("hands_free_listening", trigger="enable")
+    dispatcher.fire_hook("hands_free_listening", trigger="stt_confirmation")
+    dispatcher.revert_hook("hands_free_listening", trigger="disable")
+
+    assert dispatcher.get_current_hook() == "idle"
+    assert dispatcher.get_previous_hook() == "hands_free_listening"
+    assert transitions == [
+        ("hands_free_listening", "idle"),
+        ("hands_free_listening", "hands_free_listening"),
+        ("idle", "hands_free_listening"),
+    ]

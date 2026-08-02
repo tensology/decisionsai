@@ -55,20 +55,24 @@ class _FakeStream:
 
 
 class _FakePyAudio:
-    def __init__(self, default_index):
+    def __init__(self, default_index, devices=None):
         self.default_index = default_index
+        self.devices = devices or {
+            index: {"index": index, "name": f"Device {index}", "maxOutputChannels": 2}
+            for index in range(3)
+        }
         self.opened_indices = []
         self.opened_channels = []
         self.fail_indices = set()
 
     def get_default_output_device_info(self):
-        return {"index": self.default_index, "name": f"Device {self.default_index}"}
+        return self.devices[self.default_index]
 
     def get_device_info_by_index(self, index):
-        return {"index": index, "name": f"Device {index}", "maxOutputChannels": 2}
+        return self.devices[index]
 
     def get_device_count(self):
-        return 3
+        return len(self.devices)
 
     def get_format_from_width(self, width):
         return width
@@ -144,7 +148,7 @@ def test_transport_refreshes_when_system_default_name_changes_at_same_index(monk
     assert reopened == [2]
 
 
-def test_transport_uses_fresh_resolver_for_output_missing_from_cached_list(monkeypatch):
+def test_transport_does_not_reuse_fresh_index_from_incompatible_device_list(monkeypatch):
     monkeypatch.setattr(
         "distr.core.agent.config_loader.resolve_device_index",
         lambda device_name, is_input, sd_module=None: 4
@@ -158,7 +162,29 @@ def test_transport_uses_fresh_resolver_for_output_missing_from_cached_list(monke
     transport._resolved_default_output_name = "Device 2"
     transport._out_stream = _FakeStream(active=True)
 
-    assert transport._resolve_configured_output_device_index() == 4
+    assert transport._resolve_configured_output_device_index() == 2
+
+
+def test_transport_maps_fresh_system_default_name_into_active_pyaudio_list(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.agent.config_loader.resolve_system_default_output_device",
+        lambda: (5, "JBL TUNE510BT"),
+    )
+    devices = {
+        0: {"index": 0, "name": "DELL S2421HN", "maxOutputChannels": 2},
+        1: {"index": 1, "name": "MacBook Pro Microphone", "maxOutputChannels": 0},
+        2: {"index": 2, "name": "MacBook Pro Speakers", "maxOutputChannels": 2},
+        3: {"index": 3, "name": "Microsoft Teams Audio", "maxOutputChannels": 2},
+        4: {"index": 4, "name": "ZoomAudioDevice", "maxOutputChannels": 2},
+        5: {"index": 5, "name": "Yeti and Scarlett", "maxOutputChannels": 0},
+        6: {"index": 6, "name": "JBL TUNE510BT", "maxOutputChannels": 2},
+    }
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    transport._py_audio = _FakePyAudio(default_index=2, devices=devices)
+    transport._resolved_default_output_name = None
+
+    assert transport._get_default_output_device_index() == 6
+    assert transport._resolved_default_output_name == "JBL TUNE510BT"
 
 
 def test_transport_reopens_active_stream_when_output_channel_count_changes(monkeypatch):
@@ -270,7 +296,14 @@ def test_transport_opens_stereo_output_and_duplicates_mono_samples():
 def test_transport_falls_back_when_resolved_output_device_will_not_open(monkeypatch):
     _use_fake_py_audio_default(monkeypatch)
     transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
-    py_audio = _FakePyAudio(default_index=2)
+    py_audio = _FakePyAudio(
+        default_index=2,
+        devices={
+            0: {"index": 0, "name": "MacBook Pro Speakers", "maxOutputChannels": 2},
+            1: {"index": 1, "name": "MacBook Pro Microphone", "maxOutputChannels": 0},
+            2: {"index": 2, "name": "Stale default route", "maxOutputChannels": 1},
+        },
+    )
     py_audio.fail_indices.add(2)
     transport._py_audio = py_audio
     transport._params = SimpleNamespace(output_device_index=2, audio_out_channels=1)
@@ -295,3 +328,31 @@ def test_transport_falls_back_when_resolved_output_device_will_not_open(monkeypa
     transport._ensure_output_stream_for_configured_device(reason="next audio frame")
 
     assert py_audio.opened_indices == [2, 0]
+
+
+def test_set_device_immediately_opens_fallback_when_requested_route_fails(monkeypatch):
+    _use_fake_py_audio_default(monkeypatch)
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    py_audio = _FakePyAudio(default_index=2)
+    py_audio.fail_indices.add(2)
+    transport._py_audio = py_audio
+    transport._params = SimpleNamespace(output_device_index=0, audio_out_channels=2)
+    transport._output_device_name = "Device 0"
+    transport._resolved_output_device_index = 0
+    transport._resolved_default_output_name = None
+    transport._last_opened_default_output_name = None
+    transport._out_stream = _FakeStream(active=True)
+    transport._sample_rate = 24000
+    transport._original_sample_rate = 24000
+    transport._stream_error_count = 0
+    transport._stream_error_logged = False
+    transport._output_channels = 2
+    transport._failed_output_device_index = None
+    transport._hardware_check_disabled = False
+
+    transport.set_device(2, "Device 2")
+
+    assert py_audio.opened_indices == [2, 0]
+    assert transport._resolved_output_device_index == 0
+    assert transport._output_stream_is_active() is True
+    assert transport._failed_output_device_index == 2
