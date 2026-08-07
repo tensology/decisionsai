@@ -101,3 +101,87 @@ def test_disable_hands_free_forces_idle_when_revert_stack_is_stale():
     assert harness.is_hands_free is False
     assert harness._event_dispatcher.current_hook == "idle"
     assert harness._event_dispatcher.forced_reasons == ["hands_free_disable_safety"]
+
+
+class _InteractionDispatcher:
+    def __init__(self, current_hook):
+        self.current_hook = current_hook
+        self.forced_reasons = []
+        self.fired = []
+
+    def get_current_hook(self):
+        return self.current_hook
+
+    def force_idle(self, reason):
+        self.forced_reasons.append(reason)
+        self.current_hook = "idle"
+
+    def fire_hook(self, hook, *, trigger=None):
+        self.fired.append((hook, trigger))
+        self.current_hook = hook
+
+
+def _interaction_harness(current_hook, **state):
+    class Harness:
+        is_dictating = False
+        _dictation_hotkey_active = False
+        hold_to_talk_active = False
+        ptt_requested = False
+        is_hands_free = False
+
+    harness = Harness()
+    harness._event_dispatcher = _InteractionDispatcher(current_hook)
+    for name, value in state.items():
+        setattr(harness, name, value)
+    return harness
+
+
+def test_interaction_reconciler_clears_stale_hands_free_glow_after_dictation_release():
+    from distr.gui.oracle.window import OracleWindow
+
+    harness = _interaction_harness("hands_free_listening")
+
+    OracleWindow._reconcile_interaction_visual_state(harness, "dictation_hotkey_release")
+
+    assert harness._event_dispatcher.current_hook == "idle"
+    assert harness._event_dispatcher.forced_reasons == [
+        "interaction_reconcile:dictation_hotkey_release"
+    ]
+
+
+def test_interaction_reconciler_clears_stale_hands_free_glow_after_ptt_release():
+    from distr.gui.oracle.window import OracleWindow
+
+    harness = _interaction_harness("hands_free_listening")
+
+    OracleWindow._reconcile_interaction_visual_state(harness, "ptt_release")
+
+    assert harness._event_dispatcher.current_hook == "idle"
+    assert harness._event_dispatcher.forced_reasons == [
+        "interaction_reconcile:ptt_release"
+    ]
+
+
+def test_interaction_reconciler_preserves_non_interaction_agent_visual():
+    from distr.gui.oracle.window import OracleWindow
+
+    harness = _interaction_harness("thinking")
+
+    OracleWindow._reconcile_interaction_visual_state(harness, "dictation_stopped")
+
+    assert harness._event_dispatcher.current_hook == "thinking"
+    assert harness._event_dispatcher.forced_reasons == []
+    assert harness._event_dispatcher.fired == []
+
+
+def test_interaction_reconciler_repairs_visual_for_active_runtime_mode():
+    from distr.gui.oracle.window import OracleWindow
+
+    harness = _interaction_harness("idle", is_hands_free=True)
+
+    OracleWindow._reconcile_interaction_visual_state(harness, "capture_release")
+
+    assert harness._event_dispatcher.current_hook == "hands_free_listening"
+    assert harness._event_dispatcher.fired == [
+        ("hands_free_listening", "oracle:interaction_reconcile:capture_release")
+    ]

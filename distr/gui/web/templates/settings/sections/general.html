@@ -354,8 +354,45 @@
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4 items-stretch">
+                    <!-- OpenAI TTS model / instructions -->
+                    <div id="openai_voice_options" class="hidden md:col-span-2 w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                            <div>
+                                <label for="openai_tts_model" class="block text-sm font-semibold text-[#ececf1] mb-2">OpenAI TTS model:</label>
+                                <select id="openai_tts_model" name="openai_tts_model"
+                                        class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                                focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
+                                    <option value="tts-1">tts-1 (low latency)</option>
+                                    <option value="tts-1-hd">tts-1-hd (higher quality)</option>
+                                    <option value="gpt-4o-mini-tts">gpt-4o-mini-tts (steerable)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="openai_tts_instructions" class="block text-sm font-semibold text-[#ececf1] mb-2">Speaking instructions:</label>
+                                <input type="text" id="openai_tts_instructions" name="openai_tts_instructions"
+                                       placeholder="e.g. Warm, calm, moderate pace (gpt-4o-mini-tts only)"
+                                       class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                               focus:outline-none focus:border-[#10a37f] transition-colors">
+                            </div>
+                        </div>
+                        <p class="text-xs text-[#7a7c8c] mt-2">
+                            Instructions are sent only for gpt-4o-mini-tts. Legacy tts-1 / tts-1-hd ignore them.
+                        </p>
+                    </div>
+
                     <!-- ElevenLabs voice options -->
                     <div id="elevenlabs_voice_options" class="hidden md:col-span-2 w-full border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                        <div class="mb-4">
+                            <label for="elevenlabs_tts_model" class="block text-sm font-semibold text-[#ececf1] mb-2">ElevenLabs TTS model:</label>
+                            <select id="elevenlabs_tts_model" name="elevenlabs_tts_model"
+                                    class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                            focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
+                                <option value="eleven_flash_v2_5">eleven_flash_v2_5 (default, low latency)</option>
+                                <option value="eleven_turbo_v2_5">eleven_turbo_v2_5</option>
+                                <option value="eleven_multilingual_v2">eleven_multilingual_v2</option>
+                                <option value="eleven_v3">eleven_v3</option>
+                            </select>
+                        </div>
                         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                             <div>
                                 <label for="elevenlabs_stability" class="block text-sm font-semibold text-[#ececf1] mb-2">Stability:</label>

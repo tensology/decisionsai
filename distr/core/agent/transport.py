@@ -379,6 +379,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._stream_error_count = 0
         self._stream_error_logged = False  # Only log the first error per failure burst
         self._failed_output_device_index = None
+        # The parent transport owns the PyAudio instance created at startup.
+        # When CoreAudio's device registry changes, output may adopt a fresh
+        # instance without disturbing the input transport's live backend.
+        self._owns_py_audio = False
+        self._pending_output_backend_refresh_name = None
         
         # State machine
         self._state = AudioPlaybackState.IDLE
@@ -393,9 +398,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             current_index = self._find_output_device_index_by_name(fresh_name)
             if current_index is not None:
                 return current_index
+            self._pending_output_backend_refresh_name = fresh_name
             logger.warning(
                 "Transport: Fresh system default '%s' (index %s) is not present in the "
-                "active PyAudio device list; ignoring the incompatible fresh index",
+                "active PyAudio device list; scheduling an output backend refresh",
                 fresh_name,
                 fresh_index,
             )
@@ -403,30 +409,35 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         try:
             info = self._py_audio.get_default_output_device_info()
             index = int(info.get("index")) if info is not None else None
-            if index is not None:
+            if index is not None and not fresh_name:
                 self._resolved_default_output_name = str(info.get("name") or "").strip() or None
             return index
         except Exception as exc:
             logger.warning("Transport: Could not resolve system default output device: %s", exc)
             return None
 
-    def _iter_output_devices(self):
+    def _iter_output_devices(self, py_audio_backend=None):
+        backend = py_audio_backend or self._py_audio
         try:
-            count = self._py_audio.get_device_count()
+            count = backend.get_device_count()
         except Exception as exc:
             logger.warning("Transport: Could not enumerate output devices: %s", exc)
             return
         for index in range(count):
             try:
-                info = self._py_audio.get_device_info_by_index(index)
+                info = backend.get_device_info_by_index(index)
             except Exception:
                 continue
             if int(info.get("maxOutputChannels") or 0) > 0:
                 yield int(info.get("index", index)), str(info.get("name") or ""), info
 
-    def _find_output_device_index_by_name(self, configured_name: str) -> Optional[int]:
+    def _find_output_device_index_by_name(
+        self,
+        configured_name: str,
+        py_audio_backend=None,
+    ) -> Optional[int]:
         wanted = configured_name.strip().lower()
-        output_devices = list(self._iter_output_devices())
+        output_devices = list(self._iter_output_devices(py_audio_backend))
         for index, name, _info in output_devices:
             if name == configured_name:
                 return index
@@ -459,9 +470,10 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
             fresh_index = resolve_device_index(configured_name, is_input=False, sd_module=sd)
             if fresh_index is not None:
+                self._pending_output_backend_refresh_name = configured_name
                 logger.warning(
                     "Transport: Output device '%s' exists only in the fresh device list at index %d; "
-                    "ignoring that index because the active PyAudio list does not contain the device",
+                    "scheduling an output backend refresh",
                     configured_name,
                     fresh_index,
                 )
@@ -473,6 +485,64 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             configured_name,
         )
         return self._get_default_output_device_index()
+
+    def _reopen_with_refreshed_output_backend(self, device_name: str) -> Optional[int]:
+        """Refresh PortAudio's device registry and open the requested route.
+
+        A PyAudio instance keeps the CoreAudio device list it observed when it
+        was created. Bluetooth devices connected later therefore cannot be
+        addressed by that instance, even though a fresh sounddevice query sees
+        them. Output gets its own refreshed PyAudio instance so input capture
+        can continue using the parent transport's original instance.
+        """
+        try:
+            refreshed_backend = pyaudio.PyAudio()
+        except Exception as exc:
+            logger.error("Transport: Could not refresh the output audio backend: %s", exc)
+            return None
+
+        refreshed_index = self._find_output_device_index_by_name(
+            device_name,
+            py_audio_backend=refreshed_backend,
+        )
+        if refreshed_index is None:
+            try:
+                refreshed_backend.terminate()
+            except Exception:
+                pass
+            logger.warning(
+                "Transport: Refreshed output backend still does not contain '%s'",
+                device_name,
+            )
+            return None
+
+        previous_backend = self._py_audio
+        previous_backend_owned = bool(getattr(self, "_owns_py_audio", False))
+        self._py_audio = refreshed_backend
+        self._owns_py_audio = True
+        self._params.output_device_index = refreshed_index
+
+        if self._reopen_output_stream(refreshed_index):
+            self._pending_output_backend_refresh_name = None
+            if previous_backend_owned:
+                try:
+                    previous_backend.terminate()
+                except Exception as exc:
+                    logger.debug("Transport: Could not close superseded output backend: %s", exc)
+            logger.info(
+                "Transport: Refreshed output backend and adopted '%s' at index %s",
+                device_name,
+                refreshed_index,
+            )
+            return refreshed_index
+
+        self._py_audio = previous_backend
+        self._owns_py_audio = previous_backend_owned
+        try:
+            refreshed_backend.terminate()
+        except Exception:
+            pass
+        return None
 
     def _describe_output_device(self, device_index: Optional[int]) -> str:
         if device_index is None:
@@ -522,6 +592,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
     def _ensure_output_stream_for_configured_device(self, *, reason: str) -> None:
         target_index = self._resolve_configured_output_device_index()
+        pending_refresh_name = getattr(self, "_pending_output_backend_refresh_name", None)
+        if pending_refresh_name:
+            refreshed_index = self._reopen_with_refreshed_output_backend(pending_refresh_name)
+            if refreshed_index is not None:
+                target_index = refreshed_index
         current_index = self._resolved_output_device_index
         target_channels = self._device_output_channels(target_index)
         configured_name = _normalize_output_device_name(self._output_device_name)
@@ -540,6 +615,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             and self._params.output_device_index == target_index
             and not default_name_changed
             and not channel_count_changed
+            and not getattr(self, "_pending_output_backend_refresh_name", None)
         ):
             return
         if (
@@ -1401,6 +1477,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             and self._resolved_output_device_index == target_index
             and self._output_stream_is_active()
             and not default_name_changed
+            and not getattr(self, "_pending_output_backend_refresh_name", None)
         ):
             return
 
@@ -1417,6 +1494,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         # Reopen on the PortAudio executor so we never close the stream while a
         # write is in flight (causes crackling / PortAudio -9986 errors).
         def _switch_output_stream():
+            pending_refresh_name = getattr(self, "_pending_output_backend_refresh_name", None)
+            if pending_refresh_name:
+                refreshed_index = self._reopen_with_refreshed_output_backend(pending_refresh_name)
+                if refreshed_index is not None:
+                    return
             if self._reopen_output_stream(target_index):
                 return
             self._failed_output_device_index = target_index
@@ -1434,6 +1516,15 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 pass
 
         _switch_output_stream()
+
+    async def cleanup(self):
+        await super().cleanup()
+        if getattr(self, "_owns_py_audio", False):
+            try:
+                self._py_audio.terminate()
+            except Exception as exc:
+                logger.debug("Transport: Could not close refreshed output backend: %s", exc)
+            self._owns_py_audio = False
 
 
 class HotSwappableLocalAudioTransport(LocalAudioTransport):

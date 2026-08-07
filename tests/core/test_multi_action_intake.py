@@ -4,6 +4,7 @@ from distr.core.agent.services.llm.bulk_instruction import (
     should_bypass_fast_action_detection,
 )
 from distr.core.agent.services.llm.fast_action_detector import ActionType, detect_fast_action
+from distr.core.agent.services.llm.fast_action_detector import DetectedAction
 from distr.core.automation_orchestrator import automation_prompt
 
 
@@ -63,6 +64,39 @@ def test_direct_run_action_still_detects_fast_action():
     detected = detect_fast_action(text)
     assert detected.action_type == ActionType.ACTION_PLAY
     assert detected.tool_args.get("action_name") == "fuzzy"
+
+
+def test_again_replays_recent_successful_fast_action():
+    import time
+
+    previous = DetectedAction(
+        action_type=ActionType.MOUSE_MOVEMENT,
+        tool_name="mouse_movement",
+        tool_args={"action": "move", "text": "move the mouse down again"},
+        needs_copy_first=False,
+        response_type="done",
+        confidence=0.95,
+        original_text="move the mouse down again",
+    )
+
+    class _StubMixin:
+        _messages = [{"role": "user", "content": "again."}]
+        _processed_fast_actions = set()
+        _bypass_fast_actions_for_turn = False
+        _last_repeatable_fast_action = previous
+        _last_repeatable_fast_action_at = time.monotonic()
+
+        def _check_fast_actions(self):
+            from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
+
+            return LLMSharedMixin._check_fast_actions(self)
+
+    replay = _StubMixin()._check_fast_actions()
+
+    assert replay is not previous
+    assert replay.tool_name == "mouse_movement"
+    assert replay.tool_args == previous.tool_args
+    assert replay.original_text == "again."
 
 
 def test_multi_action_packets_are_not_re_augmented():

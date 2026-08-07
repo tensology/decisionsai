@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 class GlobalPttHotkeyListener:
+    """Listen for a two-modifier combo and emit press/release callbacks."""
+
     @staticmethod
     def _modifier_tokens(modifier: str) -> Set[str]:
         if not modifier:
@@ -28,7 +30,44 @@ class GlobalPttHotkeyListener:
         parts = modifier.replace("+", "_").split("_")
         return {aliases.get(token, token) for token in parts if token}
 
-    """Listen for a two-modifier combo and emit press/release callbacks."""
+    @classmethod
+    def _most_specific_action_matches(
+        cls,
+        action_combos: dict,
+        *,
+        pressed_modifiers: Set[str],
+        normalized_key: str | None = None,
+        modifier_only: bool = False,
+    ) -> list[tuple[str, Set[str], str]]:
+        """Return chord matches, keeping only the most-specific modifier sets.
+
+        Subset matching lets ``cmd+1`` also fire while ``option+cmd+1`` is held.
+        Preferring the longest matching modifier set keeps skin-select / nav
+        chords from being stolen by shorter snippet paste chords.
+        """
+        matches: list[tuple[int, str, Set[str], str]] = []
+        for action_name, combo in (action_combos or {}).items():
+            if not combo or len(combo) != 2:
+                continue
+            action_modifier, action_key = combo
+            action_key = str(action_key or "").strip().lower()
+            if modifier_only:
+                if action_key:
+                    continue
+            elif normalized_key != action_key:
+                continue
+            action_modifiers = cls._modifier_tokens(action_modifier)
+            if not action_modifiers.issubset(pressed_modifiers):
+                continue
+            matches.append((len(action_modifiers), action_name, action_modifiers, action_key))
+        if not matches:
+            return []
+        best = max(length for length, *_rest in matches)
+        return [
+            (action_name, action_modifiers, action_key)
+            for length, action_name, action_modifiers, action_key in matches
+            if length == best
+        ]
 
     def __init__(
         self,
@@ -75,6 +114,7 @@ class GlobalPttHotkeyListener:
         self._dictation_active = False
         self._ticket_dictation_active = False
         self._active_modifier_only_shortcuts: Set[Tuple[str, str]] = set()
+        self._pending_release_actions: dict[str, Tuple[Set[str], str]] = {}
         self._listener = None
         self._lock = threading.Lock()
 
@@ -106,6 +146,7 @@ class GlobalPttHotkeyListener:
             self._dictation_active = False
             self._ticket_dictation_active = False
             self._active_modifier_only_shortcuts.clear()
+            self._pending_release_actions.clear()
 
         if was_active:
             try:
@@ -152,6 +193,7 @@ class GlobalPttHotkeyListener:
             self._dictation_active = False
             self._ticket_dictation_active = False
             self._active_modifier_only_shortcuts.clear()
+            self._pending_release_actions.clear()
 
         if was_active:
             try:
@@ -168,6 +210,33 @@ class GlobalPttHotkeyListener:
                 self._on_ticket_dictation_released()
             except Exception:
                 logger.debug("[PTT HOTKEY] Ticket dictation release callback failed during reset", exc_info=True)
+
+    def _load_action_combos(self) -> dict:
+        """Read action chords outside the listener lock (may hit settings/DB)."""
+        if not self._get_action_combos:
+            return {}
+        try:
+            return self._get_action_combos() or {}
+        except Exception:
+            logger.debug("[PTT HOTKEY] Failed to load action combos", exc_info=True)
+            return {}
+
+    def _queue_matched_actions(
+        self,
+        matches: list[tuple[str, Set[str], str]],
+        emit_action_names: list[str],
+    ) -> None:
+        for action_name, action_modifiers, action_key in matches:
+            if action_name.startswith("paste_snippet_"):
+                # A paste emits Command+V. Wait until the user has released the
+                # entire snippet chord so its physical modifiers cannot turn
+                # that into Ctrl+Shift+Cmd+V or trigger a modifier-only action.
+                self._pending_release_actions[action_name] = (
+                    action_modifiers,
+                    action_key,
+                )
+            else:
+                emit_action_names.append(action_name)
 
     def _on_press(self, key) -> None:
         normalized_key = self._normalize_key(key)
@@ -190,6 +259,10 @@ class GlobalPttHotkeyListener:
         emit_dictation_pressed = False
         emit_ticket_dictation_pressed = False
 
+        # ponytail: load combos before taking the lock — snippet rows hit SQLite,
+        # and doing that under _lock deadlocks with shortcut refresh on the UI thread.
+        action_combos = self._load_action_combos() if self._on_hotkey_action else {}
+
         with self._lock:
             down_combo = self._get_size_down_combo() if self._get_size_down_combo else None
             up_combo = self._get_size_up_combo() if self._get_size_up_combo else None
@@ -209,14 +282,15 @@ class GlobalPttHotkeyListener:
                 record_modifiers = self._modifier_tokens(record_modifier)
                 if record_modifiers.issubset(self._pressed_modifiers) and normalized_key == record_key:
                     emit_record_toggle = True
-            if self._get_action_combos and self._on_hotkey_action:
-                for action_name, combo in (self._get_action_combos() or {}).items():
-                    if not combo or len(combo) != 2:
-                        continue
-                    action_modifier, action_key = combo
-                    action_modifiers = self._modifier_tokens(action_modifier)
-                    if action_modifiers.issubset(self._pressed_modifiers) and normalized_key == action_key:
-                        emit_action_names.append(action_name)
+            if action_combos and self._on_hotkey_action:
+                self._queue_matched_actions(
+                    self._most_specific_action_matches(
+                        action_combos,
+                        pressed_modifiers=self._pressed_modifiers,
+                        normalized_key=normalized_key,
+                    ),
+                    emit_action_names,
+                )
             if self._get_dictation_combo and self._on_dictation_pressed:
                 dict_combo = self._get_dictation_combo()
                 if dict_combo and len(dict_combo) == 2:
@@ -282,18 +356,17 @@ class GlobalPttHotkeyListener:
                             emit_size_up = True
                         elif action_name == "__record_toggle__":
                             emit_record_toggle = True
-                if self._get_action_combos and self._on_hotkey_action:
-                    for action_name, combo_tuple in (self._get_action_combos() or {}).items():
-                        if not combo_tuple or len(combo_tuple) != 2:
+                if action_combos and self._on_hotkey_action:
+                    for action_name, action_modifiers, _action_key in self._most_specific_action_matches(
+                        action_combos,
+                        pressed_modifiers=self._pressed_modifiers,
+                        modifier_only=True,
+                    ):
+                        signature = (action_name, "_".join(sorted(action_modifiers)))
+                        if signature in self._active_modifier_only_shortcuts:
                             continue
-                        action_modifier, action_key = combo_tuple
-                        if action_key:
-                            continue
-                        action_modifiers = self._modifier_tokens(action_modifier)
-                        signature = (action_name, action_modifier)
-                        if action_modifiers.issubset(self._pressed_modifiers) and signature not in self._active_modifier_only_shortcuts:
-                            self._active_modifier_only_shortcuts.add(signature)
-                            emit_action_names.append(action_name)
+                        self._active_modifier_only_shortcuts.add(signature)
+                        emit_action_names.append(action_name)
                 if matched and not self._combo_active:
                     self._combo_active = True
                     emit_combo_pressed = True
@@ -389,6 +462,7 @@ class GlobalPttHotkeyListener:
             self._on_ticket_dictation_released()
 
         if not mod:
+            self._emit_actions_ready_after_release()
             return
 
         with self._lock:
@@ -414,6 +488,24 @@ class GlobalPttHotkeyListener:
 
         if should_emit:
             self._on_combo_released()
+        self._emit_actions_ready_after_release()
+
+    def _emit_actions_ready_after_release(self) -> None:
+        """Emit deferred actions once their full physical chord is released."""
+        ready_action_names: list[str] = []
+        with self._lock:
+            for action_name, (action_modifiers, action_key) in list(
+                self._pending_release_actions.items()
+            ):
+                key_released = action_key not in self._pressed_keys
+                modifiers_released = action_modifiers.isdisjoint(self._pressed_modifiers)
+                if key_released and modifiers_released:
+                    ready_action_names.append(action_name)
+                    self._pending_release_actions.pop(action_name, None)
+
+        if self._on_hotkey_action:
+            for action_name in ready_action_names:
+                self._on_hotkey_action(action_name)
 
     @staticmethod
     def _normalize_key(key) -> Optional[str]:

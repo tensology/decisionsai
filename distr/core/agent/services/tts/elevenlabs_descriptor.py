@@ -11,7 +11,7 @@ import io
 import logging
 from typing import Any, Optional
 
-from distr.core.agent.services.tts.elevenlabs_config import ELEVENLABS_TTS_MODEL_ID
+from distr.core.agent.services.tts.elevenlabs_config import resolve_elevenlabs_tts_model
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
 
 logger = logging.getLogger(__name__)
@@ -136,6 +136,7 @@ class ElevenLabsDescriptor(TTSProviderDescriptor):
             style=float(settings.get('elevenlabs_style', ELEVENLABS_DEFAULTS['style'])),
             use_speaker_boost=bool(settings.get('elevenlabs_use_speaker_boost', ELEVENLABS_DEFAULTS['use_speaker_boost'])),
             on_quota_exceeded=settings.get('_on_quota_exceeded'),
+            model_id=resolve_elevenlabs_tts_model(settings.get('elevenlabs_tts_model')),
         )
         # Stash resolved voice name on the service so caller can read it
         service._resolved_voice_name = voice_name
@@ -200,7 +201,7 @@ class ElevenLabsDescriptor(TTSProviderDescriptor):
             audio_stream = client.text_to_speech.convert(
                 text=text,
                 voice_id=resolved_voice,
-                model_id=ELEVENLABS_TTS_MODEL_ID,
+                model_id=resolve_elevenlabs_tts_model(settings.get("elevenlabs_tts_model")),
                 output_format="mp3_44100_128",
                 voice_settings={
                     "stability": stability,

@@ -20,13 +20,6 @@ try:
 except ImportError:
     sd = None
 
-# Cache for query_macos_devices — system_profiler is expensive (hammers coreaudiod).
-# Only re-run it at most once every 30 seconds.
-_macos_device_cache: tuple = ([], [])   # (outputs, inputs)
-_macos_device_cache_ts: float = 0.0
-_MACOS_DEVICE_CACHE_TTL: float = 30.0  # seconds
-
-
 def get_device_type(device_name: str) -> str:
     """Determine device type from device name."""
     name_lower = device_name.lower()
@@ -74,178 +67,51 @@ def query_native_devices():
         return query_unix_devices()
 
 
-def query_windows_devices():
-    """Query devices using sounddevice on Windows (cross-platform, works on all OSes)."""
+def _query_sounddevice_devices():
+    """Enumerate PortAudio/sounddevice devices. id is always the device name (stable)."""
     if sd is None:
-        logger.warning("sounddevice not available, cannot query Windows audio devices")
+        logger.warning("sounddevice not available, cannot query audio devices")
         return [], []
     try:
         outputs = []
         inputs = []
         devices = sd.query_devices()
-        for i, dev in enumerate(devices):
-            name = dev.get('name', '')
+        for dev in devices:
+            name = (dev.get("name") or "").strip()
             if not name:
                 continue
-            device_type = get_device_type(name)
-            device_info = {'name': name, 'id': str(i), 'type': device_type}
-            if dev.get('max_output_channels', 0) > 0:
+            device_info = {"name": name, "id": name, "type": get_device_type(name)}
+            if dev.get("max_output_channels", 0) > 0:
                 outputs.append(device_info)
-            if dev.get('max_input_channels', 0) > 0:
+            if dev.get("max_input_channels", 0) > 0:
                 inputs.append(device_info)
-        logger.info(f"query_windows_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
         return outputs, inputs
     except Exception as e:
-        logger.error(f"Error querying Windows devices: {e}")
+        logger.error(f"Error querying sounddevice devices: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return [], []
+
+
+def query_windows_devices():
+    """Query devices via PortAudio/sounddevice (same namespace TTS transport resolves)."""
+    outputs, inputs = _query_sounddevice_devices()
+    logger.info(f"query_windows_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
+    return outputs, inputs
 
 
 def query_macos_devices():
-    """Query devices using system_profiler on macOS. Results are cached for 30s to avoid hammering coreaudiod."""
-    import time
-    global _macos_device_cache, _macos_device_cache_ts
-    now = time.monotonic()
-    if now - _macos_device_cache_ts < _MACOS_DEVICE_CACHE_TTL:
-        return _macos_device_cache
-    try:
-        # Use system_profiler to get audio devices
-        result = subprocess.run(
-            ['system_profiler', '-json', 'SPAudioDataType'],
-            capture_output=True,
-            text=True,
-            timeout=15  # Can be slow on Macs with many USB/Bluetooth devices
-        )
-        
-        if result.returncode != 0:
-            logger.error(f"system_profiler failed: {result.stderr}")
-            return [], []
-        
-        data = json.loads(result.stdout)
-        sp_audio_data = data.get('SPAudioDataType', [])
-        
-        outputs = []
-        inputs = []
-        
-        # The structure is: SPAudioDataType[0]['_items'] contains the actual devices
-        for top_level_item in sp_audio_data:
-            device_items = top_level_item.get('_items', [])
-            
-            for item in device_items:
-                name = item.get('_name', '')
-                if not name or name == 'Unknown':
-                    continue
-                
-                # Get device ID - use name as ID since system_profiler doesn't provide UID
-                device_id = name
-                
-                # Determine type from transport
-                transport = item.get('coreaudio_device_transport', '').lower()
-                device_type = get_device_type(name)
-                
-                # Check if it has input/output capabilities
-                has_input = item.get('coreaudio_device_input', 0) > 0
-                has_output = item.get('coreaudio_device_output', 0) > 0
-                
-                # Also check for input/output source fields as backup
-                if not has_input:
-                    has_input = 'coreaudio_input_source' in item or 'coreaudio_default_audio_input_device' in item
-                if not has_output:
-                    has_output = 'coreaudio_output_source' in item or 'coreaudio_default_audio_output_device' in item
-                
-                device_info = {
-                    'name': name,
-                    'id': device_id,
-                    'type': device_type
-                }
-                
-                if has_input:
-                    inputs.append(device_info)
-                    logger.debug(f"Found input device: {name} (type: {device_type})")
-                if has_output:
-                    outputs.append(device_info)
-                    logger.debug(f"Found output device: {name} (type: {device_type})")
-        
-        logger.debug(f"query_macos_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
-        _macos_device_cache = (outputs, inputs)
-        _macos_device_cache_ts = now
-        return outputs, inputs
-
-    except subprocess.TimeoutExpired:
-        logger.warning("system_profiler timed out (using sounddevice fallback)")
-        return _macos_device_cache  # return stale cache rather than empty
-    except Exception as e:
-        logger.error(f"Error querying macOS devices: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return _macos_device_cache  # return stale cache rather than empty
+    """Query devices via PortAudio/sounddevice (same names as Qt dialog / TTS transport)."""
+    outputs, inputs = _query_sounddevice_devices()
+    logger.debug(f"query_macos_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
+    return outputs, inputs
 
 
 def query_unix_devices():
-    """Query devices using PulseAudio on Linux/Unix."""
-    try:
-        outputs = []
-        inputs = []
-        
-        # Try PulseAudio first (most common on modern Linux)
-        try:
-            # Get output devices (sinks)
-            result = subprocess.run(
-                ['pactl', 'list', 'short', 'sinks'],
-                capture_output=True,
-                text=True,
-                timeout=3
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split('\n'):
-                    if line:
-                        parts = line.split('\t')
-                        if len(parts) >= 2:
-                            device_id = parts[0]
-                            device_name = parts[1]
-                            device_type = get_device_type(device_name)
-                            outputs.append({
-                                'name': device_name,
-                                'id': device_id,
-                                'type': device_type
-                            })
-            
-            # Get input devices (sources)
-            result = subprocess.run(
-                ['pactl', 'list', 'short', 'sources'],
-                capture_output=True,
-                text=True,
-                timeout=3
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split('\n'):
-                    if line and '.monitor' not in line:  # Skip monitor sources
-                        parts = line.split('\t')
-                        if len(parts) >= 2:
-                            device_id = parts[0]
-                            device_name = parts[1]
-                            device_type = get_device_type(device_name)
-                            inputs.append({
-                                'name': device_name,
-                                'id': device_id,
-                                'type': device_type
-                            })
-        except FileNotFoundError:
-            # PulseAudio not available, try ALSA
-            logger.debug("PulseAudio not found, trying ALSA")
-            # ALSA is more complex, would need to parse /proc/asound/cards
-            # For now, return empty lists
-            pass
-        
-        logger.info(f"query_unix_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
-        return outputs, inputs
-        
-    except Exception as e:
-        logger.error(f"Error querying Unix devices: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return [], []
+    """Query devices via PortAudio/sounddevice so names match TTS transport resolution."""
+    outputs, inputs = _query_sounddevice_devices()
+    logger.info(f"query_unix_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
+    return outputs, inputs
 
 
 def refresh_device_lists():
@@ -686,24 +552,29 @@ def restore_locked_devices(settings: dict):
 def get_current_device_list_hash():
     """
     Get an MD5 hash of the current device list for change detection.
-    Uses sd.query_devices() (lightweight) instead of system_profiler to avoid
-    hammering coreaudiod every 5 seconds.
+    Uses a fresh PortAudio subprocess query so Bluetooth connect/disconnect
+    is visible without restarting the main process.
     """
     import hashlib
     try:
+        from distr.core.agent.config_loader import _query_devices_fresh_subprocess
+        fresh = _query_devices_fresh_subprocess()
+        if fresh:
+            device_names = sorted({name for _i, name, _in, _out in fresh if name})
+            return hashlib.md5("|".join(device_names).encode("utf-8")).hexdigest()
+        # Fallback: in-process sounddevice / native query
         if sd is not None:
             devices = sd.query_devices()
-            out_names = sorted([d['name'] for d in devices if d.get('max_output_channels', 0) > 0])
-            in_names = sorted([d['name'] for d in devices if d.get('max_input_channels', 0) > 0])
+            out_names = sorted([d["name"] for d in devices if d.get("max_output_channels", 0) > 0])
+            in_names = sorted([d["name"] for d in devices if d.get("max_input_channels", 0) > 0])
             device_names = sorted(set(out_names + in_names))
-            return hashlib.md5('|'.join(device_names).encode('utf-8')).hexdigest()
-        # Fallback to native query (cached) if sounddevice unavailable
+            return hashlib.md5("|".join(device_names).encode("utf-8")).hexdigest()
         outputs, inputs = query_native_devices()
-        device_names = sorted([dev['name'] for dev in outputs] + [dev['name'] for dev in inputs])
-        return hashlib.md5('|'.join(device_names).encode('utf-8')).hexdigest()
+        device_names = sorted([dev["name"] for dev in outputs] + [dev["name"] for dev in inputs])
+        return hashlib.md5("|".join(device_names).encode("utf-8")).hexdigest()
     except Exception as e:
         logger.error(f"Error getting device list hash: {e}")
-        return ''
+        return ""
 
 
 def pitch_preserving_time_stretch(audio, speed, sample_rate=24000):

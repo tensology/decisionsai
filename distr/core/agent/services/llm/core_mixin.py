@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import platform
+import re
 import time
 from typing import Optional
 
@@ -391,19 +392,34 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if wants_screenshot_tool:
                 sa_tool = self._tools_dict.get("screenshot_analyzer")
                 if sa_tool is not None:
-                    msg = (
-                        "For screenshots and on-screen vision tasks, use 'screenshot_analyzer' directly. "
-                        "It is already available in your active set."
-                    )
+                    # ``_tools_dict`` is the full session cache. The semantic
+                    # retriever may still have omitted screenshot_analyzer from
+                    # the schemas sent for this model round. Make the cached
+                    # tool sticky so the provider refresh immediately below can
+                    # expose it on the next tool round.
+                    sticky_names = set(getattr(self, "_sticky_tool_names", set()))
+                    newly_exposed = sa_tool.name not in sticky_names
+                    if newly_exposed:
+                        sticky_names.add(sa_tool.name)
+                        self._sticky_tool_names = sticky_names
+                        msg = (
+                            "Tool 'screenshot_analyzer' is now exposed for this request. "
+                            "Call it directly on the next tool round."
+                        )
+                    else:
+                        msg = (
+                            "Tool 'screenshot_analyzer' is already exposed for this request. "
+                            "Call it directly."
+                        )
                     log_request_tool_event(
                         query=qnorm,
                         success=True,
                         injected_tool_name="screenshot_analyzer",
                         model_name=_mn,
-                        injection_performed=False,
+                        injection_performed=newly_exposed,
                         message=msg,
                     )
-                    return (True, msg, False)
+                    return (True, msg, newly_exposed)
 
                 cached_sa_tool = _tool_cache.get("screenshot_analyzer")
                 if cached_sa_tool is not None:
@@ -496,6 +512,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     best = min(100, best + 24)
                 if class_name == "ScreenshotAnalyzerTool" and wants_screenshot_tool:
                     best = min(100, best + 30)
+                if class_name == "MouseMovementTool" and (
+                    any(token in qlow for token in ("mouse", "cursor", "pointer"))
+                    and any(
+                        token in qlow
+                        for token in ("move", "movement", "direction", "left", "right", "up", "down")
+                    )
+                ):
+                    best = 100
                 scores.append((class_name, best))
 
             scores.sort(key=lambda x: x[1], reverse=True)
@@ -533,12 +557,24 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     )
                     return (False, msg, False)
 
-                # Already active — do not claim a fresh injection (misleading UX + telemetry)
+                # ``_tools_dict`` is the full session cache, not necessarily the
+                # smaller schema set exposed to this model request. Mark a cached
+                # match sticky so the provider can expose it on the next tool round.
                 if matched_tool.name in self._tools_dict:
-                    msg = (
-                        f"Tool '{matched_tool.name}' is already in your active set — "
-                        "you can call it directly."
-                    )
+                    sticky_names = set(getattr(self, "_sticky_tool_names", set()))
+                    newly_exposed = matched_tool.name not in sticky_names
+                    if newly_exposed:
+                        sticky_names.add(matched_tool.name)
+                        self._sticky_tool_names = sticky_names
+                        msg = (
+                            f"Tool '{matched_tool.name}' is now exposed for this request. "
+                            "Call it directly on the next tool round."
+                        )
+                    else:
+                        msg = (
+                            f"Tool '{matched_tool.name}' is already exposed for this request. "
+                            "Call it directly."
+                        )
                     log_request_tool_event(
                         query=qnorm,
                         success=True,
@@ -546,10 +582,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         injected_tool_name=matched_tool.name,
                         fuzzy_score=best_score,
                         model_name=_mn,
-                        injection_performed=False,
+                        injection_performed=newly_exposed,
                         message=msg,
                     )
-                    return (True, msg, False)
+                    return (True, msg, newly_exposed)
 
                 self._tools.append(matched_tool)
                 self._tools_dict[matched_tool.name] = matched_tool
@@ -697,6 +733,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         Returns a DetectedAction if a fast action is found, or None.
         Shared across all providers.
         """
+        import copy
+
         from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
         from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
         if getattr(self, "_bypass_fast_actions_for_turn", False):
@@ -710,9 +748,34 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return None
         if last_message in self._processed_fast_actions:
             return None
+        normalized = re.sub(r"[^a-z0-9']+", " ", last_message.lower()).strip()
+        repeat_phrases = {
+            "again",
+            "do it again",
+            "do that again",
+            "same again",
+            "one more time",
+            "repeat that",
+            "repeat it",
+        }
+        if normalized in repeat_phrases:
+            previous = getattr(self, "_last_repeatable_fast_action", None)
+            previous_at = float(getattr(self, "_last_repeatable_fast_action_at", 0.0) or 0.0)
+            if previous is not None and time.monotonic() - previous_at <= 120.0:
+                replay = copy.deepcopy(previous)
+                replay.original_text = last_message
+                logger.info(
+                    "FastActionDetector: replaying previous %s action for %r",
+                    replay.tool_name,
+                    last_message,
+                )
+                return replay
         fast_action = detect_fast_action(last_message)
         if fast_action and fast_action.confidence >= 0.9 and fast_action.action_type not in (ActionType.CONVERSATIONAL, ActionType.UNKNOWN):
             return fast_action
+        if normalized not in repeat_phrases:
+            self._last_repeatable_fast_action = None
+            self._last_repeatable_fast_action_at = 0.0
         return None
 
     def _fuzzy_match_tool(self, tool_name: str):

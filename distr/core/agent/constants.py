@@ -234,6 +234,8 @@ VAD_BARGEIN_CONSECUTIVE_MIN = 6
 VAD_BARGEIN_CONSECUTIVE_MAX = 14
 
 # --- STT Defaults ---
+# Batch (PTT): OpenAI recommends gpt-transcribe. Live (hands-free): gpt-live-transcribe.
+# VALID_* are selectable via Settings → LLMs → Speech to Text.
 DEFAULT_OPENAI_WHISPER_MODEL = "gpt-transcribe"
 DEFAULT_OPENAI_LIVE_TRANSCRIPTION_MODEL = "gpt-live-transcribe"
 VALID_OPENAI_TRANSCRIPTION_MODELS = [

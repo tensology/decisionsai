@@ -100,6 +100,8 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._generation_task = None
         self._cancelled = False
         self._processed_fast_actions = set()
+        self._last_repeatable_fast_action = None
+        self._last_repeatable_fast_action_at = 0.0
         self._generation_requested_at = 0.0
         self._background_chain = None
 

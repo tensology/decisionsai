@@ -167,6 +167,24 @@ def _cmd_hot_swap_llm(session, params):
     chat_id = params.get('chat_id')
     voice_provider = (params.get('voice_provider') or '').strip() or None
     voice_model = (params.get('voice_model') or '').strip() or None
+
+    from distr.core.openai_s2s import completions_model_for_chat, is_openai_s2s_model
+    if is_openai_s2s_model(model_name):
+        twin = completions_model_for_chat(
+            model_name,
+            (session.settings or {}).get("conversational_llm_model")
+            or (session.settings or {}).get("agent_model"),
+        )
+        session.logger.info(
+            "hot_swap_llm: S2S model %s requested; Completions twin=%s (Realtime runtime pending)",
+            model_name,
+            twin,
+        )
+        if session.config and session.config.get("llm") is not None:
+            session.config["llm"]["s2s_active"] = True
+            session.config["llm"]["s2s_model"] = model_name
+        model_name = twin
+
     session.logger.debug(
         "hot_swap_llm: chat_id=%s provider=%s model_name=%s voice=%s/%s (will swap LLM then TTS)",
         chat_id, provider, model_name, voice_provider, voice_model,
@@ -567,6 +585,8 @@ def _cmd_set_hands_free(session, params):
         session.llm_service.set_hands_free(enabled)
     if hasattr(session, 'tts_service') and session.tts_service:
         session.tts_service.set_hands_free(enabled)
+    if getattr(session, 's2s_service', None) and hasattr(session.s2s_service, 'set_hands_free'):
+        session.s2s_service.set_hands_free(enabled)
     _sync_audio_input_power(session, "set_hands_free")
     session.logger.debug("All services updated - audio input power synced to active voice mode")
 
@@ -583,6 +603,8 @@ def _cmd_set_dictating(session, params):
             session.logger.warning("STT service does not support set_dictating()")
     else:
         session.logger.debug("STT service not yet available - dictation state will be restored when STT starts")
+    if getattr(session, 's2s_service', None) and hasattr(session.s2s_service, 'set_dictating'):
+        session.s2s_service.set_dictating(enabled)
     _sync_audio_input_power(session, "set_dictating")
 
 
@@ -829,6 +851,9 @@ def _cmd_push_to_talk_start(session, params):
     if hasattr(session, 'tts_service') and session.tts_service and hasattr(session.tts_service, 'set_ptt_active'):
         session.tts_service.set_ptt_active(True)
 
+    if getattr(session, 's2s_service', None) and hasattr(session.s2s_service, 'set_ptt_active'):
+        session.s2s_service.set_ptt_active(True, queue_interruption=not for_dictation)
+
     if hasattr(session, 'stt_service') and session.stt_service:
         # Agent PTT must interrupt current speech; dictation only captures for typing.
         session.stt_service.set_ptt_active(True, queue_interruption=not for_dictation)
@@ -930,6 +955,8 @@ def _cmd_push_to_talk_stop(session, params):
         )
     if hasattr(session, 'tts_service') and session.tts_service and hasattr(session.tts_service, 'set_ptt_active'):
         session.tts_service.set_ptt_active(False)
+    if getattr(session, 's2s_service', None) and hasattr(session.s2s_service, 'set_ptt_active'):
+        session.s2s_service.set_ptt_active(False)
     if hasattr(session, 'stt_service') and session.stt_service:
         session.stt_service.set_ptt_active(False)
     else:
@@ -990,6 +1017,9 @@ def _cmd_dictation_hotkey_released(session, params):
     stt = getattr(session, 'stt_service', None)
     if stt and hasattr(stt, 'set_dictating'):
         stt.set_dictating(False)
+    s2s = getattr(session, 's2s_service', None)
+    if s2s and hasattr(s2s, 'set_dictating'):
+        s2s.set_dictating(False)
     try:
         llm = getattr(session, 'llm_service', None)
         if llm and hasattr(llm, '_finish_dictation_after_pending_transcript'):
@@ -1483,9 +1513,34 @@ def _cmd_current_chat_changed(session, params):
     # ---------------------------------------------------------------
     # 3. Determine what needs swapping
     # ---------------------------------------------------------------
+    from distr.core.openai_s2s import (
+        apply_s2s_voice_defaults,
+        completions_model_for_chat,
+        is_openai_s2s_model,
+    )
     provider = chat_provider or "Ollama"
+    s2s_prov, chat_voice_provider, chat_voice_model = apply_s2s_voice_defaults(
+        model_name=chat_model,
+        voice_provider=chat_voice_provider,
+        voice_model=chat_voice_model,
+    )
+    if s2s_prov:
+        provider = s2s_prov
     chat_engine = PROVIDER_TO_ENGINE.get(provider, "ollama")
-    model_name = (chat_model or "").strip() or DEFAULT_MODELS.get(chat_engine, DEFAULT_MODELS["ollama"])
+    raw_model = (chat_model or "").strip() or DEFAULT_MODELS.get(chat_engine, DEFAULT_MODELS["ollama"])
+    # Completions twin when chat is S2S (Realtime runtime still pending)
+    model_name = (
+        completions_model_for_chat(
+            raw_model,
+            (session.settings or {}).get("conversational_llm_model")
+            or (session.settings or {}).get("agent_model"),
+        )
+        if is_openai_s2s_model(raw_model)
+        else raw_model
+    )
+    if is_openai_s2s_model(raw_model) and session.config and session.config.get("llm") is not None:
+        session.config["llm"]["s2s_active"] = True
+        session.config["llm"]["s2s_model"] = raw_model
 
     cur_engine = (session.config or {}).get("llm", {}).get("engine", "ollama")
     cur_model = ((session.config or {}).get("llm", {}).get("model_name") or "").strip()

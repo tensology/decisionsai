@@ -1,8 +1,6 @@
 """
 Audio routes — /audio, /audio/devices, /audio/detect, /audio/devices-version
 """
-import json
-
 from fastapi.responses import JSONResponse
 
 from ._shared import logger, AudioSettings, route_handler
@@ -28,18 +26,20 @@ def register_routes(router, templates):
     @route_handler("save audio settings")
     async def save_audio_settings_route(settings_data: AudioSettings):
         """Save audio settings"""
-        from distr.core.services.settings_service import save_audio_settings
+        from distr.core.services.settings_service import save_audio_settings, _run_on_qt_main_thread
         save_audio_settings(settings_data)
 
         in_dev = settings_data.input_device
         out_dev = settings_data.output_device
         try:
             from PyQt6.QtWidgets import QApplication
-            from PyQt6.QtCore import QTimer
 
             app = QApplication.instance()
-            if app is not None and hasattr(app, "update_agent_audio_devices") and hasattr(app, "agent_command_queue"):
-                QTimer.singleShot(0, lambda i=in_dev, o=out_dev: app.update_agent_audio_devices(i, o))
+            if app is not None and hasattr(app, "update_agent_audio_devices"):
+                def _notify():
+                    app.update_agent_audio_devices(in_dev, out_dev)
+
+                _run_on_qt_main_thread(_notify, label="audio_devices_changed")
                 logger.info("Scheduled agent audio update on main thread: input=%s, output=%s", in_dev, out_dev)
         except Exception as e:
             logger.debug("Could not schedule agent audio update from web (may be headless): %s", e)
@@ -48,55 +48,51 @@ def register_routes(router, templates):
 
     @router.get("/audio/devices")
     async def get_audio_devices():
-        """Get available audio devices."""
+        """Get available audio devices (fresh PortAudio names; id == name)."""
         try:
-            from distr.core.settings import load_settings_from_db
             from distr.core.audio.utils import query_native_devices, get_device_type, format_devices_for_api
-            settings = load_settings_from_db()
-            merged_outputs = []
-            merged_inputs = []
-            try:
-                if settings.get("locked_output_list"):
-                    merged_outputs = json.loads(settings["locked_output_list"])
-                if settings.get("locked_input_list"):
-                    merged_inputs = json.loads(settings["locked_input_list"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-            if not merged_outputs and not merged_inputs:
-                outputs, inputs = query_native_devices()
-                if not outputs and not inputs:
-                    import sounddevice as sd
-                    devices = sd.query_devices()
-                    for i, dev in enumerate(devices):
-                        di = {"name": dev.get("name", ""), "id": str(i), "type": get_device_type(dev.get("name", ""))}
-                        if dev.get("max_output_channels", 0) > 0:
-                            merged_outputs.append(di)
-                        if dev.get("max_input_channels", 0) > 0:
-                            merged_inputs.append(di)
-                else:
-                    merged_outputs, merged_inputs = outputs, inputs
+            outputs, inputs = query_native_devices()
+            if not outputs and not inputs:
+                import sounddevice as sd
+                devices = sd.query_devices()
+                for dev in devices:
+                    name = (dev.get("name") or "").strip()
+                    if not name:
+                        continue
+                    di = {"name": name, "id": name, "type": get_device_type(name)}
+                    if dev.get("max_output_channels", 0) > 0:
+                        outputs.append(di)
+                    if dev.get("max_input_channels", 0) > 0:
+                        inputs.append(di)
             return JSONResponse({
-                "input_devices": format_devices_for_api(merged_inputs),
-                "output_devices": format_devices_for_api(merged_outputs)
+                "input_devices": format_devices_for_api(inputs),
+                "output_devices": format_devices_for_api(outputs),
             })
         except Exception as e:
             logger.error("Failed to get audio devices: %s", e, exc_info=True)
             try:
-                from distr.core.audio.utils import get_device_type
+                from distr.core.audio.utils import get_device_type, format_devices_for_api
                 import sounddevice as sd
                 devices = sd.query_devices()
-                input_devices = [{"name": "System Default", "id": -1}]
-                output_devices = [{"name": "System Default", "id": -1}]
-                for i, device in enumerate(devices):
+                input_devices = []
+                output_devices = []
+                for device in devices:
+                    name = (device.get("name") or "").strip()
+                    if not name:
+                        continue
+                    di = {"name": name, "id": name, "type": get_device_type(name)}
                     if device.get("max_input_channels", 0) > 0:
-                        input_devices.append({"name": device["name"], "id": i, "type": get_device_type(device["name"])})
+                        input_devices.append(di)
                     if device.get("max_output_channels", 0) > 0:
-                        output_devices.append({"name": device["name"], "id": i, "type": get_device_type(device["name"])})
-                return JSONResponse({"input_devices": input_devices, "output_devices": output_devices})
+                        output_devices.append(di)
+                return JSONResponse({
+                    "input_devices": format_devices_for_api(input_devices),
+                    "output_devices": format_devices_for_api(output_devices),
+                })
             except Exception:
                 return JSONResponse({
                     "input_devices": [{"name": "System Default", "id": -1}],
-                    "output_devices": [{"name": "System Default", "id": -1}]
+                    "output_devices": [{"name": "System Default", "id": -1}],
                 })
 
     @router.post("/audio/detect")

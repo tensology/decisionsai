@@ -13,7 +13,7 @@ from distr.core.agent.libs import (
     AudioSegment, PYDUB_AVAILABLE
 )
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
-from distr.core.agent.services.tts.elevenlabs_config import ELEVENLABS_TTS_MODEL_ID
+from distr.core.agent.services.tts.elevenlabs_config import resolve_elevenlabs_tts_model
 from distr.core.agent.services.tts.sentence_split import (
     extract_complete_sentences,
     tts_chunk_has_enough_weight,
@@ -54,7 +54,7 @@ def _elevenlabs_clean_error(error):
 class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
     """ElevenLabs-based TTS service using Pipecat"""
     
-    def __init__(self, api_key: str, voice_id: str, voice_name: str = None, stt_service=None, playback_speed: float = 1.0, event_queue=None, speech_volume: int = 100, stability: float = 0.5, similarity_boost: float = 0.6, style: float = 0.25, use_speaker_boost: bool = True, on_quota_exceeded=None, **kwargs):
+    def __init__(self, api_key: str, voice_id: str, voice_name: str = None, stt_service=None, playback_speed: float = 1.0, event_queue=None, speech_volume: int = 100, stability: float = 0.5, similarity_boost: float = 0.6, style: float = 0.25, use_speaker_boost: bool = True, on_quota_exceeded=None, model_id: str = None, **kwargs):
         if not PIPECAT_AVAILABLE:
             raise ImportError("Pipecat is required for ElevenLabsTTSService")
         if not ELEVENLABS_AVAILABLE:
@@ -69,6 +69,7 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
         self.client = ElevenLabs(api_key=api_key)
         self.voice_id = voice_id
         self.voice_name = voice_name or voice_id
+        self.model_id = resolve_elevenlabs_tts_model(model_id)
         self.playback_speed = playback_speed
         self._text_buffer = ""
         self._frame_id_counter = 10000
@@ -181,7 +182,7 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
                 audio_stream = self.client.text_to_speech.convert(
                     text=text,
                     voice_id=self.voice_id,
-                    model_id=ELEVENLABS_TTS_MODEL_ID,
+                    model_id=self.model_id,
                     output_format="mp3_44100_128",
                     voice_settings={
                         "stability": self._stability,

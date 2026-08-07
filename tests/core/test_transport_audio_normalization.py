@@ -64,6 +64,7 @@ class _FakePyAudio:
         self.opened_indices = []
         self.opened_channels = []
         self.fail_indices = set()
+        self.terminated = False
 
     def get_default_output_device_info(self):
         return self.devices[self.default_index]
@@ -84,6 +85,9 @@ class _FakePyAudio:
         if index in self.fail_indices:
             raise OSError("device failed")
         return _FakeStream(active=True)
+
+    def terminate(self):
+        self.terminated = True
 
 
 def _use_fake_py_audio_default(monkeypatch):
@@ -163,6 +167,100 @@ def test_transport_does_not_reuse_fresh_index_from_incompatible_device_list(monk
     transport._out_stream = _FakeStream(active=True)
 
     assert transport._resolve_configured_output_device_index() == 2
+
+
+def test_set_device_refreshes_stale_pyaudio_registry_for_new_bluetooth_output(monkeypatch):
+    stale_backend = _FakePyAudio(
+        default_index=0,
+        devices={
+            0: {"index": 0, "name": "MacBook Pro Speakers", "maxOutputChannels": 2},
+        },
+    )
+    refreshed_backend = _FakePyAudio(
+        default_index=0,
+        devices={
+            0: {"index": 0, "name": "MacBook Pro Speakers", "maxOutputChannels": 2},
+            1: {"index": 1, "name": "JBL TUNE510BT", "maxOutputChannels": 2},
+        },
+    )
+    monkeypatch.setattr(
+        "distr.core.agent.config_loader.resolve_device_index",
+        lambda device_name, is_input, sd_module=None: 6,
+    )
+    monkeypatch.setattr("distr.core.agent.transport.pyaudio.PyAudio", lambda: refreshed_backend)
+
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    transport._py_audio = stale_backend
+    transport._owns_py_audio = False
+    transport._pending_output_backend_refresh_name = None
+    transport._params = SimpleNamespace(output_device_index=0, audio_out_channels=2)
+    transport._output_device_name = "System Default"
+    transport._resolved_output_device_index = 0
+    transport._resolved_default_output_name = "MacBook Pro Speakers"
+    transport._last_opened_default_output_name = "MacBook Pro Speakers"
+    transport._out_stream = _FakeStream(active=True)
+    transport._sample_rate = 44100
+    transport._original_sample_rate = 44100
+    transport._stream_error_count = 0
+    transport._stream_error_logged = False
+    transport._output_channels = 2
+    transport._failed_output_device_index = None
+    transport._hardware_check_disabled = False
+
+    transport.set_device(6, "JBL TUNE510BT")
+
+    assert transport._py_audio is refreshed_backend
+    assert transport._owns_py_audio is True
+    assert transport._params.output_device_index == 1
+    assert transport._resolved_output_device_index == 1
+    assert refreshed_backend.opened_indices == [1]
+    assert stale_backend.terminated is False
+
+
+def test_system_default_refreshes_stale_pyaudio_registry_after_os_route_change(monkeypatch):
+    stale_backend = _FakePyAudio(
+        default_index=0,
+        devices={
+            0: {"index": 0, "name": "MacBook Pro Speakers", "maxOutputChannels": 2},
+        },
+    )
+    refreshed_backend = _FakePyAudio(
+        default_index=1,
+        devices={
+            0: {"index": 0, "name": "MacBook Pro Speakers", "maxOutputChannels": 2},
+            1: {"index": 1, "name": "JBL TUNE510BT", "maxOutputChannels": 2},
+        },
+    )
+    monkeypatch.setattr(
+        "distr.core.agent.config_loader.resolve_system_default_output_device",
+        lambda: (6, "JBL TUNE510BT"),
+    )
+    monkeypatch.setattr("distr.core.agent.transport.pyaudio.PyAudio", lambda: refreshed_backend)
+
+    transport = HotSwappableLocalAudioOutputTransport.__new__(HotSwappableLocalAudioOutputTransport)
+    transport._py_audio = stale_backend
+    transport._owns_py_audio = False
+    transport._pending_output_backend_refresh_name = None
+    transport._params = SimpleNamespace(output_device_index=0, audio_out_channels=2)
+    transport._output_device_name = "System Default"
+    transport._resolved_output_device_index = 0
+    transport._resolved_default_output_name = "MacBook Pro Speakers"
+    transport._last_opened_default_output_name = "MacBook Pro Speakers"
+    transport._out_stream = _FakeStream(active=True)
+    transport._sample_rate = 44100
+    transport._original_sample_rate = 44100
+    transport._stream_error_count = 0
+    transport._stream_error_logged = False
+    transport._output_channels = 2
+    transport._failed_output_device_index = None
+
+    transport._ensure_output_stream_for_configured_device(reason="system route changed")
+
+    assert transport._py_audio is refreshed_backend
+    assert transport._params.output_device_index == 1
+    assert transport._resolved_output_device_index == 1
+    assert transport._resolved_default_output_name == "JBL TUNE510BT"
+    assert refreshed_backend.opened_indices == [1]
 
 
 def test_transport_maps_fresh_system_default_name_into_active_pyaudio_list(monkeypatch):

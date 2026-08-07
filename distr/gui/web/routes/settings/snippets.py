@@ -120,6 +120,24 @@ def _stored_shortcut_signature(modifier: str | None, key: str | None) -> tuple[t
     return (mods, normalized_key)
 
 
+def _signatures_overlap(
+    left: tuple[tuple[str, ...], str],
+    right: tuple[tuple[str, ...], str],
+) -> bool:
+    """True when two chords share a key and one modifier set contains the other.
+
+    The global listener matches with modifier subset checks, so ``cmd+1`` also
+    fires while ``option+cmd+1`` (skin select) is held. Treat that as a conflict.
+    """
+    left_mods, left_key = left
+    right_mods, right_key = right
+    if left_key != right_key:
+        return False
+    left_set = set(left_mods)
+    right_set = set(right_mods)
+    return left_set <= right_set or right_set <= left_set
+
+
 def _reserved_shortcut_signatures(settings: dict) -> dict[tuple[tuple[str, ...], str], str]:
     signatures: dict[tuple[tuple[str, ...], str], str] = {}
 
@@ -163,14 +181,15 @@ def _validate_snippet_remote_hotkey(
         raise ValueError("Invalid snippet hotkey.")
 
     reserved = _reserved_shortcut_signatures(settings)
-    reserved_label = reserved.get(signature)
-    if reserved_label:
-        raise ValueError(f"Snippet hotkey overlaps {reserved_label}. Choose a different shortcut combo.")
+    for reserved_signature, reserved_label in reserved.items():
+        if _signatures_overlap(signature, reserved_signature):
+            raise ValueError(f"Snippet hotkey overlaps {reserved_label}. Choose a different shortcut combo.")
 
     for snippet in existing_snippets:
         if getattr(snippet, "id", None) == current_snippet_id:
             continue
-        if _remote_hotkey_signature(getattr(snippet, "remote_hotkey", "")) == signature:
+        other = _remote_hotkey_signature(getattr(snippet, "remote_hotkey", ""))
+        if other and _signatures_overlap(signature, other):
             raise ValueError(
                 f"Snippet hotkey overlaps Snippet {getattr(snippet, 'id', '?')}. Choose a different shortcut combo."
             )

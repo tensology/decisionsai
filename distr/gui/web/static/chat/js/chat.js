@@ -591,6 +591,11 @@ function setupEventListeners() {
         loadLlmModels(llmProviderSelect.value);
         toggleModalOllamaPullBtn();
     });
+    if (llmModelSelect) {
+        llmModelSelect.addEventListener('change', () => {
+            applyChatS2sLocksForModelSelect(llmModelSelect);
+        });
+    }
     if (voiceProviderSelect) {
         voiceProviderSelect.addEventListener('change', async () => {
             await loadVoiceModels(voiceProviderSelect.value);
@@ -636,6 +641,11 @@ function setupEventListeners() {
             loadLlmModelsInto(chatConfigLlmModel, chatConfigLlmProvider.value);
         });
     }
+    if (chatConfigLlmModel) {
+        chatConfigLlmModel.addEventListener('change', () => {
+            applyChatS2sLocksForModelSelect(chatConfigLlmModel);
+        });
+    }
     if (chatConfigVoiceProvider) {
         chatConfigVoiceProvider.addEventListener('change', async () => {
             await reloadChatVoiceModels('chatConfig', chatConfigVoiceProvider.value);
@@ -644,12 +654,18 @@ function setupEventListeners() {
     }
 
     const emptyStateLlmProvider = document.getElementById('emptyStateLlmProvider');
+    const emptyStateLlmModel = document.getElementById('emptyStateLlmModel');
     const emptyStateVoiceProvider = document.getElementById('emptyStateVoiceProvider');
     const emptyStateVoiceModel = document.getElementById('emptyStateVoiceModel');
     if (emptyStateLlmProvider) emptyStateLlmProvider.addEventListener('change', () => {
         loadEmptyStateLlmModels(emptyStateLlmProvider.value);
         toggleEmptyStateOllamaPullBtn();
     });
+    if (emptyStateLlmModel) {
+        emptyStateLlmModel.addEventListener('change', () => {
+            applyChatS2sLocksForModelSelect(emptyStateLlmModel);
+        });
+    }
     if (emptyStateVoiceProvider) {
         emptyStateVoiceProvider.addEventListener('change', async () => {
             await loadEmptyStateVoiceModels(emptyStateVoiceProvider.value);
@@ -2804,6 +2820,7 @@ async function loadEmptyStateLlmModels(provider) {
         const data = await response.json();
         const models = data.models || [];
         el.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
+        await applyChatS2sLocksForModelSelect(el);
     } catch (e) {
         el.innerHTML = '<option value="">Error loading</option>';
     }
@@ -4800,10 +4817,66 @@ async function loadLlmModelsInto(modelSelectEl, provider, preferredModel) {
         if (!modelSelectEl.value && modelSelectEl.options[0] && modelSelectEl.options[0].value) {
             modelSelectEl.selectedIndex = 0;
         }
+        await applyChatS2sLocksForModelSelect(modelSelectEl);
     } catch (e) {
         console.error('Error loading LLM models:', e);
         modelSelectEl.innerHTML = '<option value="">Error loading</option>';
     }
+}
+
+async function applyChatS2sLocksForModelSelect(modelSelectEl) {
+    if (!window.DecisionsS2S || typeof window.DecisionsS2S.applyS2sLocks !== 'function' || !modelSelectEl) {
+        return;
+    }
+    const model = modelSelectEl.value || '';
+    // Map model select → matching voice controls on the same surface
+    let voiceProvider = null;
+    let voiceModel = null;
+    let llmProvider = null;
+    if (modelSelectEl.id === 'llmModel') {
+        voiceProvider = document.getElementById('voiceProvider');
+        voiceModel = document.getElementById('voiceModel');
+        llmProvider = document.getElementById('llmProvider');
+    } else if (modelSelectEl.id === 'emptyStateLlmModel') {
+        voiceProvider = document.getElementById('emptyStateVoiceProvider');
+        voiceModel = document.getElementById('emptyStateVoiceModel');
+        llmProvider = document.getElementById('emptyStateLlmProvider');
+    } else if (modelSelectEl.id === 'chatConfigLlmModel') {
+        voiceProvider = document.getElementById('chatConfigVoiceProvider');
+        voiceModel = document.getElementById('chatConfigVoiceModel');
+        llmProvider = document.getElementById('chatConfigLlmProvider');
+    }
+    const locks = await window.DecisionsS2S.applyS2sLocks({
+        model: model,
+        conversationalProvider: llmProvider,
+        conversationalModel: modelSelectEl,
+        voiceProvider: voiceProvider,
+        voiceModel: voiceModel,
+        onRealtimeVoices: async function (voices, defaultVoice) {
+            if (!voiceModel) return;
+            const preferred = (voiceModel.value && voices.indexOf(voiceModel.value) >= 0)
+                ? voiceModel.value
+                : defaultVoice;
+            voiceModel.innerHTML = voices.map(function (v) {
+                return '<option value="' + v + '">' + v + '</option>';
+            }).join('');
+            voiceModel.value = preferred;
+        },
+        onRestoreVoices: async function (stash) {
+            if (!voiceProvider || !voiceModel) return;
+            if (stash && stash.provider) {
+                voiceProvider.value = stash.provider;
+                await reloadChatVoiceModels(
+                    modelSelectEl.id === 'llmModel' ? 'modal'
+                        : modelSelectEl.id === 'emptyStateLlmModel' ? 'emptyState'
+                        : 'chatConfig',
+                    stash.provider,
+                    stash.model
+                );
+            }
+        },
+    });
+    return locks;
 }
 
 async function loadLlmModels(provider) {

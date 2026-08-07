@@ -47,12 +47,21 @@ def get_openai_models(api_key: str):
                 if not model_id:
                     continue
 
+                from distr.core.openai_s2s import is_openai_s2s_model
+
+                # Speech-to-speech Realtime conversation models (allowlisted)
+                if is_openai_s2s_model(model_id):
+                    if date_pattern.search(model_id):
+                        continue
+                    chat_models.append(model_id)
+                    continue
+
                 # Skip non-chat models
                 if any(x in model_id for x in [
                     'embed', 'whisper', 'tts', 'dall-e', 'davinci', 'babbage',
                     'instruct', 'realtime', 'audio', 'moderation', 'search',
                     'similarity', 'code-', 'text-', 'curie', 'ada',
-                    'canary', 'preview'
+                    'canary', 'preview', 'transcribe'
                 ]):
                     continue
 
@@ -67,23 +76,33 @@ def get_openai_models(api_key: str):
 
                 chat_models.append(model_id)
 
-            # Sort: o-series first (reasoning), then gpt-4o, gpt-4, gpt-3.5
+            # Sort: frontier GPT-5.x first, then o-series, then gpt-4o / gpt-4 / gpt-3.5
             def sort_key(m):
-                if m.startswith('o4'):
+                ml = m.lower()
+                if ml.startswith('gpt-5.6') or ml.startswith('gpt-5'):
                     return (0, m)
-                elif m.startswith('o3'):
+                if m.startswith('o4'):
                     return (1, m)
-                elif m.startswith('o1'):
+                elif m.startswith('o3'):
                     return (2, m)
-                elif 'gpt-4o' in m:
+                elif m.startswith('o1'):
                     return (3, m)
-                elif 'gpt-4' in m:
+                elif 'gpt-4o' in m:
                     return (4, m)
-                elif 'gpt-3.5' in m:
+                elif 'gpt-4' in m:
                     return (5, m)
-                return (6, m)
+                elif 'gpt-3.5' in m:
+                    return (6, m)
+                return (7, m)
 
             chat_models.sort(key=sort_key)
+
+            # Ensure allowlisted Realtime S2S models appear even if API omitted them
+            from distr.core.openai_s2s import OPENAI_S2S_MODEL_IDS
+            known = set(chat_models)
+            for s2s_id in sorted(OPENAI_S2S_MODEL_IDS):
+                if s2s_id not in known:
+                    chat_models.append(s2s_id)
 
             models = []
             for model_id in chat_models:
@@ -110,6 +129,16 @@ def get_openai_models(api_key: str):
 def _format_openai_model_name(model_id: str) -> str:
     """Format OpenAI model ID to display name."""
     name_map = {
+        'gpt-5.6-sol': 'GPT-5.6 Sol',
+        'gpt-5.6-terra': 'GPT-5.6 Terra',
+        'gpt-5.6-luna': 'GPT-5.6 Luna',
+        'gpt-5.6': 'GPT-5.6',
+        'gpt-5': 'GPT-5',
+        'gpt-realtime-2.1-mini': 'GPT Realtime 2.1 Mini (speech-to-speech)',
+        'gpt-realtime-2.1': 'GPT Realtime 2.1 (speech-to-speech)',
+        'gpt-realtime-2': 'GPT Realtime 2 (speech-to-speech)',
+        'gpt-realtime-1.5': 'GPT Realtime 1.5 (speech-to-speech)',
+        'gpt-realtime': 'GPT Realtime (speech-to-speech)',
         'gpt-4o': 'GPT-4o',
         'gpt-4o-mini': 'GPT-4o Mini',
         'gpt-4.1': 'GPT-4.1',

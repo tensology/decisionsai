@@ -108,8 +108,24 @@ async function loadGeneralSettings() {
         document.getElementById('elevenlabs_style').value = Math.round(styleVal * 100);
         document.getElementById('elevenlabs_style_value').textContent = Math.round(styleVal * 100) + '%';
         document.getElementById('elevenlabs_speaker_boost').checked = speakerBoost;
+        const elevenlabsModelEl = document.getElementById('elevenlabs_tts_model');
+        if (elevenlabsModelEl) {
+            elevenlabsModelEl.value = settings.elevenlabs_tts_model || 'eleven_flash_v2_5';
+        }
         const elevenlabsOpts = document.getElementById('elevenlabs_voice_options');
         if (elevenlabsOpts) elevenlabsOpts.classList.toggle('hidden', voiceProvider !== 'elevenlabs');
+
+        const openaiModelEl = document.getElementById('openai_tts_model');
+        if (openaiModelEl) {
+            openaiModelEl.value = settings.openai_tts_model || 'tts-1';
+        }
+        const openaiInstrEl = document.getElementById('openai_tts_instructions');
+        if (openaiInstrEl) {
+            openaiInstrEl.value = settings.openai_tts_instructions || '';
+        }
+        const openaiOpts = document.getElementById('openai_voice_options');
+        if (openaiOpts) openaiOpts.classList.toggle('hidden', voiceProvider !== 'openai');
+
         const pixazoOpts = document.getElementById('pixazo_voice_options');
         const pixazoSteps = document.getElementById('pixazo_dit_steps');
         if (pixazoOpts) pixazoOpts.classList.toggle('hidden', voiceProvider !== 'pixazo');
@@ -122,6 +138,10 @@ async function loadGeneralSettings() {
         _updateDeleteButton();
 
         document.getElementById('oracle_position').value = settings.oracle_position || 'custom';
+
+        if (typeof window.refreshS2sLocksUi === 'function') {
+            await window.refreshS2sLocksUi();
+        }
 
         console.log('General settings loaded successfully:', settings);
     } catch (error) {
@@ -159,6 +179,9 @@ async function saveGeneralSettings() {
             elevenlabs_similarity_boost: parseInt(document.getElementById('elevenlabs_similarity').value, 10) / 100,
             elevenlabs_style: parseInt(document.getElementById('elevenlabs_style').value, 10) / 100,
             elevenlabs_use_speaker_boost: document.getElementById('elevenlabs_speaker_boost').checked,
+            elevenlabs_tts_model: (document.getElementById('elevenlabs_tts_model') || {}).value || 'eleven_flash_v2_5',
+            openai_tts_model: (document.getElementById('openai_tts_model') || {}).value || 'tts-1',
+            openai_tts_instructions: ((document.getElementById('openai_tts_instructions') || {}).value || '').trim(),
             pixazo_dit_steps: parseInt(document.getElementById('pixazo_dit_steps')?.value || '6', 10),
             restore_position: document.getElementById('restore_position').checked,
             oracle_position: document.getElementById('oracle_position').value,
@@ -215,6 +238,34 @@ async function updateVoiceOptions(provider) {
     });
 
     _updateDeleteButton();
+}
+
+async function updateOpenAIVoicesForModel(model) {
+    const voiceSelect = document.getElementById('tts_voice');
+    if (!voiceSelect) return;
+    const previous = voiceSelect.value;
+    try {
+        const resp = await fetch('/api/voices/openai?model=' + encodeURIComponent(model || 'tts-1'));
+        if (!resp.ok) return;
+        const voices = await resp.json();
+        voiceSelect.innerHTML = '';
+        (voices || []).forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice.id;
+            option.textContent = voice.name;
+            setVoiceOptionMetadata(option, voice);
+            voiceSelect.appendChild(option);
+        });
+        const ids = new Set((voices || []).map(v => v.id));
+        if (ids.has(previous)) {
+            voiceSelect.value = previous;
+        }
+        const providerInfo = _ttsProviders.find(p => p.id === 'openai');
+        if (providerInfo) providerInfo.voices = voices;
+        _updateDeleteButton();
+    } catch (e) {
+        console.error('Failed to refresh OpenAI voices for model:', e);
+    }
 }
 
 // Update playback speed label
@@ -672,9 +723,19 @@ function _initGeneral() {
             updateVoiceOptions(p);
             const el = document.getElementById('elevenlabs_voice_options');
             if (el) el.classList.toggle('hidden', p !== 'elevenlabs');
+            const openaiEl = document.getElementById('openai_voice_options');
+            if (openaiEl) openaiEl.classList.toggle('hidden', p !== 'openai');
             const pixazoEl = document.getElementById('pixazo_voice_options');
             if (pixazoEl) pixazoEl.classList.toggle('hidden', p !== 'pixazo');
             _updateCustomVoiceButton(p);
+        });
+    }
+    const openaiModelSelect = document.getElementById('openai_tts_model');
+    if (openaiModelSelect) {
+        openaiModelSelect.addEventListener('change', async function() {
+            if (document.getElementById('tts_provider').value === 'openai') {
+                await updateOpenAIVoicesForModel(this.value);
+            }
         });
     }
     const addBtn = document.getElementById('add_custom_voice_btn');

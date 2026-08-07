@@ -1080,6 +1080,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         # Always clean up PTT state and revert hook
         self._cleanup_ptt()
+        self._reconcile_interaction_visual_state("ptt_release")
         self._maybe_prompt_enable_listening_on_release()
 
     def _apply_immediate_release_visual(self):
@@ -1098,6 +1099,70 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             signal_manager.interrupt_tts.emit()
         except Exception as exc:
             logging.debug("[ORACLE] Could not dismiss TTS player for %s: %s", reason, exc)
+
+    def _reconcile_interaction_visual_state(self, reason: str) -> None:
+        """Repair stale capture visuals from the authoritative runtime flags.
+
+        Hook history is useful for normal transitions, but it can retain an
+        interaction state after an out-of-order release/stop signal. Only
+        interaction hooks are force-reset here so unrelated agent visuals such
+        as thinking or TTS are never cleared by capture cleanup.
+        """
+        dispatcher = self._event_dispatcher
+        current = dispatcher.get_current_hook()
+        interaction_hooks = {
+            "dictation",
+            "ticket_dictation",
+            "ptt_active",
+            "hands_free_listening",
+        }
+
+        if bool(getattr(self, "is_dictating", False)) or bool(
+            getattr(self, "_dictation_hotkey_active", False)
+        ):
+            expected = current if current in {"dictation", "ticket_dictation"} else "dictation"
+        elif bool(getattr(self, "hold_to_talk_active", False)) or bool(
+            getattr(self, "ptt_requested", False)
+        ):
+            expected = "ptt_active"
+        elif bool(getattr(self, "is_hands_free", False)):
+            expected = "hands_free_listening"
+        else:
+            expected = "idle"
+
+        if current == expected:
+            logging.debug(
+                "[ORACLE] interaction visual reconciled (%s): hook=%s",
+                reason,
+                current,
+            )
+            return
+
+        if expected == "idle":
+            if current in interaction_hooks:
+                logging.warning(
+                    "[ORACLE] interaction visual mismatch (%s): current=%s expected=idle; forcing idle",
+                    reason,
+                    current,
+                )
+                dispatcher.force_idle(f"interaction_reconcile:{reason}")
+            else:
+                logging.debug(
+                    "[ORACLE] interaction visual check (%s): preserving non-interaction hook=%s",
+                    reason,
+                    current,
+                )
+            return
+
+        logging.warning(
+            "[ORACLE] interaction visual mismatch (%s): current=%s expected=%s; repairing",
+            reason,
+            current,
+            expected,
+        )
+        if current in interaction_hooks:
+            dispatcher.force_idle(f"interaction_reconcile:{reason}")
+        dispatcher.fire_hook(expected, trigger=f"oracle:interaction_reconcile:{reason}")
 
     def _cleanup_ptt(self):
         """Clean up all PTT state — reverts hook, resets flags."""
@@ -1169,8 +1234,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # If hold_to_talk_active is still True, the user is still holding down PTT
         # and we should keep the glow active (STT might have stopped for other reasons like interruption)
         if not self.hold_to_talk_active:
-            # User already released - glow should already be stopped
-            logging.info("[ORACLE] User already released PTT - glow already stopped")
+            # Release normally clears the visual first. Reconcile anyway because
+            # this backend acknowledgement is the final recovery point for a
+            # missed or out-of-order UI transition.
+            logging.info("[ORACLE] User already released capture - verifying visual state")
+            self._reconcile_interaction_visual_state("stt_capture_stopped_after_release")
             return
         
         # Check if PTT is still requested (user still holding button)
@@ -1185,6 +1253,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.hold_to_talk_active = False
         self.ptt_pulse_timer.stop()
         logging.info("[ORACLE] Push-to-talk pulsing animation stopped (from STT)")
+        self._reconcile_interaction_visual_state("stt_capture_stopped")
 
     def on_hands_free_glow_on(self):
         """Enable the slow glow when STT reports hands-free listening."""
@@ -1432,6 +1501,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                     self.ptt_requested = False
                     signal_manager.push_to_talk_stop.emit()
                 self._cleanup_ptt()
+                self._reconcile_interaction_visual_state("ptt_drag_release")
             
             # Safety: if hook is still ptt_active after cleanup, force idle
             if self._event_dispatcher.get_current_hook() == "ptt_active":
@@ -1481,6 +1551,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.settings = load_settings_from_db()
         except Exception as exc:
             logger.warning("[HOTKEY] Failed to reload shortcut settings: %s", exc)
+
+        self._invalidate_hotkey_action_combos_cache()
 
         if self._global_ptt_listener is None:
             self._setup_global_ptt_hotkey()
@@ -1759,16 +1831,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         except Exception as exc:
             logging.debug("[ORACLE] dictation hook revert failed: %s", exc)
 
-        # Safety net: if we're still on dictation (revert didn't fire or hook
-        # stack was unexpected), force back to idle so glow never gets stuck.
         try:
-            current = self._event_dispatcher.get_current_hook()
-            if current == "dictation":
-                logging.warning("[ORACLE] dictation hook still active after revert — forcing idle")
-                self._event_dispatcher.force_idle("dictation_hotkey_release_safety")
-            elif current == "ptt_active":
-                logging.warning("[ORACLE] stale ptt_active after dictation release — forcing idle")
-                self._event_dispatcher.force_idle("dictation_hotkey_release_stale_ptt")
+            self._reconcile_interaction_visual_state("dictation_hotkey_release")
         except Exception as exc:
             logging.debug("[ORACLE] dictation cleanup check failed: %s", exc)
 
@@ -1796,11 +1860,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         except Exception as exc:
             logging.debug("[ORACLE] ticket dictation hook revert failed: %s", exc)
         try:
-            current = self._event_dispatcher.get_current_hook()
-            if current in {"dictation", "ticket_dictation"}:
-                self._event_dispatcher.force_idle("ticket_dictation_hotkey_release_safety")
-            elif current == "ptt_active":
-                self._event_dispatcher.force_idle("ticket_dictation_hotkey_release_stale_ptt")
+            self._reconcile_interaction_visual_state("ticket_dictation_hotkey_release")
         except Exception as exc:
             logging.debug("[ORACLE] ticket dictation cleanup check failed: %s", exc)
         self.update()
@@ -1824,7 +1884,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.start_recording_action()
         logger.info("[HOTKEY] Started recording via global recording hotkey")
 
+    def _invalidate_hotkey_action_combos_cache(self) -> None:
+        self._hotkey_action_combos_cache = None
+
     def _get_hotkey_action_combos(self) -> dict[str, tuple[str, str]]:
+        cached = getattr(self, "_hotkey_action_combos_cache", None)
+        if cached is not None:
+            return cached
+
         try:
             current_settings = load_settings_from_db()
         except Exception:
@@ -1886,6 +1953,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 snippets = (
                     session.query(Snippet.id, Snippet.remote_hotkey)
                     .filter(Snippet.remote_hotkey.isnot(None))
+                    .filter(Snippet.remote_hotkey != "")
                     .all()
                 )
             for snippet_id, remote_hotkey in snippets:
@@ -1894,13 +1962,26 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                     combos[f"paste_snippet_{snippet_id}"] = combo
         except Exception as exc:
             logger.debug("[HOTKEY] Failed to load snippet hotkeys: %s", exc)
+        self._hotkey_action_combos_cache = combos
         return combos
 
     @staticmethod
     def _snippet_remote_hotkey_to_global_combo(remote_hotkey: str | None) -> tuple[str, str] | None:
         from distr.core.hotkeys import parse_remote_hotkey
 
-        return parse_remote_hotkey(remote_hotkey)
+        combo = parse_remote_hotkey(remote_hotkey)
+        if not combo:
+            return None
+        modifier, key = combo
+        # Snippet storage uses short arrow names; the global listener emits *_arrow.
+        key_aliases = {
+            "left": "left_arrow",
+            "right": "right_arrow",
+            "up": "up_arrow",
+            "down": "down_arrow",
+            "esc": "escape",
+        }
+        return (modifier, key_aliases.get(str(key or "").strip().lower(), str(key or "").strip().lower()))
 
     def _get_skin_shortcut_order(self) -> list[str]:
         try:
@@ -2678,6 +2759,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.enable_hands_free()
         
         self._hands_free_before_dictation = False
+        self._reconcile_interaction_visual_state("dictation_stopped")
     
     def stop_dictating(self):
         """Stop dictation from menu"""

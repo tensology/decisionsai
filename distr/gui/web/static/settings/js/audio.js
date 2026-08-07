@@ -5,7 +5,7 @@ var _lastLoadedInputDevice = 'System Default';
 var _lastLoadedOutputDevice = 'System Default';
 
 function _setSelectValueIfPossible(select, value) {
-    if (!select || !value || value === 'System Default') return;
+    if (!select || !value) return;
     if (select.value === value) return;
     select.value = value;
     if (select.value !== value) {

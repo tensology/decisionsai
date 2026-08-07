@@ -2566,3 +2566,24 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
         ensure_automation_schema()
     except Exception as exc:
         logger.warning("Automation schema migration failed: %s", exc)
+
+    # OpenAI / ElevenLabs selectable TTS model settings (+ optional OpenAI STT hints)
+    _openai_elevenlabs_tts_columns = [
+        ("openai_tts_model", "VARCHAR DEFAULT 'tts-1'"),
+        ("openai_tts_instructions", "VARCHAR DEFAULT ''"),
+        ("elevenlabs_tts_model", "VARCHAR DEFAULT 'eleven_flash_v2_5'"),
+        ("openai_stt_prompt", "VARCHAR DEFAULT ''"),
+        ("openai_stt_noise_reduction", "VARCHAR DEFAULT ''"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for col, col_def in _openai_elevenlabs_tts_columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} {col_def}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", col)
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.debug("Could not add %s to settings: %s", col, e)
+    except Exception as e:
+        logger.debug("OpenAI/ElevenLabs TTS model settings migration: %s", e)

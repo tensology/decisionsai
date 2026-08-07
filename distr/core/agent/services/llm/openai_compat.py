@@ -57,6 +57,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
         "open_project",
     }
 
+    def _tools_list_for_message(self, user_message: str):
+        """Build schemas from the currently exposed tools for an agent round."""
+        filtered_tools = self._get_filtered_tools(user_message)
+        return convert_tools_to_openai_format(filtered_tools) if filtered_tools else None
+
     @staticmethod
     def _tool_intent_block_reason(
         func_name: str,
@@ -222,8 +227,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 if msg.get('role') == 'user':
                     last_user_msg = msg.get('content', '')
                     break
-            filtered_tools = self._get_filtered_tools(last_user_msg)
-            tools_list = convert_tools_to_openai_format(filtered_tools) if filtered_tools else None
+            tools_list = self._tools_list_for_message(last_user_msg)
             logger.info("%s: [2] prepare_messages+tools: %.3fs (%d msgs, %d tools)",
                         self.SERVICE_NAME, _time.time() - _t1, len(validated_messages),
                         len(tools_list) if tools_list else 0)
@@ -293,6 +297,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         await self._execute_chained_tools(tool_calls, full_content)
                 finally:
                     self._tool_execution_in_progress = False
+
+                # request_tool can expose a cached capability during this turn.
+                # Rebuild provider schemas before the follow-up so the model can
+                # actually call that tool immediately instead of being told to
+                # wait for another user message.
+                tools_list = self._tools_list_for_message(last_user_msg)
 
                 # Auto-send file to Telegram if applicable
                 auto_sent = await self._auto_send_file_to_telegram()

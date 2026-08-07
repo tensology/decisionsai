@@ -13,11 +13,16 @@ import re
 from typing import Any, Optional
 
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
+from distr.core.agent.services.tts.openai_tts_config import (
+    DEFAULT_OPENAI_TTS_MODEL,
+    openai_tts_supports_instructions,
+    resolve_openai_tts_model,
+    voices_for_openai_tts_model,
+)
 
 logger = logging.getLogger(__name__)
 
 # --- OpenAI defaults (moved from constants.py) ---
-OPENAI_ALLOWED_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer", "ash", "sage", "coral"}
 DEFAULT_OPENAI_VOICE = "alloy"
 DEFAULT_OPENAI_AGENT = "Alloy"
 
@@ -101,6 +106,10 @@ class OpenAIDescriptor(TTSProviderDescriptor):
 
         lo, hi = self.speed_bounds
         playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
+        model = resolve_openai_tts_model(settings.get("openai_tts_model"))
+        instructions = (settings.get("openai_tts_instructions") or "").strip()
+        if not openai_tts_supports_instructions(model):
+            instructions = ""
 
         service = OpenAITTSService(
             api_key=api_key,
@@ -110,6 +119,8 @@ class OpenAIDescriptor(TTSProviderDescriptor):
             playback_speed=playback_speed,
             event_queue=settings.get('_event_queue'),
             speech_volume=100,
+            model=model,
+            instructions=instructions,
         )
         service.set_hands_free(is_hands_free)
         return service
@@ -133,13 +144,18 @@ class OpenAIDescriptor(TTSProviderDescriptor):
             raise ValueError("OpenAI API key not configured")
 
         client = OpenAI(api_key=api_key)
+        model = resolve_openai_tts_model(settings.get("openai_tts_model"))
+        create_kwargs = {
+            "model": model,
+            "voice": voice,
+            "input": text,
+            "speed": speed,
+        }
+        instructions = (settings.get("openai_tts_instructions") or "").strip()
+        if instructions and openai_tts_supports_instructions(model):
+            create_kwargs["instructions"] = instructions
 
-        response = client.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=text,
-            speed=speed,
-        )
+        response = client.audio.speech.create(**create_kwargs)
         # OpenAI returns MP3 by default; write to temp then convert to WAV
         tmp_mp3 = out_file + ".tmp.mp3"
         response.stream_to_file(tmp_mp3)
@@ -153,7 +169,7 @@ class OpenAIDescriptor(TTSProviderDescriptor):
             if os.path.exists(tmp_mp3):
                 os.remove(tmp_mp3)
 
-        logger.info("Wrote OpenAI sample to %s", out_file)
+        logger.info("Wrote OpenAI sample to %s (model=%s)", out_file, model)
 
     # ------------------------------------------------------------------
     # Voice / display-name resolution
@@ -179,23 +195,31 @@ class OpenAIDescriptor(TTSProviderDescriptor):
 
         Replicates the OpenAI branch from tts_handler._normalize_voice_for_provider().
         """
+        allowed = voices_for_openai_tts_model((settings or {}).get("openai_tts_model"))
         raw = (raw_voice or "").strip()
         v = raw.lower()
-        if v in OPENAI_ALLOWED_VOICES:
+        if v in allowed:
             return v
         # Handle labels like "Kiran nova" by matching any token to a valid id
         tokens = re.split(r"[^a-zA-Z0-9_]+", v)
         for token in tokens:
-            if token in OPENAI_ALLOWED_VOICES:
+            if token in allowed:
                 return token
         configured = (settings.get("openai_voice") or "").strip().lower()
-        if configured in OPENAI_ALLOWED_VOICES:
+        if configured in allowed:
             return configured
         return DEFAULT_OPENAI_VOICE
 
     def get_voices(self) -> list[dict]:
-        """Return the list of available OpenAI voices."""
-        return [{"id": v, "name": v.capitalize()} for v in sorted(OPENAI_ALLOWED_VOICES)]
+        """Return the list of available OpenAI voices for the configured model."""
+        try:
+            from distr.core.utils import load_settings_from_db
+            settings = load_settings_from_db()
+            model = settings.get("openai_tts_model")
+        except Exception:
+            model = DEFAULT_OPENAI_TTS_MODEL
+        allowed = voices_for_openai_tts_model(model)
+        return [{"id": v, "name": v.capitalize()} for v in sorted(allowed)]
 
     # ------------------------------------------------------------------
     # Hot-swap support

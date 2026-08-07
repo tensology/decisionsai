@@ -93,6 +93,20 @@ def create_llm_service(llm_config, *, role, agent_name, event_queue, is_listenin
 
     cls, label = _load_llm_service_class(engine)
 
+    from distr.core.openai_s2s import completions_model_for_chat, is_openai_s2s_model
+    raw_model = (llm_config.get("model_name") or "").strip()
+    if is_openai_s2s_model(raw_model):
+        twin = completions_model_for_chat(raw_model, None)
+        logger.warning(
+            "create_llm_service: refusing Realtime model %s on Completions path; using twin %s",
+            raw_model,
+            twin,
+        )
+        llm_config = dict(llm_config)
+        llm_config["model_name"] = twin
+        llm_config["s2s_model"] = raw_model
+        llm_config["s2s_active"] = True
+
     if engine == 'ollama':
         model_name = llm_config.get('model_name', DEFAULT_MODELS['ollama'])
         if not model_name or not model_name.strip():

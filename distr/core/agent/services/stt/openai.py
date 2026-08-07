@@ -74,7 +74,7 @@ class OpenAIWhisperSTTService(BaseSTTService):
     - Realtime API for hands-free mode (streaming audio via WebSocket)
     """
 
-    def __init__(self, api_key: str, model: str = DEFAULT_OPENAI_WHISPER_MODEL, event_queue=None, is_hands_free=False, **kwargs):
+    def __init__(self, api_key: str, model: str = DEFAULT_OPENAI_WHISPER_MODEL, event_queue=None, is_hands_free=False, prompt: str = None, noise_reduction: str = None, **kwargs):
         if not PIPECAT_AVAILABLE:
             raise ImportError("Pipecat is required for OpenAIWhisperSTTService")
         if not OPENAI_AVAILABLE:
@@ -86,6 +86,9 @@ class OpenAIWhisperSTTService(BaseSTTService):
         self.api_key = api_key
         self.model = model
         self.client = OpenAI(api_key=api_key)
+        self._transcription_prompt = (prompt or "").strip() or None
+        # "near_field" | "far_field" | None (disabled)
+        self._noise_reduction = noise_reduction if noise_reduction in ("near_field", "far_field") else None
 
         # Keep explicit for clarity (same as base default)
         self._min_audio_duration_ms = 1000
@@ -113,18 +116,26 @@ class OpenAIWhisperSTTService(BaseSTTService):
 
     def _realtime_session_config(self) -> dict:
         """Build the current Realtime transcription session update event."""
+        transcription = {"model": self._realtime_model}
+        prompt = getattr(self, "_transcription_prompt", None)
+        if prompt:
+            transcription["prompt"] = prompt
+        input_audio = {
+            "format": {"type": "audio/pcm", "rate": 24000},
+            "transcription": transcription,
+            # DecisionsAI already detects speech boundaries locally.
+            # gpt-live-transcribe accepts explicit buffer commits.
+            "turn_detection": None,
+        }
+        noise_reduction = getattr(self, "_noise_reduction", None)
+        if noise_reduction:
+            input_audio["noise_reduction"] = {"type": noise_reduction}
         return {
             "type": "session.update",
             "session": {
                 "type": "transcription",
                 "audio": {
-                    "input": {
-                        "format": {"type": "audio/pcm", "rate": 24000},
-                        "transcription": {"model": self._realtime_model},
-                        # DecisionsAI already detects speech boundaries locally.
-                        # gpt-live-transcribe accepts explicit buffer commits.
-                        "turn_detection": None,
-                    }
+                    "input": input_audio,
                 },
             },
         }
@@ -436,10 +447,14 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 if self._stt_cancelled:
                     return None
                 try:
-                    transcript = self.client.audio.transcriptions.create(
-                        model=self.model,
-                        file=("audio.wav", wav_buffer.read(), "audio/wav"),
-                    )
+                    create_kwargs = {
+                        "model": self.model,
+                        "file": ("audio.wav", wav_buffer.read(), "audio/wav"),
+                    }
+                    prompt = getattr(self, "_transcription_prompt", None)
+                    if prompt:
+                        create_kwargs["prompt"] = prompt
+                    transcript = self.client.audio.transcriptions.create(**create_kwargs)
                     return transcript.text if transcript else None
                 except Exception as e:
                     logger.error(f"OpenAI Whisper API error: {e}")
@@ -659,10 +674,14 @@ class OpenAIWhisperSTTService(BaseSTTService):
             logger.info(f"OpenAIWhisperSTTService: Transcribing file {audio_file_path}")
             
             with open(audio_file_path, 'rb') as audio_file:
-                transcript = self.client.audio.transcriptions.create(
-                    model=self.model,
-                    file=audio_file,
-                )
+                create_kwargs = {
+                    "model": self.model,
+                    "file": audio_file,
+                }
+                prompt = getattr(self, "_transcription_prompt", None)
+                if prompt:
+                    create_kwargs["prompt"] = prompt
+                transcript = self.client.audio.transcriptions.create(**create_kwargs)
                 text = transcript.text if transcript else None
                 logger.info(f"OpenAIWhisperSTTService: Transcription complete ({len(text) if text else 0} chars)")
                 return text

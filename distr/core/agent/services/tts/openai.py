@@ -19,6 +19,10 @@ from distr.core.agent.services.tts.tts_pipeline_mixin import (
     STALE_INTERRUPT_GRACE_SEC,
     TTSPipelineMixin,
 )
+from distr.core.agent.services.tts.openai_tts_config import (
+    openai_tts_supports_instructions,
+    resolve_openai_tts_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,19 @@ except ImportError:
 class OpenAITTSService(TTSPipelineMixin, TTSService):
     """OpenAI-based TTS service using Pipecat"""
     
-    def __init__(self, api_key: str, voice_id: str, voice_name: str = None, stt_service=None, playback_speed: float = 1.0, event_queue=None, speech_volume: int = 100, **kwargs):
+    def __init__(
+        self,
+        api_key: str,
+        voice_id: str,
+        voice_name: str = None,
+        stt_service=None,
+        playback_speed: float = 1.0,
+        event_queue=None,
+        speech_volume: int = 100,
+        model: str = None,
+        instructions: str = None,
+        **kwargs,
+    ):
         if not PIPECAT_AVAILABLE:
             raise ImportError("Pipecat is required for OpenAITTSService")
         if not OPENAI_AVAILABLE:
@@ -50,6 +66,8 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
         self.client = OpenAI(api_key=api_key)
         self.voice_id = voice_id
         self.voice_name = voice_name or voice_id
+        self.model = resolve_openai_tts_model(model)
+        self.instructions = (instructions or "").strip()
         self.playback_speed = playback_speed
         self._text_buffer = ""
         self._frame_id_counter = 10000
@@ -73,7 +91,13 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
         # Convert speech_volume (0-100) to multiplier (0.0-1.0)
         self._speech_volume = max(0.0, min(1.0, speech_volume / 100.0))
         
-        logger.info(f"OpenAITTSService initialized with voice: {self.voice_name} (ID: {self.voice_id}), volume: {speech_volume}%")
+        logger.info(
+            "OpenAITTSService initialized with voice: %s (ID: %s), model: %s, volume: %s%%",
+            self.voice_name,
+            self.voice_id,
+            self.model,
+            speech_volume,
+        )
     
     def set_playback_speed(self, speed: float):
         """Update playback speed in real-time"""
@@ -166,22 +190,23 @@ class OpenAITTSService(TTSPipelineMixin, TTSService):
         self._sentence_batch_hold = []
         await self._enqueue_sentence(" ".join(hold), direction)
 
+    def _speech_create_kwargs(self, text: str) -> dict:
+        """Build Speech API kwargs for the selected model."""
+        # Speed is forced to 1.0; time stretching is handled by the Transport layer.
+        kwargs = {
+            "model": self.model,
+            "voice": self.voice_id,
+            "input": text,
+            "speed": 1.0,
+        }
+        if self.instructions and openai_tts_supports_instructions(self.model):
+            kwargs["instructions"] = self.instructions
+        return kwargs
+
     def _generate_audio(self, text: str):
         """Generate audio from text using OpenAI TTS API"""
         try:
-            # OpenAI TTS API supports 'speed' parameter (range 0.25-4.0)
-            # Clamp playback_speed to API's supported range
-            # NOTE: We force speed to 1.0 here because time stretching is handled by the Transport layer now.
-            # This prevents double speed application and allows for smoother real-time adjustment.
-            api_speed = 1.0
-            
-            # Generate audio using OpenAI TTS API
-            response = self.client.audio.speech.create(
-                model="tts-1",
-                voice=self.voice_id,
-                input=text,
-                speed=api_speed
-            )
+            response = self.client.audio.speech.create(**self._speech_create_kwargs(text))
             
             # Get audio bytes from response
             audio_bytes = response.content

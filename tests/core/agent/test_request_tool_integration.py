@@ -138,6 +138,81 @@ def test_empty_query_short_circuits_without_crash(request_tool_harness_factory) 
     assert "provide" in out.lower() or "description" in out.lower()
 
 
+def test_mouse_movement_natural_language_is_exposed_in_current_request(
+    request_tool_harness_factory,
+    warm_real_tool_cache,
+) -> None:
+    from distr.core.agent.tools.loader import get_cached_tool
+
+    mouse_tool = get_cached_tool("mouse_movement")
+    if mouse_tool is None:
+        pytest.skip("mouse_movement tool is not available in cache")
+
+    harness = request_tool_harness_factory()
+    if mouse_tool.name not in harness._tools_dict:
+        harness._tools.append(mouse_tool)
+        harness._tools_dict[mouse_tool.name] = mouse_tool
+    harness._sticky_tool_names = set()
+    harness._wire_request_tool_callback()
+
+    rtt = harness._tools_dict["request_tool"]
+    msg = rtt._run(
+        text="Need a tool to move the mouse down by a small amount or directional mouse movement."
+    )
+
+    assert "mouse_movement" in harness._sticky_tool_names
+    assert "exposed" in msg.lower()
+
+
+def test_second_request_for_exposed_cached_tool_is_idempotent(
+    request_tool_harness_factory,
+    warm_real_tool_cache,
+) -> None:
+    from distr.core.agent.tools.loader import get_cached_tool
+
+    mouse_tool = get_cached_tool("mouse_movement")
+    if mouse_tool is None:
+        pytest.skip("mouse_movement tool is not available in cache")
+
+    harness = request_tool_harness_factory()
+    if mouse_tool.name not in harness._tools_dict:
+        harness._tools.append(mouse_tool)
+        harness._tools_dict[mouse_tool.name] = mouse_tool
+    harness._sticky_tool_names = set()
+    harness._wire_request_tool_callback()
+    rtt = harness._tools_dict["request_tool"]
+
+    rtt._run(text="MouseMovementTool")
+    msg = rtt._run(text="MouseMovementTool")
+
+    assert harness._sticky_tool_names == {"mouse_movement"}
+    assert "already exposed" in msg.lower()
+
+
+def test_cached_screenshot_tool_is_exposed_in_current_request(
+    request_tool_harness_factory,
+    warm_real_tool_cache,
+) -> None:
+    from distr.core.agent.tools.loader import get_cached_tool
+
+    screenshot_tool = get_cached_tool("screenshot_analyzer")
+    if screenshot_tool is None:
+        pytest.skip("screenshot_analyzer tool is not available in cache")
+
+    harness = request_tool_harness_factory()
+    if screenshot_tool.name not in harness._tools_dict:
+        harness._tools.append(screenshot_tool)
+        harness._tools_dict[screenshot_tool.name] = screenshot_tool
+    harness._sticky_tool_names = set()
+    harness._wire_request_tool_callback()
+
+    rtt = harness._tools_dict["request_tool"]
+    msg = rtt._run(text="I need to take a proper screenshot and analyze the screen.")
+
+    assert "screenshot_analyzer" in harness._sticky_tool_names
+    assert "now exposed" in msg.lower()
+
+
 def test_gmail_query_injects_google_workspace_without_fuzzy_match(
     request_tool_harness_factory,
     warm_real_tool_cache,

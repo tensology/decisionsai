@@ -13,6 +13,58 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _is_false_image_refusal(content: str) -> bool:
+    """Detect a model claiming it cannot inspect an image that was attached."""
+    text = (content or "").strip().lower()
+    refusal_markers = (
+        "unable to analyze an image",
+        "unable to analyse an image",
+        "cannot analyze an image",
+        "cannot analyse an image",
+        "can't analyze an image",
+        "can't analyse an image",
+        "cannot see the image",
+        "can't see the image",
+        "unable to see the image",
+        "cannot view the image",
+        "can't view the image",
+        "do not have access to the image",
+        "don't have access to the image",
+        "do not have access to images",
+        "don't have access to images",
+    )
+    if any(marker in text for marker in refusal_markers):
+        return True
+
+    # Providers vary the disclaimer wording. Catch capability denials such as
+    # "unable to create or process screenshots or directly view images" while
+    # requiring both a denial and visual/capability language to avoid treating
+    # ordinary screenshot summaries as refusals.
+    denial_markers = ("unable to", "cannot", "can't", "do not", "don't")
+    visual_markers = ("image", "images", "screenshot", "screenshots", "picture", "pictures")
+    capability_markers = (
+        "analyze",
+        "analyse",
+        "see",
+        "view",
+        "inspect",
+        "process",
+        "access",
+        "create",
+    )
+    for denial in denial_markers:
+        start = text.find(denial)
+        while start >= 0:
+            denial_clause = text[start:start + 180]
+            if (
+                any(marker in denial_clause for marker in visual_markers)
+                and any(marker in denial_clause for marker in capability_markers)
+            ):
+                return True
+            start = text.find(denial, start + len(denial))
+    return False
+
+
 def resolve_vision_llm_config(settings: dict) -> tuple[str, str]:
     """Resolve vision provider/model from global settings only."""
     provider = (
@@ -79,7 +131,10 @@ def call_openai_vision(
             mime = image_mimes[i]
         content_items.append({
             "type": "image_url",
-            "image_url": {"url": f"data:{mime};base64,{b64}"},
+            "image_url": {
+                "url": f"data:{mime};base64,{b64}",
+                "detail": "high",
+            },
         })
 
     vision_messages = [{"role": "user", "content": content_items}]
@@ -94,7 +149,10 @@ def call_openai_vision(
         "timeout": 60.0,
     }
 
-    if is_action_request and any(v in vision_model.lower() for v in ['gpt-4o', 'gpt-4-turbo', 'o1', 'o3']):
+    # Every screenshot prompt builder requests a JSON object, including summary
+    # prompts. Enforcing JSON prevents a prose-only capability disclaimer from
+    # being accepted as a successful visual analysis.
+    if any(v in vision_model.lower() for v in ['gpt-4o', 'gpt-4-turbo', 'o1', 'o3']):
         create_kwargs["response_format"] = {"type": "json_object"}
 
     logger.info(f"ScreenshotAnalyzer: Calling vision API with {len(base64_images)} image(s), model: {vision_model}")
@@ -102,9 +160,34 @@ def call_openai_vision(
     import time
     max_retries = 2
     last_err: Optional[Exception] = None
+    content = ""
     for attempt in range(max_retries + 1):
         try:
             response = client.chat.completions.create(**create_kwargs)
+            if not response or not response.choices:
+                raise RuntimeError("Vision API returned empty response.")
+            content = response.choices[0].message.content or ""
+            if not content:
+                raise RuntimeError("Vision API returned empty content.")
+            if _is_false_image_refusal(content):
+                if attempt < max_retries:
+                    logger.warning(
+                        "Vision API falsely refused an attached image on attempt %d; retrying",
+                        attempt + 1,
+                    )
+                    retry_items = [dict(item) for item in content_items]
+                    retry_items[0] = {
+                        "type": "text",
+                        "text": (
+                            "A screenshot is attached to this message and is available for direct visual "
+                            "inspection. Analyze the attached pixels now. Do not claim that no image is "
+                            "available. Return only the requested JSON object.\n\n"
+                            + enhanced_prompt
+                        ),
+                    }
+                    create_kwargs["messages"] = [{"role": "user", "content": retry_items}]
+                    continue
+                raise RuntimeError("Vision model repeatedly refused the attached screenshot.")
             break
         except Exception as retry_err:
             last_err = retry_err
@@ -121,13 +204,6 @@ def call_openai_vision(
                 raise
     else:
         raise last_err  # type: ignore[misc]
-
-    if not response or not response.choices:
-        raise RuntimeError("Vision API returned empty response.")
-
-    content = response.choices[0].message.content
-    if not content:
-        raise RuntimeError("Vision API returned empty content.")
 
     preview = content[:200] if len(content) > 200 else content
     logger.info(f"ScreenshotAnalyzer: Vision analysis complete ({len(content)} chars). Preview: {preview}")

@@ -98,10 +98,17 @@ def _category_for_llm_type(llm_type: str) -> str:
 
 
 def register_routes(router, templates):
+    # OpenAI batch model is selectable; live hands-free always pairs with gpt-live-transcribe.
+    # Labels are parsed by resolve_stt_config() (model before '+' inside parentheses).
     _STT_CHOICES = {
         "vosk": "Vosk (Local & Offline)",
         "whisper": "Whisper.cpp (Local & Offline)",
         "assemblyai": "AssemblyAI (universal-3-5-pro)",
+        "openai_gpt-transcribe": "OpenAI (gpt-transcribe + gpt-live-transcribe)",
+        "openai_gpt-4o-transcribe": "OpenAI (gpt-4o-transcribe + gpt-live-transcribe)",
+        "openai_gpt-4o-mini-transcribe": "OpenAI (gpt-4o-mini-transcribe + gpt-live-transcribe)",
+        "openai_whisper-1": "OpenAI (whisper-1 + gpt-live-transcribe)",
+        # Legacy id kept for older clients; maps to current recommended pair.
         "openai_whisper": "OpenAI (gpt-transcribe + gpt-live-transcribe)",
     }
 
@@ -114,25 +121,38 @@ def register_routes(router, templates):
             "assemblyai (universal-3-5-pro)": "assemblyai",
             "assemblyai (nano)": "assemblyai",
             "assemblyai (best)": "assemblyai",
-            "openai whisper (whisper-1)": "openai_whisper",
-            "openai (gpt-transcribe + gpt-live-transcribe)": "openai_whisper",
+            "openai whisper (whisper-1)": "openai_whisper-1",
+            "openai (gpt-transcribe + gpt-live-transcribe)": "openai_gpt-transcribe",
+            "openai (gpt-4o-transcribe + gpt-live-transcribe)": "openai_gpt-4o-transcribe",
+            "openai (gpt-4o-mini-transcribe + gpt-live-transcribe)": "openai_gpt-4o-mini-transcribe",
+            "openai (whisper-1 + gpt-live-transcribe)": "openai_whisper-1",
         }
         lowered = raw.lower()
-        return stt_map_to_short.get(
-            lowered,
-            "whisper" if "whisper" in lowered
-            else "vosk" if "vosk" in lowered
-            else "openai_whisper" if "openai" in lowered
-            else "assemblyai" if "assemblyai" in lowered
-            else "whisper",
-        )
+        if lowered in stt_map_to_short:
+            return stt_map_to_short[lowered]
+        if "openai" in lowered:
+            # Prefer specific batch model id when present in the label.
+            for model_id, choice_id in (
+                ("gpt-4o-mini-transcribe", "openai_gpt-4o-mini-transcribe"),
+                ("gpt-4o-transcribe", "openai_gpt-4o-transcribe"),
+                ("gpt-transcribe", "openai_gpt-transcribe"),
+                ("whisper-1", "openai_whisper-1"),
+            ):
+                if model_id in lowered:
+                    return choice_id
+            return "openai_gpt-transcribe"
+        if "assemblyai" in lowered:
+            return "assemblyai"
+        if "vosk" in lowered:
+            return "vosk"
+        return "whisper"
 
     def _stt_option_available(settings: dict, stt_id: str) -> tuple[bool, str]:
         if stt_id == "assemblyai":
             if settings.get("assemblyai_enabled") and (settings.get("assemblyai_key") or "").strip():
                 return True, ""
             return False, "AssemblyAI needs an enabled API key in API Keys."
-        if stt_id == "openai_whisper":
+        if stt_id.startswith("openai"):
             if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip():
                 return True, ""
             return False, "OpenAI transcription needs an enabled OpenAI API key in API Keys."
@@ -141,7 +161,10 @@ def register_routes(router, templates):
     def _available_stt_options(settings: dict) -> tuple[list[dict], dict]:
         options = []
         hidden = {}
-        for stt_id, label in _STT_CHOICES.items():
+        # Hide legacy openai_whisper alias from the dropdown (same label as openai_gpt-transcribe).
+        visible_ids = [k for k in _STT_CHOICES if k != "openai_whisper"]
+        for stt_id in visible_ids:
+            label = _STT_CHOICES[stt_id]
             available, reason = _stt_option_available(settings, stt_id)
             item = {"id": stt_id, "name": label, "available": available, "reason": reason}
             if available:
@@ -177,6 +200,8 @@ def register_routes(router, templates):
 
         _raw_stt = (settings.get("transcription_model") or "Whisper.cpp (Local & Offline)").strip()
         _stt_short = _stt_short_from_full(_raw_stt)
+        if _stt_short == "openai_whisper":
+            _stt_short = "openai_gpt-transcribe"
         _stt_options, _hidden_stt_options = _available_stt_options(settings)
         _stt_unavailable = _hidden_stt_options.get(_stt_short)
         if _stt_unavailable:
@@ -252,6 +277,8 @@ def register_routes(router, templates):
         _fp_before = _agent_llm_settings_fingerprint(settings)
 
         _stt = (settings_data.stt_model or "whisper").strip().lower()
+        if _stt == "openai_whisper":
+            _stt = "openai_gpt-transcribe"
         _stt_options, _hidden_stt_options = _available_stt_options(settings)
         _stt_available_ids = {o["id"] for o in _stt_options}
         if _stt not in _STT_CHOICES:
@@ -260,13 +287,37 @@ def register_routes(router, templates):
             reason = (_hidden_stt_options.get(_stt) or {}).get("reason") or "This speech-to-text backend is not available."
             return JSONResponse({"detail": reason}, status_code=400)
         settings["transcription_model"] = _STT_CHOICES.get(_stt, "Whisper.cpp (Local & Offline)")
-        settings["conversational_llm_provider"] = (settings_data.conversational_provider or "ollama").strip()
-        settings["conversational_llm_model"] = (settings_data.conversational_model or "").strip()
-        # Sync legacy fields
-        settings["llm_provider"] = settings["conversational_llm_provider"]
-        settings["llm_model"] = settings["conversational_llm_model"]
-        settings["agent_provider"] = settings["conversational_llm_provider"]
-        settings["agent_model"] = settings["conversational_llm_model"]
+        conv_provider = (settings_data.conversational_provider or "ollama").strip()
+        conv_model = (settings_data.conversational_model or "").strip()
+
+        from distr.core.openai_s2s import is_openai_s2s_model, strip_realtime_from_settings_models
+
+        s2s_selected = is_openai_s2s_model(conv_model)
+        if s2s_selected:
+            # S2S is chat-scoped: stamp loaded chat only; never poison global Completions defaults.
+            chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+            if chat_id:
+                try:
+                    from distr.core.db import get_session, Chat
+                    with get_session() as db:
+                        chat = db.get(Chat, int(chat_id))
+                        if chat:
+                            chat.provider = "openai"
+                            chat.model_name = conv_model
+                            db.commit()
+                except Exception as exc:
+                    logger.warning("Could not stamp S2S model on loaded chat: %s", exc)
+            # Keep existing Completions globals; do not write Realtime into them
+            strip_realtime_from_settings_models(settings)
+        else:
+            settings["conversational_llm_provider"] = conv_provider
+            settings["conversational_llm_model"] = conv_model
+            # Sync legacy fields
+            settings["llm_provider"] = settings["conversational_llm_provider"]
+            settings["llm_model"] = settings["conversational_llm_model"]
+            settings["agent_provider"] = settings["conversational_llm_provider"]
+            settings["agent_model"] = settings["conversational_llm_model"]
+            strip_realtime_from_settings_models(settings)
         settings["coding_llm_provider"] = (settings_data.coding_provider or "ollama").strip()
         settings["coding_llm_model"] = (settings_data.coding_model or "").strip()
         settings["vision_llm_provider"] = (settings_data.vision_provider or "ollama").strip()
@@ -320,15 +371,52 @@ def register_routes(router, templates):
         # tools, but the main session.settings and pipeline still need a refresh so the
         # orchestrator matches what the user just saved.
         _fp_after = _agent_llm_settings_fingerprint(settings)
-        if _fp_before != _fp_after:
+        if _fp_before != _fp_after or s2s_selected:
             chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
-            notify_conversational_llm_saved_for_running_agent(
-                (settings.get("conversational_llm_provider") or "ollama").strip(),
-                (settings.get("conversational_llm_model") or "").strip(),
-                chat_id,
-            )
+            if s2s_selected:
+                notify_conversational_llm_saved_for_running_agent(
+                    "openai",
+                    conv_model,
+                    chat_id,
+                )
+            else:
+                notify_conversational_llm_saved_for_running_agent(
+                    (settings.get("conversational_llm_provider") or "ollama").strip(),
+                    (settings.get("conversational_llm_model") or "").strip(),
+                    chat_id,
+                )
 
         return JSONResponse({"success": True, "message": "LLMs settings saved"})
+
+    @router.get("/llms/s2s-locks")
+    @route_handler("get S2S UI lock matrix", fallback={
+        "s2s_active": False,
+        "lock_stt": False,
+        "lock_conversational_provider": False,
+        "lock_tts_provider": False,
+        "lock_openai_tts_model": False,
+        "lock_conversational_model": False,
+        "voice_set": None,
+        "default_voice": None,
+    })
+    async def get_s2s_locks(model: str = ""):
+        """Return STT/LLM/TTS lock flags. If model omitted, use loaded chat model_name."""
+        from distr.core.openai_s2s import s2s_ui_locks
+        mid = (model or "").strip()
+        if not mid:
+            try:
+                from distr.core.settings import load_settings_from_db
+                from distr.core.db import get_session, Chat
+                settings = load_settings_from_db()
+                chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+                if chat_id:
+                    with get_session() as db:
+                        chat = db.get(Chat, int(chat_id))
+                        if chat and chat.model_name:
+                            mid = (chat.model_name or "").strip()
+            except Exception:
+                mid = ""
+        return JSONResponse(s2s_ui_locks(mid))
 
     @router.get("/llms/available-providers")
     @route_handler("get available LLM providers", fallback={"providers": [{"id": "ollama", "name": "Ollama"}]})

@@ -8,6 +8,7 @@ Extracted from LLMSharedMixin to keep shared.py focused on core LLM logic.
 """
 
 import asyncio
+import copy
 import logging
 import platform
 import re
@@ -65,6 +66,21 @@ class FastActionMixin:
                 None, lambda t=tool, a=safe_tool_args: t._run(**a)
             )
             logger.debug("LLM: Fast action result: %s", str(result)[:100])
+
+            repeatable_tools = {
+                "mouse_movement",
+                "mouse_actions",
+                "caret_movement",
+                "special_key",
+                "media_control",
+            }
+            result_lower = str(result or "").strip().lower()
+            if (
+                fast_action.tool_name in repeatable_tools
+                and not result_lower.startswith(("error", "failed", "blocked"))
+            ):
+                self._last_repeatable_fast_action = copy.deepcopy(fast_action)
+                self._last_repeatable_fast_action_at = time.monotonic()
 
             # --- file_operations → trigger LLM follow-up ---
             if fast_action.tool_name == "file_operations":

@@ -168,6 +168,7 @@ class AgentSession:
         self.stt_service = None
         self.llm_service = None
         self.tts_service = None
+        self.s2s_service = None  # OpenAI Realtime S2S bridge (passthrough when inactive)
         self.vad_analyzer = None
         self.chat_manager = None  # Will be instantiated in _create_services
         
@@ -388,18 +389,52 @@ class AgentSession:
         # Use chat provider/model first; then conversational_llm_* (what web/settings UI shows); then legacy agent_*
         raw_provider = chat_provider or self.settings.get('conversational_llm_provider') or self.settings.get('agent_provider', 'Ollama')
         provider = normalize_provider(raw_provider)
-        model_name = (chat_model or self.settings.get('conversational_llm_model') or self.settings.get('agent_model', '') or '').strip()
+        chat_or_global_model = (chat_model or self.settings.get('conversational_llm_model') or self.settings.get('agent_model', '') or '').strip()
 
-        # Infer provider from model when model clearly indicates a different provider
+        from distr.core.openai_s2s import (
+            completions_model_for_chat,
+            is_openai_s2s_model,
+        )
+        s2s_intent_model = chat_or_global_model if is_openai_s2s_model(chat_or_global_model) else None
+        if s2s_intent_model:
+            # Completions twin = globals (must stay non-Realtime). Chat row holds S2S intent.
+            model_name = completions_model_for_chat(
+                chat_or_global_model,
+                self.settings.get('conversational_llm_model') or self.settings.get('agent_model', ''),
+            )
+            self.logger.info(
+                "S2S intent active (chat model=%s); Completions twin=%s; "
+                "dictation uses transcription_model; agent talk uses Realtime S2S",
+                s2s_intent_model,
+                model_name,
+            )
+            config['llm']['s2s_model'] = s2s_intent_model
+            config['llm']['s2s_active'] = True
+        else:
+            model_name = chat_or_global_model
+            config['llm']['s2s_active'] = False
+            config['llm']['s2s_model'] = None
+
+        # Infer provider from Completions model (not Realtime id)
         from distr.core.llm_factory import infer_provider_from_model
         provider = infer_provider_from_model(provider, model_name)
-        self.logger.debug("_load_config: LLM provider=%s model=%s", provider, model_name)
+        self.logger.debug("_load_config: LLM provider=%s model=%s s2s=%s", provider, model_name, bool(s2s_intent_model))
 
         # Map provider to engine and resolve config
         from .constants import PROVIDER_TO_ENGINE
         engine = PROVIDER_TO_ENGINE.get(provider, 'ollama')
         config['llm']['engine'] = engine
         config['llm']['model_name'] = model_name or agent_config.get('llm') or DEFAULT_MODELS.get(engine, DEFAULT_MODELS['ollama'])
+        if is_openai_s2s_model(config['llm']['model_name']):
+            # Last-resort guard — never put Realtime on Completions service
+            config['llm']['model_name'] = completions_model_for_chat(
+                config['llm']['model_name'],
+                self.settings.get('conversational_llm_model'),
+            )
+            self.logger.warning(
+                "Blocked Realtime model on Completions path; using twin %s",
+                config['llm']['model_name'],
+            )
         if engine in API_KEY_NAMES:
             config['llm']['api_key'] = self.settings.get(API_KEY_NAMES[engine], '')
         
@@ -559,11 +594,16 @@ class AgentSession:
                 raise ValueError("OpenAI API key is required but not found in settings for STT")
             model = stt_config.get('model', DEFAULT_OPENAI_WHISPER_MODEL)
             self.logger.debug(f"Creating OpenAI Whisper STT service with model: {model}")
+            noise = (self.settings.get("openai_stt_noise_reduction") or "").strip() or None
+            if noise not in ("near_field", "far_field"):
+                noise = None
             self.stt_service = OpenAIWhisperSTTService(
                 api_key=api_key,
                 model=model,
                 event_queue=self.event_queue,
-                is_hands_free=self.is_hands_free
+                is_hands_free=self.is_hands_free,
+                prompt=(self.settings.get("openai_stt_prompt") or "").strip() or None,
+                noise_reduction=noise,
             )
             self.logger.debug(f"✅ OpenAI Whisper STT service created successfully")
         if stt_config['engine'] == 'assemblyai':
@@ -748,7 +788,58 @@ class AgentSession:
         # Pass TTS service to LLM service so tools can use it
         if hasattr(self, 'llm_service') and self.llm_service:
             self.llm_service.set_tts_service(self.tts_service)
-            
+
+        self._create_s2s_service()
+
+    def _create_s2s_service(self):
+        """Create/update the Realtime S2S bridge (always in pipeline; enabled when S2S intent)."""
+        from distr.core.agent.services.s2s.openai_realtime import OpenAIRealtimeS2SBridge
+        from distr.core.openai_s2s import coerce_realtime_voice
+
+        llm_cfg = (self.config or {}).get("llm") or {}
+        s2s_active = bool(llm_cfg.get("s2s_active"))
+        s2s_model = llm_cfg.get("s2s_model") or "gpt-realtime-2.1"
+        api_key = (self.settings or {}).get("openai_key", "") or ""
+        tts_cfg = (self.config or {}).get("tts") or {}
+        voice = coerce_realtime_voice(
+            tts_cfg.get("voice_name") or tts_cfg.get("voice_id") or ""
+        )
+        instructions = ""
+        try:
+            instructions = (self._load_agent_role() or "").strip()
+        except Exception:
+            instructions = ""
+
+        if self.s2s_service is None:
+            self.s2s_service = OpenAIRealtimeS2SBridge(
+                api_key=api_key,
+                model=s2s_model,
+                voice=voice,
+                instructions=instructions,
+                enabled=s2s_active,
+                event_queue=self.event_queue,
+            )
+        else:
+            self.s2s_service.set_s2s_enabled(
+                s2s_active,
+                model=s2s_model,
+                voice=voice,
+                api_key=api_key,
+                instructions=instructions,
+            )
+        if hasattr(self.s2s_service, "set_hands_free"):
+            self.s2s_service.set_hands_free(self.is_hands_free)
+        if hasattr(self.s2s_service, "set_dictating"):
+            self.s2s_service.set_dictating(self.is_dictating)
+        if hasattr(self.s2s_service, "set_ptt_active"):
+            self.s2s_service.set_ptt_active(self.ptt_active)
+        self.logger.info(
+            "S2S bridge: enabled=%s model=%s voice=%s",
+            s2s_active,
+            s2s_model,
+            voice,
+        )
+
     def _setup_signal_bridging(self):
         """Bridge signals from ChatManager and SignalManager to event_queue"""
         if not self.event_queue:
@@ -929,6 +1020,27 @@ class AgentSession:
             provider, model_name, chat_id, speak, voice_provider, voice_model,
         )
 
+        from distr.core.openai_s2s import completions_model_for_chat, is_openai_s2s_model
+        if is_openai_s2s_model(model_name):
+            twin = completions_model_for_chat(
+                model_name,
+                (self.settings or {}).get("conversational_llm_model")
+                or (self.settings or {}).get("agent_model"),
+            )
+            self.logger.info(
+                "HOT-SWAP LLM: S2S model %s → Completions twin %s",
+                model_name,
+                twin,
+            )
+            if self.config and self.config.get("llm") is not None:
+                self.config["llm"]["s2s_active"] = True
+                self.config["llm"]["s2s_model"] = model_name
+            model_name = twin
+            provider = "openai" if not (provider or "").strip() else provider
+        elif self.config and self.config.get("llm") is not None:
+            self.config["llm"]["s2s_active"] = False
+            self.config["llm"]["s2s_model"] = None
+
         old_service = self.llm_service
         old_pipeline_direction = getattr(old_service, '_pipeline_direction', None) if old_service else None
         old_event_loop = getattr(old_service, '_event_loop', None) if old_service else None
@@ -1005,6 +1117,14 @@ class AgentSession:
         # isn't initialized yet (it's created BY StartFrame processing).
         setattr(self.llm_service, '_FrameProcessor__started', True)
         self.logger.debug("HOT-SWAP LLM: marked new service as started")
+
+        # Sync Realtime S2S bridge enable/model with chat intent
+        try:
+            self._create_s2s_service()
+            if self.s2s_service is not None and self.transport is not None:
+                self.s2s_service.set_audio_out(self.transport.output())
+        except Exception as e:
+            self.logger.warning("HOT-SWAP LLM: S2S bridge sync failed: %s", e)
 
         # Update chat_manager to reflect the provider/model we actually use.
         # NOTE: Do NOT call set_current_chat here — the caller (_cmd_current_chat_changed)
@@ -1225,6 +1345,15 @@ class AgentSession:
         self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
         self.role = self._load_agent_role()
         service_factory.update_agent_name_on_llm(self.llm_service, self.agent_name, self.role)
+
+        # Keep Realtime S2S voice in sync when S2S intent is active
+        llm_cfg = (self.config or {}).get("llm") or {}
+        if llm_cfg.get("s2s_active") and getattr(self, "s2s_service", None):
+            from distr.core.openai_s2s import coerce_realtime_voice
+            self.s2s_service.set_s2s_enabled(
+                True,
+                voice=coerce_realtime_voice(voice_model),
+            )
 
     def _tts_service_matches_target(self, service, *, target_engine, target_voice_name, target_voice_id) -> bool:
         if service is None or not target_engine:
@@ -1468,16 +1597,25 @@ class AgentSession:
         
         self.logger.info(f"Transport created: audio_in={True}, audio_out={True}, volume={initial_volume:.2f}, speed={initial_speed:.2f}x")
         
-        # Create pipeline
-        self.pipeline = Pipeline(
+        # Ensure S2S bridge exists (passthrough when inactive)
+        if self.s2s_service is None:
+            self._create_s2s_service()
+        if self.s2s_service is not None:
+            self.s2s_service.set_audio_out(self.transport.output())
+
+        # Create pipeline — S2S sits before STT so agent talk can skip the STT chain
+        processors = [self.transport.input()]
+        if self.s2s_service is not None:
+            processors.append(self.s2s_service)
+        processors.extend(
             [
-                self.transport.input(),
                 self.stt_service,
                 self.llm_service,
                 self.tts_service,
-                self.transport.output()
+                self.transport.output(),
             ]
         )
+        self.pipeline = Pipeline(processors)
         self.llm_service._audio_transport_output = self.transport.output()
         
         # Create task — disable idle timeout since this is a persistent desktop assistant,

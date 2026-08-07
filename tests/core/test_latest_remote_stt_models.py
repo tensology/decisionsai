@@ -45,7 +45,7 @@ def test_settings_api_exposes_latest_models_through_existing_stt_choices(monkeyp
 
     assert response.status_code == 200
     options = {item["id"]: item["name"] for item in response.json()["stt_options"]}
-    assert options["openai_whisper"] == "OpenAI (gpt-transcribe + gpt-live-transcribe)"
+    assert options["openai_gpt-transcribe"] == "OpenAI (gpt-transcribe + gpt-live-transcribe)"
     assert options["assemblyai"] == "AssemblyAI (universal-3-5-pro)"
 
 

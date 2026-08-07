@@ -1180,8 +1180,19 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
             # Normalize provider for validation
             from distr.core.chat import _normalize_provider, valid_llm_providers
+            from distr.core.openai_s2s import apply_s2s_voice_defaults, is_openai_s2s_model
 
             provider = _normalize_provider(raw_provider)
+
+            # S2S: force OpenAI provider + Realtime voice on the chat row
+            s2s_prov, voice_provider, _s2s_voice = apply_s2s_voice_defaults(
+                model_name=model_name,
+                voice_provider=voice_provider,
+                voice_model=(request_data.voice_model or "").strip() or None,
+            )
+            if s2s_prov:
+                provider = s2s_prov
+                raw_provider = "openai"
 
             # Validate provider
             valid_providers = valid_llm_providers()
@@ -1206,7 +1217,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             # Resolve voice model for the chosen provider only.
             # This avoids cross-provider fallbacks (e.g. using a Kokoro voice when
             # the selected provider is OpenAI/ElevenLabs).
-            if voice_provider and voice_provider in tts_registry:
+            if is_openai_s2s_model(model_name):
+                voice_model = _s2s_voice
+            elif voice_provider and voice_provider in tts_registry:
                 desc = tts_registry.get(voice_provider)
                 voice_model = (request_data.voice_model or "").strip() or (
                     settings.get(desc.settings_key) or desc.default_voice
@@ -1250,20 +1263,27 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 _settings = load_settings_from_db()
                 _changed = False
 
-                # LLM provider & model
-                _settings["conversational_llm_provider"] = provider  # normalized
-                _settings["llm_provider"] = provider
-                _settings["agent_provider"] = provider
-                _changed = True
-                if model_name:
-                    _settings["conversational_llm_model"] = model_name
-                    _settings["llm_model"] = model_name
-                    _settings["agent_model"] = model_name
+                # LLM provider & model — never write Realtime S2S ids into globals
+                from distr.core.openai_s2s import is_openai_s2s_model, strip_realtime_from_settings_models
+                if not is_openai_s2s_model(model_name):
+                    _settings["conversational_llm_provider"] = provider  # normalized
+                    _settings["llm_provider"] = provider
+                    _settings["agent_provider"] = provider
                     _changed = True
+                    if model_name:
+                        _settings["conversational_llm_model"] = model_name
+                        _settings["llm_model"] = model_name
+                        _settings["agent_model"] = model_name
+                        _changed = True
+                else:
+                    strip_realtime_from_settings_models(_settings)
+                    logger.info(
+                        "Create chat: S2S model %s kept chat-scoped; globals Completions untouched",
+                        model_name,
+                    )
 
-                # TTS: same as Settings → General / save_voice_selection — voice_provider id,
-                # tts_provider = descriptor display name, tts_voice + per-provider *_voice columns.
-                if voice_provider and voice_model:
+                # TTS globals: skip when chat is S2S (Realtime voice is chat-scoped)
+                if voice_provider and voice_model and not is_openai_s2s_model(model_name):
                     from distr.core.services.settings_service import (
                         apply_voice_selection_to_settings,
                     )
@@ -1377,6 +1397,22 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     chat.voice_model = (request_data.voice_model or "").strip() or None
                     updated = True
                     settings_fields_touched = True
+
+                # S2S: coerce provider + Realtime voice on the chat row
+                from distr.core.openai_s2s import apply_s2s_voice_defaults, is_openai_s2s_model
+                if is_openai_s2s_model(chat.model_name):
+                    s2s_prov, vp, vm = apply_s2s_voice_defaults(
+                        model_name=chat.model_name,
+                        voice_provider=chat.voice_provider,
+                        voice_model=chat.voice_model,
+                    )
+                    if s2s_prov:
+                        chat.provider = s2s_prov
+                        chat.voice_provider = vp
+                        chat.voice_model = vm
+                        updated = True
+                        settings_fields_touched = True
+
                 if updated:
                     chat.modified_date = datetime.utcnow()
                     session.commit()
@@ -1397,23 +1433,35 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 _changed = False
                 if request_data.provider and request_data.provider.strip():
                     from distr.core.chat import _normalize_provider, valid_llm_providers
-                    _sett["conversational_llm_provider"] = _normalize_provider(request_data.provider)
-                    _sett["llm_provider"] = _normalize_provider(request_data.provider)
-                    _sett["agent_provider"] = _normalize_provider(request_data.provider)
-                    _changed = True
+                    from distr.core.openai_s2s import is_openai_s2s_model
+                    # Provider globals only when not switching into S2S via model below
+                    if not (
+                        request_data.model_name
+                        and is_openai_s2s_model(request_data.model_name.strip())
+                    ):
+                        _sett["conversational_llm_provider"] = _normalize_provider(request_data.provider)
+                        _sett["llm_provider"] = _normalize_provider(request_data.provider)
+                        _sett["agent_provider"] = _normalize_provider(request_data.provider)
+                        _changed = True
                 if request_data.model_name and request_data.model_name.strip():
-                    _sett["conversational_llm_model"] = request_data.model_name.strip()
-                    _sett["llm_model"] = request_data.model_name.strip()
-                    _sett["agent_model"] = request_data.model_name.strip()
-                    _changed = True
+                    from distr.core.openai_s2s import is_openai_s2s_model, strip_realtime_from_settings_models
+                    _m = request_data.model_name.strip()
+                    if is_openai_s2s_model(_m):
+                        strip_realtime_from_settings_models(_sett)
+                    else:
+                        _sett["conversational_llm_model"] = _m
+                        _sett["llm_model"] = _m
+                        _sett["agent_model"] = _m
+                        _changed = True
 
-                # Voice globals: same shape as create-chat / save_voice_selection (tts_provider name,
-                # tts_voice, *_voice columns). Only when this PATCH touches voice fields.
+                # Voice globals: skip when chat is S2S (Realtime voice is chat-scoped)
                 voice_touched = (
                     request_data.voice_provider is not None
                     or request_data.voice_model is not None
                 )
-                if voice_touched:
+                _chat_model = (response_payload.get("model_name") or "").strip()
+                from distr.core.openai_s2s import is_openai_s2s_model as _is_s2s
+                if voice_touched and not _is_s2s(_chat_model):
                     from distr.core.services.settings_service import (
                         apply_voice_selection_to_settings,
                     )

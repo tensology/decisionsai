@@ -382,6 +382,7 @@ async function loadLLMsSettings(opts) {
 
         await populateProjectCliRoutes(settings);
         updateDownloadButtonVisibility();
+        await refreshS2sLocksUi();
         if (opts.forceModelReload && typeof window.showNotification === 'function') {
             window.showNotification('Model catalogs reloaded', 'success');
         }
@@ -393,6 +394,42 @@ async function loadLLMsSettings(opts) {
         if (opts.forceModelReload) {
             const { reloadBtn } = _getLLMActionButtons();
             _setActionBusy(reloadBtn, false, '', 'Reload');
+        }
+    }
+}
+
+async function refreshS2sLocksUi(explicitModel) {
+    if (!window.DecisionsS2S || typeof window.DecisionsS2S.applyS2sLocks !== 'function') {
+        return;
+    }
+    const modelEl = document.getElementById('conversational_model');
+    const model = explicitModel !== undefined && explicitModel !== null
+        ? explicitModel
+        : (modelEl ? modelEl.value : '');
+    await window.DecisionsS2S.applyS2sLocks({
+        model: model,
+        sttSelect: document.getElementById('stt_model'),
+        conversationalProvider: document.getElementById('conversational_provider'),
+        conversationalModel: modelEl,
+        ttsProvider: document.getElementById('tts_provider'),
+        openaiTtsModel: document.getElementById('openai_tts_model'),
+        voiceProvider: document.getElementById('tts_provider'),
+        voiceModel: document.getElementById('tts_voice'),
+    });
+    // If dropdown is Completions but loaded chat is S2S, re-query without model (chat-scoped)
+    if (model && window.DecisionsS2S.fetchS2sLocks) {
+        const byModel = await window.DecisionsS2S.fetchS2sLocks(model);
+        if (!byModel.s2s_active) {
+            await window.DecisionsS2S.applyS2sLocks({
+                model: '',
+                sttSelect: document.getElementById('stt_model'),
+                conversationalProvider: document.getElementById('conversational_provider'),
+                conversationalModel: modelEl,
+                ttsProvider: document.getElementById('tts_provider'),
+                openaiTtsModel: document.getElementById('openai_tts_model'),
+                voiceProvider: document.getElementById('tts_provider'),
+                voiceModel: document.getElementById('tts_voice'),
+            });
         }
     }
 }
@@ -1326,6 +1363,13 @@ if (document.readyState === 'loading') {
                     });
                 }
 
+                const modelSelect = document.getElementById(`${type}_model`);
+                if (modelSelect && type === 'conversational') {
+                    modelSelect.addEventListener('change', function() {
+                        refreshS2sLocksUi(this.value);
+                    });
+                }
+
                 const downloadBtn = document.getElementById(`${type}_download`);
                 if (downloadBtn) {
                     downloadBtn.addEventListener('click', function() {
@@ -1358,6 +1402,13 @@ if (document.readyState === 'loading') {
                 });
             }
 
+            const modelSelect = document.getElementById(`${type}_model`);
+            if (modelSelect && type === 'conversational') {
+                modelSelect.addEventListener('change', function() {
+                    refreshS2sLocksUi(this.value);
+                });
+            }
+
             const downloadBtn = document.getElementById(`${type}_download`);
             if (downloadBtn) {
                 downloadBtn.addEventListener('click', function() {
@@ -1372,6 +1423,7 @@ if (document.readyState === 'loading') {
 // Export functions for use in other files
 window.loadLLMsSettings = loadLLMsSettings;
 window.reloadLLMsSettings = reloadLLMsSettings;
+window.refreshS2sLocksUi = refreshS2sLocksUi;
 window.openLLMBenchmarkModal = openBenchmarkModal;
 
 // Auto-refresh provider dropdowns when third-party keys are saved (same page)

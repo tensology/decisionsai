@@ -291,6 +291,13 @@ def test_global_hotkey_listener_accepts_web_style_ctrl_alt_number_action_combo()
     listener._on_press(OptionKey())
     listener._on_press(OptionOne())
 
+    action_cb.assert_not_called()
+    listener._on_release(OptionOne())
+    action_cb.assert_not_called()
+    listener._on_release(OptionKey())
+    action_cb.assert_not_called()
+    listener._on_release(ControlKey())
+
     action_cb.assert_called_once_with("paste_snippet_7")
 
 
@@ -326,7 +333,60 @@ def test_global_hotkey_listener_accepts_default_snippet_function_key_combo():
     listener._on_press(ShiftKey())
     listener._on_press(F3Key())
 
+    action_cb.assert_not_called()
+    listener._on_release(F3Key())
+    action_cb.assert_not_called()
+    listener._on_release(ShiftKey())
+    action_cb.assert_not_called()
+    listener._on_release(ControlKey())
+
     action_cb.assert_called_once_with("paste_snippet_3")
+
+
+def test_snippet_paste_callback_runs_with_trigger_modifiers_released():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    modifiers_at_paste = []
+    listener = None
+
+    def on_action(_action_name):
+        modifiers_at_paste.append(set(listener._pressed_modifiers))
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_action_combos=MagicMock(return_value={"paste_snippet_8": ("control_shift", "1")}),
+        on_hotkey_action=on_action,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class ShiftKey:
+        name = "shift"
+        char = None
+        vk = None
+
+    class OneKey:
+        name = "1"
+        char = "1"
+        vk = None
+
+    listener._on_press(ControlKey())
+    listener._on_press(ShiftKey())
+    listener._on_press(OneKey())
+    listener._on_release(OneKey())
+    listener._on_release(ShiftKey())
+
+    assert modifiers_at_paste == []
+
+    listener._on_release(ControlKey())
+
+    assert modifiers_at_paste == [set()]
 
 
 def test_dictation_hotkey_uses_dynamic_combo_from_settings_callback():

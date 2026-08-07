@@ -10,15 +10,15 @@ from distr.core.paths import DB_DIR
 from ._shared import logger
 
 
-# OpenAI TTS supported voices (single source of truth in backend)
-OPENAI_TTS_VOICES = [
-    {"id": "alloy", "name": "Alloy"},
-    {"id": "echo", "name": "Echo"},
-    {"id": "fable", "name": "Fable"},
-    {"id": "onyx", "name": "Onyx"},
-    {"id": "nova", "name": "Nova"},
-    {"id": "shimmer", "name": "Shimmer"},
-]
+def _openai_tts_voices_for_request(model: str | None = None) -> list[dict]:
+    """OpenAI built-in voices for the selected Speech API model."""
+    from distr.core.agent.services.tts.openai_tts_config import voices_for_openai_tts_model
+
+    return [{"id": v, "name": v.capitalize()} for v in sorted(voices_for_openai_tts_model(model))]
+
+
+# Backward-compatible default list (legacy tts-1 set + common extras used by UI).
+OPENAI_TTS_VOICES = _openai_tts_voices_for_request(None)
 
 # Same tree as settings.db (distr.core.paths.DB_DIR) — do not use distr/db/custom_voices.
 CUSTOM_VOICE_AUDIO_DIR = os.path.join(DB_DIR, "custom_voices")
@@ -150,7 +150,9 @@ def register_routes(router, templates):
                     voices = []
                     voices = [_elevenlabs_api_voice_entry(v) for v in el_voices]
             elif provider_id == "openai":
-                voices = list(OPENAI_TTS_VOICES)
+                from distr.core.settings import load_settings_from_db
+                _oa_settings = load_settings_from_db()
+                voices = _openai_tts_voices_for_request(_oa_settings.get("openai_tts_model"))
             elif provider_id == "coqui":
                 from distr.core.agent.constants import COQUI_VOICES
                 voices = [{"id": vid, "name": name} for vid, name in COQUI_VOICES.items()]
@@ -291,9 +293,15 @@ def register_routes(router, templates):
             return []
 
     @router.get("/voices/openai")
-    async def get_openai_voices():
-        """Return OpenAI TTS voice list (backend-defined)."""
-        return OPENAI_TTS_VOICES
+    async def get_openai_voices(model: str = None):
+        """Return OpenAI TTS voice list for the selected Speech API model."""
+        if model is None:
+            try:
+                from distr.core.settings import load_settings_from_db
+                model = load_settings_from_db().get("openai_tts_model")
+            except Exception:
+                model = None
+        return _openai_tts_voices_for_request(model)
 
     @router.get("/voices/coqui")
     async def get_coqui_voices():
