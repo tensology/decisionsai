@@ -811,6 +811,13 @@
     background-size: 280px auto;
 }
 
+/* ponytail: overflow:hidden on .turn-panel zeroes min-height:auto, so a
+   column-flex thread shrinks panels to a 1px orange border and 24px gaps
+   that look like extra footers. Do not shrink rows; scroll instead. */
+.chat-messages > * {
+    flex-shrink: 0;
+}
+
 .chat-divider {
     display: flex;
     align-items: center;

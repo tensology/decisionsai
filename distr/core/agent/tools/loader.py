@@ -46,6 +46,29 @@ def list_all_cached_tool_instances():
         return list(_tool_cache.values())
 
 
+def register_runtime_tool(tool, source: str, *, replace: bool = False) -> None:
+    """Register a tool created after startup and refresh retrieval.
+
+    This is the one mutation boundary for agent-built tools. MCP keeps its own
+    lifecycle adapter because it must reconcile whole remote servers.
+    """
+    reg = get_tool_registry()
+    existing = reg.get_record(tool.name)
+    if existing is not None:
+        if not replace:
+            raise ValueError(f"Tool {tool.name!r} is already registered")
+        reg.unregister(tool.name)
+    reg.register(tool, source)
+    with _cache_lock:
+        _tool_cache[tool.name] = tool
+    try:
+        from distr.core.agent.tool_retriever import schedule_tool_index_rebuild
+
+        schedule_tool_index_rebuild(reg.get_all())
+    except Exception:
+        logger.debug("Could not refresh tool retrieval after runtime registration", exc_info=True)
+
+
 def _get_tool_definitions(
     chat_manager=None,
     llm_service=None,
@@ -77,6 +100,7 @@ def _get_tool_definitions(
         ("MouseMovementTool", dict(chat_manager=chat_manager)),
         ("MouseActionsTool", dict(chat_manager=chat_manager)),
         ("ComputerUseContextTool", {}),
+        ("ComputerUseTool", dict(chat_manager=chat_manager)),
         # Media Control
         ("MediaControlTool", dict(chat_manager=chat_manager)),
         # Function Keys
@@ -174,6 +198,7 @@ def _get_tool_definitions(
         ("CodexThreadContextTool", {}),
         ("IdeThreadTool", {}),
         ("ProactiveOrchestratorTool", {}),
+        ("WorkOpsTool", {}),
         ("MemorySearchTool", {}),
         ("MemoryReadTool", {}),
         (
@@ -242,6 +267,8 @@ def _get_tool_definitions(
         ("OpenProjectTool", dict(event_queue=event_queue)),
         ("StartProjectTool", dict(event_queue=event_queue)),
         ("OpenAndStartProjectTool", dict(event_queue=event_queue)),
+        # Deterministic tool compiler. Callback is wired by the active LLM session.
+        ("BuildToolTool", dict(chat_manager=chat_manager)),
         # Meta-tool: RequestToolTool (callback wired separately in core_mixin.py)
         ("RequestToolTool", {}),
     ]
@@ -314,6 +341,10 @@ def warm_tool_cache(
             ("MoveToElementTool",  ("input.accessibility_tree", "MoveToElementTool"),  {}),
             ("ClickElementTool",   ("input.accessibility_tree", "ClickElementTool"),   {}),
             ("GetDesktopSnapshotTool", ("input.accessibility_tree", "GetDesktopSnapshotTool"), {}),
+            ("ListWindowsTool",    ("input.window_ops", "ListWindowsTool"),            {}),
+            ("FocusWindowTool",    ("input.window_ops", "FocusWindowTool"),            {}),
+            ("LaunchAppTool",      ("input.window_ops", "LaunchAppTool"),              {}),
+            ("SetWindowBoundsTool", ("input.window_ops", "SetWindowBoundsTool"),       {}),
         ]
         for tool_name, (submodule, class_name), kwargs in _accessibility_tools:
             try:
@@ -363,6 +394,20 @@ def warm_tool_cache(
                 logger.debug("Cached sidecar tool: %s", tool_name)
             except Exception as e:
                 logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
+
+        # Durable agent-built tools are ordinary registry entries after loading.
+        try:
+            from distr.core.agent.tools.artifacts import load_artifact_tools
+
+            for tool in load_artifact_tools(chat_manager=chat_manager):
+                source = f"artifact:{tool.name}"
+                try:
+                    reg.register(tool, source)
+                    _tool_cache[tool.name] = tool
+                except ValueError as exc:
+                    logger.warning("Skipped duplicate tool artifact %r: %s", tool.name, exc)
+        except Exception:
+            logger.warning("Could not load deterministic tool artifacts", exc_info=True)
 
         tools_for_index = list(_tool_cache.values())
 
@@ -440,6 +485,7 @@ TOOL_REGISTRY = {
     "MouseMovementTool":       ("input.mouse_movement", "MouseMovementTool"),
     "MouseActionsTool":        ("input.mouse_actions", "MouseActionsTool"),
     "ComputerUseContextTool":  ("input.computer_use_context", "ComputerUseContextTool"),
+    "ComputerUseTool":         ("input.computer_use", "ComputerUseTool"),
     "FunctionKeyTool":         ("input.function_keys", "FunctionKeyTool"),
     "SpecialKeyTool":          ("input.special_keys", "SpecialKeyTool"),
     "TypeTextTool":            ("input.type_text", "TypeTextTool"),
@@ -514,6 +560,7 @@ TOOL_REGISTRY = {
     "CodexThreadContextTool":  ("system.codex_thread_context", "CodexThreadContextTool"),
     "IdeThreadTool":           ("system.ide_thread", "IdeThreadTool"),
     "ProactiveOrchestratorTool": ("system.proactive_orchestrator", "ProactiveOrchestratorTool"),
+    "WorkOpsTool": ("system.work_ops_tool", "WorkOpsTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
     "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
     "MemoryAddTool":           ("system.memory_tools", "MemoryAddTool"),
@@ -551,6 +598,7 @@ TOOL_REGISTRY = {
     "PlaywrightTool":          ("integrations.playwright_tool", "PlaywrightTool"),
     "PiAgentTool":             ("integrations.pi_agent", "PiAgentTool"),
     # meta/
+    "BuildToolTool":           ("artifacts", "BuildToolTool"),
     "RequestToolTool":         ("request_tool", "RequestToolTool"),
     "TerminalOverviewTool":     ("integrations.terminal_overview", "TerminalOverviewTool"),
 }
@@ -573,12 +621,17 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "MouseMovementTool": "Move the mouse pointer to a specific position, screen corner, or relative direction on the desktop.",
     "MouseActionsTool": "Perform mouse clicks (left, right, double) and scroll up or down at the current cursor position.",
     "ComputerUseContextTool": "Read or clear shared computer-use context (latest observation, located target, and last executed action) to coordinate step-by-step UI automation.",
+    "ComputerUseTool": "Autonomously complete a multi-step desktop task (move/focus windows, open apps, type into documents, click UI). Prefers OS window ops over mouse; falls back to screenshot-action-verify for visual targets.",
     "FunctionKeyTool": "Press a function key from F1 through F12 in the active application.",
     "SpecialKeyTool": "Press any keyboard key: Enter, Space, Tab, Escape, arrows, F1-F24, letters, numbers, modifiers, and more.",
     "TypeTextTool": "Type out text character by character into the currently focused input field or editor.",
     # input/accessibility_tree
     "GetWindowTreeTool": "Get the accessibility tree of the frontmost window to inspect UI elements, buttons, text fields, and their hierarchy.",
     "GetDesktopSnapshotTool": "Refresh a compact ambient desktop summary (frontmost app and window title). Prefer this over screenshots for 'what am I looking at'; use get_window_tree for targeting.",
+    "ListWindowsTool": "List visible desktop windows with pid, process name, title, and bounds. Use before focusing or snapping a named app such as Terminal.",
+    "FocusWindowTool": "Bring a named window to the foreground by pid, process_name, or title. Prefer this over clicking the title bar.",
+    "LaunchAppTool": "Launch an application by name (Terminal, TextEdit, Google Chrome) via the sidecar.",
+    "SetWindowBoundsTool": "Move or snap a window with OS APIs: snap left/right/maximize, or set x,y,w,h. Identify the window by pid or process_name.",
     "FindElementTool": "Find a specific UI element in the accessibility tree by role, title, or description.",
     "MoveToElementTool": "Move the mouse cursor to a specific UI element identified by its accessibility tree ID.",
     "ClickElementTool": "Click a specific UI element identified by its accessibility tree ID.",
@@ -645,7 +698,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "NewChatTool": "Start a new conversation, new chat, or fresh chat session.",
     "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
-    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
+    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. For the generic ticket board page only. To open a specific local/Jira/Trello board, use create_ticket action=open_board instead.",
     "ShowMermaidDiagramTool": "Open the Mermaid diagram viewer. With mermaid_code: render that diagram. With empty mermaid_code: open the viewer (last diagram or blank editor). Use open_page page='diagram viewer' when the user only asks to open the viewer.",
     "YtdlpDownloadTool": "Download YouTube or video URLs with yt-dlp and open Download Manager for live progress, speed, and ETA. Use when user asks to download videos or save YouTube links.",
     # system/
@@ -662,6 +715,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Scan Gmail, Slack, WhatsApp, Telegram, Trello, Jira, and board-derived work signals, "
         "build daily plans from connected work intelligence, prioritize important items, match them to projects and recent Codex/Cursor context, "
         "and dispatch approved work to Codex, Cursor, Pi, or the configured project backend."
+    ),
+    "WorkOpsTool": (
+        "Operate the work loop: intake Jira/email batches onto the Ticket Board, run tickets via project CLI or workflow, "
+        "check lifecycle status, show humanized client drafts, and approve client sends. "
+        "Telegram remains Send/Revise/Leave. Prefer this over inventing a chat-stream CLI."
     ),
     "MemorySearchTool": "Search distilled long-term MEMORY.md sections for facts and preferences using keyword relevance.",
     "MemoryReadTool": "Read line ranges from cross-chat AGENT.md, USER.md, MEMORY.md, or EVENTS.md persistent files.",
@@ -710,16 +768,19 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "CreateCursorTicketTool": "Create a Cursor plugin handoff only when the user explicitly asks for Cursor. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes a DecisionsAI Cursor handoff; ordinary ticket requests use create_ticket.",
     "KanbanTicketTool": (
         "Create, update, list, move, or manage tickets, tasks, or cards on project ticket boards, including external "
-        "Jira and Trello boards/tickets. Also handles WhatsApp work intake in order: sync relay messages, list latest "
-        "activity, preview a project or board's linked WhatsApp feed, list contacts/senders, list chats, read messages, "
-        "find likely work-related WhatsApp messages, mark messages handled/unhandled, snapshot WhatsApp messages into "
-        "tickets after confirmation, leave reply drafts in the WhatsApp composer for user review, and send WhatsApp "
-        "replies to a contact/chat after confirmation."
+        "Jira and Trello boards/tickets. Use action=open_board to open the Ticket Board UI in the browser with the "
+        "correct deep link for a local, Jira, or Trello board (do not guess URLs or use smart_open). Also handles "
+        "WhatsApp work intake in order: sync relay messages, list latest activity, preview a project or board's "
+        "linked WhatsApp feed, list contacts/senders, list chats, read messages, find likely work-related WhatsApp "
+        "messages, mark messages handled/unhandled, snapshot WhatsApp messages into tickets after confirmation, leave "
+        "reply drafts in the WhatsApp composer for user review, and send WhatsApp replies to a contact/chat after "
+        "confirmation."
     ),
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",
     "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",
     # meta/
+    "BuildToolTool": "Build, validate, freeze, register, and reuse a missing deterministic capability or multi-step action sequence when existing tools cannot complete the request.",
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",
     # sidecar (screen intelligence, Python execution, physical interaction)
 
@@ -837,6 +898,10 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
         ("MoveToElementTool",  ("input.accessibility_tree", "MoveToElementTool"),  {}),
         ("ClickElementTool",   ("input.accessibility_tree", "ClickElementTool"),   {}),
         ("GetDesktopSnapshotTool", ("input.accessibility_tree", "GetDesktopSnapshotTool"), {}),
+        ("ListWindowsTool",    ("input.window_ops", "ListWindowsTool"),            {}),
+        ("FocusWindowTool",    ("input.window_ops", "FocusWindowTool"),            {}),
+        ("LaunchAppTool",      ("input.window_ops", "LaunchAppTool"),              {}),
+        ("SetWindowBoundsTool", ("input.window_ops", "SetWindowBoundsTool"),       {}),
     ]
     for tool_name, (submodule, class_name), kwargs in accessibility_tools:
         try:

@@ -76,6 +76,15 @@ def recommend_automation_from_work_scan(scan: dict[str, Any]) -> ProposedAction 
             "I'm seeing WhatsApp messages that look like work intake.",
         )
 
+    jira_email_keys = scan.get("messages", {}).get("jira_email") if isinstance(scan.get("messages"), dict) else None
+    jira_proposals = [
+        p for p in proposals if str(_proposal_payload(p).get("source") or "").lower() == "jira_email"
+        or str(p.get("action_type") or "") == "jira_intake"
+    ]
+    # Initiative executes jira_intake directly. Do not nag to install a named automation.
+    if (isinstance(jira_email_keys, list) and jira_email_keys) or jira_proposals:
+        return None
+
     email_rows = _messages(scan, "email")
     email_proposals = [
         p for p in proposals if str(_proposal_payload(p).get("source") or "").lower() == "email"

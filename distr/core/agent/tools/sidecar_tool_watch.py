@@ -27,6 +27,10 @@ SIDECAR_DEPENDENT_TOOL_NAMES: Final[frozenset[str]] = frozenset(
         "drag_to",
         "scroll",
         "wait_for_element",
+        "list_windows",
+        "focus_window",
+        "launch_app",
+        "set_window_bounds",
     }
 )
 

@@ -246,6 +246,14 @@ def _chat_title(tool_name: str, result: Optional[str], instruction_hint: Optiona
         return "Inspected files"
     if tool_name == "execute_code":
         return "Ran helper code"
+    if tool_name == "build_tool":
+        return "Built missing capability"
+    if tool_name == "computer_use":
+        return "Completed computer-use loop"
+    if tool_name.startswith("built__"):
+        return "Ran " + tool_name.removeprefix("built__").replace("_", " ").title()
+    if tool_name.startswith("artifact_step__"):
+        return "Ran " + tool_name.removeprefix("artifact_step__").replace("_", " ").title()
     if tool_name == "mode_control":
         return "Checked mode control"
     if tool_name == "chat_settings":

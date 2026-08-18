@@ -3804,7 +3804,7 @@ class StepExecutorMixin:
         Unlike agent_instruction (which burns orchestration LLM tokens on every
         micro-decision), this handler owns the loop itself:
 
-          screenshot → qwen3-vl decides action → sidecar executes → repeat
+          screenshot → configured vision model decides → sidecar executes → repeat
 
         The orchestration model is only called when the loop escalates.
         """
@@ -3819,6 +3819,7 @@ class StepExecutorMixin:
 
         iteration_log: List[Dict[str, Any]] = []
         consecutive_stuck = 0
+        chat_id = config.get("_chat_id")
 
         logger.info("ComputerUse[%s]: starting — goal=%r max_iter=%d", run_id, goal[:80], max_iter)
 
@@ -3835,14 +3836,45 @@ class StepExecutorMixin:
             logger.info("ComputerUse[%s]: iter %d action=%s desc=%r",
                         run_id, i + 1, action_type, action.get("description", "")[:60])
 
+            action_event_id = None
+            if chat_id:
+                try:
+                    from distr.core.agent.tool_audit import record_tool_start
+
+                    action_event_id = record_tool_start(
+                        int(chat_id),
+                        f"computer_use_step__{action_type}",
+                        instruction_hint=(
+                            f"Computer use step {i + 1}: "
+                            f"{action.get('description') or action.get('reason') or action_type}"
+                        ),
+                        routing_path="computer_use",
+                        metadata={"iteration": i + 1, "action_type": action_type},
+                    )
+                except Exception:
+                    logger.debug("ComputerUse: could not record action start", exc_info=True)
+
             # ── 3. Check terminal states ─────────────────────────────────────
             if action_type == "finished":
                 summary = self._cu_format_summary(goal, iteration_log, action.get("reason", "Goal achieved."))
+                if action_event_id:
+                    from distr.core.chat_turns import finish_tool
+
+                    finish_tool(action_event_id, success=True, summary=action.get("reason", "Goal achieved."), detail=summary)
                 return {"output": summary, "passed": True}
 
             if action_type == "stuck":
                 consecutive_stuck += 1
                 iteration_log.append({"i": i + 1, "type": "stuck", "description": action.get("reason", "")})
+                if action_event_id:
+                    from distr.core.chat_turns import finish_tool
+
+                    finish_tool(
+                        action_event_id,
+                        success=False,
+                        summary=action.get("reason", "Computer use is stuck."),
+                        detail=action.get("reason", "Computer use is stuck."),
+                    )
                 if consecutive_stuck >= stuck_threshold:
                     if escalate:
                         escalation = self._cu_escalate(goal, screenshot_b64, iteration_log, step_data, run_id)
@@ -3867,6 +3899,17 @@ class StepExecutorMixin:
                 "description": action.get("description", ""),
                 "result": exec_result[:200],
             })
+            if action_event_id:
+                from distr.core.agent.tool_audit import classify_tool_result_status
+                from distr.core.chat_turns import finish_tool
+
+                action_status = classify_tool_result_status(exec_result)
+                finish_tool(
+                    action_event_id,
+                    success=action_status not in {"failed", "error", "cancelled"},
+                    summary=exec_result[:1200],
+                    detail=exec_result,
+                )
 
             import time as _time
             _time.sleep(0.4)  # Let the UI settle before next screenshot
@@ -3912,8 +3955,26 @@ Previous actions ({n} so far):
 {history}
 
 Look at the current screenshot and decide the single next action.
+Prefer OS window ops (list/focus/launch/set_bounds) over clicking title bars or dragging windows.
 
 Respond with ONLY a JSON object — no text before or after it:
+
+If you need to see open windows:
+  {{"type":"list_windows","description":"listing windows"}}
+
+If you need to bring a window forward:
+  {{"type":"focus","pid":123,"description":"focus Terminal"}}
+  {{"type":"focus","process_name":"Terminal","description":"focus Terminal"}}
+
+If you need to open an app:
+  {{"type":"launch","executable":"TextEdit","description":"open TextEdit"}}
+
+If you need to move, resize, or snap a window:
+  {{"type":"set_bounds","process_name":"Terminal","snap":"left","description":"snap Terminal left"}}
+  {{"type":"set_bounds","pid":123,"x":0,"y":0,"w":800,"h":600,"description":"place window"}}
+
+If you need to wait for a UI element:
+  {{"type":"wait","name":"Save","timeout":10000,"description":"wait for Save"}}
 
 If you need to click something:
   {{"type":"click","description":"what you're clicking","norm_x":0.5,"norm_y":0.3}}
@@ -3955,24 +4016,57 @@ IMPORTANT: norm_x and norm_y are 0.0–1.0 fractions of screen width/height.\
 
         try:
             from distr.core.settings import load_settings_from_db
-            settings = load_settings_from_db()
-            ollama_url = settings.get("ollama_url", "http://localhost:11434/")
-            vision_model = settings.get("vision_llm_model") or "qwen3-vl:2b"
+            from distr.core.llm_factory import resolve_computer_use_config
+            from distr.core.agent.tools.vision.vision_api import resolve_vision_llm_config
+            from distr.core.agent.tools.vision.screenshot_analyzer import ScreenshotAnalyzerTool
 
-            import requests as _req
-            resp = _req.post(
-                ollama_url.rstrip("/") + "/api/chat",
-                json={
-                    "model": vision_model,
-                    "messages": [{"role": "user", "content": prompt, "images": [screenshot_b64]}],
-                    "stream": False,
-                },
-                timeout=60,
+            settings = load_settings_from_db()
+            configured_provider, configured_model = resolve_computer_use_config(settings)
+            fallback_provider, fallback_model = resolve_vision_llm_config(settings)
+            provider = configured_provider or fallback_provider
+            model = configured_model or fallback_model
+            if not provider or not model:
+                return {
+                    "type": "stuck",
+                    "reason": "No Computer Use or vision provider/model is configured.",
+                }
+
+            logger.info(
+                "ComputerUse: deciding action with configured model %s/%s",
+                provider,
+                model,
             )
-            content = resp.json()["message"]["content"].strip()
+            analyzer = ScreenshotAnalyzerTool()
+            content = analyzer._call_vision_api(
+                provider.strip().lower(),
+                model,
+                [screenshot_b64],
+                prompt,
+                True,
+                image_mimes=["image/jpeg"],
+            )
+            if content.startswith("Error:") and configured_provider and (
+                fallback_provider.strip().lower(), fallback_model
+            ) != (configured_provider.strip().lower(), configured_model):
+                logger.warning(
+                    "ComputerUse: configured model failed, falling back to vision %s/%s: %s",
+                    fallback_provider,
+                    fallback_model,
+                    content[:180],
+                )
+                content = analyzer._call_vision_api(
+                    fallback_provider.strip().lower(),
+                    fallback_model,
+                    [screenshot_b64],
+                    prompt,
+                    True,
+                    image_mimes=["image/jpeg"],
+                )
+            if content.startswith("Error:"):
+                return {"type": "stuck", "reason": content}
+            content = content.strip()
 
             # Extract JSON from response (model may wrap it in markdown)
-            import re
             m = re.search(r'\{.*\}', content, re.DOTALL)
             if m:
                 return json.loads(m.group())
@@ -3985,9 +4079,77 @@ IMPORTANT: norm_x and norm_y are 0.0–1.0 fractions of screen width/height.\
         """Execute a single computer-use action via the sidecar HTTP API."""
         try:
             from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
+            from distr.core.agent.tools.input.window_ops import format_window_list, resolve_window_pid
+
             action_type = action.get("type", "")
 
-            if action_type == "click":
+            if action_type == "list_windows":
+                result = call_sidecar_tool("list_windows", {}, timeout=15)
+                return format_window_list(result.get("windows") or [])
+
+            elif action_type == "focus":
+                pid, window = resolve_window_pid(
+                    action.get("pid"),
+                    action.get("process_name") or "",
+                    action.get("title") or "",
+                    action.get("app_name") or "",
+                )
+                result = call_sidecar_tool("focus_window", {"pid": pid}, timeout=10)
+                label = window.get("process_name") or window.get("title") or pid
+                return f"Focused pid={pid} ({label}): {result.get('success', False)}"
+
+            elif action_type == "launch":
+                executable = (action.get("executable") or action.get("app_name") or "").strip()
+                if not executable:
+                    return "Launch failed: executable is required"
+                result = call_sidecar_tool("launch_app", {"executable": executable}, timeout=15)
+                return f"Launched {executable}: {result.get('success', False)}"
+
+            elif action_type == "set_bounds":
+                pid, window = resolve_window_pid(
+                    action.get("pid"),
+                    action.get("process_name") or "",
+                    action.get("title") or "",
+                    action.get("app_name") or "",
+                )
+                params: Dict[str, Any] = {"pid": pid}
+                snap = (action.get("snap") or "").strip().lower()
+                if snap:
+                    params["snap"] = snap
+                else:
+                    params["x"] = int(action.get("x") or 0)
+                    params["y"] = int(action.get("y") or 0)
+                    params["w"] = int(action.get("w") or 0)
+                    params["h"] = int(action.get("h") or 0)
+                result = call_sidecar_tool("set_window_bounds", params, timeout=10)
+                label = window.get("process_name") or window.get("title") or pid
+                return (
+                    f"Moved {label} pid={pid} to "
+                    f"({result.get('x')},{result.get('y')} {result.get('w')}x{result.get('h')}): "
+                    f"{result.get('success', False)}"
+                )
+
+            elif action_type == "wait":
+                wait_params: Dict[str, Any] = {
+                    "timeout": int(action.get("timeout") or 10000),
+                    "interval": int(action.get("interval") or 500),
+                }
+                if action.get("name"):
+                    wait_params["name"] = action["name"]
+                if action.get("control_type"):
+                    wait_params["control_type"] = action["control_type"]
+                if action.get("app_name"):
+                    wait_params["app_name"] = action["app_name"]
+                result = call_sidecar_tool(
+                    "wait_for_element",
+                    wait_params,
+                    timeout=int(wait_params["timeout"] / 1000) + 5,
+                )
+                if result.get("found"):
+                    return f"Found {result.get('match_count', 0)} element(s) matching {action.get('name')!r}"
+                return f"Element not found: {action.get('name')!r}"
+
+            elif action_type == "click":
                 result = call_sidecar_tool("click_at", {
                     "norm_x": action.get("norm_x", 0.5),
                     "norm_y": action.get("norm_y", 0.5),
@@ -4008,7 +4170,7 @@ IMPORTANT: norm_x and norm_y are 0.0–1.0 fractions of screen width/height.\
                 return f"Pressed {action.get('keys')}: {result.get('success', False)}"
 
             elif action_type == "scroll":
-                params: Dict[str, Any] = {
+                params = {
                     "direction": action.get("direction", "down"),
                     "amount": int(action.get("amount", 3)),
                 }

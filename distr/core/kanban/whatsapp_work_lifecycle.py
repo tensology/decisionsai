@@ -99,17 +99,13 @@ def mark_execution_started(*, ticket_id: int, execution_kind: str, run_id: int |
 
 
 def _client_draft(ticket_title: str, result_summary: str, contact: str) -> str:
-    title = re.sub(r"\s+", " ", ticket_title or "the requested work").strip()
-    summary = re.sub(r"[`*_#]+", "", result_summary or "")
-    summary = re.sub(r"https?://\S+|(?<!\w)(?:~?/|[A-Za-z]:\\)[^\s,;]+", "", summary)
-    summary = re.sub(r"\s+", " ", summary).strip()
-    summary = re.sub(r"(?i)\b(?:run|ticket|step)\s*#?\d+\b", "", summary)
-    summary = re.sub(r"\s{2,}", " ", summary).strip(" .")
-    if summary.startswith(("{", "[")) or len(summary) > 320:
-        summary = "The requested work has been completed and checked"
-    greeting = f"Hi {contact}," if contact and not contact.isdigit() else "Hi,"
-    detail = f" {summary}." if summary else " The requested work has been completed and checked."
-    return f"{greeting} quick update on {title}.{detail} It is ready for your review. Please let me know if you would like any changes."
+    from distr.core.kanban.client_message_humanize import build_client_work_update
+
+    return build_client_work_update(
+        contact=contact,
+        work_title=ticket_title,
+        result_summary=result_summary,
+    )
 
 
 def prepare_completed_reply(

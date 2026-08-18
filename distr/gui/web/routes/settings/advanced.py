@@ -626,7 +626,7 @@ def register_routes(router, templates):
 
     @router.post("/advanced/google/disconnect")
     async def disconnect_google():
-        """Remove Google OAuth tokens and delete the client secret file."""
+        """Remove saved Google account tokens while preserving OAuth app config."""
         try:
             from distr.core.settings import load_settings_from_db, save_settings_to_db
             # Remove Google account from connected_accounts in DB
@@ -636,11 +636,7 @@ def register_routes(router, templates):
             # Pass a list — save_settings_to_db encrypts per-account secrets then JSON-encodes once.
             # json.dumps(list) here skipped encryption and double-encoded, so Google tokens could reappear as "connected" incorrectly.
             save_settings_to_db({"connected_accounts": connected_accounts})
-            # Delete the client secret file from canonical location
-            from distr.core.paths import GOOGLE_OAUTH_SECRET_PATH
-            if os.path.isfile(GOOGLE_OAUTH_SECRET_PATH):
-                os.unlink(GOOGLE_OAUTH_SECRET_PATH)
-            logger.info("Google disconnected: tokens removed, secret file deleted")
+            logger.info("Google disconnected: saved account tokens removed; OAuth client config preserved")
             return JSONResponse({"success": True})
         except Exception as e:
             logger.error(f"Google disconnect: {e}", exc_info=True)
@@ -659,6 +655,19 @@ def register_routes(router, templates):
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
             logger.error(f"WhatsApp QR proxy: {e}")
+            return JSONResponse({"status": "error", "qr_code": None, "error": str(e)}, status_code=500)
+
+    @router.post("/advanced/whatsapp/connect")
+    async def connect_whatsapp():
+        """Proxy: start or resume WhatsApp pairing."""
+        try:
+            import httpx
+            base_url = _whatsapp_relay_base_url()
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(f"{base_url}/connect", headers=_relay_headers())
+                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"WhatsApp connect proxy: {e}")
             return JSONResponse({"status": "error", "qr_code": None, "error": str(e)}, status_code=500)
 
     @router.get("/advanced/whatsapp/status")

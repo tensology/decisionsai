@@ -845,7 +845,7 @@ function startChatWebSocket(force) {
                     return;
                 }
                 if (msg.event === 'transcription_progress') {
-                    if (msg.chat_id === currentChatId) {
+                    if (Number(msg.chat_id) === Number(currentChatId)) {
                         queueTranscriptionStatusUpdate(
                             msg.status != null ? msg.status : '',
                             Boolean(msg.done),
@@ -1092,7 +1092,7 @@ function _ensureTranscriptionPreviewPlacement() {
     }
 }
 
-/** Always remove live STT preview + reset composer — must run even when we skip duplicate message_added. */
+/** Remove the live STT preview. Do not touch the composer — dictation may have just typed into it. */
 function _discardLiveTranscriptionUi() {
     _stopSttPreviewClock();
     const liveStt = document.getElementById('transcriptionStatus');
@@ -1100,10 +1100,6 @@ function _discardLiveTranscriptionUi() {
     if (transcriptionStatusTimer) {
         clearTimeout(transcriptionStatusTimer);
         transcriptionStatusTimer = null;
-    }
-    if (messageInput) {
-        messageInput.value = '';
-        messageInput.placeholder = 'Send message...';
     }
 }
 
@@ -1389,9 +1385,12 @@ function isLiveChatMessageNode(node) {
 
 function insertMessageElementInOrder(div, message) {
     if (!chatMessages || !div) return;
-    const ts = messageTimestampMs(message);
-    const rowId = message.chat_row_id != null ? Number(message.chat_row_id) : null;
-    div.dataset.messageTs = String(ts || Date.now());
+    // Voice message_added often has no timestamp. 0 sorts before every real
+    // bubble, so the question jumps to the top (off-screen at the bottom).
+    const ts = messageTimestampMs(message) || Date.now();
+    const ordered = Object.assign({}, message, { timestamp: ts });
+    const rowId = ordered.chat_row_id != null ? Number(ordered.chat_row_id) : null;
+    div.dataset.messageTs = String(ts);
     if (rowId != null && !Number.isNaN(rowId)) {
         div.dataset.turnChatId = String(rowId);
     }
@@ -1399,11 +1398,11 @@ function insertMessageElementInOrder(div, message) {
         .filter(isLiveChatMessageNode)
         .filter((node) => node !== div);
     for (const node of nodes) {
-        if (compareMessageInsertOrder(message, node) < 0) {
+        if (compareMessageInsertOrder(ordered, node) < 0) {
             chatMessages.insertBefore(div, node);
-            finalizeMessageElementMount(div, message);
+            finalizeMessageElementMount(div, ordered);
             syncRenderedMessageCountFromDom();
-            if (message.role === 'user') repairOrphanAssistantBeforeUser();
+            if (ordered.role === 'user') repairOrphanAssistantBeforeUser();
             return;
         }
     }
@@ -1417,13 +1416,13 @@ function insertMessageElementInOrder(div, message) {
     } else if (div.parentNode !== chatMessages) {
         chatMessages.appendChild(div);
     }
-    finalizeMessageElementMount(div, message);
+    finalizeMessageElementMount(div, ordered);
     syncRenderedMessageCountFromDom();
-    if (message.role === 'user') repairOrphanAssistantBeforeUser();
+    if (ordered.role === 'user') repairOrphanAssistantBeforeUser();
 }
 
 function handleChatEventMessageAdded(msg) {
-    if (msg.chat_id !== currentChatId) return;
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const role = msg.role || 'user';
     const content = msg.content || '';
     if (role === 'user') {
@@ -1431,6 +1430,7 @@ function handleChatEventMessageAdded(msg) {
         // Skip only if sendMessage() already rendered this exact text optimistically.
         const key = content.substring(0, 100);
         const np = _normalizeMsgPlain(content);
+        const ts = msg.timestamp || Date.now();
         if (_hasRecentOptimisticUserMessage(key) && (hasOpenUserTurnPlain(np) || hasRenderedUserMessagePlain(np))) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
@@ -1443,8 +1443,8 @@ function handleChatEventMessageAdded(msg) {
         }
         _lastStreamFinalizedPlain = null;
         _discardLiveTranscriptionUi();
-        const div = createMessageElement({ role, content, timestamp: msg.timestamp });
-        insertMessageElementInOrder(div, { role, content, timestamp: msg.timestamp, chat_row_id: msg.chat_row_id });
+        const div = createMessageElement({ role, content, timestamp: ts });
+        insertMessageElementInOrder(div, { role, content, timestamp: ts, chat_row_id: msg.chat_row_id });
         _addOptimisticUserMessage(key);
         _acknowledgePersistedLiveUser(currentChatId, content);
         repairOrphanAssistantBeforeUser();
@@ -1519,6 +1519,9 @@ function findLiveTurnAnchor(chatRowId) {
         const activity = matches.find(el => el.classList.contains('activity'));
         if (activity) return activity;
         if (matches.length) return matches[0];
+        // A specific turn id that is not in the DOM is missing — do not treat
+        // the live assistant stream as "this user row already rendered".
+        return null;
     }
     return document.getElementById('streamingAssistantActivity')
         || document.getElementById('streamingAssistantMessage')
@@ -1558,7 +1561,7 @@ function repairMissingUserMessageForStream(chatId) {
 }
 
 function handleChatEventStreamStarted(msg) {
-    if (msg.chat_id !== currentChatId) return;
+    if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const preview = document.getElementById('transcriptionStatus');
     const previewTextEl = preview ? preview.querySelector('#transcriptionStatusText') : null;
     const previewPlain = _normalizeMsgPlain(previewTextEl ? previewTextEl.textContent : '');
@@ -3381,11 +3384,16 @@ function insertTurnPanel(panel, turnId) {
         insertDomNodeAfter(panel, anchor);
         return;
     }
+    // No user row (compacted/stale): keep a live running turn next to the
+    // in-flight bubble. Never append under the last message — that became the
+    // orange composer "footer line" on refresh.
+    if (!panel.classList.contains('turn-panel--running')) return;
     const liveAnchor = document.getElementById('streamingAssistantActivity')
         || document.getElementById('streamingAssistantMessage')
         || document.getElementById('typingIndicator');
-    if (liveAnchor && liveAnchor.parentNode === chatMessages) chatMessages.insertBefore(panel, liveAnchor);
-    else chatMessages.appendChild(panel);
+    if (liveAnchor && liveAnchor.parentNode === chatMessages) {
+        chatMessages.insertBefore(panel, liveAnchor);
+    }
 }
 
 function upsertTurnPanel(turn) {
@@ -3408,9 +3416,9 @@ function upsertTurnPanel(turn) {
         replacement.querySelectorAll('.turn-step').forEach(step => {
             if (openSteps.has(step.dataset.turnEventId)) step.open = true;
         });
-        prior.replaceWith(replacement);
+        prior.remove();
     }
-    else insertTurnPanel(replacement, turn.turn_id);
+    insertTurnPanel(replacement, turn.turn_id);
     // Durable activity supersedes legacy tool/workflow cards for the same turn.
     [...chatMessages.querySelectorAll(`.message.activity[data-turn-chat-id="${Number(turn.turn_id)}"]`)]
         .forEach(node => node.remove());
@@ -3942,6 +3950,18 @@ function restoreAssistantEmbeddedActivity(assistantEl, activityHtml) {
     assistantEl.classList.add('assistant--with-activity');
 }
 
+const BUILT_TOOL_ACTIVITY_LABELS = [
+    [/^built missing capability/i, 'Built capability'],
+    [/^building a missing capability/i, 'Building capability'],
+    [/^completed computer-use loop/i, 'Computer use'],
+];
+
+function builtToolActivityLabel(title) {
+    if (/^step\s+\d+:/i.test(title)) return title;
+    const match = BUILT_TOOL_ACTIVITY_LABELS.find(([pattern]) => pattern.test(title));
+    return match ? match[1] : '';
+}
+
 function activityCollapsedActionLabel(title, event) {
     let t = String(title || '').trim();
     if (!t) {
@@ -3953,6 +3973,8 @@ function activityCollapsedActionLabel(title, event) {
     if (/^screenshot/i.test(t)) return 'Screenshot Analyzer';
     if (/^type text\b/i.test(t)) return 'Type Text';
     if (/^ran helper code/i.test(t)) return 'Ran helper code';
+    const generatedToolLabel = builtToolActivityLabel(t);
+    if (generatedToolLabel) return generatedToolLabel;
     if (/^inspected files/i.test(t)) return 'Inspected files';
     if (/^checked mode control/i.test(t)) return 'Checked mode control';
     const bracket = t.match(/^\[([^\]]+)\]/);

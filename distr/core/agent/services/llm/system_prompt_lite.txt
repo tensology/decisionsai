@@ -17,6 +17,7 @@ Execution rules:
 - For project code-change requests, prefer project ticket workflows over ad-hoc code execution.
 - Respect dropped files context and active project context when present.
 - For multi-action requests, split the work into an ordered queue, run the right tool for each ready action, verify tool results before dependent actions, ask before unclear risky/external/destructive/bulk actions, and summarize completed/blocked items at the end.
+- If no existing tool can complete a local task, call build_tool to compile, validate, freeze, and expose a deterministic capability, then call the returned tool. Use computer_use for multi-step visible desktop goals and screenshot_analyzer for a single screen action.
 
 Self-improvement (R11): If a task fails for lack of capability, explain the gap and propose fixing it. **install_mcp_server** and **install_skill** queue user-approved installs only (Initiative pending actions or voice approve); they do not change disk until approved. Use https URLs for skill clones; never expose MCP env secrets in replies.
 

@@ -31,7 +31,7 @@ source "$PROJECT_ROOT/bin/decisions-env.sh"
     echo "===== DecisionsAI dock launch $(date) ====="
     echo "Project root: $PROJECT_ROOT"
 
-    if pgrep -f "[Pp]ython.*${PROJECT_ROOT}/bin/start.py" > /dev/null 2>&1; then
+    if pgrep -f "${PROJECT_ROOT}/bin/start.py" > /dev/null 2>&1; then
         echo "DecisionsAI already running — requesting activation."
         touch "$RUN_DIR/activate.request"
         exit 0

@@ -17,6 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from distr.core import chat_turns
+from distr.core.agent.tools.artifacts import ArtifactTool
 from distr.core.db import Chat, ChatTurnEvent
 
 
@@ -249,5 +250,108 @@ def test_turn_panel_realtime_steer_refresh_and_terminal_recovery(page: Page, vie
         assert overflow is False
         relevant_errors = [e for e in console_errors if "favicon" not in e.lower() and "websocket" not in e.lower()]
         assert not relevant_errors, relevant_errors
+    finally:
+        _cleanup(root_id)
+
+
+def test_built_tool_shows_ordered_execution_steps(page: Page, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A frozen runtime tool exposes each deterministic step in the live Chat panel."""
+    try:
+        if not page.request.get(f"{BASE_URL}/api/chats").ok:
+            pytest.skip("DecisionsAI server is unavailable")
+    except Exception:
+        pytest.skip("DecisionsAI server is unavailable")
+
+    root_id, turn_id, initial_event_id = _seed_turn()
+
+    class _ChatManager:
+        @staticmethod
+        def get_current_chat() -> int:
+            return root_id
+
+    class _EchoTool:
+        @staticmethod
+        def invoke(arguments: dict) -> str:
+            return f"echo:{arguments.get('value', '')}"
+
+    from distr.core.agent.tools import loader
+    from distr.core.agent.tool_audit import record_tool_start
+
+    original_get_cached_tool = loader.get_cached_tool
+    monkeypatch.setattr(
+        loader,
+        "get_cached_tool",
+        lambda name: _EchoTool() if name == "test_echo" else original_get_cached_tool(name),
+    )
+    artifact = {
+        "format": 1,
+        "name": "built__demo_pipeline",
+        "description": "Run two deterministic test steps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+        "steps": [
+            {
+                "id": "normalize_input",
+                "name": "Normalize input",
+                "kind": "tool",
+                "tool": "test_echo",
+                "arguments": {"value": "${inputs.value}"},
+            },
+            {
+                "id": "format_output",
+                "name": "Format output",
+                "kind": "tool",
+                "tool": "test_echo",
+                "arguments": {"value": "${steps.normalize_input.output}"},
+            },
+        ],
+    }
+
+    try:
+        chat_turns.finish_tool(
+            initial_event_id,
+            success=True,
+            summary="Project context ready.",
+            detail="Project context ready.",
+        )
+        outer_event_id = record_tool_start(
+            root_id,
+            "built__demo_pipeline",
+            instruction_hint="Run the generated deterministic capability",
+        )
+        assert outer_event_id
+        result = ArtifactTool(artifact, chat_manager=_ChatManager()).invoke({"value": "alpha"})
+        chat_turns.finish_tool(
+            outer_event_id,
+            success=True,
+            summary=result,
+            detail=result,
+        )
+        chat_turns.complete_turn(
+            root_id,
+            turn_id=turn_id,
+            display_text="The generated capability completed both steps.",
+            speech_text="The generated capability completed both steps.",
+        )
+
+        page.goto(
+            f"{BASE_URL}/chat/?id={root_id}&from_create=1",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        panel = page.locator(f"#turnPanel-{turn_id}")
+        expect(panel).to_be_visible(timeout=15000)
+        expect(panel).to_contain_text("Completed")
+        panel.locator(".turn-panel-details > summary").click()
+        expect(panel).to_contain_text("Run the generated deterministic capability")
+        expect(panel).to_contain_text("Step 1: Normalize input")
+        expect(panel).to_contain_text("Step 2: Format output")
+        expect(panel).to_contain_text("echo:echo:alpha")
+        screenshot_path = os.environ.get("CHAT_E2E_SCREENSHOT_PATH", "").strip()
+        if screenshot_path:
+            page.screenshot(path=screenshot_path, full_page=True)
     finally:
         _cleanup(root_id)

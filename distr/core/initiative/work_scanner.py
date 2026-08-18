@@ -99,7 +99,12 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         scan["unavailable_sources"].append({"source": "local_boards", "reason": str(exc)})
 
-    if settings.get("initiative_scan_external_boards", False):
+    # Scan whatever is actually connected. Flags can still force off later;
+    # missing flags must not hide Gmail/Jira/Trello from Initiative.
+    scan_external = bool(settings.get("initiative_scan_external_boards", False)) or _has_connected_provider(
+        settings, {"jira", "trello"}
+    )
+    if scan_external:
         try:
             _scan_external_boards(scan)
         except Exception:
@@ -119,7 +124,12 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
         except Exception as exc:
             scan["unavailable_sources"].append({"source": "telegram", "reason": str(exc)})
 
-    if settings.get("initiative_scan_email", False):
+    scan_email = (
+        bool(settings.get("initiative_scan_email", False))
+        or _gmail_connected()
+        or _tensology_mail_configured(settings)
+    )
+    if scan_email:
         try:
             _scan_email(scan)
         except Exception as exc:
@@ -131,6 +141,47 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
         scan["unavailable_sources"].append({"source": "advanced_connectors", "reason": str(exc)})
 
     return scan
+
+
+def _has_connected_provider(settings: dict[str, Any], providers: set[str]) -> bool:
+    import json
+
+    raw = settings.get("connected_accounts") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) or []
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return False
+    wanted = {p.lower() for p in providers}
+    for acct in raw:
+        if not isinstance(acct, dict):
+            continue
+        if str(acct.get("provider") or "").lower() in wanted and acct.get("is_valid", True):
+            return True
+    return False
+
+
+def _gmail_connected() -> bool:
+    try:
+        from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+        return bool(GoogleWorkspaceConnector().is_connected())
+    except Exception:
+        return False
+
+
+def _tensology_mail_configured(settings: dict[str, Any] | None = None) -> bool:
+    """True when Tensology/Mailshot API credentials are saved."""
+    try:
+        if settings is None:
+            from distr.core.settings import load_settings_from_db
+
+            settings = load_settings_from_db() or {}
+        return bool(settings.get("tensology_enabled")) and bool(str(settings.get("tensology_key") or "").strip())
+    except Exception:
+        return False
 
 
 def _connected_work_sources(settings: dict[str, Any]) -> list[dict[str, Any]]:
@@ -583,50 +634,100 @@ def _scan_email(scan: dict[str, Any]) -> None:
             scan["messages"]["email"] = deepcopy(_email_scan_cache["messages"])
             scan["proposals"].extend(deepcopy(_email_scan_cache["proposals"]))
             scan["unavailable_sources"].extend(deepcopy(_email_scan_cache["unavailable_sources"]))
-            return
+        else:
+            _scan_email_uncached(scan)
+            _email_scan_cache = {
+                "created_at": time.monotonic(),
+                "messages": deepcopy(scan["messages"]["email"]),
+                "proposals": [
+                    deepcopy(row)
+                    for row in scan["proposals"]
+                    if (row.get("payload") or {}).get("source") in {"email", "jira_email"}
+                ],
+                "unavailable_sources": [
+                    deepcopy(row)
+                    for row in scan["unavailable_sources"]
+                    if row.get("source") in {"email", "jira_email"}
+                ],
+            }
 
-        _scan_email_uncached(scan)
-        _email_scan_cache = {
-            "created_at": time.monotonic(),
-            "messages": deepcopy(scan["messages"]["email"]),
-            "proposals": [
-                deepcopy(row)
-                for row in scan["proposals"]
-                if (row.get("payload") or {}).get("source") == "email"
-            ],
-            "unavailable_sources": [
-                deepcopy(row)
-                for row in scan["unavailable_sources"]
-                if row.get("source") == "email"
-            ],
-        }
+    # Always (re)assert a single collated Jira intake proposal from the email slice.
+    try:
+        from distr.core.kanban.jira_intake import scan_jira_email_proposals
+
+        # Prefer raw inbox rows when present; fall back to work_like email messages.
+        email_rows = list(scan.get("messages", {}).get("email") or [])
+        # Drop any prior jira_email proposal from this scan pass to avoid duplicates on cache hit.
+        scan["proposals"] = [
+            row for row in scan["proposals"]
+            if (row.get("payload") or {}).get("source") != "jira_email"
+        ]
+        jira_proposal = scan_jira_email_proposals(email_rows)
+        if jira_proposal:
+            scan["proposals"].append(jira_proposal)
+            scan["messages"]["jira_email"] = list((jira_proposal.get("payload") or {}).get("issue_keys") or [])
+    except Exception as exc:
+        scan["unavailable_sources"].append({"source": "jira_email", "reason": str(exc)})
 
 
 def _scan_email_uncached(scan: dict[str, Any]) -> None:
-    from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+    from distr.core.kanban.jira_intake import (
+        fetch_gmail_intake_messages,
+        fetch_mailshot_intake_messages,
+        is_jira_notification_email,
+    )
 
-    connector = GoogleWorkspaceConnector()
-    if not connector.is_connected():
-        scan["unavailable_sources"].append({"source": "email", "reason": "Google/Gmail is not connected"})
+    messages: list[dict[str, Any]] = []
+    sources_tried: list[str] = []
+
+    mailshot_rows = fetch_mailshot_intake_messages(jira_only=False, max_pages=3)
+    if mailshot_rows:
+        sources_tried.append("mailshot")
+        messages.extend(mailshot_rows)
+    else:
+        # Distinguish "empty inbox" from "not configured" only loosely; caller
+        # still gets jira proposals from whatever we could read.
+        sources_tried.append("mailshot")
+
+    gmail_rows = fetch_gmail_intake_messages(max_results=20)
+    if gmail_rows:
+        sources_tried.append("gmail")
+        messages.extend(gmail_rows)
+
+    if not messages:
+        if not _gmail_connected() and not _tensology_mail_configured():
+            scan["unavailable_sources"].append({
+                "source": "email",
+                "reason": "Neither Mailshot (Tensology) nor Gmail is connected",
+            })
         return
 
-    messages = connector.check_inbox(max_results=10, query="in:inbox newer_than:7d") or []
     work_like = []
+    seen_ids: set[str] = set()
     for msg in messages:
+        mid = str(msg.get("id") or "").strip()
+        if mid and mid in seen_ids:
+            continue
+        if mid:
+            seen_ids.add(mid)
         subject = str(msg.get("subject") or "").strip()
         snippet = str(msg.get("snippet") or msg.get("body") or "").strip()
         combined = f"{subject}\n{snippet}".strip()
         item = {
-            "id": msg.get("id") or "",
-            "thread_id": msg.get("threadId") or "",
+            "id": mid,
+            "thread_id": msg.get("thread_id") or msg.get("threadId") or "",
             "from": msg.get("from") or "",
             "subject": subject,
             "snippet": snippet[:240],
             "date": msg.get("date") or "",
             "labels": msg.get("labels") or [],
             "work_related": _looks_work_related(combined),
+            "body": str(msg.get("body") or "")[:2000],
+            "source": msg.get("source") or ("mailshot" if "mailshot" in sources_tried else "gmail"),
         }
-        if item["work_related"]:
+        if item["work_related"] or is_jira_notification_email(
+            from_addr=item["from"], subject=item["subject"]
+        ):
             work_like.append(item)
 
     scan["messages"]["email"] = work_like

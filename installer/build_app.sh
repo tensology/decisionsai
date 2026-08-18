@@ -153,6 +153,10 @@ set_plist CFBundleIdentifier "$BUNDLE_ID"
 set_plist CFBundleShortVersionString "$VERSION"
 set_plist CFBundleVersion "$VERSION"
 set_plist NSHumanReadableCopyright "Copyright © $(date +%Y) Tensology (Pty) Ltd"
+set_plist NSAppleEventsUsageDescription "Decisions needs to control other apps so it can move windows and type into them."
+set_plist NSMicrophoneUsageDescription "Decisions uses the microphone for voice input."
+set_plist NSAudioCaptureUsageDescription "Decisions uses the microphone for voice input."
+set_plist NSScreenCaptureUsageDescription "Decisions captures the screen to see what to click and to move windows."
 
 if [ "$RELEASE" -eq 1 ]; then
     codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$BUILT_APP"

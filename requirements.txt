@@ -48,7 +48,6 @@ protobuf>=5.29.3,<5.30.0
 # PyTorch on macOS, causing _PyDict_GetItemRef symbol errors at import time.
 torch>=2.5.0,<2.10.0
 torchaudio>=2.5.0,<2.10.0
-spacy
 scipy
 # SECURITY: litellm 1.82.7 and 1.82.8 were compromised (supply chain attack, March 24 2026).
 # Both versions have been removed from PyPI. Pin to exclude them explicitly.
@@ -90,11 +89,7 @@ pynput
 # brew install ffmpeg  # Required for pydub MP3 conversion support
 
 syntok>=1.4.4
-# spaCy dependencies
-spacy>=3.5.0
 regex>=2023.0.0
-# spaCy model (will be installed by setup.py)
-# python -m spacy download en_core_web_lg
 # Pin pipecat-ai to specific version to reduce resolver backtracking
 pipecat-ai[silero]>=0.0.95,<0.0.101
 # Browser Use 0.12+ pins Pillow 12, which is incompatible with the supported

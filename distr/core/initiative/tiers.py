@@ -51,7 +51,7 @@ def configured_tier_for_action(
             if boundaries.get("initiative_allow_routine_tasks")
             else PermissionTier.NOTIFY
         )
-    if at in ("board_triage", "message_triage", "email_triage"):
+    if at in ("board_triage", "message_triage", "email_triage", "jira_intake"):
         return PermissionTier.NOTIFY
     if at == "ticket_lane_move":
         return PermissionTier.APPROVE

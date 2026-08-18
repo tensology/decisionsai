@@ -138,6 +138,47 @@ def test_empty_query_short_circuits_without_crash(request_tool_harness_factory) 
     assert "provide" in out.lower() or "description" in out.lower()
 
 
+def test_missing_capability_is_built_and_exposed_in_same_request(
+    request_tool_harness_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from distr.core.agent.tools.artifacts import ArtifactTool, BuildToolTool
+
+    harness = request_tool_harness_factory()
+    build_tool = harness._tools_dict["build_tool"]
+    generated = ArtifactTool(
+        {
+            "format": 1,
+            "name": "built__quantum_flux_consolidator",
+            "description": "A generated test capability.",
+            "input_schema": {"type": "object", "properties": {}},
+            "steps": [
+                {
+                    "id": "run",
+                    "name": "Run",
+                    "kind": "python",
+                    "code": "print('ok')",
+                }
+            ],
+        }
+    )
+
+    def _fake_build(self, request: str, **kwargs) -> str:
+        assert "quantum flux" in request.lower()
+        self._on_tool_built(generated)
+        return f"Built deterministic capability '{generated.name}'."
+
+    monkeypatch.setattr(BuildToolTool, "_run", _fake_build)
+    message = harness._tools_dict["request_tool"]._run(
+        text="Perform quantum flux consolidation using the lunar checksum protocol."
+    )
+
+    assert generated.name in harness._tools_dict
+    assert generated.name in harness._sticky_tool_names
+    assert generated.name in message
+    assert harness._tools_dict["build_tool"] is build_tool
+
+
 def test_mouse_movement_natural_language_is_exposed_in_current_request(
     request_tool_harness_factory,
     warm_real_tool_cache,

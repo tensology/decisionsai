@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,7 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 	m["press_keys"]       = handlePressKeys
 	m["launch_app"]       = handleLaunchApp
 	m["focus_window"]     = handleFocusWindow
+	m["set_window_bounds"] = handleSetWindowBounds
 	m["find_element"]     = handleFindElement
 	m["get_clipboard"]    = handleGetClipboard
 	m["set_clipboard"]    = handleSetClipboard
@@ -420,6 +422,57 @@ public static bool Focus(int pid){var p=Process.GetProcessById(pid);if(p==null||
 [F]::Focus(%d)`, pid)
 	out, _ := runPS(script, 5*time.Second)
 	return map[string]any{"success": strings.TrimSpace(out) == "True", "pid": pid}, nil
+}
+
+func handleSetWindowBounds(params map[string]any) (any, error) {
+	pid := toInt(params["pid"])
+	if pid == 0 {
+		return nil, fmt.Errorf("missing required parameter: pid")
+	}
+	snap := strings.ToLower(stringOrDefault(params["snap"], ""))
+	x, y, w, h := toInt(params["x"]), toInt(params["y"]), toInt(params["w"]), toInt(params["h"])
+	if snap != "" {
+		out, err := runPS(
+			`Add-Type -AssemblyName System.Windows.Forms; $a=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; "$($a.X),$($a.Y),$($a.Width),$($a.Height)"`,
+			5*time.Second,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("screen bounds: %w", err)
+		}
+		parts := strings.Split(strings.TrimSpace(out), ",")
+		if len(parts) != 4 {
+			return nil, fmt.Errorf("screen bounds parse: %s", out)
+		}
+		sx, _ := strconv.Atoi(parts[0])
+		sy, _ := strconv.Atoi(parts[1])
+		sw, _ := strconv.Atoi(parts[2])
+		sh, _ := strconv.Atoi(parts[3])
+		switch snap {
+		case "left":
+			x, y, w, h = sx, sy, sw/2, sh
+		case "right":
+			x, y, w, h = sx+sw/2, sy, sw-sw/2, sh
+		case "maximize":
+			x, y, w, h = sx, sy, sw, sh
+		default:
+			return nil, fmt.Errorf("unknown snap %q (use left, right, maximize)", snap)
+		}
+	}
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("need snap=left|right|maximize or positive w and h")
+	}
+	script := fmt.Sprintf(`
+Add-Type @'
+using System;using System.Runtime.InteropServices;using System.Diagnostics;
+public class MW{
+[DllImport("user32.dll")]public static extern bool MoveWindow(IntPtr h,int x,int y,int w,int h,bool r);
+[DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int n);
+public static bool Move(int pid,int x,int y,int w,int h){var p=Process.GetProcessById(pid);if(p==null||p.MainWindowHandle==IntPtr.Zero)return false;ShowWindow(p.MainWindowHandle,9);return MoveWindow(p.MainWindowHandle,x,y,w,h,true);}}
+'@
+[MW]::Move(%d,%d,%d,%d,%d)`, pid, x, y, w, h)
+	out, err := runPS(script, 5*time.Second)
+	ok := strings.TrimSpace(out) == "True" && err == nil
+	return map[string]any{"success": ok, "pid": pid, "x": x, "y": y, "w": w, "h": h, "snap": snap}, nil
 }
 
 // ── find_element ──────────────────────────────────────────────────────────────

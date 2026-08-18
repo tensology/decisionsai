@@ -134,6 +134,19 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         TOOL_DESCRIPTIONS values, then injects the matched tool into the
         session's active tool set (``self._tools`` / ``self._tools_dict``).
         """
+        def _expose_runtime_tool(tool) -> None:
+            if tool.name not in self._tools_dict:
+                self._tools.append(tool)
+                self._tools_dict[tool.name] = tool
+            sticky_names = set(getattr(self, "_sticky_tool_names", set()))
+            sticky_names.add(tool.name)
+            self._sticky_tool_names = sticky_names
+            self._last_built_tool_name = tool.name
+
+        build_tool = self._tools_dict.get("build_tool")
+        if build_tool is not None:
+            object.__setattr__(build_tool, "_on_tool_built", _expose_runtime_tool)
+
         rtt = self._tools_dict.get("request_tool")
         if rtt is None:
             return
@@ -609,7 +622,30 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     True,
                 )
 
-            # No match — return top 5 candidates
+            # No match: compile the missing capability once, freeze it, expose
+            # it to the current request, and let the next tool round call it.
+            # Existing tools always win because this path runs only after the
+            # native fuzzy matcher fails its confidence threshold.
+            if build_tool is not None and len(qnorm) >= 8:
+                build_result = str(build_tool._run(request=qnorm))
+                if not build_result.lower().startswith("error"):
+                    injected_name = str(getattr(self, "_last_built_tool_name", "") or "build_tool")
+                    msg = (
+                        f"{build_result} Call '{injected_name}' on the next tool round."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name=injected_name,
+                        fuzzy_score=scores[0][1] if scores else None,
+                        top_candidates=[name for name, _ in scores[:5]],
+                        model_name=_mn,
+                        injection_performed=True,
+                        message=msg,
+                    )
+                    return (True, msg, True)
+
+            # No match and compilation failed or was not appropriate.
             top_5 = [name for name, _ in scores[:5]]
             msg = f"Tool not found. Closest matches: {', '.join(top_5)}"
             log_request_tool_event(
@@ -644,6 +680,35 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # Resolve retrieved names to tool instances from this session
             retrieved = [self._tools_dict[n] for n in names if n in self._tools_dict]
             retrieved_names = {t.name for t in retrieved}
+
+            # Keep an explicit multi-tool workflow available across terse
+            # follow-ups such as "try again". This state lives on the chat
+            # session, so message-window truncation cannot discard the tools
+            # needed to finish the user's original instruction.
+            from distr.core.agent.tool_intents import (
+                forced_tool_names_for_text,
+                is_workflow_follow_up,
+            )
+
+            forced_names = forced_tool_names_for_text(last_user_message)
+            active_workflow_names = set(
+                getattr(self, "_active_workflow_tool_names", set())
+            )
+            if len(forced_names) >= 2:
+                active_workflow_names = set(forced_names)
+                self._active_workflow_tool_names = active_workflow_names
+            elif active_workflow_names and is_workflow_follow_up(last_user_message):
+                active_workflow_names.update(forced_names)
+                self._active_workflow_tool_names = active_workflow_names
+            else:
+                active_workflow_names = set()
+                self._active_workflow_tool_names = set()
+
+            for name in active_workflow_names:
+                tool = self._tools_dict.get(name)
+                if tool is not None and name not in retrieved_names:
+                    retrieved.append(tool)
+                    retrieved_names.add(name)
 
             sticky_names = set(getattr(self, "_sticky_tool_names", set()))
             sticky = [t for t in self._tools if t.name not in retrieved_names and t.name in sticky_names]

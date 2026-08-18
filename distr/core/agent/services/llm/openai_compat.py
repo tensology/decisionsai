@@ -932,6 +932,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         decisions = build_computer_use_execution_decisions(tool_calls)
         for idx, tc in enumerate(tool_calls):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             func_name = tc["function"]["name"]
             decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             try:
@@ -958,9 +959,19 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
             if func_name in self._tools_dict:
                 tool = self._tools_dict[func_name]
+                from distr.core.agent.tool_audit import record_tool_execution, record_tool_start
+
+                record_tool_start(chat_id, func_name)
                 try:
                     result = await self._run_tool_with_timeout(tool, func_args, func_name)
                     result_str = str(result)
+                    record_tool_execution(
+                        chat_id,
+                        func_name,
+                        result_str,
+                        "completed",
+                        event_queue=self.event_queue,
+                    )
 
                     if hasattr(threading.current_thread(), 'suppress_tts_for_tool_chain'):
                         threading.current_thread().suppress_tts_for_tool_chain = False
@@ -971,7 +982,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     self._messages.append({"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": result_str})
                 except Exception as e:
                     logger.error("Chained tool %s failed: %s", func_name, e, exc_info=True)
-                    self._messages.append({"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": f"Error: {e}"})
+                    error_text = f"Error: {e}"
+                    record_tool_execution(
+                        chat_id,
+                        func_name,
+                        error_text,
+                        "failed",
+                        event_queue=self.event_queue,
+                    )
+                    self._messages.append({"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": error_text})
             else:
                 self._messages.append({"tool_call_id": tc["id"], "role": "tool", "name": func_name,
                                        "content": f"Error: Tool '{func_name}' not found"})

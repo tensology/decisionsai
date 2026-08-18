@@ -270,7 +270,7 @@ def _probe_python_accessibility(*, prompt: bool = False) -> tuple[bool, str]:
             ok = bool(AXIsProcessTrustedWithOptions(options))
         else:
             ok = bool(AXIsProcessTrusted())
-        return ok, "ok" if ok else "Not trusted — enable Python in Accessibility"
+        return ok, "ok" if ok else "Not trusted — enable Decisions in Accessibility"
     except Exception as exc:
         return False, f"Could not check Accessibility: {exc}"
 
@@ -283,7 +283,7 @@ def _probe_python_screen_recording(*, prompt: bool = False) -> tuple[bool, str]:
             ok = bool(CGRequestScreenCaptureAccess())
         else:
             ok = bool(CGPreflightScreenCaptureAccess())
-        return ok, "ok" if ok else "Not granted — enable Python in Screen Recording"
+        return ok, "ok" if ok else "Not granted — enable Decisions in Screen Recording"
     except Exception as exc:
         return False, f"Could not check Screen Recording: {exc}"
 
@@ -323,6 +323,30 @@ def _probe_python_microphone(*, prompt: bool = False) -> tuple[bool, str]:
         return False, f"Microphone unavailable: {exc}"
 
 
+def _probe_python_automation(*, prompt: bool = False) -> tuple[bool, str]:
+    """System Events from this process — TCC attaches to Decisions, not the sidecar."""
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to return name of first process whose frontmost is true',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            name = (result.stdout or "").strip() or "frontmost app"
+            return True, f"ok ({name})"
+        detail = (result.stderr or result.stdout or "Automation denied").strip()
+        if prompt:
+            return False, detail
+        return False, "Not allowed — enable Decisions to control System Events"
+    except Exception as exc:
+        return False, str(exc)
+
+
 def request_python_permission(kind: str) -> tuple[bool, str]:
     if kind == "accessibility":
         return _probe_python_accessibility(prompt=True)
@@ -330,6 +354,14 @@ def request_python_permission(kind: str) -> tuple[bool, str]:
         return _probe_python_screen_recording(prompt=True)
     if kind == "microphone":
         return _probe_python_microphone(prompt=True)
+    if kind == "automation":
+        return _probe_python_automation(prompt=True)
+    if kind == "desktop":
+        a11y_ok, a11y_detail = _probe_python_accessibility(prompt=True)
+        scr_ok, scr_detail = _probe_python_screen_recording(prompt=True)
+        auto_ok, auto_detail = _probe_python_automation(prompt=True)
+        ok = a11y_ok and scr_ok and auto_ok
+        return ok, f"accessibility={a11y_detail}; screen={scr_detail}; automation={auto_detail}"
     return False, f"Unknown permission kind: {kind}"
 
 
@@ -369,75 +401,74 @@ def collect_permission_report(*, start_sidecar: bool = True) -> dict[str, Any]:
     py_a11y_ok, py_a11y_detail = _probe_python_accessibility()
     py_scr_ok, py_scr_detail = _probe_python_screen_recording()
     py_mic_ok, py_mic_detail = _probe_python_microphone()
+    py_auto_ok, py_auto_detail = _probe_python_automation()
 
     sidecar_scr = (sidecar_perms.get("screen_recording") or {}).get("ok")
     sidecar_auto = (sidecar_perms.get("automation") or {}).get("ok")
     sidecar_a11y = (sidecar_perms.get("accessibility") or {}).get("ok")
-    sidecar_a11y_via = (sidecar_perms.get("accessibility") or {}).get("via") or "sidecar"
 
     items: list[PermissionItem] = [
         PermissionItem(
             id="sidecar_running",
-            title="Desktop automation service (sidecar)",
+            title="Desktop helper (optional sidecar)",
             ok=sidecar_ok,
-            detail="Running on port 11435" if sidecar_ok else "Not responding — check ~/.decisions/logs/sidecar.log",
+            detail="Running on port 11435" if sidecar_ok else "Not running — Decisions can still move windows itself",
             settings_pane=None,
             enable_in_settings=None,
         ),
         PermissionItem(
             id="sidecar_screen_recording",
-            title="Screenshots (sidecar)",
+            title="Screenshots (helper)",
             ok=bool(sidecar_scr) if sidecar_ok else False,
-            detail=str((sidecar_perms.get("screen_recording") or {}).get("detail") or "Sidecar not running"),
-            settings_pane="screen_recording",
-            enable_in_settings=f"decisionsai-sidecar\n{sidecar_path}",
+            detail=str((sidecar_perms.get("screen_recording") or {}).get("detail") or "Helper not running"),
+            settings_pane=None,
+            enable_in_settings=None,
         ),
         PermissionItem(
             id="sidecar_automation",
-            title="UI tree & keystrokes (Automation)",
+            title="UI tree (helper)",
             ok=bool(sidecar_auto) if sidecar_ok else False,
-            detail=str((sidecar_perms.get("automation") or {}).get("detail") or "Sidecar not running"),
-            settings_pane=None if sidecar_auto else "automation",
-            enable_in_settings=None
-            if sidecar_auto
-            else (
-                "decisionsai-sidecar → System Events\n"
-                f"Binary: {sidecar_path}"
-            ),
+            detail=str((sidecar_perms.get("automation") or {}).get("detail") or "Helper not running"),
+            settings_pane=None,
+            enable_in_settings=None,
         ),
         PermissionItem(
             id="sidecar_accessibility",
-            title="Mouse & keyboard control",
+            title="Mouse (helper)",
             ok=bool(sidecar_a11y) if sidecar_ok else False,
-            detail=str((sidecar_perms.get("accessibility") or {}).get("detail") or "Sidecar not running"),
-            settings_pane=None if sidecar_a11y else "accessibility",
-            enable_in_settings=None
-            if sidecar_a11y
-            else (
-                f"{'cliclick' if sidecar_a11y_via == 'cliclick' else 'python3'} "
-                f"(used by sidecar for clicks)\n"
-                f"{cliclick_path or 'install: brew install cliclick'}"
-            ),
+            detail=str((sidecar_perms.get("accessibility") or {}).get("detail") or "Helper not running"),
+            settings_pane=None,
+            enable_in_settings=None,
         ),
         PermissionItem(
             id="python_accessibility",
-            title="Accessibility (Python app)",
+            title="Accessibility (Decisions)",
             ok=py_a11y_ok,
             detail=py_a11y_detail,
             settings_pane="accessibility",
-            enable_in_settings=f"Python\n{python_path}",
+            enable_in_settings="Decisions — Accessibility",
             can_prompt=True,
             prompt_target="accessibility",
         ),
         PermissionItem(
             id="python_screen_recording",
-            title="Screen Recording (Python app)",
+            title="Screen Recording (Decisions)",
             ok=py_scr_ok,
             detail=py_scr_detail,
             settings_pane="screen_recording",
-            enable_in_settings=f"Python\n{python_path}",
+            enable_in_settings="Decisions — Screen Recording",
             can_prompt=True,
             prompt_target="screen_recording",
+        ),
+        PermissionItem(
+            id="python_automation",
+            title="Automation (Decisions → System Events)",
+            ok=py_auto_ok,
+            detail=py_auto_detail,
+            settings_pane="automation",
+            enable_in_settings="Decisions → System Events",
+            can_prompt=True,
+            prompt_target="automation",
         ),
         PermissionItem(
             id="python_microphone",
@@ -445,7 +476,7 @@ def collect_permission_report(*, start_sidecar: bool = True) -> dict[str, Any]:
             ok=py_mic_ok,
             detail=py_mic_detail,
             settings_pane="microphone",
-            enable_in_settings=f"Python\n{python_path}",
+            enable_in_settings="Decisions — Microphone",
             can_prompt=True,
             prompt_target="microphone",
         ),
@@ -455,23 +486,24 @@ def collect_permission_report(*, start_sidecar: bool = True) -> dict[str, Any]:
             ok=os.access(os.path.expanduser("~/Desktop"), os.R_OK | os.W_OK),
             detail="Can read/write Desktop",
             settings_pane="files",
-            enable_in_settings="Python — allow Desktop & Documents if prompted",
+            enable_in_settings="Decisions — allow Desktop & Documents if prompted",
         ),
     ]
 
     item_dicts = [asdict(i) for i in items]
-    setup_needed = permissions_setup_needed({"supported": True, "items": item_dicts})
-
-    return {
+    report = {
         "platform": "darwin",
         "supported": True,
-        "all_ok": not setup_needed,
-        "setup_needed": setup_needed,
         "python_executable": python_path,
         "sidecar_executable": sidecar_path,
         "cliclick_path": cliclick_path or None,
         "items": item_dicts,
     }
+    report["display_items"] = user_facing_permission_items(report)
+    setup_needed = permissions_setup_needed(report)
+    report["all_ok"] = not setup_needed
+    report["setup_needed"] = setup_needed
+    return report
 
 
 def _failure_requires_user_action(item: dict[str, Any]) -> bool:
@@ -489,7 +521,7 @@ def _failure_requires_user_action(item: dict[str, Any]) -> bool:
         return False
     item_id = str(item.get("id"))
     if item_id == "sidecar_running":
-        return True
+        return False
     if item_id == "sidecar_screen_recording" and "verified on first screenshot" in detail:
         return False
     privacy_markers = (
@@ -533,9 +565,6 @@ def permissions_setup_needed(report: dict[str, Any] | None = None) -> bool:
 
     items = {str(i.get("id")): i for i in (report.get("items") or [])}
 
-    if not items.get("sidecar_running", {}).get("ok"):
-        return True
-
     if _core_capabilities_ok(items):
         return False
 
@@ -554,7 +583,10 @@ def _core_capabilities_ok(items: dict[str, dict[str, Any]]) -> bool:
         items.get("sidecar_accessibility", {}).get("ok")
         or items.get("python_accessibility", {}).get("ok")
     )
-    auto_ok = bool(items.get("sidecar_automation", {}).get("ok"))
+    auto_ok = bool(
+        items.get("sidecar_automation", {}).get("ok")
+        or items.get("python_automation", {}).get("ok")
+    )
     mic_ok = bool(items.get("python_microphone", {}).get("ok"))
     return screen_ok and control_ok and auto_ok and mic_ok
 
@@ -574,10 +606,75 @@ def actionable_permission_failures(report: dict[str, Any]) -> list[dict[str, Any
             continue
         if item_id == "python_accessibility" and by_id.get("sidecar_accessibility", {}).get("ok"):
             continue
+        if item_id == "python_automation" and by_id.get("sidecar_automation", {}).get("ok"):
+            continue
+        if item_id == "sidecar_running":
+            continue
         if not _failure_requires_user_action(item):
             continue
         failures.append(item)
     return failures
+
+
+def user_facing_permission_items(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Grouped Decisions-owned permission rows for Settings and the setup dialog."""
+    items = {str(i.get("id")): i for i in (report.get("items") or [])}
+    screen_ok = bool(
+        items.get("sidecar_screen_recording", {}).get("ok")
+        or items.get("python_screen_recording", {}).get("ok")
+    )
+    control_ok = bool(
+        items.get("sidecar_accessibility", {}).get("ok")
+        or items.get("python_accessibility", {}).get("ok")
+    )
+    auto_ok = bool(
+        items.get("sidecar_automation", {}).get("ok")
+        or items.get("python_automation", {}).get("ok")
+    )
+    desktop_ok = screen_ok and control_ok and auto_ok
+    missing: list[str] = []
+    if not screen_ok:
+        missing.append("Screen Recording")
+    if not control_ok:
+        missing.append("Accessibility")
+    if not auto_ok:
+        missing.append("Automation")
+    desktop = {
+        "id": "desktop_control",
+        "title": "Screenshots & desktop control",
+        "ok": desktop_ok,
+        "detail": (
+            "Decisions can screenshot, move windows, and type."
+            if desktop_ok
+            else (
+                f"Turn on Decisions for {', '.join(missing)}."
+                if missing
+                else "Enable Decisions in System Settings."
+            )
+        ),
+        "settings_pane": "accessibility",
+        "settings_panes": ["screen_recording", "accessibility", "automation"],
+        "enable_in_settings": (
+            "Enable Decisions in Accessibility, Screen Recording, and Automation "
+            "(System Events). The optional helper does not need its own toggles."
+        ),
+        "can_prompt": not desktop_ok,
+        "prompt_target": "desktop",
+    }
+    mic = items.get("python_microphone") or {}
+    mic_ok = bool(mic.get("ok"))
+    voice = {
+        "id": "voice_input",
+        "title": "Microphone (voice input)",
+        "ok": mic_ok,
+        "detail": str(mic.get("detail") or "Turn on Decisions for Microphone if you use voice."),
+        "settings_pane": "microphone",
+        "settings_panes": ["microphone"],
+        "enable_in_settings": "Enable Decisions for Microphone if you use voice.",
+        "can_prompt": not mic_ok,
+        "prompt_target": "microphone",
+    }
+    return [desktop, voice]
 
 
 def user_facing_permission_failures(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -589,68 +686,14 @@ def user_facing_permission_failures(report: dict[str, Any]) -> list[dict[str, An
     """
     items = {str(i.get("id")): i for i in (report.get("items") or [])}
     failures: list[dict[str, Any]] = []
-
-    sidecar_ok = bool(items.get("sidecar_running", {}).get("ok"))
-    screen_ok = bool(
-        items.get("sidecar_screen_recording", {}).get("ok")
-        or items.get("python_screen_recording", {}).get("ok")
-    )
-    control_ok = bool(
-        items.get("sidecar_accessibility", {}).get("ok")
-        or items.get("python_accessibility", {}).get("ok")
-    )
-    auto_ok = bool(items.get("sidecar_automation", {}).get("ok"))
-    desktop_ok = sidecar_ok and screen_ok and control_ok and auto_ok
-
-    if not desktop_ok:
-        if not sidecar_ok:
-            detail = "Desktop tools are still starting. Wait a moment, then click Check again."
-        else:
-            missing: list[str] = []
-            if not screen_ok:
-                missing.append("Screen Recording")
-            if not control_ok:
-                missing.append("Accessibility")
-            if not auto_ok:
-                missing.append("Automation")
-            detail = (
-                f"Turn on Decisions for {', '.join(missing)}."
-                if missing
-                else "Finish enabling Decisions in System Settings."
-            )
-
-        failures.append(
-            {
-                "id": "desktop_control",
-                "title": "Screenshots & desktop control",
-                "ok": False,
-                "detail": detail,
-                "settings_pane": "screen_recording",
-                "settings_panes": ["screen_recording", "accessibility", "automation"],
-                "enable_in_settings": (
-                    "In Privacy & Security, enable Decisions (decisionsai-sidecar) for "
-                    "Screen Recording, Accessibility, and Automation."
-                ),
-                "can_prompt": False,
-            }
-        )
-
-    mic = items.get("python_microphone") or {}
-    if not mic.get("ok") and _failure_requires_user_action(mic):
-        failures.append(
-            {
-                "id": "voice_input",
-                "title": "Microphone (voice input)",
-                "ok": False,
-                "detail": "Turn on Decisions for Microphone if you use voice.",
-                "settings_pane": "microphone",
-                "settings_panes": ["microphone"],
-                "enable_in_settings": "In Privacy & Security, enable Decisions (Python) for Microphone.",
-                "can_prompt": True,
-                "prompt_target": "microphone",
-            }
-        )
-
+    for row in user_facing_permission_items(report):
+        if row.get("ok"):
+            continue
+        if row.get("id") == "voice_input" and not _failure_requires_user_action(
+            items.get("python_microphone") or {}
+        ):
+            continue
+        failures.append(row)
     return failures
 
 

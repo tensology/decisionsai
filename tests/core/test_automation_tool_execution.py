@@ -13,10 +13,11 @@ def test_automation_presets_include_daily_plan():
     from distr.core.automation_presets import get_automation_preset, list_automation_presets
 
     presets = list_automation_presets()
-    assert len(presets) == 10
+    assert len(presets) == 11
     assert any(row["preset_id"] == "daily_plan" for row in presets)
     assert any(row["preset_id"] == "whatsapp_to_tickets" for row in presets)
     assert any(row["preset_id"] == "timesheet_export_25th" for row in presets)
+    assert any(row["preset_id"] == "jira_morning_intake" for row in presets)
     preset = get_automation_preset("daily_plan")
     assert preset is not None
     assert preset["action_config"]["tool"] == "proactive_orchestrator"
@@ -24,6 +25,11 @@ def test_automation_presets_include_daily_plan():
     whatsapp = get_automation_preset("whatsapp_to_tickets")
     assert whatsapp is not None
     assert whatsapp["automation_type"] == "scheduled_instruction"
+    jira = get_automation_preset("jira_morning_intake")
+    assert jira is not None
+    assert jira["automation_type"] == "scheduled_instruction"
+    assert "ONE batch" in jira["instruction"]
+    assert "Do NOT start workflows" in jira["instruction"]
 
 
 def test_run_automation_tool_proactive_orchestrator(monkeypatch):

@@ -26,6 +26,7 @@ _CU_ACTION_TOOLS = frozenset({
     "click_element", "move_to_element",
     "type_text", "type_clipboard", "press_keys",
     "scroll", "drag_to", "mouse_actions",
+    "focus_window", "launch_app", "set_window_bounds",
 })
 
 _CU_SUCCESS_SIGNALS = (

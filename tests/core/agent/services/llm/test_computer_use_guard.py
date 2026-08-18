@@ -37,3 +37,14 @@ def test_screenshot_locate_only_is_not_actioning():
     decisions = build_computer_use_execution_decisions(calls)
     assert decisions[0]["allow"] is True
     assert decisions[1]["allow"] is True
+
+
+def test_window_ops_are_not_mouse_actioning():
+    """list/focus/snap can share a round; they are not mouse clicks."""
+    calls = [
+        _tc("list_windows"),
+        _tc("focus_window", '{"process_name":"Terminal"}'),
+        _tc("set_window_bounds", '{"process_name":"Terminal","snap":"left"}'),
+    ]
+    decisions = build_computer_use_execution_decisions(calls)
+    assert [d["allow"] for d in decisions] == [True, True, True]

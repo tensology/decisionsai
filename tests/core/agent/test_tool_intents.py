@@ -1,4 +1,4 @@
-from distr.core.agent.tool_intents import forced_tool_names_for_text
+from distr.core.agent.tool_intents import forced_tool_names_for_text, is_workflow_follow_up
 
 
 def test_screenshot_intent_forces_screenshot_analyzer() -> None:
@@ -19,6 +19,21 @@ def test_forces_clipboard_for_read_and_write_requests():
     assert "clipboard_action" in forced_tool_names_for_text("read the clipboard and let's talk about it")
     assert "clipboard_action" in forced_tool_names_for_text("set clipboard to hello")
     assert "clipboard_action" in forced_tool_names_for_text("write hello into my clipboard")
+
+
+def test_clipboard_to_calendar_instruction_forces_both_tools():
+    forced = forced_tool_names_for_text(
+        "Go and ingest my clipboard and then please create the event in Google Calendar."
+    )
+
+    assert forced == ["clipboard_action", "google_workspace"]
+
+
+def test_calendar_event_follow_ups_are_recognized():
+    assert is_workflow_follow_up("Try again.")
+    assert is_workflow_follow_up("Create the fucking event.")
+    assert is_workflow_follow_up("do it, read or ingest the clipboard and do it.")
+    assert not is_workflow_follow_up("Create a ticket for this bug")
 
 
 def test_forces_file_convert_automation_and_exit_tools():
@@ -50,6 +65,22 @@ def test_forces_proactive_orchestrator_for_workload_and_source_triage():
     assert "proactive_orchestrator" in forced_tool_names_for_text(
         "What is my daily plan from emails, WhatsApp, tickets, boards and projects?"
     )
+    assert "proactive_orchestrator" in forced_tool_names_for_text(
+        "Turn on Jira morning intake"
+    )
+    assert "proactive_orchestrator" in forced_tool_names_for_text(
+        "Enable the Jira intake automation from email"
+    )
+    assert "proactive_orchestrator" in forced_tool_names_for_text(
+        "Run Jira intake now"
+    )
+
+
+def test_forces_work_ops_for_intake_run_and_client_send():
+    assert "work_ops" in forced_tool_names_for_text("What's coming in from work intake?")
+    assert "work_ops" in forced_tool_names_for_text("Run ticket 42")
+    assert "work_ops" in forced_tool_names_for_text("Send it to the client")
+    assert "work_ops" in forced_tool_names_for_text("work status of the ticket")
 
 
 def test_forces_ticket_tool_for_local_and_remote_ticket_requests(monkeypatch):

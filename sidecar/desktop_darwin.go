@@ -126,30 +126,31 @@ func resolveCoords(params map[string]any) (int, int) {
 }
 
 func addDesktopHandlers(m map[string]ToolHandler) {
-	m["list_windows"]     = handleListWindows
-	m["get_window_tree"]  = handleGetWindowTree
-	m["click_element"]    = handleClickElement
-	m["move_mouse"]       = handleMoveMouse
-	m["type_text"]        = handleTypeText
-	m["press_keys"]       = handlePressKeys
-	m["launch_app"]       = handleLaunchApp
-	m["focus_window"]     = handleFocusWindow
-	m["find_element"]     = handleFindElement
-	m["get_clipboard"]    = handleGetClipboard
-	m["set_clipboard"]    = handleSetClipboard
-	m["drag_to"]          = handleDragTo
-	m["scroll"]           = handleScroll
+	m["list_windows"] = handleListWindows
+	m["get_window_tree"] = handleGetWindowTree
+	m["click_element"] = handleClickElement
+	m["move_mouse"] = handleMoveMouse
+	m["type_text"] = handleTypeText
+	m["press_keys"] = handlePressKeys
+	m["launch_app"] = handleLaunchApp
+	m["focus_window"] = handleFocusWindow
+	m["set_window_bounds"] = handleSetWindowBounds
+	m["find_element"] = handleFindElement
+	m["get_clipboard"] = handleGetClipboard
+	m["set_clipboard"] = handleSetClipboard
+	m["drag_to"] = handleDragTo
+	m["scroll"] = handleScroll
 	m["wait_for_element"] = handleWaitForElement
 
 	// Coordinate-input tools — registered here so darwin overrides the
 	// platform-agnostic stubs that would otherwise land from handlers.go.
-	m["click_at"]          = handleClickAt
-	m["double_click_at"]   = handleDoubleClickAt
-	m["right_click_at"]    = handleRightClickAt
-	m["get_screen_info"]   = handleGetScreenInfo
-	m["get_cursor_pos"]    = handleGetCursorPos
+	m["click_at"] = handleClickAt
+	m["double_click_at"] = handleDoubleClickAt
+	m["right_click_at"] = handleRightClickAt
+	m["get_screen_info"] = handleGetScreenInfo
+	m["get_cursor_pos"] = handleGetCursorPos
 	m["capture_annotated"] = handleCaptureAnnotated
-	m["type_clipboard"]    = handleTypeClipboard
+	m["type_clipboard"] = handleTypeClipboard
 }
 
 func platformCaptureScreen(outputPath string) error {
@@ -221,57 +222,64 @@ func handleSetClipboard(params map[string]any) (any, error) {
 // ── list_windows ──────────────────────────────────────────────────────────────
 
 func handleListWindows(params map[string]any) (any, error) {
-	script := `
-tell application "System Events"
-	set out to ""
-	set fg to name of first process whose frontmost is true
-	repeat with proc in (every process whose background only is false)
-		set pn to name of proc
-		set pp to unix id of proc
-		try
-			repeat with w in windows of proc
-				set wt to name of w
-				set wp to position of w
-				set ws to size of w
-				set out to out & pn & "|||" & pp & "|||" & wt & "|||" & (item 1 of wp) & "|||" & (item 2 of wp) & "|||" & (item 1 of ws) & "|||" & (item 2 of ws) & "|||" & (pn = fg) & linefeed
-			end repeat
-		end try
-	end repeat
-	return out
-end tell`
+	// System Events becomes very slow when many applications are open and can
+	// exceed the HTTP deadline while enumerating every accessibility tree. The
+	// CoreGraphics window server already has the exact metadata needed here and
+	// returns it in one bounded local call.
+	py := `
+import json
+from AppKit import NSWorkspace
+from Quartz import (
+    CGWindowListCopyWindowInfo,
+    kCGNullWindowID,
+    kCGWindowBounds,
+    kCGWindowLayer,
+    kCGWindowListExcludeDesktopElements,
+    kCGWindowListOptionOnScreenOnly,
+    kCGWindowName,
+    kCGWindowOwnerName,
+    kCGWindowOwnerPID,
+)
+front = NSWorkspace.sharedWorkspace().frontmostApplication()
+front_pid = int(front.processIdentifier()) if front else 0
+items = []
+for window in CGWindowListCopyWindowInfo(
+    kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+    kCGNullWindowID,
+) or []:
+    if int(window.get(kCGWindowLayer, 0) or 0) != 0:
+        continue
+    bounds = window.get(kCGWindowBounds, {}) or {}
+    left = int(bounds.get('X', 0) or 0)
+    top = int(bounds.get('Y', 0) or 0)
+    width = int(bounds.get('Width', 0) or 0)
+    height = int(bounds.get('Height', 0) or 0)
+    if width <= 1 or height <= 1:
+        continue
+    pid = int(window.get(kCGWindowOwnerPID, 0) or 0)
+    items.append({
+        'title': str(window.get(kCGWindowName, '') or ''),
+        'pid': pid,
+        'process_name': str(window.get(kCGWindowOwnerName, '') or ''),
+        'left': left,
+        'top': top,
+        'right': left + width,
+        'bottom': top + height,
+        'is_foreground': pid == front_pid,
+    })
+print(json.dumps({'windows': items}))`
 
-	out, err := runOsascript(script, 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	raw, err := runSidecarPythonOutput(ctx, py)
 	if err != nil {
-		return nil, fmt.Errorf("list_windows: %w", err)
+		return nil, fmt.Errorf("list_windows: %w: %s", err, strings.TrimSpace(string(raw)))
 	}
-
-	windows := []map[string]any{}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "|||")
-		if len(parts) < 8 {
-			continue
-		}
-		pid, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
-		left, _ := strconv.Atoi(strings.TrimSpace(parts[3]))
-		top, _ := strconv.Atoi(strings.TrimSpace(parts[4]))
-		w, _ := strconv.Atoi(strings.TrimSpace(parts[5]))
-		h, _ := strconv.Atoi(strings.TrimSpace(parts[6]))
-		windows = append(windows, map[string]any{
-			"title":         strings.TrimSpace(parts[2]),
-			"pid":           pid,
-			"process_name":  strings.TrimSpace(parts[0]),
-			"left":          left,
-			"top":           top,
-			"right":         left + w,
-			"bottom":        top + h,
-			"is_foreground": strings.TrimSpace(parts[7]) == "true",
-		})
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("list_windows parse: %w", err)
 	}
-	return map[string]any{"windows": windows}, nil
+	return result, nil
 }
 
 // ── get_window_tree ───────────────────────────────────────────────────────────
@@ -724,6 +732,48 @@ func handleFocusWindow(params map[string]any) (any, error) {
 end tell`, pid)
 	_, err := runOsascript(script, 5*time.Second)
 	return map[string]any{"success": err == nil, "pid": pid}, nil
+}
+
+// ── set_window_bounds ─────────────────────────────────────────────────────────
+// Move/resize by pid. snap=left|right|maximize uses the primary desktop bounds
+// (Finder, top-left coords — same space as list_windows / System Events).
+
+func handleSetWindowBounds(params map[string]any) (any, error) {
+	pid := toInt(params["pid"])
+	if pid == 0 {
+		return nil, fmt.Errorf("missing required parameter: pid")
+	}
+	snap := strings.ToLower(stringOrDefault(params["snap"], ""))
+	x, y, w, h := toInt(params["x"]), toInt(params["y"]), toInt(params["w"]), toInt(params["h"])
+	if snap != "" {
+		sc := screenRect(0)
+		switch snap {
+		case "left":
+			x, y, w, h = sc.xOffset, sc.yOffset, sc.logicalW/2, sc.logicalH
+		case "right":
+			x, y, w, h = sc.xOffset+sc.logicalW/2, sc.yOffset, sc.logicalW-sc.logicalW/2, sc.logicalH
+		case "maximize":
+			x, y, w, h = sc.xOffset, sc.yOffset, sc.logicalW, sc.logicalH
+		default:
+			return nil, fmt.Errorf("unknown snap %q (use left, right, maximize)", snap)
+		}
+	}
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("need snap=left|right|maximize or positive w and h")
+	}
+	script := fmt.Sprintf(`tell application "System Events"
+	set proc to first process whose unix id is %d
+	tell proc
+		if (count of windows) is 0 then error "no window"
+		set position of first window to {%d, %d}
+		set size of first window to {%d, %d}
+	end tell
+end tell`, pid, x, y, w, h)
+	_, err := runOsascript(script, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"success": true, "pid": pid, "x": x, "y": y, "w": w, "h": h, "snap": snap}, nil
 }
 
 // ── find_element ──────────────────────────────────────────────────────────────
@@ -1209,12 +1259,12 @@ func keysToOsascript(keys string) string {
 	specialKeys := map[string]int{
 		// Core
 		"return": 36, "enter": 36,
-		"tab": 48,
-		"space": 49,
+		"tab":    48,
+		"space":  49,
 		"delete": 51, "backspace": 51,
 		"escape": 53, "esc": 53,
 		"caps_lock": 57,
-		"fn": 63,
+		"fn":        63,
 
 		// Forward delete
 		"forward_delete": 117, "del": 117,
@@ -1249,7 +1299,7 @@ func keysToOsascript(keys string) string {
 		"numpad_decimal": 65, "numpad_dot": 65,
 		"numpad_multiply": 67, "numpad_star": 67,
 		"numpad_plus": 69, "numpad_add": 69,
-		"numpad_clear": 71,
+		"numpad_clear":  71,
 		"numpad_divide": 75, "numpad_slash": 75,
 		"numpad_enter": 76,
 		"numpad_minus": 78, "numpad_subtract": 78,
@@ -1257,8 +1307,8 @@ func keysToOsascript(keys string) string {
 
 		// Media / special hardware keys
 		"volume_up": 72, "volume_mute": 74, "volume_down": 73,
-		"mute": 74,
-		"play_pause": 100, // maps to F8 on Apple keyboards; use key code directly
+		"mute":          74,
+		"play_pause":    100, // maps to F8 on Apple keyboards; use key code directly
 		"brightness_up": 144, "brightness_down": 145,
 		"mission_control": 160, "launchpad": 131,
 

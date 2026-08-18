@@ -122,6 +122,25 @@ AUTOMATION_PRESETS: dict[str, dict[str, Any]] = {
         "action_config": {},
         "schedule": {"kind": "daily", "time": "10:00"},
     },
+    "jira_morning_intake": {
+        "preset_id": "jira_morning_intake",
+        "name": "Jira morning intake",
+        "description": "Collate overnight Jira notification emails into one local ticket batch and Telegram digest.",
+        "automation_type": "scheduled_instruction",
+        "instruction": (
+            "Run Jira morning intake as ONE batch, never email-by-email:\n"
+            "1. Scan Gmail for Jira/Atlassian notification emails since the last check.\n"
+            "2. Extract all issue keys, dedupe, and fetch live issue details from Jira.\n"
+            "3. Stage new issues onto the active/linked local Ticket Board with create/intake batch "
+            "(source_provider=jira, external_id=issue key). Skip keys already ticketed.\n"
+            "4. Send ONE Telegram digest listing all new tickets with Run all / Prioritize / Ignore.\n"
+            "5. Do NOT start workflows, comment on Jira, log time to Jira, or send email replies "
+            "until I approve from Telegram after work completes.\n"
+            "6. Summarize keys staged, skipped, and whether the digest was sent."
+        ),
+        "action_config": {},
+        "schedule": {"kind": "daily", "time": "08:00"},
+    },
     "friday_time_summary": {
         "preset_id": "friday_time_summary",
         "name": "Friday time summary",

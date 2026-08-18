@@ -10,7 +10,7 @@ import time
 from distr.core.audio.stream_resampler import LinearStreamResampler
 from distr.core.audio.time_stretcher import TimeStretcher
 from .libs import (
-    LocalAudioTransport, LocalAudioInputTransport, LocalAudioOutputTransport, AudioRawFrame, InputAudioRawFrame, EndFrame, TTSStoppedFrame, LLMFullResponseEndFrame, TTSStartedFrame, InterruptionFrame,
+    LocalAudioTransport, LocalAudioInputTransport, LocalAudioOutputTransport, AudioRawFrame, InputAudioRawFrame, EndFrame, TTSStoppedFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame, TTSStartedFrame, InterruptionFrame,
     librosa, pyaudio, sd
 )
 from enum import IntEnum, auto
@@ -374,6 +374,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         # next response starts.
         self._pipeline_cut = False
         self._force_silence = False  # When True, write silence instead of audio
+        # ponytail: PTT interrupt_tts races the response it just captured. TTS
+        # already ignores InterruptionFrame for 2s after LLMFullResponseStartFrame;
+        # transport must too or it dumps the process queue and the user hears nothing.
+        self._tts_response_started_at = 0.0
+        self._STALE_INTERRUPT_GRACE_SEC = 2.0
         
         # Stream health tracking — detect dead PortAudio streams and recover
         self._stream_error_count = 0
@@ -708,6 +713,20 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         mapped_speed = self._map_speed(self._speed)
         logger.debug(f"Transport output speed set to {self._speed:.2f}x (Mapped: {mapped_speed:.2f}x)")
 
+    def _begin_tts_response(self):
+        """Unmute for a new spoken response and start the stale-PTT grace window."""
+        self._pipeline_cut = False
+        self._force_silence = False
+        self._tts_response_started_at = time.monotonic()
+
+    def _is_stale_tts_interrupt(self) -> bool:
+        started = float(getattr(self, "_tts_response_started_at", 0.0) or 0.0)
+        if started <= 0:
+            return False
+        return (time.monotonic() - started) < float(
+            getattr(self, "_STALE_INTERRUPT_GRACE_SEC", 2.0)
+        )
+
     def _ensure_frame_attributes(self, frame):
         """Ensure frame has required attributes for BaseOutputTransport."""
         if not hasattr(frame, 'transport_destination'):
@@ -991,6 +1010,14 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
     async def process_frame(self, frame, direction):
         self._ensure_frame_attributes(frame)
+
+        # ── LLMFullResponseStartFrame ───────────────────────────────────
+        # Control frame (not SystemFrame): can sit behind a delayed PTT
+        # InterruptionFrame. Mark the response now so that interrupt is stale.
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._begin_tts_response()
+            await super().process_frame(frame, direction)
+            return
         
         # ── TTSStartedFrame ─────────────────────────────────────────────
         if isinstance(frame, TTSStartedFrame):
@@ -1036,6 +1063,19 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         
         # ── InterruptionFrame ───────────────────────────────────────────
         elif isinstance(frame, InterruptionFrame):
+            if self._is_stale_tts_interrupt():
+                logger.info(
+                    "Transport: Ignoring stale InterruptionFrame (%.0fms since TTS response start)",
+                    (time.monotonic() - self._tts_response_started_at) * 1000,
+                )
+                return
+            if self._state in (AudioPlaybackState.IDLE, AudioPlaybackState.COMPLETED):
+                # PTT always broadcasts InterruptionFrame, even when nothing is
+                # playing. Dumping the process queue here deletes the
+                # LLMFullResponseStartFrame / audio for the command just captured.
+                logger.debug("Transport: InterruptionFrame while idle — keeping queued response frames")
+                self._force_silence = False
+                return
             logger.debug("Transport: Interrupted")
             # Signal AEC that speaker stopped
             if self._aec_ref_buf is not None:

@@ -35,6 +35,19 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "work_ops",
+        (
+            r"\b(what'?s?\s+coming\s+in|check\s+(?:my\s+)?(?:work|inbox|intake)|work\s+intake)\b",
+            r"\b(intake|stage)\b.+\b(jira|email|gmail|tickets?)\b",
+            r"\b(run|start|execute)\b.+\b(ticket|issue)\b\s*#?\d+",
+            r"\b(run|start)\b.+\bticket\b",
+            r"\b(work\s+status|status\s+of\s+(?:the\s+)?(?:work|ticket)|where\s+is\s+ticket)\b",
+            r"\b(show|read)\b.+\b(client\s+)?draft\b.+\bticket\b",
+            r"\b(send|approve)\b.+\b(client|draft)\b",
+            r"\bsend\s+(?:it\s+)?to\s+the\s+client\b",
+        ),
+    ),
+    (
         "proactive_orchestrator",
         (
             r"\b(proactive|morning|lunch|evening|check\s+work|work\s+coming\s+in|prioriti[sz]e|what\s+is\s+important)\b.*\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?|codex|codecs|cursor|project)\b",
@@ -43,12 +56,17 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(plan|prioriti[sz]e)\b.*\b(today|my\s+day|daily|emails?|gmail|whats\s*app|tickets?|boards?|projects?|workflows?)\b",
             r"\b(where\s+am\s+i|what\s+am\s+i\s+doing|workload|working\s+on)\b.*\b(cursor|codex|codecs)\b",
             r"\b(cursor|codex|codecs)\b.*\b(workload|working\s+on|what\s+am\s+i\s+doing|where\s+am\s+i)\b",
+            r"\b(turn\s+on|enable|start|set\s+up|setup|activate)\b.+\b(jira)\b.+\b(morning\s+)?(intake|automation|batch|notifications?|email)\b",
+            r"\b(jira)\b.+\b(morning\s+)?(intake|automation)\b.+\b(turn\s+on|enable|start|set\s+up|setup|activate)\b",
+            r"\b(turn\s+on|enable|start)\b.+\bjira\b.+\b(tickets?|issues?)\b.+\b(from\s+)?(email|gmail|telegram)\b",
+            r"\b(run|do|start)\b.+\bjira\b.+\b(intake|morning\s+intake|email\s+batch)\b\s*(now)?\b",
         ),
     ),
     (
         "clipboard_action",
         (
             r"\b(what'?s?|what\s+is|show|get|read|see)\s+(?:in|on)?\s*(?:my\s+|the\s+)?clipboard\b",
+            r"\b(?:read|ingest|consume|inspect|load|get)\b.*\b(?:my\s+|the\s+)?clipboard\b",
             r"\b(read|inspect|check|look\s+at|review|load)\b.*\bclipboard\b.*\b(talk|discuss|go\s+through|about\s+it|with\s+me)\b",
             r"\b(explain|elaborate|summari[sz]e|rework|rewrite)\s+(?:on\s+)?this\b",
             r"\b(?:set|write|put|copy)\s+(?:the\s+)?clipboard\s+(?:to|as)\b",
@@ -70,6 +88,10 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(sync|latest|activity|overview|list|show|read|open|snapshot|create|make|draft|reply|send)\b.+\bwhats\s*app\b",
             r"\b(groups?|chats?|threads?)\b.+\b(messages?|photos?|screenshots?|voice\s+notes?)\b",
             r"\b(messages?|photos?|screenshots?|voice\s+notes?)\b.+\b(groups?|chats?|threads?)\b",
+            r"\b(open|show|go\s+to|switch\s+to|launch)\b.+\b(ticket\s+board|kanban(?:\s+board)?)\b",
+            r"\b(ticket\s+board|kanban(?:\s+board)?)\b.+\b(open|show)\b",
+            r"\b(open|show|go\s+to|launch)\b.+\b(?:jira|trello|local)\b.+\bboard\b",
+            r"\b(open|show|go\s+to)\b.+\bboard\b.*\b(jira|trello|local)\b",
         ),
     ),
     (
@@ -93,6 +115,21 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "build_tool",
+        (
+            r"\b(build|create|make|generate|save)\s+(?:a\s+|an\s+|this\s+)?(?:reusable\s+|custom\s+)?(?:tool|capability)\b",
+            r"\b(turn|save|make)\s+(?:this|that|it)\s+into\s+(?:a\s+)?(?:tool|repeatable\s+action)\b",
+        ),
+    ),
+    (
+        "computer_use",
+        (
+            r"\b(on\s+(?:my|the)\s+(?:screen|desktop)|in\s+the\s+(?:app|window))\b.*\b(first|then|after|finally)\b",
+            r"\b(first|then|after\s+that|finally)\b.*\b(click|type|select|open|scroll|drag|press)\b.*\b(click|type|select|open|scroll|drag|press)\b",
+            r"\b(complete|handle|do)\s+(?:this\s+)?(?:multi[- ]step\s+)?(?:desktop|screen|gui)\s+(?:task|workflow)\b",
+        ),
+    ),
+    (
         "scheduled_action",
         (
             r"\b(schedule|scheduled|recurring|every\s+(?:day|weekday|week|morning|evening))\b.*\b(action|desktop|keypress|key\s*press|type|open|recording|chrome|app|automation)\b",
@@ -104,6 +141,9 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "google_workspace",
         (
+            r"\b(?:google\s+)?calendar\b.*\b(?:create|add|make|schedule|event|appointment)\b",
+            r"\b(?:create|add|make|schedule)\b.*\b(?:google\s+)?calendar\b",
+            r"\b(?:create|add|make|schedule)\s+(?:the\s+|an?\s+)?(?:calendar\s+)?event\b",
             r"\b(gmail|email)\b.*\battachment",
             r"\battachment\b.*\b(gmail|email|inbox)\b",
             r"\bdownload\b.*\b(gmail|email)\b.*\battachment",
@@ -175,3 +215,21 @@ def forced_tool_names_for_text(text: str) -> list[str]:
         if any(re.search(pattern, raw, re.IGNORECASE) for pattern in patterns):
             forced.append(tool_name)
     return forced
+
+
+_WORKFLOW_FOLLOW_UP_PATTERNS: tuple[str, ...] = (
+    r"^(?:please\s+)?(?:try|retry)(?:\s+it|\s+that)?\s+again[.!]?$",
+    r"^(?:please\s+)?do\s+(?:it|that)(?:\s+again)?[.!]?$",
+    r"^(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!]?$",
+    r"^(?:please\s+)?create\s+the\b.*\bevent\b[.!]?$",
+    r"\bclipboard\b.*\bdo\s+it\b",
+)
+
+
+def is_workflow_follow_up(text: str) -> bool:
+    """Return whether a short instruction should retain an active tool chain."""
+    raw = (text or "").strip()
+    return bool(raw) and any(
+        re.search(pattern, raw, re.IGNORECASE)
+        for pattern in _WORKFLOW_FOLLOW_UP_PATTERNS
+    )

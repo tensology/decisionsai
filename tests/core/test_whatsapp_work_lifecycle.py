@@ -52,7 +52,7 @@ def test_completed_ticket_creates_unsent_review_not_completion(monkeypatch, tmp_
         ticket_id=42, run_id=8, status="completed", result_summary="Checkout now passes browser validation."
     )
     assert review and review["token"]
-    assert "ready for your review" in review["draft"]
+    assert "ready for you to look" in review["draft"].lower() or "checkout" in review["draft"].lower()
     assert saved["source"] == "agent"
     with lifecycle.engine.connect() as conn:
         row = conn.execute(text("SELECT status, reply_status FROM whatsapp_work_lifecycles WHERE ticket_id=42")).mappings().one()

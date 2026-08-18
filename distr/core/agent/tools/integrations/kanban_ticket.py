@@ -13,6 +13,8 @@ import os
 import re
 import shutil
 import unicodedata
+import webbrowser
+from urllib.parse import urlencode
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -183,7 +185,7 @@ class TicketDraftInput(BaseModel):
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, open_board, create_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
@@ -233,6 +235,7 @@ class KanbanTicketTool(BaseTool):
     ACTIONS (pass as the 'action' parameter):
       list_boards        — list all boards
       get_active_board   — show which board is currently active/in use
+      open_board         — open the Ticket Board UI in the browser (optional board_name, board_id, source_provider)
       create_board       — create a new board (requires board_name)
       delete_board       — delete a board (requires board_id or board_name)
       list_lanes         — list lanes for a board (requires board_id or board_name)
@@ -317,6 +320,10 @@ class KanbanTicketTool(BaseTool):
         "When the user asks for a Trello card or Jira ticket, still use action='create_ticket'; "
         "the tool will create it on the matching remote board instead of the local Kanban database. "
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
+        "Use action='open_board' when the user asks to open the ticket board or a specific board "
+        "(local, Jira, or Trello). Pass board_name and optional source_provider ('local', 'jira', 'trello'). "
+        "Do not guess browser URLs or use smart_open for ticket boards — this action opens the correct "
+        "DecisionsAI /tickets/ deep link. "
         "Use action='get_active_board' to see the active local board in use. "
         "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
         "Use action='discuss_ticket' when the user wants to talk through a **local** ticket (numeric id or row copied to "
@@ -390,6 +397,8 @@ class KanbanTicketTool(BaseTool):
             "create a ticket board ticket", "ticket board ticket",
             "add to board", "add to the board",
             "list boards", "show boards", "my boards",
+            "open ticket board", "open the ticket board", "open kanban board",
+            "open board", "show ticket board", "go to ticket board",
             "active board", "current board", "board in use", "in use board",
             "which board is active", "what is the active board",
             "list tickets", "show tickets",
@@ -1334,6 +1343,15 @@ class KanbanTicketTool(BaseTool):
             ):
                 action = "discuss_ticket"
 
+            if action in ("create_ticket", "list_boards") and re.search(r"\bopen\b", text_norm):
+                if re.search(
+                    r"\b(ticket\s+board|kanban(?:\s+board)?|boards?\s+view|jira\s+board|trello\s+board)\b",
+                    text_norm,
+                ):
+                    action = "open_board"
+                elif re.search(r"\bopen\s+(?:the\s+)?(?:(?:local|jira|trello)\s+)?\w.+\s+board\b", text_norm):
+                    action = "open_board"
+
             if action == "list_boards":
                 return self._action_list_boards()
             elif action in ("get_active_board", "active_board", "which_board_is_active", "current_board"):
@@ -1457,6 +1475,13 @@ class KanbanTicketTool(BaseTool):
                 return self._action_send_to_project(ticket_id or self._last_ticket_id)
             elif action in ("activate_board", "set_board", "use_board"):
                 return self._action_activate_board(board_id or None, board_name or text)
+            elif action in ("open_board", "open_ticket_board", "show_board"):
+                return self._action_open_board(
+                    board_id=board_id or None,
+                    board_name=board_name or "",
+                    source_provider=source_provider or "",
+                    text=text,
+                )
             elif action in ("send_to_cli", "push_to_cli", "run_cli"):
                 return self._action_send_to_cli(ticket_id or self._last_ticket_id)
             elif action in ("workflow_overview", "board_overview"):
@@ -1538,7 +1563,7 @@ class KanbanTicketTool(BaseTool):
                 return self._action_whatsapp_list_drafts()
             else:
                 ref = (
-                    f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, create_board, delete_board, "
+                    f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, open_board, create_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
                     "move_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
                     "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
@@ -1693,7 +1718,8 @@ class KanbanTicketTool(BaseTool):
         lines = []
         for b in boards:
             marker = ", ACTIVE" if active_id is not None and b["id"] == active_id else ""
-            lines.append(f"Board '{b['name']}' (ID {b['id']}, local{marker})")
+            path = self._ticket_board_path("database", b["id"])
+            lines.append(f"Board '{b['name']}' (ID {b['id']}, local{marker}) → {path}")
 
         # Also fetch external boards
         try:
@@ -1704,13 +1730,15 @@ class KanbanTicketTool(BaseTool):
                 if key in seen:
                     continue
                 seen.add(key)
-                lines.append(f"Board '{b['name']}' (Trello, ID {b['id']})")
+                path = self._ticket_board_path("trello", b["id"], b.get("url", ""))
+                lines.append(f"Board '{b['name']}' (Trello, ID {b['id']}) → {path}")
             for b in ext.get("jira", []):
                 key = ("jira", str(b.get("id") or ""))
                 if key in seen:
                     continue
                 seen.add(key)
-                lines.append(f"Board '{b['name']}' (Jira, ID {b['id']})")
+                path = self._ticket_board_path("jira", b["id"])
+                lines.append(f"Board '{b['name']}' (Jira, ID {b['id']}) → {path}")
         except Exception as e:
             logger.debug("Could not fetch external boards: %s", e)
 
@@ -2886,6 +2914,209 @@ class KanbanTicketTool(BaseTool):
         spoken = f"I exported that ticket into your {project_name} project folder."
         return voice_then_reference(spoken, ref)
 
+    # ── Open board in browser ─────────────────────────────────────────────
+
+    @staticmethod
+    def _ticket_board_path(source: str, board_id, board_url: str = "") -> str:
+        """Build a /tickets/ deep-link path understood by kanban.js loadBoards()."""
+        src = (source or "database").lower()
+        params: Dict[str, str] = {}
+        if src == "database":
+            params["board_id"] = str(board_id)
+        elif src in ("jira", "trello"):
+            params["source"] = src
+            params["board_id"] = str(board_id)
+            if board_url:
+                params["board_url"] = board_url
+        else:
+            params["board_id"] = str(board_id)
+        return "/tickets/?" + urlencode(params)
+
+    def _resolve_web_base_url(self) -> Optional[str]:
+        from distr.core.agent.tools.chat.open_page import OpenPageTool
+
+        return OpenPageTool()._resolve_web_base_url()
+
+    def _open_ticket_board_in_browser(self, source: str, board_id, board_url: str = "") -> Optional[str]:
+        base = self._resolve_web_base_url()
+        if not base:
+            return None
+        path = self._ticket_board_path(source, board_id, board_url)
+        url = f"{base}{path}"
+        webbrowser.open(url)
+        logger.info("KanbanTicketTool: opened board URL %s", url)
+        return url
+
+    def _infer_board_source_from_text(self, text: str = "", source_provider: str = "") -> str:
+        explicit = (source_provider or "").strip().lower()
+        if explicit in ("local", "database", "db"):
+            return "database"
+        if explicit in ("jira", "trello"):
+            return explicit
+        t = (text or "").lower()
+        if re.search(r"\b(local|database|db)\b", t):
+            return "database"
+        if re.search(r"\bjira\b", t):
+            return "jira"
+        if re.search(r"\btrello\b", t):
+            return "trello"
+        return ""
+
+    def _extract_board_name_for_open(self, text: str = "", board_name: str = "") -> str:
+        if board_name and board_name.strip():
+            return board_name.strip()
+        t = (text or "").strip()
+        patterns = (
+            r"\bopen\s+(?:the\s+)?(?:(?:local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b",
+            r"\b(?:show|go\s+to|switch\s+to|launch)\s+(?:the\s+)?(?:(?:local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b",
+        )
+        for pattern in patterns:
+            m = re.search(pattern, t, re.IGNORECASE)
+            if not m:
+                continue
+            name = (m.group(1) or "").strip(" .,!?:;")
+            if name and name.lower() not in {"ticket", "kanban", "the", "a", "my"}:
+                return name
+        return ""
+
+    def _find_open_board_candidates(
+        self,
+        board_name: str = "",
+        board_id: Optional[int] = None,
+        source_provider: str = "",
+        text: str = "",
+    ) -> List[Dict]:
+        hint = self._infer_board_source_from_text(text, source_provider)
+        name = self._extract_board_name_for_open(text, board_name)
+        candidates: List[Dict] = []
+
+        def add_local() -> None:
+            board = self._find_board(board_id, name or None)
+            if board:
+                candidates.append(
+                    {
+                        "source": "database",
+                        "id": board["id"],
+                        "name": board["name"],
+                        "board_url": "",
+                    }
+                )
+
+        def add_external(provider: str) -> None:
+            board, _boards = self._find_external_board(provider, board_id, name, text)
+            if board:
+                candidates.append(
+                    {
+                        "source": provider,
+                        "id": board["id"],
+                        "name": board["name"],
+                        "board_url": board.get("url", ""),
+                    }
+                )
+
+        if hint in ("", "database"):
+            add_local()
+        if hint == "jira":
+            add_external("jira")
+        elif hint == "trello":
+            add_external("trello")
+        elif hint == "" and name:
+            add_external("jira")
+            add_external("trello")
+
+        if not candidates and not name and not board_id:
+            active_board, _ = self._get_active_board(auto_recover=True)
+            if active_board:
+                candidates.append(
+                    {
+                        "source": "database",
+                        "id": active_board["id"],
+                        "name": active_board["name"],
+                        "board_url": "",
+                    }
+                )
+
+        seen = set()
+        unique: List[Dict] = []
+        for candidate in candidates:
+            key = (candidate["source"], str(candidate["id"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(candidate)
+        return unique
+
+    def _set_active_local_board(self, board_id: int) -> None:
+        from distr.core.db.kanban import KanbanBoard as KB
+
+        with self._get_session() as s:
+            s.query(KB).filter(KB.in_use == True).update({"in_use": False})
+            board = orm_get_by_id(s, KB, board_id)
+            if board:
+                board.in_use = True
+                s.commit()
+                self._last_board_id = board_id
+
+    def _action_open_board(
+        self,
+        board_id: Optional[int] = None,
+        board_name: str = "",
+        source_provider: str = "",
+        text: str = "",
+    ) -> str:
+        """Open the Ticket Board UI in the browser, optionally deep-linked to a specific board."""
+        candidates = self._find_open_board_candidates(board_name, board_id, source_provider, text)
+        source_hint = self._infer_board_source_from_text(text, source_provider)
+
+        if not candidates:
+            from distr.core.agent.tools.chat.open_page import OpenPageTool
+
+            return OpenPageTool(chat_manager=self.chat_manager)._open_url("/tickets/", "ticket board")
+
+        if len(candidates) > 1 and not board_id and not source_hint:
+            lines = []
+            for candidate in candidates:
+                label = "local" if candidate["source"] == "database" else candidate["source"]
+                path = self._ticket_board_path(
+                    candidate["source"],
+                    candidate["id"],
+                    candidate.get("board_url", ""),
+                )
+                lines.append(
+                    f"- '{candidate['name']}' ({label}, ID {candidate['id']}) → {path}"
+                )
+            ref = (
+                "Multiple boards match that name. Say which source to open (local, Jira, or Trello), "
+                "or call open_board with source_provider:\n" + "\n".join(lines)
+            )
+            spoken = (
+                f"I found {len(candidates)} boards with that name. "
+                "Tell me whether you want the local, Jira, or Trello one."
+            )
+            return voice_then_reference(spoken, ref)
+
+        target = candidates[0]
+        if target["source"] == "database":
+            self._set_active_local_board(int(target["id"]))
+
+        url = self._open_ticket_board_in_browser(
+            target["source"],
+            target["id"],
+            target.get("board_url", ""),
+        )
+        if not url:
+            return voice_then_reference(
+                "The web server is not ready, so I could not open the board in your browser.",
+                "Error: Web server is not ready. Try again in a moment.",
+            )
+
+        src_label = {"database": "local", "jira": "Jira", "trello": "Trello"}.get(
+            target["source"], target["source"]
+        )
+        spoken = f"I opened the {target['name']} board in your browser."
+        ref = f"Opened '{target['name']}' ({src_label}) in the Ticket Board UI."
+        return voice_then_reference(spoken, ref)
+
     # ── Activate board ────────────────────────────────────────────────────
 
     def _action_activate_board(self, board_id=None, board_name=None) -> str:
@@ -2897,20 +3128,7 @@ class KanbanTicketTool(BaseTool):
                 f"Board '{board_name or board_id}' not found.",
             )
 
-        from distr.core.db.kanban import KanbanBoard as KB
-        with self._get_session() as s:
-            # Deactivate all boards
-            s.query(KB).filter(KB.in_use == True).update({"in_use": False})
-            b = orm_get_by_id(s, KB, board["id"])
-            if not b:
-                return voice_then_reference(
-                    "I could not find that board.",
-                    f"Board '{board['name']}' not found.",
-                )
-            b.in_use = True
-            s.commit()
-
-        self._last_board_id = board["id"]
+        self._set_active_local_board(board["id"])
         return voice_then_reference(
             f"{board['name']} is now your default board for ticket commands.",
             f"Board '{board['name']}' is now your active board. All ticket commands will default to this board.",
@@ -3121,6 +3339,21 @@ class KanbanTicketTool(BaseTool):
                             notify_telegram_review(review)
                     except Exception:
                         logger.exception("Could not prepare WhatsApp CLI completion draft")
+                    try:
+                        from distr.core.kanban.jira_work_lifecycle import (
+                            notify_telegram_jira_review,
+                            prepare_completed_jira_review,
+                        )
+                        jira_review = prepare_completed_jira_review(
+                            ticket_id=ticket_id_val,
+                            run_id=int(audit_id or 0),
+                            status="completed",
+                            result_summary=str(result.output or "")[:1200],
+                        )
+                        if jira_review:
+                            notify_telegram_jira_review(jira_review)
+                    except Exception:
+                        logger.exception("Could not prepare Jira CLI completion review")
                     return voice_then_reference(
                         f"The work has finished and is ready for your review in {project_name}.",
                         (

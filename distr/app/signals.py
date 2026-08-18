@@ -600,7 +600,13 @@ class SignalBridgeMixin:
                 )
 
                 c = redact_filesystem_paths_for_conversation(c)
-            _post_chat_event({"event": "message_added", "chat_id": int(chat_id), "role": role, "content": c})
+            _post_chat_event({
+                "event": "message_added",
+                "chat_id": int(chat_id),
+                "role": role,
+                "content": c,
+                "timestamp": int(time.time() * 1000),
+            })
         signal_manager.chat_message_added.connect(on_chat_message_added_web)
 
         def on_chat_stream_started_web(chat_id):

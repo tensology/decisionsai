@@ -11,6 +11,7 @@ class _CoreHarness(LLMSharedMixin):
         self._model_name = "llama3:8b"
         self._tools = [
             SimpleNamespace(name="request_tool"),
+            SimpleNamespace(name="clipboard_action"),
             SimpleNamespace(name="google_workspace"),
             SimpleNamespace(name="tensology_workspace"),
             SimpleNamespace(name="delegated_workflow"),
@@ -182,6 +183,29 @@ def test_get_filtered_tools_preserves_sticky_injected_google_workspace(monkeypat
 
     assert "request_tool" in names
     assert "google_workspace" in names
+
+
+def test_get_filtered_tools_retains_multistep_tools_for_terse_follow_ups(monkeypatch):
+    class _Retriever:
+        def retrieve(self, _msg, _model):
+            return ["request_tool"]
+
+    monkeypatch.setattr(
+        "distr.core.agent.tool_retriever.get_tool_retriever",
+        lambda: _Retriever(),
+    )
+
+    h = _CoreHarness()
+    first = h._get_filtered_tools(
+        "Ingest my clipboard and create the event in Google Calendar."
+    )
+    retried = h._get_filtered_tools("Try again.")
+    insisted = h._get_filtered_tools("Create the fucking event.")
+
+    expected = {"clipboard_action", "google_workspace"}
+    assert expected.issubset({tool.name for tool in first})
+    assert expected.issubset({tool.name for tool in retried})
+    assert expected.issubset({tool.name for tool in insisted})
 
 
 def test_intercept_tool_calls_rewrites_gmail_request_tool_to_google_workspace():

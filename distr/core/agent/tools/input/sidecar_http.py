@@ -51,7 +51,10 @@ def is_sidecar_reachable(timeout: float = 2.0) -> bool:
 
 def call_sidecar_tool(tool: str, params: dict, *, timeout: float = 120) -> dict:
     """
-    ``POST /tool/{tool}`` with JSON body. Raises ``RuntimeError`` on connection errors or HTTP failures.
+    ``POST /tool/{tool}`` with JSON body.
+
+    If the sidecar is down or refuses the call, window/screenshot tools run in the
+    Decisions process so TCC grants attach to the app instead of decisionsai-sidecar.
     """
     url = f"{sidecar_base_url()}/tool/{tool}"
     try:
@@ -61,19 +64,31 @@ def call_sidecar_tool(tool: str, params: dict, *, timeout: float = 120) -> dict:
         if not isinstance(data, dict):
             raise RuntimeError(f"Sidecar returned non-object JSON for {tool!r}")
         return data
-    except requests.ConnectionError as e:
-        raise RuntimeError(
-            "Sidecar not running. Start the sidecar (bundled with the app) or check "
-            f"{sidecar_base_url()}/health."
-        ) from e
-    except requests.HTTPError as e:
-        body = ""
-        try:
-            body = (e.response.text or "")[:500]
-        except Exception:
-            pass
-        raise RuntimeError(f"Sidecar HTTP error ({tool}): {e} {body}") from e
-    except RuntimeError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Sidecar call failed ({tool}): {e}") from e
+    except Exception as exc:
+        local = _run_in_decisions_process(tool, params)
+        if local is not None:
+            logger.info("desktop tool %s ran in Decisions (sidecar: %s)", tool, exc)
+            return local
+        if isinstance(exc, requests.ConnectionError):
+            raise RuntimeError(
+                "Sidecar not running. Start the sidecar (bundled with the app) or check "
+                f"{sidecar_base_url()}/health."
+            ) from exc
+        if isinstance(exc, requests.HTTPError):
+            body = ""
+            try:
+                body = (exc.response.text or "")[:500]
+            except Exception:
+                pass
+            raise RuntimeError(f"Sidecar HTTP error ({tool}): {exc} {body}") from exc
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Sidecar call failed ({tool}): {exc}") from exc
+
+
+def _run_in_decisions_process(tool: str, params: dict) -> dict[str, Any] | None:
+    from distr.core.agent.tools.input.desktop_local import LOCAL_DESKTOP_TOOLS, run_local_desktop_tool
+
+    if tool not in LOCAL_DESKTOP_TOOLS:
+        return None
+    return run_local_desktop_tool(tool, params)

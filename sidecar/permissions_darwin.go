@@ -50,6 +50,10 @@ func markSidecarScreenRecordingOK() {
 	_ = os.WriteFile(sidecarScreenMarkerPath(), []byte(hash+"\n"), 0o644)
 }
 
+func markSidecarScreenRecordingFailed() {
+	_ = os.Remove(sidecarScreenMarkerPath())
+}
+
 func probeMacOSPermissions() map[string]any {
 	exe, _ := os.Executable()
 	return map[string]any{

@@ -26,6 +26,7 @@ VALID_ACTION_TYPES = frozenset(
         "automation_recommendation",
         "message_triage",
         "email_triage",
+        "jira_intake",
         "external_comms",
         "file_change",
         "sensitive",

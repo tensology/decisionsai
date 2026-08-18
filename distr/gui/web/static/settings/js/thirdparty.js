@@ -354,7 +354,21 @@ function thirdPartyConnectIsConnected(providerId) {
 }
 
 function thirdPartyConnectStatusText(providerId) {
-    return '';
+    const labels = {
+        google: 'Google',
+        telegram: 'Telegram',
+        whatsapp: 'WhatsApp',
+        jira: 'Jira',
+        trello: 'Trello',
+        discord: 'Discord',
+        slack: 'Slack',
+        clickup: 'ClickUp',
+        monday: 'Monday'
+    };
+    const label = labels[providerId] || 'Provider';
+    return thirdPartyConnectIsConnected(providerId)
+        ? label + ' is connected.'
+        : label + ' is not connected.';
 }
 
 function thirdPartyConnectorHasStoredConfig(providerId) {
@@ -586,9 +600,17 @@ function selectThirdPartyConnectProvider(providerId) {
 }
 
 function openThirdPartyConnectProvider(providerId) {
-    selectThirdPartyConnectProvider(providerId);
+    selectedThirdPartyConnectProviderId = providerId;
     thirdPartyConnectDetailOpen = true;
-    renderThirdPartyScreen();
+    loadThirdPartyConnectStatus(false).then(function () {
+        if (
+            activeThirdPartySubtab === 'connect' &&
+            thirdPartyConnectDetailOpen &&
+            selectedThirdPartyConnectProviderId === providerId
+        ) {
+            renderThirdPartyScreen();
+        }
+    });
 }
 
 function closeThirdPartyConnectProvider() {
@@ -614,6 +636,63 @@ function loadThirdPartyConnectStatus(renderAfter) {
             }
             return thirdPartyConnectStatusCache;
         });
+}
+
+function disconnectThirdPartyGoogle() {
+    const disconnectBtn = document.getElementById('thirdparty_connect_google_disconnect');
+    if (!window.DecisionsAPI || typeof window.DecisionsAPI.confirm !== 'function') {
+        if (typeof window.showNotification === 'function') {
+            window.showNotification('The confirmation dialog is unavailable. Reload the page and try again.', 'error');
+        }
+        return Promise.resolve(false);
+    }
+
+    return window.DecisionsAPI.confirm({
+        title: 'Disconnect Google',
+        message: 'Disconnect Google? This removes the saved account tokens. You can reconnect later without uploading the OAuth configuration again.',
+        confirmLabel: 'Disconnect',
+        danger: true
+    }).then(function (confirmed) {
+        if (!confirmed) return false;
+        if (disconnectBtn) {
+            disconnectBtn.disabled = true;
+            disconnectBtn.setAttribute('aria-busy', 'true');
+            disconnectBtn.textContent = 'Disconnecting...';
+        }
+        return fetch(settingsBase + '/api/advanced/google/disconnect', { method: 'POST' })
+            .then(function (response) {
+                return response.json().catch(function () { return {}; }).then(function (data) {
+                    if (!response.ok || !data.success) {
+                        throw new Error(data.error || 'Disconnect failed');
+                    }
+                    return data;
+                });
+            })
+            .then(function () {
+                return loadThirdPartyConnectStatus(false);
+            })
+            .then(function () {
+                renderThirdPartyScreen();
+                if (typeof window.updateConnectionStatus === 'function') {
+                    window.updateConnectionStatus();
+                }
+                if (typeof window.showNotification === 'function') {
+                    window.showNotification('Google disconnected', 'success');
+                }
+                return true;
+            })
+            .catch(function (error) {
+                if (disconnectBtn && document.contains(disconnectBtn)) {
+                    disconnectBtn.disabled = false;
+                    disconnectBtn.removeAttribute('aria-busy');
+                    disconnectBtn.textContent = 'Disconnect';
+                }
+                if (typeof window.showNotification === 'function') {
+                    window.showNotification(error.message || 'Disconnect failed', 'error');
+                }
+                return false;
+            });
+    });
 }
 
 function loadThirdPartyConnectorDraft(renderAfter) {
@@ -804,7 +883,7 @@ function bindThirdPartyConnectDetail(provider) {
         const actionBtn = document.getElementById('thirdparty_connect_google_action');
         const disconnectBtn = document.getElementById('thirdparty_connect_google_disconnect');
         if (actionBtn) actionBtn.addEventListener('click', function () { window.connectGoogle(); });
-        if (disconnectBtn) disconnectBtn.addEventListener('click', function () { window.disconnectGoogleDirect(); });
+        if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectThirdPartyGoogle);
         return;
     }
     if (provider.id === 'telegram') {
@@ -960,16 +1039,19 @@ function loadThirdPartyWhatsAppInline() {
         phoneInfoEl.classList.add('hidden');
     }
     resetThirdPartyWhatsAppPolling();
-    fetch(settingsBase + '/api/advanced/whatsapp/qr').then(function (response) { return response.json(); }).then(function (data) {
-        if (data.error && data.status === 'service_down') {
+
+    function renderWhatsAppState(data) {
+        data = data || {};
+        if (data.status === 'service_down' || data.status === 'error') {
             if (statusEl) {
-                statusEl.textContent = 'WhatsApp service is not running on the server.';
-                statusEl.className = 'text-sm text-yellow-400 text-center';
+                statusEl.textContent = data.error || 'WhatsApp service is unavailable.';
+                statusEl.className = 'text-sm text-red-400 text-center';
             }
             if (qrContainer) {
-                qrContainer.innerHTML = '<div class="text-center"><p class="text-yellow-600">Service unavailable</p><p class="text-sm text-[#565869] mt-2">Start the WhatsApp service and try again.</p></div>';
+                qrContainer.innerHTML = '<div class="text-center"><p class="text-red-500">Connection unavailable</p><p class="text-sm text-[#565869] mt-2">Check the WhatsApp relay, then press Refresh.</p></div>';
             }
-            return;
+            resetThirdPartyWhatsAppPolling();
+            return 'error';
         }
         if (data.status === 'connected' && data.phone) {
             if (qrContainer) qrContainer.innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
@@ -982,8 +1064,7 @@ function loadThirdPartyWhatsAppInline() {
                 phoneInfoEl.classList.remove('hidden');
             }
             if (disconnectBtn) disconnectBtn.classList.remove('hidden');
-            loadThirdPartyConnectStatus(false);
-            return;
+            return 'connected';
         }
         if (data.qr_image && qrContainer) {
             const img = document.createElement('img');
@@ -992,49 +1073,78 @@ function loadThirdPartyWhatsAppInline() {
             img.className = 'max-w-[256px] max-h-[256px] rounded';
             qrContainer.innerHTML = '';
             qrContainer.appendChild(img);
+            if (statusEl) {
+                statusEl.textContent = 'Scan with WhatsApp: Settings → Linked Devices → Link a Device';
+                statusEl.className = 'text-sm text-green-400 text-center';
+            }
         } else if (data.qr_code && qrContainer) {
             qrContainer.innerHTML = '<div class="text-center"><p class="text-sm text-[#ececf1] mb-2">Enter this code in WhatsApp:</p><div class="bg-white p-3 rounded inline-block"><p class="text-xs text-black break-all font-mono" style="max-width:250px;word-break:break-all;">' + escapeThirdPartyHtml(data.qr_code) + '</p></div></div>';
-        } else if (qrContainer) {
-            qrContainer.innerHTML = '<p class="text-[#565869]">Waiting for QR code…</p>';
-        }
-        if (statusEl) {
-            statusEl.textContent = 'Scan with WhatsApp: Settings → Linked Devices → Link a Device';
-            statusEl.className = 'text-sm text-green-400 text-center';
+            if (statusEl) {
+                statusEl.textContent = 'Scan with WhatsApp: Settings → Linked Devices → Link a Device';
+                statusEl.className = 'text-sm text-green-400 text-center';
+            }
+        } else {
+            if (qrContainer) qrContainer.innerHTML = '<p class="text-[#565869]">Starting WhatsApp pairing…</p>';
+            if (statusEl) {
+                statusEl.textContent = data.status === 'disconnected'
+                    ? 'WhatsApp is reconnecting. Waiting for a fresh QR code…'
+                    : 'Starting WhatsApp and requesting a QR code…';
+                statusEl.className = 'text-sm text-yellow-400 text-center';
+            }
         }
         if (disconnectBtn) disconnectBtn.classList.add('hidden');
-        thirdPartyWhatsAppPollInterval = setInterval(function () {
-            fetch(settingsBase + '/api/advanced/whatsapp/status').then(function (response) { return response.json(); }).then(function (status) {
-                if (status.status === 'connected' && status.phone) {
-                    resetThirdPartyWhatsAppPolling();
-                    return fetch(settingsBase + '/api/advanced/whatsapp/save', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            jid: status.phone.jid || '',
-                            name: status.phone.name || '',
-                            push_name: status.phone.pushName || status.phone.notify || ''
-                        })
-                    }).then(function () {
-                        if (qrContainer) qrContainer.innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
-                        if (statusEl) {
-                            statusEl.textContent = 'WhatsApp connected successfully.';
-                            statusEl.className = 'text-sm text-green-400 text-center';
-                        }
-                        if (phoneInfoEl) {
-                            phoneInfoEl.textContent = status.phone.name || status.phone.jid || 'Unknown';
-                            phoneInfoEl.classList.remove('hidden');
-                        }
-                        if (disconnectBtn) disconnectBtn.classList.remove('hidden');
-                        loadThirdPartyConnectStatus();
-                        if (typeof window.showNotification === 'function') window.showNotification('WhatsApp connected', 'success');
-                    });
-                }
-            }).catch(function () {});
-        }, 3000);
+        return data.qr_image || data.qr_code ? 'qr_ready' : 'starting';
+    }
+
+    function saveConnectedWhatsApp(status) {
+        resetThirdPartyWhatsAppPolling();
+        return fetch(settingsBase + '/api/advanced/whatsapp/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jid: status.phone.jid || '',
+                name: status.phone.name || '',
+                push_name: status.phone.pushName || status.phone.notify || ''
+            })
+        }).then(function () {
+            renderWhatsAppState(status);
+            if (statusEl) statusEl.textContent = 'WhatsApp connected successfully.';
+            loadThirdPartyConnectStatus(false);
+            if (typeof window.showNotification === 'function') window.showNotification('WhatsApp connected', 'success');
+        });
+    }
+
+    function pollWhatsAppState() {
+        fetch(settingsBase + '/api/advanced/whatsapp/status').then(function (response) {
+            return response.json().catch(function () { return {}; }).then(function (data) {
+                if (!response.ok && !data.status) data.status = 'error';
+                return data;
+            });
+        }).then(function (status) {
+            const state = renderWhatsAppState(status);
+            if (state === 'connected') saveConnectedWhatsApp(status);
+        }).catch(function () {
+            renderWhatsAppState({ status: 'error', error: 'Failed to read WhatsApp connection status.' });
+        });
+    }
+
+    fetch(settingsBase + '/api/advanced/whatsapp/connect', { method: 'POST' }).then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok && !data.status) data.status = 'error';
+            return data;
+        });
+    }).then(function (data) {
+        const state = renderWhatsAppState(data);
+        if (state === 'connected') {
+            loadThirdPartyConnectStatus(false);
+            return;
+        }
+        if (state === 'error') return;
+        thirdPartyWhatsAppPollInterval = setInterval(pollWhatsAppState, 2000);
+        pollWhatsAppState();
     }).catch(function () {
         if (statusEl) {
-            statusEl.textContent = 'Failed to connect to WhatsApp service.';
-            statusEl.className = 'text-sm text-red-400 text-center';
+            renderWhatsAppState({ status: 'error', error: 'Failed to start WhatsApp pairing.' });
         }
     });
 }

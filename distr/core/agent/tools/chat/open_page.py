@@ -157,6 +157,7 @@ class OpenPageTool(BaseTool):
         "Open a DecisionsAI web UI page in the default browser. "
         "Use when the user says 'open chat', 'open preferences', 'open projects', etc. "
         f"Known pages: {_KNOWN_PAGES}. "
+        "For a specific ticket board (local, Jira, or Trello), use create_ticket with action='open_board' instead. "
         "Also handles 'new chat' by creating a fresh chat and opening the chat page."
     )
     args_schema: type[BaseModel] = OpenPageInput

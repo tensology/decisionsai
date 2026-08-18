@@ -1068,16 +1068,22 @@ def _cmd_interrupt_tts(session, params):
             except Exception:
                 pass
     if transport_out is not None:
-        # Set force_silence flag so any audio currently being written
-        # by the executor thread becomes silence immediately.
-        transport_out._force_silence = True
-        try:
-            stream = getattr(transport_out, '_out_stream', None)
-            if stream and stream.is_active():
-                stream.abort_stream()
-                stream.start_stream()
-        except Exception as e:
-            logger.debug("Interrupt: could not abort output stream: %s", e)
+        # Only mute the live output when something is actually playing.
+        # PTT always sends interrupt_tts, including for the command it just
+        # captured; leaving force_silence=True while idle makes the next TTS
+        # write zeros (clipboard read with no sound).
+        state_name = getattr(getattr(transport_out, "_state", None), "name", "")
+        if state_name in ("SYNTHESIZING", "PLAYING", "DRAINING"):
+            transport_out._force_silence = True
+            try:
+                stream = getattr(transport_out, '_out_stream', None)
+                if stream and stream.is_active():
+                    stream.abort_stream()
+                    stream.start_stream()
+            except Exception as e:
+                logger.debug("Interrupt: could not abort output stream: %s", e)
+        else:
+            transport_out._force_silence = False
 
     # Emit tts_stopped IMMEDIATELY so the GUI hides the player without
     # waiting for the async InterruptionFrame to propagate.

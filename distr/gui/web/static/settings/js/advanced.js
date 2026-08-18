@@ -87,7 +87,7 @@ function setIntegrationCardState(key, connected, statusText) {
 function disconnectGoogleDirect() {
     window.DecisionsAPI.confirm({
         title: "Disconnect Google",
-        message: "Disconnect Google? This will remove your tokens and OAuth config.",
+        message: "Disconnect Google? This removes the saved account tokens. You can reconnect later without uploading the OAuth configuration again.",
         confirmLabel: "Disconnect",
         danger: true,
         onConfirm: function() {
@@ -1282,7 +1282,7 @@ async function loadMacosPermissionsPanel() {
         panel.classList.remove('hidden');
         syncAdvancedPermissionsPanelVisibility();
         statusEl.innerHTML = '';
-        (data.items || []).forEach(function (item) {
+        (data.display_items || data.items || []).forEach(function (item) {
             var row = document.createElement('div');
             row.className = 'border border-[#565869] rounded-md p-3 bg-[#40414f]';
             var ok = !!item.ok;

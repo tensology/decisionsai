@@ -727,17 +727,19 @@ class InitiativeService:
                 settings.get("initiative_scan_boards", True)
                 and settings.get("initiative_allow_project_cli", False)
             ),
+            "jira_intake": True,
             "message_triage": True,
             "board_triage": True,
             "email_triage": True,
         }
         priority = {
-            "workflow_start": 0,
-            "project_cli_task": 1,
-            "ticket_lane_move": 2,
-            "message_triage": 3,
-            "board_triage": 4,
-            "email_triage": 5,
+            "jira_intake": 0,
+            "workflow_start": 1,
+            "project_cli_task": 2,
+            "ticket_lane_move": 3,
+            "message_triage": 4,
+            "board_triage": 5,
+            "email_triage": 6,
         }
         candidates = [
             p for p in proposals
@@ -749,7 +751,9 @@ class InitiativeService:
         action_type = chosen.get("action_type") or "suggestion"
         payload = chosen.get("payload") if isinstance(chosen.get("payload"), dict) else {}
         description = chosen.get("description") or "Initiative found actionable work."
-        if level == "assist" and action_type not in ("message_triage", "board_triage", "email_triage"):
+        if level == "assist" and action_type not in (
+            "message_triage", "board_triage", "email_triage", "jira_intake"
+        ):
             action_type = "board_triage"
             payload = {**payload, "proposed_action_type": chosen.get("action_type")}
         return ProposedAction(
@@ -1402,7 +1406,7 @@ class InitiativeService:
             self._deliver_suggestion(action, settings, tier=tier)
             return
 
-        if action.action_type in ("ticket_lane_move", "workflow_start", "project_cli_task"):
+        if action.action_type in ("ticket_lane_move", "workflow_start", "project_cli_task", "jira_intake"):
             try:
                 from distr.core.initiative.action_handlers import execute_initiative_action
 

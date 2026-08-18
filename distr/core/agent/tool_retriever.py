@@ -45,6 +45,7 @@ ALWAYS_ON_NAMES: set[str] = {
     "system_info",
     "memory_search",
     "memory_read",
+    "build_tool",
 }
 
 _MICRO_ALLOWLIST: list[str] = ["smollm", "tinyllama", "phi-1", "phi-1.5"]

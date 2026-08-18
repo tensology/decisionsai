@@ -51,6 +51,7 @@ class GoogleWorkspaceConnector:
     """Comprehensive Google Workspace API connector"""
 
     _google_refresh_retry_after_global: Optional[datetime] = None
+    _google_refresh_error_global: Optional[str] = None
     
     def __init__(self):
         self.access_token: Optional[str] = None
@@ -58,6 +59,7 @@ class GoogleWorkspaceConnector:
         self.token_expires_at: Optional[datetime] = None
         self.client_id: Optional[str] = None
         self.client_secret: Optional[str] = None
+        self.last_error: Optional[str] = self.__class__._google_refresh_error_global
         self._google_refresh_retry_after: Optional[datetime] = self.__class__._google_refresh_retry_after_global
         self._load_credentials()
     
@@ -143,6 +145,9 @@ class GoogleWorkspaceConnector:
     def _ensure_valid_token(self) -> bool:
         """Ensure access token is valid, refresh if needed"""
         if not self.is_connected():
+            self.last_error = (
+                "Google Workspace is not connected. Reconnect the Google account in Settings."
+            )
             return False
         
         # Check if token needs refresh (refresh 5 minutes before expiration)
@@ -152,6 +157,11 @@ class GoogleWorkspaceConnector:
                 or self.__class__._google_refresh_retry_after_global
             )
             if retry_after and datetime.utcnow() < retry_after:
+                self.last_error = (
+                    getattr(self, "last_error", None)
+                    or self.__class__._google_refresh_error_global
+                    or "Google authentication recently failed. Reconnect the Google account in Settings."
+                )
                 logger.debug(
                     "Skipping Google access-token refresh until %s after recent failure",
                     retry_after.isoformat(),
@@ -164,9 +174,14 @@ class GoogleWorkspaceConnector:
     def _refresh_access_token(self) -> bool:
         """Refresh the access token using refresh token"""
         if not self.refresh_token:
+            self.last_error = (
+                "Google authentication has no refresh token. Reconnect the Google account in Settings."
+            )
+            self.__class__._google_refresh_error_global = self.last_error
             logger.error("No refresh token available")
             return False
         
+        response = None
         try:
             token_uri = "https://oauth2.googleapis.com/token"
             token_data = {
@@ -185,6 +200,8 @@ class GoogleWorkspaceConnector:
             self.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
             self._google_refresh_retry_after = None
             self.__class__._google_refresh_retry_after_global = None
+            self.last_error = None
+            self.__class__._google_refresh_error_global = None
             
             # Update tokens in database
             self._save_tokens_to_db()
@@ -193,6 +210,24 @@ class GoogleWorkspaceConnector:
             return True
             
         except Exception as e:
+            provider_detail = ""
+            if response is not None:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    error_code = str(payload.get("error") or "").strip()
+                    error_description = str(payload.get("error_description") or "").strip()
+                    provider_detail = ": ".join(
+                        part for part in (error_code, error_description) if part
+                    )
+            self.last_error = (
+                "Google authentication failed while refreshing access. "
+                "Reconnect the Google account in Settings."
+                + (f" Google reported: {provider_detail}." if provider_detail else "")
+            )
+            self.__class__._google_refresh_error_global = self.last_error
             self._google_refresh_retry_after = datetime.utcnow() + _REFRESH_FAILURE_BACKOFF
             self.__class__._google_refresh_retry_after_global = self._google_refresh_retry_after
             logger.warning(
@@ -256,6 +291,7 @@ class GoogleWorkspaceConnector:
         try:
             response = requests.request(method, url, **kwargs)
             response.raise_for_status()
+            self.last_error = None
             return response.json() if response.content else {}
         except requests.exceptions.HTTPError as e:
             error_msg = f"API request failed: {e}"
@@ -263,7 +299,9 @@ class GoogleWorkspaceConnector:
             service_name = "API"
             response_text = None
             
-            if hasattr(e, 'response') and e.response:
+            # requests.Response is falsey for 4xx/5xx statuses, so an ordinary
+            # truthiness check discards precisely the error payload we need.
+            if getattr(e, 'response', None) is not None:
                 # Try to get response text, content, or status
                 try:
                     response_text = e.response.text if hasattr(e.response, 'text') and e.response.text else None
@@ -321,14 +359,17 @@ class GoogleWorkspaceConnector:
                                 else:
                                     error_msg = f"{service_name} is not enabled. Please enable it in Google Cloud Console."
                                 
+                                self.last_error = error_msg
                                 logger.error(error_msg)
                                 return None
                     except Exception as parse_error:
                         logger.debug(f"Could not parse error response: {parse_error}")
             
+            self.last_error = error_msg
             logger.error(f"{error_msg}, Response: {response_text if response_text else 'N/A'}")
             return None
         except Exception as e:
+            self.last_error = f"Google Workspace request failed: {e}"
             logger.error(f"API request error: {e}", exc_info=True)
             return None
     
@@ -986,6 +1027,19 @@ class GoogleWorkspaceConnector:
         result = self._make_request('POST', url, json=event)
         
         return result.get('id') if result else None
+
+    def delete_calendar_event(self, event_id: str) -> bool:
+        """Delete one event from the primary calendar by its event ID."""
+        if not event_id or not self._ensure_valid_token():
+            return False
+
+        from urllib.parse import quote
+
+        url = (
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events/"
+            + quote(str(event_id), safe="")
+        )
+        return self._make_request("DELETE", url) is not None
 
     def create_calendar_events_batch(
         self,

@@ -368,6 +368,28 @@ class TelegramMessagesMixin:
                 logger.error("[Telegram] WhatsApp reply review routing failed: %s", exc, exc_info=True)
 
             try:
+                from distr.core.kanban.jira_intake import handle_jira_intake_telegram_reply
+                from distr.core.kanban.jira_work_lifecycle import handle_telegram_jira_reply
+
+                jira_intake = handle_jira_intake_telegram_reply(text, chat_id=chat_id)
+                if jira_intake:
+                    self.send_to_telegram(
+                        jira_intake.get("text") or "Jira intake updated.",
+                        reply_markup=jira_intake.get("reply_markup"),
+                    )
+                    return
+
+                jira_review = handle_telegram_jira_reply(text, chat_id=chat_id)
+                if jira_review:
+                    self.send_to_telegram(
+                        jira_review.get("text") or "Jira review updated.",
+                        reply_markup=jira_review.get("reply_markup"),
+                    )
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] Jira intake/review routing failed: %s", exc, exc_info=True)
+
+            try:
                 from distr.core.workflow.interactions import (
                     handle_telegram_workflow_reply,
                     workflow_reply_message,

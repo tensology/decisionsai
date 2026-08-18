@@ -6,4 +6,5 @@ func probeMacOSPermissions() map[string]any {
 	return nil
 }
 
-func markSidecarScreenRecordingOK() {}
+func markSidecarScreenRecordingOK()     {}
+func markSidecarScreenRecordingFailed() {}

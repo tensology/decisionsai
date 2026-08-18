@@ -164,6 +164,20 @@ def test_input_band_stacks_above_llama_click_target():
     assert "z-index: 5;" in llama_block
 
 
+def test_chat_message_rows_do_not_flex_shrink_into_footer_lines():
+    css = _chat_css_source()
+    js = _chat_js_source()
+    child_block = css.split(".chat-messages > * {", 1)[1].split("}", 1)[0]
+    insert_block = js.split("function insertTurnPanel(panel, turnId) {", 1)[1].split(
+        "function upsertTurnPanel(turn) {", 1
+    )[0]
+
+    assert "flex-shrink: 0;" in child_block
+    assert 'classList.contains(\'turn-panel--running\')' in insert_block
+    assert "Never append under the last message" in insert_block
+    assert "appendChild(panel)" not in insert_block
+
+
 def test_chat_loading_copy_is_chat_focused_not_agent_setup():
     html = _chat_html_source()
     js = _chat_js_source()
@@ -367,6 +381,31 @@ def test_voice_stream_start_repairs_missing_user_transcript_from_chat_state():
     assert "fetch(`${API_BASE}/chats/${chatId}`)" in repair_block
     assert "mergeChatUpdatedDuringStream(data.messages || []);" in repair_block
     assert "repairMissingUserMessageForStream(msg.chat_id);" in start_block
+
+
+def test_voice_user_bubble_does_not_sort_to_top_or_wipe_composer():
+    src = _chat_js_source()
+    insert_block = src.split("function insertMessageElementInOrder", 1)[1].split(
+        "function handleChatEventMessageAdded",
+        1,
+    )[0]
+    discard_block = src.split("function _discardLiveTranscriptionUi", 1)[1].split(
+        "function isLoadedChatView",
+        1,
+    )[0]
+    anchor_block = src.split("function findLiveTurnAnchor", 1)[1].split(
+        "function mergeChatUpdatedDuringStream",
+        1,
+    )[0]
+    added_block = src.split("function handleChatEventMessageAdded", 1)[1].split(
+        "if (role === 'assistant' && streamingChatId",
+        1,
+    )[0]
+
+    assert "messageTimestampMs(message) || Date.now()" in insert_block
+    assert "const ts = msg.timestamp || Date.now();" in added_block
+    assert "messageInput.value = ''" not in discard_block
+    assert "return null;" in anchor_block.split("if (matches.length) return matches[0];", 1)[1]
 
 
 def test_live_tool_activity_keeps_turn_anchor_for_voice_transcript_merge():

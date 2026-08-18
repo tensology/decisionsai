@@ -5,6 +5,29 @@ from __future__ import annotations
 import pytest
 
 
+def test_does_not_recommend_named_automation_for_jira_email(monkeypatch):
+    from distr.core.initiative.automation_recommendations import recommend_automation_from_work_scan
+
+    monkeypatch.setattr(
+        "distr.core.initiative.automation_recommendations.find_automations_by_preset",
+        lambda preset_id, active_only=True: [],
+    )
+
+    action = recommend_automation_from_work_scan(
+        {
+            "messages": {"jira_email": ["ACME-1", "ACME-2"], "email": []},
+            "proposals": [
+                {
+                    "action_type": "jira_intake",
+                    "payload": {"source": "jira_email", "issue_keys": ["ACME-1", "ACME-2"], "collated": True},
+                }
+            ],
+        }
+    )
+
+    assert action is None
+
+
 def test_recommends_whatsapp_ticket_automation_for_linked_whatsapp_work(monkeypatch):
     from distr.core.initiative.automation_recommendations import recommend_automation_from_work_scan
 

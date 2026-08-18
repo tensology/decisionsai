@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 class ProactiveOrchestratorInput(BaseModel):
     action: str = Field(
         default="scan",
-        description="scan to find important work, daily_plan to build today's plan from connected intelligence, dispatch to send an approved candidate to the project backend.",
+        description=(
+            "scan to find important work; daily_plan to build today's plan; "
+            "dispatch to send an approved candidate to the project backend; "
+            "enable_jira_intake to turn on the Jira morning intake automation by voice; "
+            "run_jira_intake to run one Jira email intake batch now."
+        ),
     )
     candidate_id: Optional[int] = Field(
         default=None,
@@ -34,7 +39,7 @@ class ProactiveOrchestratorInput(BaseModel):
     )
     board_id: Optional[int] = Field(
         default=None,
-        description="Optional board id to narrow the scan.",
+        description="Optional board id for scan or Jira intake staging.",
     )
     approved_by: str = Field(
         default="user",
@@ -57,10 +62,12 @@ class ProactiveOrchestratorInput(BaseModel):
 class ProactiveOrchestratorTool(BaseTool):
     name: str = "proactive_orchestrator"
     description: str = (
-        "Scan connected work sources and project boards for important actionable work, "
-        "build daily plans from email, WhatsApp, tickets, boards, projects, workflows, and IDE context, "
-        "match items to projects and recent Codex/Cursor context, ask for approval before dispatch, "
-        "and send approved work to the configured project backend."
+        "Scan connected work sources (Gmail, WhatsApp, Jira, Trello, boards) for real work coming in, "
+        "build daily plans, match items to projects and Codex/Cursor context, "
+        "stage Jira/email intake in batches, dispatch approved work to workflow or project CLI, "
+        "and after work finishes prepare a humanized client message for Telegram approval "
+        "(send / revise by voice / leave). Do not wait for a named automation phrase — "
+        "if work is in the inbox or boards, act on it."
     )
     args_schema: type[BaseModel] = ProactiveOrchestratorInput
 
@@ -81,9 +88,19 @@ class ProactiveOrchestratorTool(BaseTool):
         from distr.core.agent.tool_voice_format import voice_then_reference
         from distr.core import orchestrator_proactive
 
-        action_name = (action or "scan").strip().lower()
+        action_name = (action or "scan").strip().lower().replace("-", "_").replace(" ", "_")
         from_automation_run = bool(kwargs.get("from_automation_run"))
-        if action_name in {"daily_plan", "daily plan", "plan", "day_plan", "morning_brief", "today"}:
+        if action_name in {
+            "enable_jira_intake",
+            "enable_jira_morning_intake",
+            "turn_on_jira_intake",
+            "jira_morning_intake",
+            "enable_jira_email_intake",
+        }:
+            result = self._enable_jira_intake()
+        elif action_name in {"run_jira_intake", "jira_intake_now", "run_jira_morning_intake"}:
+            result = self._run_jira_intake_now(board_id=board_id)
+        elif action_name in {"daily_plan", "daily_plan", "plan", "day_plan", "morning_brief", "today"}:
             result = self._resolve_daily_plan_result(format=format, from_automation_run=from_automation_run)
         elif action_name in {"dispatch", "send", "approve"}:
             if not candidate_id:
@@ -110,6 +127,16 @@ class ProactiveOrchestratorTool(BaseTool):
             spoken = "I checked the work queue and have the details ready."
         reference = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         return voice_then_reference(spoken, reference)
+
+    def _enable_jira_intake(self) -> dict[str, Any]:
+        from distr.core.kanban.jira_intake import enable_jira_morning_intake
+
+        return enable_jira_morning_intake(enable_email_scan=True)
+
+    def _run_jira_intake_now(self, *, board_id: Optional[int] = None) -> dict[str, Any]:
+        from distr.core.kanban.work_ops import work_intake
+
+        return work_intake(board_id=board_id or None, notify=True)
 
     def _resolve_daily_plan_result(self, *, format: str = "summary", from_automation_run: bool = False) -> dict[str, Any]:
         """Run the user's Daily plan automation when configured; else build inline."""

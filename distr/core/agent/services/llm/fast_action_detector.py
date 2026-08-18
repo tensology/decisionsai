@@ -566,6 +566,26 @@ class FastActionDetector:
                 re.IGNORECASE),
              ActionType.OPEN_WINDOW, "open_page", {"page": "diagram viewer"}, False, "done"),
 
+            # === TICKET BOARD (deep-link via create_ticket open_board) ===
+            (re.compile(
+                r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?'
+                r'open\s+(?:the\s+)?(?:ticket\s+board|kanban(?:\s+board)?|boards?\s+view)\b',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "create_ticket",
+             {"action": "open_board", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(
+                r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?'
+                r'open\s+(?:the\s+)?(?:(local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "create_ticket",
+             {"action": "open_board", "text": "__ORIGINAL_TEXT__", "board_name": "__BOARD_NAME_MATCH__", "source_provider": "__BOARD_SOURCE_MATCH__"}, False, "done"),
+            (re.compile(
+                r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?'
+                r'(?:show|go\s+to)\s+(?:the\s+)?(?:(local|jira|trello)\s+)?(.+?)\s+(?:ticket\s+)?board\b',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "create_ticket",
+             {"action": "open_board", "text": "__ORIGINAL_TEXT__", "board_name": "__BOARD_NAME_MATCH__", "source_provider": "__BOARD_SOURCE_MATCH__"}, False, "done"),
+
             # === CHAT MANAGEMENT ===
             (re.compile(r'\b(clear|reset|wipe)\b.*\b(chat|history|conversation)\b', re.IGNORECASE), 
              ActionType.CLEAR_CHAT, "clear_chat", {"confirm": True}, False, "done"),
@@ -1196,6 +1216,19 @@ class FastActionDetector:
                         # Captured app/window name from focus/switch/bring patterns; strip trailing punctuation.
                         raw = (match.group(1) or "").strip()
                         final_args[key] = raw.rstrip("?.!,;:").strip()
+                    elif value == "__BOARD_SOURCE_MATCH__":
+                        if match.groups() and match.group(1):
+                            final_args[key] = match.group(1).lower()
+                        else:
+                            final_args[key] = ""
+                    elif value == "__BOARD_NAME_MATCH__":
+                        name = ""
+                        if match.groups():
+                            if len(match.groups()) >= 2 and match.group(2):
+                                name = match.group(2)
+                            elif match.group(1) and (match.group(1) or "").lower() not in ("local", "jira", "trello"):
+                                name = match.group(1)
+                        final_args[key] = (name or "").strip().rstrip("?.!,;:").strip()
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")
                 

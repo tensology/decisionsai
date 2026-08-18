@@ -1215,6 +1215,7 @@ class AgentSession:
             target_voice_name=target_voice_name,
             target_voice_id=target_voice_id,
         )
+        self._unmute_output_after_tts_swap()
         if old_service is not None and (config_already_matches or live_service_already_matches):
             if live_service_already_matches and not config_already_matches:
                 self.config['tts']['engine'] = target_engine
@@ -1343,6 +1344,7 @@ class AgentSession:
             self.logger.debug("HOT-SWAP TTS: audio input power sync failed: %s", exc)
 
         self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
+        self._unmute_output_after_tts_swap()
         self.role = self._load_agent_role()
         service_factory.update_agent_name_on_llm(self.llm_service, self.agent_name, self.role)
 
@@ -1354,6 +1356,22 @@ class AgentSession:
                 True,
                 voice=coerce_realtime_voice(voice_model),
             )
+
+    def _unmute_output_after_tts_swap(self):
+        """Clear leftover PTT mute so the first utterance on the new TTS can play."""
+        transport = getattr(self, "transport", None)
+        if transport is None:
+            return
+        transport_out = getattr(transport, "_output", None)
+        if transport_out is None and hasattr(transport, "output"):
+            try:
+                transport_out = transport.output()
+            except Exception:
+                return
+        if transport_out is None:
+            return
+        transport_out._force_silence = False
+        transport_out._pipeline_cut = False
 
     def _tts_service_matches_target(self, service, *, target_engine, target_voice_name, target_voice_id) -> bool:
         if service is None or not target_engine:

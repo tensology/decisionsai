@@ -987,6 +987,39 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     except Exception:
         logger.exception("Could not prepare WhatsApp completion draft for run %d", run_id)
 
+    # Jira-sourced tickets get a Telegram approval gate before any Jira writeback.
+    try:
+        with get_session() as db:
+            jira_run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            jira_ticket_id = int(jira_run.ticket_id) if jira_run and jira_run.ticket_id else None
+        if jira_ticket_id:
+            from distr.core.kanban.jira_work_lifecycle import (
+                notify_telegram_jira_review,
+                prepare_completed_jira_review,
+            )
+
+            result_summary = ""
+            if isinstance(run_result, dict):
+                packet = run_result.get("result_packet") or {}
+                if isinstance(packet, dict):
+                    result_summary = str(packet.get("human_summary") or packet.get("summary") or "")
+                if not result_summary:
+                    completed_steps = run_result.get("steps_summary") or []
+                    if completed_steps:
+                        result_summary = str((completed_steps[-1] or {}).get("result") or "")
+            elif run_result:
+                result_summary = str(run_result)
+            jira_review = prepare_completed_jira_review(
+                ticket_id=jira_ticket_id,
+                run_id=run_id,
+                status=status,
+                result_summary=result_summary[:1200],
+            )
+            if jira_review:
+                notify_telegram_jira_review(jira_review)
+    except Exception:
+        logger.exception("Could not prepare Jira completion review for run %d", run_id)
+
     try:
         from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
         WorkflowAgentBridge().on_workflow_completed(workflow_id, run_result)

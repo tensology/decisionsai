@@ -33,6 +33,10 @@ MEMORY_FILES_DIR = os.path.join(MODELS_DIR, "memory")
 # MCP server definitions (R5) — atomic JSON alongside models / DB
 MCP_CONFIG_PATH = os.path.join(MODELS_DIR, "mcp_config.json")
 
+# Immutable, agent-built tool definitions. These live with other writable
+# runtime data so packaged application updates never remove user capabilities.
+TOOL_ARTIFACTS_DIR = os.path.join(MODELS_DIR, "tool_artifacts")
+
 # Integration message bus — (platform, thread_id) → chat_id mapping (R15)
 MESSAGE_BUS_MAPPING_PATH = os.path.join(MODELS_DIR, "integration_message_bus_mapping.json")
 

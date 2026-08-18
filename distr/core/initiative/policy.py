@@ -120,7 +120,7 @@ def _evaluate_operate(action, boundaries: dict) -> PolicyDecision:
     if action_type == "suggestion":
         return PolicyDecision.EXECUTE
 
-    if action_type in ("board_triage", "message_triage", "email_triage"):
+    if action_type in ("board_triage", "message_triage", "email_triage", "jira_intake"):
         return PolicyDecision.EXECUTE
 
     if action_type == "ticket_lane_move":
@@ -176,7 +176,7 @@ def _evaluate_own(action, boundaries: dict) -> PolicyDecision:
     if action_type == "suggestion":
         return PolicyDecision.EXECUTE
 
-    if action_type in ("board_triage", "message_triage", "email_triage"):
+    if action_type in ("board_triage", "message_triage", "email_triage", "jira_intake"):
         return PolicyDecision.EXECUTE
 
     if action_type == "ticket_lane_move":

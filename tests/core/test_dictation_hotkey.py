@@ -597,6 +597,9 @@ def test_workflow_agent_computer_use_action_tools_set():
     assert "click_at" in _CU_ACTION_TOOLS
     assert "type_clipboard" in _CU_ACTION_TOOLS
     assert "press_keys" in _CU_ACTION_TOOLS
+    assert "set_window_bounds" in _CU_ACTION_TOOLS
+    assert "focus_window" in _CU_ACTION_TOOLS
+    assert "list_windows" not in _CU_ACTION_TOOLS
 
 
 # ---------------------------------------------------------------------------

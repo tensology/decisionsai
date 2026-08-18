@@ -40,13 +40,13 @@ func buildHandlers() map[string]ToolHandler {
 
 	// New coordinate-input tools (registered after addDesktopHandlers so
 	// platform stubs can override if needed — darwin provides real impl)
-	m["click_at"]          = handleClickAt
-	m["double_click_at"]   = handleDoubleClickAt
-	m["right_click_at"]    = handleRightClickAt
-	m["get_screen_info"]   = handleGetScreenInfo
-	m["get_cursor_pos"]    = handleGetCursorPos
+	m["click_at"] = handleClickAt
+	m["double_click_at"] = handleDoubleClickAt
+	m["right_click_at"] = handleRightClickAt
+	m["get_screen_info"] = handleGetScreenInfo
+	m["get_cursor_pos"] = handleGetCursorPos
 	m["capture_annotated"] = handleCaptureAnnotated
-	m["type_clipboard"]    = handleTypeClipboard
+	m["type_clipboard"] = handleTypeClipboard
 
 	// API relay — forward HTTP calls to the desktop app's local server
 	m["api_relay"] = handleAPIRelay
@@ -212,6 +212,7 @@ func handleCaptureScreen(params map[string]any) (any, error) {
 	defer os.Remove(tmp)
 
 	if err := platformCaptureScreen(tmp); err != nil {
+		markSidecarScreenRecordingFailed()
 		return nil, fmt.Errorf("screenshot failed: %w", err)
 	}
 	markSidecarScreenRecordingOK()
@@ -229,10 +230,10 @@ func handleCaptureScreen(params map[string]any) (any, error) {
 
 	// Enrich with scale/dimension metadata on platforms that support it
 	if info, err := getScreenDimensions(data); err == nil {
-		result["scale_factor"]    = info.scaleFactor
-		result["logical_width"]   = info.logicalW
-		result["logical_height"]  = info.logicalH
-		result["physical_width"]  = info.physicalW
+		result["scale_factor"] = info.scaleFactor
+		result["logical_width"] = info.logicalW
+		result["logical_height"] = info.logicalH
+		result["physical_width"] = info.physicalW
 		result["physical_height"] = info.physicalH
 	}
 

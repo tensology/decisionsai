@@ -35,10 +35,87 @@ def execute_initiative_action(
         _require(settings, "initiative_allow_routine_tasks", "routine task execution is disabled")
         _require(settings, "initiative_allow_project_cli", "project CLI execution is disabled")
         return run_project_cli_tasks(payload)
+    if action_type == "jira_intake":
+        return run_jira_intake_from_initiative(payload, settings=settings)
     return {
         "success": True,
         "message": description or f"{action_type} acknowledged",
         "details": {"action_type": action_type, "draft": draft},
+    }
+
+
+def run_jira_intake_from_initiative(
+    payload: dict[str, Any],
+    *,
+    settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Stage collated Jira notification keys onto the in-use board and Telegram-digest them."""
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.kanban.jira_intake import run_jira_morning_intake
+    from distr.core.kanban.ticket_audit import append_ticket_audit_entry
+
+    settings = settings or {}
+    keys = payload.get("issue_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    keys = [str(k).strip().upper() for k in keys if str(k).strip()]
+    board_id = int(payload.get("board_id") or 0)
+    if not board_id:
+        with get_session() as session:
+            board = (
+                session.query(KanbanBoard)
+                .filter(KanbanBoard.in_use.is_(True), KanbanBoard.archived.is_(False))
+                .order_by(KanbanBoard.id.desc())
+                .first()
+            )
+            if not board:
+                board = (
+                    session.query(KanbanBoard)
+                    .filter(KanbanBoard.archived.is_(False), KanbanBoard.source == "database")
+                    .order_by(KanbanBoard.id.desc())
+                    .first()
+                )
+            board_id = int(board.id) if board else 0
+    if not board_id:
+        raise ValueError("No local Ticket Board is available for Jira intake")
+    if not keys:
+        return {"success": True, "message": "No new Jira keys to stage", "created": []}
+
+    result = run_jira_morning_intake(
+        board_id=board_id,
+        keys=keys,
+        notify=True,
+    )
+    created = result.get("created") or []
+    if created:
+        with get_session() as session:
+            for row in created:
+                append_ticket_audit_entry(
+                    session,
+                    ticket_id=int(row["id"]),
+                    run_id=None,
+                    step_id=None,
+                    step_result_id=None,
+                    execution_lane="initiative",
+                    status="completed",
+                    final_verdict="jira_intake_staged",
+                    summary=f"Staged from Jira intake {row.get('external_id') or row.get('key')}",
+                    details=f"board_id={board_id}; keys={keys}",
+                )
+            session.commit()
+    count = len(created)
+    message = (
+        f"Staged {count} Jira ticket(s) and sent a Telegram digest."
+        if count
+        else f"Jira intake found nothing new to stage ({result.get('reason')})."
+    )
+    return {
+        "success": True,
+        "message": message,
+        "board_id": board_id,
+        "created": created,
+        "result": result,
     }
 
 

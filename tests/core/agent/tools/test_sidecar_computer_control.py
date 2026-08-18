@@ -230,8 +230,8 @@ class TestAccessibilityTree:
             output = tool._run(name="MissingButton", timeout=1000)
         assert "not found" in output.lower() or "MissingButton" in output
 
-    def test_list_windows_via_sidecar(self, monkeypatch):
-        """list_windows is a raw sidecar call (no dedicated Tool class)."""
+    def test_list_windows_tool_formats_titles(self, monkeypatch):
+        """list_windows is a LangChain tool wrapping the sidecar call."""
         windows = [
             {"title": "Finder", "pid": 111, "process_name": "Finder",
              "left": 0, "top": 0, "right": 1440, "bottom": 900, "is_foreground": True},
@@ -240,11 +240,10 @@ class TestAccessibilityTree:
         ]
         with patch("distr.core.agent.tools.input.sidecar_http.call_sidecar_tool",
                    return_value={"windows": windows}):
-            from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
-            result = call_sidecar_tool("list_windows", {}, timeout=15)
-        titles = [w["title"] for w in result["windows"]]
-        assert "Finder" in titles
-        assert "Terminal" in titles
+            from distr.core.agent.tools.input.window_ops import ListWindowsTool
+            output = ListWindowsTool()._run()
+        assert "Finder" in output
+        assert "Terminal" in output
 
 
 # ===========================================================================
