@@ -144,8 +144,6 @@ def create_app() -> FastAPI:
     _mount_static(app, "/chat/static/js", static_dir / "chat" / "js", "chat_js")
     _mount_static(app, "/docs/static/css", static_dir / "docs" / "css", "docs_css")
     _mount_static(app, "/docs/static/js", static_dir / "docs" / "js", "docs_js")
-    _mount_static(app, "/irc/static/css", static_dir / "irc" / "css", "irc_css")
-    _mount_static(app, "/irc/static/js", static_dir / "irc" / "js", "irc_js")
     _mount_static(app, "/tickets/static/js", static_dir / "kanban" / "js", "tickets_js")
     _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js_legacy")
     _mount_static(app, "/automations/static/js", static_dir / "automations" / "js", "automations_js")
@@ -328,14 +326,6 @@ def create_app() -> FastAPI:
     async def downloads_page_with_slash(request: Request):
         return RedirectResponse(url="/settings#downloads", status_code=307)
 
-    @app.get("/irc", response_class=HTMLResponse)
-    async def irc_page_no_slash(request: Request):
-        return page_templates.TemplateResponse(request, "irc/irc.html", _template_context(request, "/irc"))
-
-    @app.get("/irc/", response_class=HTMLResponse)
-    async def irc_page_with_slash(request: Request):
-        return page_templates.TemplateResponse(request, "irc/irc.html", _template_context(request, "/irc"))
-
     try:
         from distr.gui.web.routes.integrations_hooks import router as integrations_hooks_router
 
@@ -367,14 +357,6 @@ def create_app() -> FastAPI:
         logger.info("Download API routes mounted at /api/downloads")
     except Exception as e:
         logger.error("Failed to load Download routes: %s", e, exc_info=True)
-
-    try:
-        from distr.gui.web.routes.irc import create_routes as create_irc_routes
-        irc_router = create_irc_routes()
-        app.include_router(irc_router, prefix="/api", tags=["irc"])
-        logger.info("IRC chat proxy routes mounted at /api/irc")
-    except Exception as e:
-        logger.error("Failed to load IRC chat routes: %s", e, exc_info=True)
 
     try:
         from distr.gui.web.routes.ide_bridge import create_routes as create_ide_bridge_routes

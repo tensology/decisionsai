@@ -157,7 +157,6 @@ def _reserved_shortcut_signatures(settings: dict) -> dict[tuple[tuple[str, ...],
     _add("Workflows launcher", settings.get("web_hotkey_workflows_modifier", "control_shift"), settings.get("web_hotkey_workflows_key", "w"))
     _add("Automations launcher", settings.get("web_hotkey_automations_modifier", "control_shift"), settings.get("web_hotkey_automations_key", "o"))
     _add("Ticket board launcher", settings.get("web_hotkey_ticket_board_modifier", "control_shift"), settings.get("web_hotkey_ticket_board_key", "t"))
-    _add("IRC launcher", settings.get("web_hotkey_irc_modifier", "control_shift"), settings.get("web_hotkey_irc_key", "i"))
     _add("Preferences launcher", settings.get("web_hotkey_preferences_modifier", "control_shift"), settings.get("web_hotkey_preferences_key", "p"))
     _add("Oracle size decrease", settings.get("oracle_size_hotkey_decrease_modifier", "control_command"), settings.get("oracle_size_hotkey_decrease_key", "down_arrow"))
     _add("Oracle size increase", settings.get("oracle_size_hotkey_increase_modifier", "control_command"), settings.get("oracle_size_hotkey_increase_key", "up_arrow"))

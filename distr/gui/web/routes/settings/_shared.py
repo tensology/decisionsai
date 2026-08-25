@@ -213,8 +213,6 @@ class ShortcutSettings(BaseModel):
     web_hotkey_automations_key: str = HOTKEY_DEFAULTS["web_hotkey_automations_key"]
     web_hotkey_ticket_board_modifier: str = HOTKEY_DEFAULTS["web_hotkey_ticket_board_modifier"]
     web_hotkey_ticket_board_key: str = HOTKEY_DEFAULTS["web_hotkey_ticket_board_key"]
-    web_hotkey_irc_modifier: str = HOTKEY_DEFAULTS["web_hotkey_irc_modifier"]
-    web_hotkey_irc_key: str = HOTKEY_DEFAULTS["web_hotkey_irc_key"]
     web_hotkey_preferences_modifier: str = HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]
     web_hotkey_preferences_key: str = HOTKEY_DEFAULTS["web_hotkey_preferences_key"]
     dictation_hotkey_enabled: bool = HOTKEY_DEFAULTS["dictation_hotkey_enabled"]

@@ -173,7 +173,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **Ticket Boards** | Manage local, Jira, and Trello work; link WhatsApp numbers to a board; send tickets straight into the orchestrator |
 | **Automations** | Scheduled instruction workflows with Run Now, history, and a calendar for time-entry blocks linked to tickets |
 | **Workflows** | Multi-step workflows with **Loops** presets, Step Runner execution, validation, harness steering, browser evidence, and scheduling |
-| **IRC** | Built-in IRC chat page for shared rooms alongside Telegram and WhatsApp |
+| **Discord Community** | Join the DecisionsAI community for updates, feedback, and support |
 | **Skills** | Browse local and vendored skills, including [ECC-backed capabilities](plugins/ecc/README.md), without duplicate setup |
 
 <p align="center">

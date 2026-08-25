@@ -137,8 +137,6 @@ DEFAULT_SETTINGS = {
     'web_hotkey_workflows_key': HOTKEY_DEFAULTS['web_hotkey_workflows_key'],
     'web_hotkey_automations_modifier': HOTKEY_DEFAULTS['web_hotkey_automations_modifier'],
     'web_hotkey_automations_key': HOTKEY_DEFAULTS['web_hotkey_automations_key'],
-    'web_hotkey_irc_modifier': HOTKEY_DEFAULTS['web_hotkey_irc_modifier'],
-    'web_hotkey_irc_key': HOTKEY_DEFAULTS['web_hotkey_irc_key'],
     'web_hotkey_preferences_modifier': HOTKEY_DEFAULTS['web_hotkey_preferences_modifier'],
     'web_hotkey_preferences_key': HOTKEY_DEFAULTS['web_hotkey_preferences_key'],
     'web_hotkey_ticket_board_modifier': HOTKEY_DEFAULTS['web_hotkey_ticket_board_modifier'],

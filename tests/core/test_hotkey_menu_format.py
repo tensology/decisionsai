@@ -42,7 +42,6 @@ def test_web_launcher_default_hotkeys_use_control_shift() -> None:
         "workflows": "w",
         "automations": "o",
         "ticket_board": "t",
-        "irc": "i",
         "preferences": "p",
     }
     for launcher, key in expected.items():

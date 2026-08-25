@@ -108,11 +108,11 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
                         </svg>
                     </a>
-                    <a href="/irc/"
-                       class="nav-tab nav-chat-bubble p-2 rounded-md text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors"
-                       title="Shared rooms">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v7a2 2 0 01-2 2h-8l-4 3v-3H5a2 2 0 01-2-2v-1m14-8V5a2 2 0 00-2-2H5a2 2 0 00-2 2v7a2 2 0 002 2h8l4 3V8z"/>
+                    <a href="https://discord.gg/X83gVz8G" target="_blank" rel="noopener noreferrer"
+                       class="p-2 rounded-md text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors"
+                       title="Discord Community" aria-label="Discord Community">
+                        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20.317 4.37a19.8 19.8 0 00-4.885-1.516.075.075 0 00-.079.037c-.211.375-.445.865-.608 1.25a18.27 18.27 0 00-5.487 0 12.64 12.64 0 00-.618-1.25.078.078 0 00-.079-.037A19.74 19.74 0 003.677 4.37a.07.07 0 00-.032.028C.533 9.046-.32 13.58.099 18.058a.082.082 0 00.031.056 19.9 19.9 0 005.993 3.03.078.078 0 00.084-.028c.462-.63.873-1.295 1.226-1.994a.076.076 0 00-.042-.106 13.1 13.1 0 01-1.872-.892.077.077 0 01-.008-.128c.126-.094.252-.192.372-.291a.075.075 0 01.078-.011c3.928 1.793 8.18 1.793 12.061 0a.074.074 0 01.079.01c.12.099.246.198.373.292a.077.077 0 01-.007.128c-.596.343-1.218.645-1.873.891a.077.077 0 00-.041.107c.36.698.772 1.363 1.225 1.993a.077.077 0 00.084.029 19.84 19.84 0 006.002-3.03.077.077 0 00.031-.055c.5-5.177-.838-9.674-3.548-13.66a.062.062 0 00-.031-.029zM8.02 15.331c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.211 0 2.176 1.095 2.157 2.419 0 1.333-.956 2.419-2.157 2.419zm7.975 0c-1.183 0-2.157-1.086-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.211 0 2.176 1.095 2.157 2.419 0 1.333-.946 2.419-2.157 2.419z"/>
                         </svg>
                     </a>
                     <a href="/settings" id="nav-settings-icon"
@@ -164,7 +164,7 @@
           var href = tab.getAttribute('href');
           if (!href) return;
           var tabPath = href.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/';
-          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/irc' && (path === '/irc' || path.startsWith('/irc/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/automations' && (path === '/automations' || path.startsWith('/automations/'))) || (tabPath === '/tickets' && (path === '/tickets' || path.startsWith('/tickets/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
+          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/automations' && (path === '/automations' || path.startsWith('/automations/'))) || (tabPath === '/tickets' && (path === '/tickets' || path.startsWith('/tickets/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
           tab.classList.toggle('active', isActive);
         });
         // Highlight settings gear icon when on /settings

@@ -24,8 +24,6 @@ def _base_settings(**overrides):
         "web_hotkey_automations_key": "o",
         "web_hotkey_ticket_board_modifier": "control_shift",
         "web_hotkey_ticket_board_key": "t",
-        "web_hotkey_irc_modifier": "control_shift",
-        "web_hotkey_irc_key": "i",
         "web_hotkey_preferences_modifier": "control_shift",
         "web_hotkey_preferences_key": "p",
     }

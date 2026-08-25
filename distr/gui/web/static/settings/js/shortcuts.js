@@ -704,8 +704,6 @@ function _applyShortcutSettings(s) {
            _valueOrDefault(s.web_hotkey_automations_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_automations_key, 'o'));
     _setMK('shortcuts_web_hotkey_ticket_board_modifier', 'shortcuts_web_hotkey_ticket_board_key',
            _valueOrDefault(s.web_hotkey_ticket_board_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_ticket_board_key, 't'));
-    _setMK('shortcuts_web_hotkey_irc_modifier',        'shortcuts_web_hotkey_irc_key',
-           _valueOrDefault(s.web_hotkey_irc_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_irc_key, 'i'));
     _setMK('shortcuts_web_hotkey_preferences_modifier', 'shortcuts_web_hotkey_preferences_key',
            _valueOrDefault(s.web_hotkey_preferences_modifier, 'control_shift'), _valueOrDefault(s.web_hotkey_preferences_key, 'p'));
 
@@ -794,8 +792,6 @@ async function saveShortcutSettings(options) {
             web_hotkey_automations_key:      _v('shortcuts_web_hotkey_automations_key'),
             web_hotkey_ticket_board_modifier: _v('shortcuts_web_hotkey_ticket_board_modifier'),
             web_hotkey_ticket_board_key:      _v('shortcuts_web_hotkey_ticket_board_key'),
-            web_hotkey_irc_modifier:        _v('shortcuts_web_hotkey_irc_modifier'),
-            web_hotkey_irc_key:             _v('shortcuts_web_hotkey_irc_key'),
             web_hotkey_preferences_modifier: _v('shortcuts_web_hotkey_preferences_modifier'),
             web_hotkey_preferences_key:      _v('shortcuts_web_hotkey_preferences_key'),
         };
@@ -816,7 +812,6 @@ async function saveShortcutSettings(options) {
             { name: 'Workflows launcher', enabled: true, modifier: settings.web_hotkey_workflows_modifier, key: settings.web_hotkey_workflows_key, modifierField: 'shortcuts_web_hotkey_workflows_modifier', keyField: 'shortcuts_web_hotkey_workflows_key' },
             { name: 'Automations launcher', enabled: true, modifier: settings.web_hotkey_automations_modifier, key: settings.web_hotkey_automations_key, modifierField: 'shortcuts_web_hotkey_automations_modifier', keyField: 'shortcuts_web_hotkey_automations_key' },
             { name: 'Ticket board launcher', enabled: true, modifier: settings.web_hotkey_ticket_board_modifier, key: settings.web_hotkey_ticket_board_key, modifierField: 'shortcuts_web_hotkey_ticket_board_modifier', keyField: 'shortcuts_web_hotkey_ticket_board_key' },
-            { name: 'IRC launcher', enabled: true, modifier: settings.web_hotkey_irc_modifier, key: settings.web_hotkey_irc_key, modifierField: 'shortcuts_web_hotkey_irc_modifier', keyField: 'shortcuts_web_hotkey_irc_key' },
             { name: 'Preferences launcher', enabled: true, modifier: settings.web_hotkey_preferences_modifier, key: settings.web_hotkey_preferences_key, modifierField: 'shortcuts_web_hotkey_preferences_modifier', keyField: 'shortcuts_web_hotkey_preferences_key' },
         ]);
         if (collisionMessage) {

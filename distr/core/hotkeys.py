@@ -91,8 +91,6 @@ DEFAULTS = {
     "web_hotkey_workflows_key": "w",
     "web_hotkey_automations_modifier": "control_shift",
     "web_hotkey_automations_key": "o",
-    "web_hotkey_irc_modifier": "control_shift",
-    "web_hotkey_irc_key": "i",
     "web_hotkey_preferences_modifier": "control_shift",
     "web_hotkey_preferences_key": "p",
     "web_hotkey_ticket_board_modifier": "control_shift",

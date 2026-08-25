@@ -214,8 +214,6 @@ class Settings(Base):
     web_hotkey_workflows_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_workflows_key'])
     web_hotkey_automations_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_automations_modifier'])
     web_hotkey_automations_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_automations_key'])
-    web_hotkey_irc_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_irc_modifier'])
-    web_hotkey_irc_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_irc_key'])
     web_hotkey_preferences_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_preferences_modifier'])
     web_hotkey_preferences_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_preferences_key'])
     web_hotkey_ticket_board_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_ticket_board_modifier'])
@@ -968,8 +966,6 @@ def init_db():
                 web_hotkey_workflows_key=HOTKEY_DEFAULTS['web_hotkey_workflows_key'],
                 web_hotkey_automations_modifier=HOTKEY_DEFAULTS['web_hotkey_automations_modifier'],
                 web_hotkey_automations_key=HOTKEY_DEFAULTS['web_hotkey_automations_key'],
-                web_hotkey_irc_modifier=HOTKEY_DEFAULTS['web_hotkey_irc_modifier'],
-                web_hotkey_irc_key=HOTKEY_DEFAULTS['web_hotkey_irc_key'],
                 web_hotkey_preferences_modifier=HOTKEY_DEFAULTS['web_hotkey_preferences_modifier'],
                 web_hotkey_preferences_key=HOTKEY_DEFAULTS['web_hotkey_preferences_key'],
                 web_hotkey_ticket_board_modifier=HOTKEY_DEFAULTS['web_hotkey_ticket_board_modifier'],

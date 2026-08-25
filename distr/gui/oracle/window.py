@@ -1934,10 +1934,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 str(current_settings.get("web_hotkey_ticket_board_modifier", HOTKEY_DEFAULTS["web_hotkey_ticket_board_modifier"])).strip().lower(),
                 str(current_settings.get("web_hotkey_ticket_board_key", HOTKEY_DEFAULTS["web_hotkey_ticket_board_key"])).strip().lower(),
             ),
-            "open_irc": (
-                str(current_settings.get("web_hotkey_irc_modifier", HOTKEY_DEFAULTS["web_hotkey_irc_modifier"])).strip().lower(),
-                str(current_settings.get("web_hotkey_irc_key", HOTKEY_DEFAULTS["web_hotkey_irc_key"])).strip().lower(),
-            ),
             "open_preferences": (
                 str(current_settings.get("web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"])).strip().lower(),
                 str(current_settings.get("web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"])).strip().lower(),
@@ -2055,9 +2051,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
         if action_name == "open_ticket_board":
             self._open_web_url("/tickets/")
-            return
-        if action_name == "open_irc":
-            self._open_web_url("/irc/")
             return
         if action_name == "open_preferences":
             self._open_web_url("/settings")

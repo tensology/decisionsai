@@ -141,7 +141,7 @@ visible "last updated" date was exposed in the fetched page content. Keep the
 site policy pages updated separately and make their document dates visible.
 
 Policy coverage should include connected account streams, WhatsApp/Telegram
-media, Gmail/Jira/Trello content, IRC/shared chat rooms, voice-note
+media, Gmail/Jira/Trello/Discord content, voice-note
 transcription, screenshots/images, project folders, CLI/IDE execution output,
 model-provider calls, workflow audit trails, and internal orchestration memory.
 

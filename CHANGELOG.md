@@ -146,9 +146,9 @@ The remote control focuses on Snippets, Agent chat, and Dictate — hold to talk
 
 Ticket links are simpler under `/tickets`. You can tie a WhatsApp number to a board so incoming messages become tickets there.
 
-### IRC rooms
+### Discord Community
 
-Shared community chat inside Decisions: rooms, display names, who is in the room, and who is online.
+The DecisionsAI community now lives on Discord for updates, feedback, and support.
 
 ---
 

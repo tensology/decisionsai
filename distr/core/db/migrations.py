@@ -1984,8 +1984,6 @@ def run_migrations():
         ("web_hotkey_automations_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_automations_key']}'"),
         ("web_hotkey_ticket_board_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_ticket_board_modifier']}'"),
         ("web_hotkey_ticket_board_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_ticket_board_key']}'"),
-        ("web_hotkey_irc_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_irc_modifier']}'"),
-        ("web_hotkey_irc_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_irc_key']}'"),
         ("web_hotkey_preferences_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_preferences_modifier']}'"),
         ("web_hotkey_preferences_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_preferences_key']}'"),
     ]:
