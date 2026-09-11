@@ -38,25 +38,9 @@ The old ticket board / workflows experience has been reworked into a dedicated, 
 
 Voice turn-taking, echo handling, interruption cleanup, and playback reliability have been improved, with the main browser, runtime, integration, lifecycle, and physical-audio paths covered by regression checks. Push-to-talk remains independent.
 
-## Unreleased
+### The rest got quieter and more reliable
 
-### A client message can stay connected to the work it started
-
-WhatsApp work no longer has to become a loose ticket with no reliable way home. A board can listen to several contacts or groups, and a request made through Telegram can collect the relevant messages, media, and voice transcriptions before you decide whether it should become work. The ticket keeps the source chat and message evidence, inherits the project and workflow route, and follows the normal Backlog, In Progress, and QA lifecycle.
-
-When approved work finishes, DecisionsAI records the workflow or direct CLI time and prepares a client-facing WhatsApp reply from the verified result. Telegram shows the draft with **Send**, **Revise**, and **Leave draft** choices. It never sends merely because a worker finished, and it never moves the ticket from QA to Complete for you. The lifecycle is durable, so the source messages, ticket, execution, result, and reply decision can be recovered instead of depending on one uninterrupted chat turn.
-
-Existing project-board relationships are checked conservatively in the background. A missing board that is still referenced by a real project can be recovered, project-level WhatsApp links are made visible on the project's primary board, and only orphan duplicates with a confirmed valid copy are removed. This also repairs the current Merrypak and Player1Sport routing without treating those project names as product logic.
-
-### Long-running installs keep the evidence without keeping every noisy update
-
-DecisionsAI now performs conservative storage maintenance in the background. It keeps final worker results, validation, summaries, and ticket evidence. Older high-frequency progress payloads are compacted, and old executor updates from finished sessions can be pruned after their retention window. WhatsApp media is removed only when it is old and no WhatsApp message or ticket file refers to it. The defaults are intentionally cautious and can be adjusted through the documented environment settings in the runtime module.
-
-SQLite now checkpoints its write-ahead log automatically and applies a size limit, with a final safe checkpoint when the application closes. Telegram and macOS launcher diagnostics use bounded log rotation. Machine-activity compaction and storage maintenance run outside the web event loop, so routine housekeeping does not freeze Chat or Workflows. Runtime diagnostics show the active policy and the latest maintenance result alongside the current database, WAL, log, process, version, and disk information without exposing settings or secrets.
-
-### Workflows open with less hidden work
-
-Timeline remains the default workflow view. The visual Ring implementation is no longer parsed on every visit and loads only when Ring is selected. Workspace-memory details wait until Loop or CLI needs them, and preset discovery waits for browser idle time. This reduces the work performed during the first useful paint while preserving the detailed views when you ask for them.
+WhatsApp messages can stay attached to the project and ticket that started them, with replies returned to Telegram for approval. Background maintenance keeps useful evidence while pruning noise and safely rotating storage. Workflows also avoid unnecessary loading, so the important screens open with less hidden work.
 
 ---
 
