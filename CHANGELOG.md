@@ -36,7 +36,7 @@ The old ticket board / workflows experience has been reworked into a dedicated, 
 
 ### One job can follow one path
 
-A direct prompt or a ticket from a board, Jira, Trello, Telegram, or another intake source can now open the same Development thread. The user can plan, build, test, review, steer, approve, pause, resume, or stop without being sent back to a different part of the product. The website now shows that Development workspace instead of presenting the older chat-only view.
+A direct prompt or a ticket from a board, Jira, Trello, Telegram, or another intake source can now open the same Development thread. The user can plan, build, test, review, steer, approve, pause, resume, or stop without being sent back to a different part of the product.
 
 ### Continuous voice understands who is speaking
 
