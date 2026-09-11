@@ -34,13 +34,9 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 The old ticket board / workflows experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion.
 
-### One job can follow one path
+### Voice improvements
 
-A direct prompt or a ticket from a board, Jira, Trello, Telegram, or another intake source can now open the same Development thread. The user can plan, build, test, review, steer, approve, pause, resume, or stop without being sent back to a different part of the product.
-
-### Continuous voice understands who is speaking
-
-Continuous mode keeps a time-aligned reference of TTS and compares it with the microphone input, using echo cancellation and double-talk checks to separate DecisionsAI speaking from the user speaking. Interruptions close the player and flush buffered audio before the microphone takes over. Browser, runtime, integration, lifecycle, and physical-audio checks cover the new path, while push-to-talk remains independent.
+Voice turn-taking, echo handling, interruption cleanup, and playback reliability have been improved, with the main browser, runtime, integration, lifecycle, and physical-audio paths covered by regression checks. Push-to-talk remains independent.
 
 ## Unreleased
 
