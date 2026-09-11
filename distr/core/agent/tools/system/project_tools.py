@@ -1428,12 +1428,13 @@ status: open
 
 
 class OpenProjectTool(BaseTool):
-    """Tool for opening a project folder in Cursor or VS Code."""
+    """Tool for opening a project folder in the selected development editor."""
 
     name: str = "open_project"
-    description: str = """Open the current project folder in Cursor or VS Code.
+    description: str = """Open the current project folder in Codex or Cursor.
 
-    This tool opens the active project's folder in Cursor (or VS Code if Cursor is not available).
+    This tool honors an explicit editor in the request, then the project's editor override,
+    then the global default project editor from Settings.
     It does NOT create any startup files - it only opens the editor.
 
     Triggers (use this tool for these):
@@ -1441,7 +1442,7 @@ class OpenProjectTool(BaseTool):
     - "Open this project"
     - "Open the project folder"
     - "Open project in Cursor"
-    - "Open project in VS Code"
+    - "Open project in Codex"
 
     Returns: Confirmation of which editor was opened.
     """
@@ -1456,8 +1457,7 @@ class OpenProjectTool(BaseTool):
         """Get triggers for open project."""
         return [
             "open the project", "open this project", "open project",
-            "open project folder", "open in cursor", "open in vscode",
-            "open in vs code"
+            "open project folder", "open in cursor", "open in codex"
         ]
 
     def _run(self, text: str = "", **kwargs) -> str:
@@ -1476,34 +1476,29 @@ class OpenProjectTool(BaseTool):
 
             folder_location = project['folder_location']
 
-            # Open project folder in Cursor or VS Code
+            request = str(text or "").strip().lower()
+            explicit_match = re.search(r"\b(?:in|with|using)\s+(codex|cursor)\b", request)
+            explicit_editor = explicit_match.group(1) if explicit_match else ""
+            from distr.core.settings import load_settings_from_db
+
+            global_editor = str(load_settings_from_db().get("default_project_editor") or "codex").strip().lower()
+            editor = explicit_editor or (global_editor if global_editor in {"codex", "cursor"} else "codex")
+            command = ["codex", "app", folder_location] if editor == "codex" else ["cursor", folder_location]
+            executable = command[0]
             editor_opened = False
-            editor_used = None
-
-            # Try Cursor first
-            if shutil.which('cursor'):
+            editor_used = "Codex" if editor == "codex" else "Cursor"
+            if shutil.which(executable):
                 try:
-                    subprocess.run(['cursor', folder_location], check=False)
+                    subprocess.run(command, check=False)
                     editor_opened = True
-                    editor_used = "Cursor"
-                    logger.info(f"Opened project folder in Cursor: {folder_location}")
+                    logger.info("Opened project folder in %s: %s", editor_used, folder_location)
                 except Exception as e:
-                    logger.warning(f"Failed to open Cursor: {e}")
-
-            # Fall back to VS Code if Cursor not available
-            if not editor_opened and shutil.which('code'):
-                try:
-                    subprocess.run(['code', folder_location], check=False)
-                    editor_opened = True
-                    editor_used = "Visual Studio Code"
-                    logger.info(f"Opened project folder in VS Code: {folder_location}")
-                except Exception as e:
-                    logger.warning(f"Failed to open VS Code: {e}")
+                    logger.warning("Failed to open %s: %s", editor_used, e)
 
             if editor_opened:
                 return f"Opened project '{project['name']}' in {editor_used}\n\nFolder: {folder_location}"
             else:
-                return f"Error: Could not find Cursor or VS Code in system PATH.\n\nPlease install Cursor or VS Code and make sure the command is available in your PATH.\n\nProject folder: {folder_location}"
+                return f"Error: Could not find {editor_used} in system PATH.\n\nProject folder: {folder_location}"
 
         except Exception as e:
             logger.error(f"Error in open_project tool: {e}", exc_info=True)

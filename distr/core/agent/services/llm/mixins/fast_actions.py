@@ -150,19 +150,23 @@ class FastActionMixin:
         """Helper: save assistant message and optionally emit UI signals."""
         if self.chat_manager and chat_id:
             try:
-                self.chat_manager.add_assistant_message(chat_id, text)
+                chat_row_id = self.chat_manager.add_assistant_message(chat_id, text)
                 if emit_signals:
                     try:
                         # Fast paths speak via _fa_push_tts without stream_started — emit the
                         # assistant bubble directly so the web UI does not refetch on a bare
                         # stream_finished (which duplicated rows and replayed TTS context).
-                        signal_manager.chat_message_added.emit(int(chat_id), "assistant", text)
+                        signal_manager.chat_message_added.emit(
+                            int(chat_id), "assistant", text, chat_row_id
+                        )
                         signal_manager.chat_stream_finished.emit(chat_id)
                         signal_manager.typing_indicator_changed.emit(False)
                     except RuntimeError:
                         pass
+                return chat_row_id
             except Exception as e:
                 logger.warning("LLM: Could not save fast action response: %s", e)
+        return None
 
     @staticmethod
     def _fa_screenshot_response_text(result_str: str) -> str:
@@ -597,10 +601,12 @@ class FastActionMixin:
             if getattr(self, '_is_telegram_request', False):
                 logger.debug("Skipping TTS for conversation summary: Telegram request")
                 self._messages.append({"role": "assistant", "content": summary_text})
-                self._fa_save_to_history(current_chat_id, summary_text)
+                chat_row_id = self._fa_save_to_history(current_chat_id, summary_text)
                 if current_chat_id:
                     try:
-                        signal_manager.chat_message_added.emit(current_chat_id, "assistant", summary_text)
+                        signal_manager.chat_message_added.emit(
+                            current_chat_id, "assistant", summary_text, chat_row_id
+                        )
                         signal_manager.chat_stream_finished.emit(current_chat_id)
                         signal_manager.chat_updated.emit(current_chat_id)
                     except RuntimeError:
@@ -616,10 +622,12 @@ class FastActionMixin:
             await self.push_frame(LLMFullResponseEndFrame(), direction)
 
             self._messages.append({"role": "assistant", "content": summary_text})
-            self._fa_save_to_history(current_chat_id, summary_text)
+            chat_row_id = self._fa_save_to_history(current_chat_id, summary_text)
             if current_chat_id:
                 try:
-                    signal_manager.chat_message_added.emit(current_chat_id, "assistant", summary_text)
+                    signal_manager.chat_message_added.emit(
+                        current_chat_id, "assistant", summary_text, chat_row_id
+                    )
                     signal_manager.chat_stream_finished.emit(current_chat_id)
                     signal_manager.chat_updated.emit(current_chat_id)
                 except RuntimeError:

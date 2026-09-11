@@ -3,6 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+import sys
 
 import pytest
 
@@ -17,10 +18,12 @@ from distr.core.agent.services.tts.openai_tts_config import (
     DEFAULT_OPENAI_TTS_MODEL,
     openai_tts_supports_instructions,
     resolve_openai_tts_model,
+    resolve_openai_tts_model_for_voice,
     voices_for_openai_tts_model,
 )
 from distr.core.agent.services.tts.elevenlabs_config import (
     DEFAULT_ELEVENLABS_TTS_MODEL,
+    ELEVENLABS_TTS_MODEL_OPTIONS,
     resolve_elevenlabs_tts_model,
 )
 
@@ -46,6 +49,15 @@ def test_openai_tts_voice_sets_gate_by_model():
     assert "marin" not in legacy
     assert "marin" in steerable
     assert "cedar" in steerable
+
+
+def test_openai_tts_upgrades_model_when_realtime_voice_needs_it():
+    assert resolve_openai_tts_model_for_voice("tts-1", "marin") == "gpt-4o-mini-tts"
+    assert resolve_openai_tts_model_for_voice("tts-1", "coral") == "tts-1"
+    assert (
+        resolve_openai_tts_model_for_voice("gpt-4o-mini-tts", "marin")
+        == "gpt-4o-mini-tts"
+    )
 
 
 def test_openai_tts_service_passes_selected_model_and_instructions():
@@ -129,11 +141,23 @@ def test_settings_api_exposes_openai_batch_stt_choices(monkeypatch):
 def test_elevenlabs_model_resolve_prefers_settings_then_env(monkeypatch):
     monkeypatch.delenv("DECISIONS_ELEVENLABS_TTS_MODEL_ID", raising=False)
     assert resolve_elevenlabs_tts_model(None) == DEFAULT_ELEVENLABS_TTS_MODEL
-    assert resolve_elevenlabs_tts_model("eleven_turbo_v2_5") == "eleven_turbo_v2_5"
+    assert resolve_elevenlabs_tts_model("eleven_turbo_v2_5") == DEFAULT_ELEVENLABS_TTS_MODEL
     monkeypatch.setenv("DECISIONS_ELEVENLABS_TTS_MODEL_ID", "eleven_multilingual_v2")
     assert resolve_elevenlabs_tts_model(None) == "eleven_multilingual_v2"
     # Explicit settings win over env.
     assert resolve_elevenlabs_tts_model("eleven_v3") == "eleven_v3"
+    assert (
+        resolve_elevenlabs_tts_model("eleven_v3_conversational")
+        == "eleven_v3_conversational"
+    )
+
+
+def test_elevenlabs_model_options_exclude_deprecated_turbo_models():
+    model_ids = {option["id"] for option in ELEVENLABS_TTS_MODEL_OPTIONS}
+    assert "eleven_turbo_v2_5" not in model_ids
+    assert "eleven_turbo_v2" not in model_ids
+    assert "eleven_v3_conversational" in model_ids
+    assert DEFAULT_ELEVENLABS_TTS_MODEL in model_ids
 
 
 def test_openai_batch_transcription_includes_prompt_when_set(tmp_path):
@@ -235,6 +259,101 @@ def test_openai_descriptor_create_service_passes_model_and_instructions(monkeypa
     assert captured["hands_free"] is True
 
 
+def test_openai_descriptor_sample_generation_upgrades_model_for_marin(
+    monkeypatch, tmp_path
+):
+    from distr.core.agent.services.tts.openai_descriptor import OpenAIDescriptor
+
+    captured = []
+
+    class _Response:
+        def stream_to_file(self, path):
+            Path(path).write_bytes(b"fake-mp3")
+
+    class _Speech:
+        def create(self, **kwargs):
+            captured.append(kwargs)
+            return _Response()
+
+    fake_openai = SimpleNamespace(
+        OpenAI=lambda **_kwargs: SimpleNamespace(
+            audio=SimpleNamespace(speech=_Speech())
+        )
+    )
+    fake_soundfile = SimpleNamespace(
+        read=lambda *_args, **_kwargs: ([0.0], 24000),
+        write=lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setitem(sys.modules, "openai", fake_openai)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_soundfile)
+    monkeypatch.setattr(
+        "distr.core.utils.load_settings_from_db",
+        lambda: {"openai_key": "key", "openai_tts_model": "tts-1"},
+    )
+    monkeypatch.setattr(
+        "distr.core.audio.tts_handler._resample_audio",
+        lambda audio, sample_rate, _target: (audio, sample_rate),
+    )
+
+    OpenAIDescriptor().generate_audio(
+        "Hello", "marin", 1.0, str(tmp_path / "reply.wav")
+    )
+
+    assert captured[0]["voice"] == "marin"
+    assert captured[0]["model"] == "gpt-4o-mini-tts"
+
+
+def test_openai_descriptor_retries_voice_enum_rejection_with_stable_fallback(
+    monkeypatch, tmp_path
+):
+    from distr.core.agent.services.tts.openai_descriptor import OpenAIDescriptor
+
+    captured = []
+
+    class _Response:
+        def stream_to_file(self, path):
+            Path(path).write_bytes(b"fake-mp3")
+
+    class _Speech:
+        def create(self, **kwargs):
+            captured.append(kwargs)
+            if len(captured) == 1:
+                raise RuntimeError("400 enum body voice input should be alloy or coral")
+            return _Response()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "openai",
+        SimpleNamespace(
+            OpenAI=lambda **_kwargs: SimpleNamespace(
+                audio=SimpleNamespace(speech=_Speech())
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "soundfile",
+        SimpleNamespace(
+            read=lambda *_args, **_kwargs: ([0.0], 24000),
+            write=lambda *_args, **_kwargs: None,
+        ),
+    )
+    monkeypatch.setattr(
+        "distr.core.utils.load_settings_from_db",
+        lambda: {"openai_key": "key", "openai_tts_model": "tts-1"},
+    )
+    monkeypatch.setattr(
+        "distr.core.audio.tts_handler._resample_audio",
+        lambda audio, sample_rate, _target: (audio, sample_rate),
+    )
+
+    OpenAIDescriptor().generate_audio(
+        "Hello", "marin", 1.0, str(tmp_path / "reply.wav")
+    )
+
+    assert [request["voice"] for request in captured] == ["marin", "coral"]
+
+
 def test_elevenlabs_descriptor_create_service_uses_settings_model(monkeypatch):
     from distr.core.agent.services.tts.elevenlabs_descriptor import ElevenLabsDescriptor
     import distr.core.agent.services as services_mod
@@ -272,7 +391,141 @@ def test_elevenlabs_descriptor_create_service_uses_settings_model(monkeypatch):
         models_dir="/tmp",
     )
     assert svc is not None
-    assert captured["model_id"] == "eleven_turbo_v2_5"
+    assert captured["model_id"] == "eleven_flash_v2_5"
+
+
+def test_elevenlabs_descriptor_preview_uses_v3_dialogue_stream_and_clone_id(
+    monkeypatch, tmp_path
+):
+    from distr.core.agent.services.tts.elevenlabs_descriptor import ElevenLabsDescriptor
+
+    captured = []
+
+    class FakeDialogueInput:
+        def __init__(self, *, text, voice_id):
+            self.text = text
+            self.voice_id = voice_id
+
+    class FakeModelSettings:
+        def __init__(self, *, stability):
+            self.stability = stability
+
+    class FakeDialogue:
+        def stream(self, **kwargs):
+            captured.append(kwargs)
+            return iter([b"\x01\x00" * 480])
+
+    fake_voice = SimpleNamespace(voice_id="existing-clone-id", name="My Clone")
+    fake_client = SimpleNamespace(
+        voices=SimpleNamespace(
+            get_all=lambda: SimpleNamespace(voices=[fake_voice])
+        ),
+        text_to_dialogue=FakeDialogue(),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "elevenlabs",
+        SimpleNamespace(ElevenLabs=lambda **_kwargs: fake_client),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "elevenlabs.types",
+        SimpleNamespace(
+            DialogueInput=FakeDialogueInput,
+            ModelSettingsResponseModel=FakeModelSettings,
+        ),
+    )
+    monkeypatch.setattr(
+        "distr.core.utils.load_settings_from_db",
+        lambda: {
+            "elevenlabs_key": "key",
+            "elevenlabs_voice": "existing-clone-id",
+            "elevenlabs_tts_model": "eleven_v3_conversational",
+            "elevenlabs_stability": 0.6,
+        },
+    )
+    monkeypatch.setattr(
+        "distr.core.audio.tts_handler._resample_audio",
+        lambda audio, sample_rate, _target: (audio, sample_rate),
+    )
+
+    ElevenLabsDescriptor().generate_audio(
+        "Hello from the clone", "existing-clone-id", 1.0, str(tmp_path / "reply.wav")
+    )
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request["model_id"] == "eleven_v3_conversational"
+    assert request["output_format"] == "pcm_24000"
+    assert request["inputs"][0].voice_id == "existing-clone-id"
+    assert request["settings"].stability == 0.5
+
+
+def test_elevenlabs_descriptor_sanitizes_failed_flash_preview_fallback(
+    monkeypatch, tmp_path
+):
+    from distr.core.agent.services.tts.elevenlabs_descriptor import ElevenLabsDescriptor
+
+    class CompatibilityFailure(RuntimeError):
+        status_code = 422
+
+    class AuthFailure(RuntimeError):
+        status_code = 401
+
+    class FakeDialogueInput:
+        def __init__(self, *, text, voice_id):
+            self.text = text
+            self.voice_id = voice_id
+
+    class FakeModelSettings:
+        def __init__(self, *, stability):
+            self.stability = stability
+
+    fake_voice = SimpleNamespace(voice_id="existing-clone-id", name="My Clone")
+    fake_client = SimpleNamespace(
+        voices=SimpleNamespace(
+            get_all=lambda: SimpleNamespace(voices=[fake_voice])
+        ),
+        text_to_dialogue=SimpleNamespace(
+            stream=lambda **_kwargs: (_ for _ in ()).throw(
+                CompatibilityFailure("voice is not available for this model")
+            )
+        ),
+        text_to_speech=SimpleNamespace(
+            convert=lambda **_kwargs: (_ for _ in ()).throw(
+                AuthFailure("secret response headers")
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "elevenlabs",
+        SimpleNamespace(ElevenLabs=lambda **_kwargs: fake_client),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "elevenlabs.types",
+        SimpleNamespace(
+            DialogueInput=FakeDialogueInput,
+            ModelSettingsResponseModel=FakeModelSettings,
+        ),
+    )
+    monkeypatch.setattr(
+        "distr.core.utils.load_settings_from_db",
+        lambda: {
+            "elevenlabs_key": "key",
+            "elevenlabs_voice": "existing-clone-id",
+            "elevenlabs_tts_model": "eleven_v3_conversational",
+        },
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        ElevenLabsDescriptor().generate_audio(
+            "Hello", "existing-clone-id", 1.0, str(tmp_path / "reply.wav")
+        )
+
+    assert "secret response headers" not in str(exc_info.value)
+    assert "Check the ElevenLabs API key" in str(exc_info.value)
 
 
 def test_openai_chat_model_sort_prefers_gpt5_family():

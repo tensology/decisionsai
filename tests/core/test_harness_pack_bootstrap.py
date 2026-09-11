@@ -97,3 +97,37 @@ def test_workflow_skill_provision_can_push_vendored_ecc_skill(tmp_path):
     assert pushed.exists()
     assert pushed.parent.name == "react-patterns"
     assert "React" in pushed.read_text(encoding="utf-8")
+
+
+def test_workflow_skill_provision_can_push_external_capability_skill(tmp_path, monkeypatch):
+    from distr.core.workflow.skill_provision import push_skill_to_project
+
+    skill_dir = tmp_path / "source" / "impeccable"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Impeccable\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "distr.core.workflow.skill_provision._external_capability_skill_dir",
+        lambda skill_id: skill_dir if skill_id == "impeccable" else None,
+    )
+
+    dest = push_skill_to_project(
+        skill_id="impeccable",
+        project_folder=str(tmp_path),
+        backend_id="codex",
+    )
+
+    assert dest == str(tmp_path / ".codex" / "commands" / "impeccable.md")
+    assert Path(dest).read_text(encoding="utf-8") == "# Impeccable\n"
+
+
+def test_workflow_skill_provision_can_push_visual_plan_watchdog(tmp_path):
+    from distr.core.workflow.skill_provision import push_skill_to_project
+
+    dest = push_skill_to_project(
+        skill_id="agent-watchdog",
+        project_folder=str(tmp_path),
+        backend_id="pi",
+    )
+
+    assert dest == str(tmp_path / ".pi" / "skills" / "agent-watchdog" / "SKILL.md")
+    assert Path(dest).is_file()

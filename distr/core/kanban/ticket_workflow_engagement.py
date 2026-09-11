@@ -70,6 +70,39 @@ def _ticket_subject(ticket_title: str, fallback: str = "the ticket") -> str:
     return clean or fallback
 
 
+def build_operator_waiting_message(
+    *,
+    workflow_name: str,
+    ticket_title: str,
+    step_name: str = "",
+    waiting_kind: str = "",
+) -> str:
+    """Return a safe outbound status without provider, model, or traceback text.
+
+    Technical diagnostics remain in the Decisions activity feed. Telegram is an
+    operator surface, so it should explain the action needed in plain language
+    and never repeat stale route or fallback claims.
+    """
+    subject = _ticket_subject(ticket_title, _ticket_subject(workflow_name))
+    phase = _ticket_subject(step_name, "the current phase")
+    kind = (waiting_kind or "").strip().lower()
+    if kind == "provider_preflight":
+        return (
+            f"{subject} is paused before {phase}. The selected worker could not start this phase. "
+            "The technical details are recorded in Decisions. No hosted fallback was used."
+        )
+    if kind == "route_approval":
+        return (
+            f"{subject} is waiting for approval before {phase}. "
+            "Review the proposed route in Decisions, then approve or stop the run."
+        )
+    if kind in {"step_review", "run_briefing", "pre_execution_approval"}:
+        return f"{subject} is waiting for your approval before {phase}. Reply to approve or stop the run."
+    if kind == "worker_needs_input":
+        return f"{subject} needs a short clarification before it can continue with {phase}."
+    return f"{subject} is waiting at {phase}. The current state and details are recorded in Decisions."
+
+
 def prepare_workflow_voice_text(value: str, *, max_chars: int = 320) -> str:
     """Turn a useful workflow update into speech without reading telemetry aloud.
 
@@ -518,6 +551,7 @@ def notify_ticket_workflow_progress(
     requires_response: bool = False,
     voice_body: Optional[str] = None,
     audible: bool = False,
+    allow_voice: bool = True,
 ) -> None:
     """Record progress, speaking only interruptions and explicit milestones."""
     text = (body or "").strip()
@@ -526,8 +560,8 @@ def notify_ticket_workflow_progress(
     spoken = prepare_workflow_voice_text(voice_body or text)
 
     ctx = _run_context(run_id)
-    audible = bool(audible or requires_response)
-    if not audible:
+    audible = bool((audible or requires_response) and allow_voice)
+    if not audible and not requires_response:
         # Routine model choices, step transitions, retries, and automatic
         # failovers belong in Mission Control/chat, not in the voice queue.
         try:
@@ -609,7 +643,7 @@ def notify_ticket_workflow_progress(
             run_id=run_id,
             step_id=step_id,
                 requires_response=requires_response,
-                allow_voice=True,
+                allow_voice=bool(allow_voice),
         )
     )
     if not decision.should_send:

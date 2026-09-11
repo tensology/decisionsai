@@ -13,6 +13,7 @@ import os
 import re
 import platform
 import subprocess
+import time
 from distr.core.agent.tools.base import get_platform_modifier_key
 
 # PyAutoGUI - import at module level and disable FAILSAFE
@@ -169,6 +170,10 @@ class SmartOpenTool(BaseTool):
     def _open_application(self, app_name: str, text: str) -> str:
         """Open an application."""
         try:
+            if platform.system() == "Darwin":
+                from distr.core.agent.tools.input.window_ops import LaunchAppTool
+
+                return LaunchAppTool()._run(executable=(app_name or text).strip())
             from distr.core.actions.desktop import open_app
 
             requested_name = (text or app_name or "").strip()
@@ -185,25 +190,44 @@ class SmartOpenTool(BaseTool):
 
     def _open_known_folder(self, target: str) -> Optional[str]:
         """Open common user folders directly when explicitly requested."""
-        target_lower = (target or "").lower()
+        target_lower = re.sub(r"\s+", " ", (target or "").lower()).strip()
         if not target_lower:
             return None
+
+        folder_request = re.sub(r"^(?:please\s+)?(?:open|show|launch)\s+", "", target_lower).strip()
 
         for folder_key, folder_meta in KNOWN_FOLDERS.items():
             folder_path = folder_meta["path"]
             spoken_label = folder_meta["spoken_label"]
-            explicit_folder_request = (
-                (folder_key in target_lower and "folder" in target_lower)
-                or target_lower in {
+            explicit_folder_request = folder_request in {
                 folder_key,
+                f"{folder_key} folder",
+                f"the {folder_key} folder",
                 f"my {folder_key}",
-                }
-            )
+                f"my {folder_key} folder",
+            }
             if explicit_folder_request:
                 if os.path.isdir(folder_path):
                     system = platform.system()
                     if system == "Darwin":
                         subprocess.run(["open", folder_path], check=True)
+                        expected = os.path.realpath(folder_path).rstrip("/")
+                        verify_script = (
+                            'tell application "Finder" to POSIX path of '
+                            '(target of front Finder window as alias)'
+                        )
+                        for _ in range(20):
+                            check = subprocess.run(
+                                ["osascript", "-e", verify_script],
+                                capture_output=True,
+                                text=True,
+                                timeout=3,
+                            )
+                            actual = os.path.realpath(check.stdout.strip()).rstrip("/")
+                            if check.returncode == 0 and actual == expected:
+                                return f"Opened and verified your {spoken_label}."
+                            time.sleep(0.1)
+                        return f"Error: Finder did not verify the opened {spoken_label}."
                     elif system == "Windows":
                         os.startfile(folder_path)
                     else:
@@ -221,7 +245,16 @@ class SmartOpenTool(BaseTool):
             
             logger.info(f"SmartOpenTool: Processing target='{target}', text='{text}'")
 
-            known_folder_result = self._open_known_folder(target)
+            full_request = text or target
+            if re.search(r"\b(?:open|show|launch)\b.*\bproject\b", full_request, re.IGNORECASE):
+                from distr.core.agent.tools.system.project_tools import OpenProjectTool
+
+                return OpenProjectTool()._run(full_request)
+
+            # Use the complete request for intent disambiguation. Structured
+            # calls often put only "Documents" in target while the natural
+            # language text makes clear that the user wants an editor/project.
+            known_folder_result = self._open_known_folder(full_request)
             if known_folder_result:
                 logger.info("SmartOpenTool: Opened known folder for target='%s'", target)
                 return known_folder_result

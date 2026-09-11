@@ -1,0 +1,146 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Development architecture and audit follow-up</title><style>*{box-sizing:border-box}body{margin:0;background:#e9edf4;color:#162039;font:16px/1.5 Arial,sans-serif}.page{width:1100px;margin:24px auto;background:white;padding:36px 48px;break-after:page}header{font-size:12px;letter-spacing:.12em;color:#435178;border-bottom:3px solid #f47b20;padding-bottom:12px;margin-bottom:18px}h1{font-size:30px;line-height:1.15;margin:0 0 20px}h2{font-size:19px;margin:22px 0 10px}p{margin:10px 0}table{border-collapse:collapse;width:100%;margin:14px 0;font-size:15px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #dde3ef;padding:9px 12px}th{background:#18266c;color:white}th code{color:inherit}td:first-child{width:185px}code{font:13px/1.4 monospace;color:#263e77;overflow-wrap:anywhere}li{margin:9px 0}footer{font-size:12px;color:#50617d;border-top:1px solid #cbd4e6;padding-top:12px;margin-top:24px}footer span{float:right}</style></head><body><section class="page"><header>DECISIONS AI / DEVELOPMENT</header><h1>Development architecture</h1>
+<p>Implementation and testing checkpoint, 5 September 2026. The six sections and project sidebar now have named frontend owners and backend boundaries. Provider selection remains model agnostic. This is an implemented local refactor, with remaining integration work identified on page 4.</p>
+<h2>Feature ownership</h2>
+<p>Canonical frontend: <code>distr/gui/web/static/development/</code>. Matching views: <code>distr/gui/web/templates/development/</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Owner</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>planning/</code></td>
+<td>Workspace and item selection, revision-aware editing, preview, navigation protection and external file review.</td>
+</tr>
+<tr>
+<td><code>incoming/</code></td>
+<td>Channel selection, conversation reader, links and snapshots.</td>
+</tr>
+<tr>
+<td><code>automations/</code></td>
+<td>Schedule list/calendar, edit/import dialogs, rejected import details and run history selection.</td>
+</tr>
+<tr>
+<td><code>workflows/</code></td>
+<td>Definitions, canvas/list editor, step settings, readiness and execution controls.</td>
+</tr>
+<tr>
+<td><code>terminals/</code></td>
+<td>Project/session views, terminal connections and polling lifecycle.</td>
+</tr>
+<tr>
+<td><code>reports/</code></td>
+<td>Independent run-history requests, filters, loading, errors and table rendering.</td>
+</tr>
+<tr>
+<td><code>sidebar/</code></td>
+<td>Board and thread tree, menus, pinning and board settings.</td>
+</tr>
+<tr>
+<td><code>boards/</code></td>
+<td>Kanban/list view, tickets, attachments and ticket-to-thread draft handoff.</td>
+</tr>
+<tr>
+<td><code>threads/</code></td>
+<td>Transcript, composer, inspector, session loading and live connection lifecycle.</td>
+</tr>
+</tbody>
+</table>
+<p><code>app.js</code> composes features and coordinates navigation, catalogs and active context. It is 2,468 formatted lines. Thread session loading now returns one consistent snapshot; connection ownership is separate. Shared state still exists and the shell remains substantial. File count alone does not prove full decoupling.</p>
+<p><code>shell/</code> owns independently failing catalog loads and navigation protection. <code>shared/</code> contains common styles and provider/model helpers. Legacy Studio assets and templates remain compatibility shims.</p><footer>5 September 2026 <span>1 / 4</span></footer></section><section class="page"><header>DECISIONS AI / DEVELOPMENT</header><h1>Backend ownership and contracts</h1>
+<p><code>distr/gui/web/routes/development/</code> registers feature routes at their existing public URLs. Development logging no longer imports through Settings, removing the import cycle exposed by a fresh route-registration test.</p>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>Canonical implementation under <code>distr/</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Plan</td>
+<td><code>core/planning/service.py</code> owns revisions and discovery. <code>files.py</code> owns recoverable file projection. Feature routes expose workspace, item and file-review operations.</td>
+</tr>
+<tr>
+<td>Incoming</td>
+<td><code>core/incoming/service.py</code> owns linked incoming conversations and snapshots.</td>
+</tr>
+<tr>
+<td>Terminals</td>
+<td><code>core/terminals/service.py</code> and existing terminal runtimes. Routes still register through Projects for URL compatibility.</td>
+</tr>
+<tr>
+<td>Automations</td>
+<td>Existing <code>core/automation/</code> engine. <code>schedule_import.py</code> owns lossless translation; scheduler owns durable dispatch claims and acknowledgement.</td>
+</tr>
+<tr>
+<td>Reports</td>
+<td><code>core/reports/service.py</code> combines recent workflow, automation and standalone execution records. <code>routes/development/reports.py</code> exposes a bounded read-only query.</td>
+</tr>
+<tr>
+<td>Workflows and threads</td>
+<td>Separate definition, step, execution, thread, control and tool routes call existing domain services. Some execution route files remain large.</td>
+</tr>
+</tbody>
+</table>
+<h2>Dependency rules</h2>
+<ul>
+<li>Features own their view state, requests, handlers and cleanup. Connections use declared callbacks and context rather than imports of sibling implementations.</li>
+<li>Project identity, board identity and thread identity stay distinct. Multiple boards may share one project. A thread keeps its board scope.</li>
+<li>The shell still supplies live context getters and selected setters. This is an explicit integration boundary, not complete state isolation.</li>
+<li>Thread and Reports requests are cancelled or ignored after navigation. Terminal polling and thread sockets stop when their view closes.</li>
+<li>Keep model selection behind common helpers and existing execution adapters. No framework change or separate microservices were introduced.</li>
+</ul><footer>5 September 2026 <span>2 / 4</span></footer></section><section class="page"><header>DECISIONS AI / DEVELOPMENT</header><h1>Correctness changes</h1>
+<h2>Plan integrity</h2>
+<p>Failed saves retain the draft and block unsafe navigation. Revision and workspace checks reject stale or cross-workspace edits. Changed approved content becomes a draft while approval history remains. Mobile item selection and delayed navigation are covered.</p>
+<p>The database revision and a pending file write commit together. File projection follows the commit and retries on workspace reopen. Commit failure leaves the old file intact. Rename failure keeps the committed revision recoverable. External changes are checked before writing and retained for review.</p>
+<p>File review compares the saved/editor version with the project file. Import requires the reviewed revision and file hash; restoring a missing file retains an unsaved editor draft. Discovery preserves curated overviews and creates proposals instead of replacing them. Unchanged discovery does not add revisions. The language input now describes its actual template, append and scan capabilities.</p>
+<h2>Dispatch and navigation</h2>
+<p>Automation imports select an exact or nearest containing project and reject ambiguous multi-project scope. Unsupported recurrence features are reported per source instead of silently changing the schedule. Supported cron monthly days and time zones are preserved.</p>
+<p>Scheduled occurrences have a durable dispatch attempt before work starts. The schedule advances only after acknowledgement. Failed or ambiguous dispatch pauses for manual review, including after restart. Concurrent schedule edits survive acknowledgement. This avoids blind retries that could duplicate work.</p>
+<p>Queued commands query queued rows directly, preventing delivered rows from starving the next command. Idle timers pause even if a worker never produces its first response. Late thread loads cannot restore an obsolete URL. Empty workflows and agent steps without instructions cannot start through the Development controls.</p>
+<h2>Independent surfaces</h2>
+<p>Catalog sources fail independently. Distinct boards sharing one project remain visible. Automation history stays with its selected record. Reports has real history, source/status filters, retryable errors and a mobile scrollable table. Accepted dispatch bookkeeping is excluded from the report to avoid presenting it as an additional execution.</p><footer>5 September 2026 <span>3 / 4</span></footer></section><section class="page"><header>DECISIONS AI / DEVELOPMENT</header><h1>Verification and remaining work</h1>
+<h2>Verified locally</h2>
+<p>The final selected backend suite passes 160 tests across 20 modules. It covers public route registration, reports, Plan persistence and reconciliation, schedule fidelity, dispatch claims/recovery, controls, boards, tickets, terminals and existing workflow behavior. Existing deprecation warnings remain.</p>
+<p>All 94 browser tests pass against the real templates and JavaScript with fixture APIs. Coverage includes section navigation, save failures, delayed responses, workflow editing, tickets, terminals, automation controls, file review and Reports at desktop and mobile widths. Final counts and evidence are recorded in <code>verification.json</code>, <code>backend-results.xml</code> and <code>browser-results.xml</code> beside this report.</p>
+<p>The fixture server runs independently from the desktop runtime and does not start its database, scheduler or agents. These tests do not certify live provider calls or external connector availability. JavaScript/CSS parsing, local module resolution and diff checks accompany the regression suites.</p>
+<h2>Remaining work, in order</h2>
+<table>
+<thead>
+<tr>
+<th>Owner</th>
+<th>Next deliverable and acceptance condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Planning</td>
+<td>A real model-backed planning flow and reviewed Plan-to-ticket-to-execution handoff. Preserve revisions, approvals and board identity through the full round trip.</td>
+</tr>
+<tr>
+<td>Workflow backend</td>
+<td>Consolidate the remaining legacy editor and narrow large execution routes into domain services. Apply one executable-definition validator across UI and backend entry points.</td>
+</tr>
+<tr>
+<td>Shared shell</td>
+<td>Reduce remaining state setters and backend route orchestration where ownership is clear. Verify no feature can mutate another feature's selection or lifecycle.</td>
+</tr>
+<tr>
+<td>Reports</td>
+<td>Add drill-through and richer metrics only after defining canonical execution identities. Current linked records can represent stages of the same work and are not unique-task totals.</td>
+</tr>
+<tr>
+<td>Website</td>
+<td>Replace the separate website preview with verified application behavior and captures. The original mock-up mismatch is still outstanding.</td>
+</tr>
+<tr>
+<td>Runtime verification</td>
+<td>Load these backend changes through the normal application restart, then smoke-test live connectors and a controlled provider execution. No restart or deployment was performed here.</td>
+</tr>
+</tbody>
+</table>
+<p>Older Plan clients can still omit revision checks. File synchronization uses optimistic hash checks, not a filesystem-wide transaction with external editors. Unsupported recurrences remain explicitly blocked; this is not a full RRULE engine. Review failed dispatch history before enabling a paused schedule again.</p>
+<p>Original baseline: <code>artifacts/development-audit-2026-09-05/audit.html</code>. This follow-up supersedes the earlier implementation checkpoint, not the historical audit evidence.</p><footer>5 September 2026 <span>4 / 4</span></footer></section></body></html>

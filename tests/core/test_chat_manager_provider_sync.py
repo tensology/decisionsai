@@ -25,7 +25,10 @@ def test_init_syncs_provider_from_last_chat_when_id_already_set():
   session.query.return_value.first.return_value = fake_settings
   session.get.return_value = fake_chat
 
-  with patch("distr.core.chat_manager.get_session") as mock_get_session:
+  with patch("distr.core.chat_manager.get_session") as mock_get_session, patch(
+      "distr.core.workflow.development_threads.is_development_thread",
+      return_value=False,
+  ):
       mock_get_session.return_value.__enter__.return_value = session
       cm = ChatManagerCore()
 

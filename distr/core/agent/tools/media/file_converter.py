@@ -320,9 +320,11 @@ def _transcribe_to_text(input_path: str, output_path: str, chat_manager=None, ch
             if chat_manager and chat_id:
                 try:
                     summary = f"✅ Transcription complete!\n\nSaved to: `{output_path}`\n\nTranscript preview ({len(transcript)} chars):\n{transcript[:300]}{'...' if len(transcript) > 300 else ''}"
-                    chat_manager.add_assistant_message(chat_id, summary)
+                    chat_row_id = chat_manager.add_assistant_message(chat_id, summary)
                     from distr.core.signals import signal_manager
-                    signal_manager.chat_message_added.emit(chat_id, "assistant", summary)
+                    signal_manager.chat_message_added.emit(
+                        chat_id, "assistant", summary, chat_row_id
+                    )
                     signal_manager.chat_updated.emit(chat_id)
                 except Exception as e:
                     logger.warning(f"FileConverter: Could not add message to chat: {e}")
@@ -383,9 +385,11 @@ def _convert_worker_thread(file_path: str, output_path: str, target_format: str,
             if not progress_callback and chat_manager and chat_id:
                 try:
                     summary = f"✅ File conversion complete!\n\nSaved to: `{output_path}`"
-                    chat_manager.add_assistant_message(chat_id, summary)
+                    chat_row_id = chat_manager.add_assistant_message(chat_id, summary)
                     from distr.core.signals import signal_manager
-                    signal_manager.chat_message_added.emit(chat_id, "assistant", summary)
+                    signal_manager.chat_message_added.emit(
+                        chat_id, "assistant", summary, chat_row_id
+                    )
                     signal_manager.chat_updated.emit(chat_id)
                 except Exception as e:
                     logger.warning(f"FileConverter: Could not add message to chat: {e}")
@@ -478,10 +482,15 @@ class FileConverterTool(BaseTool):
             if current_chat_id is None:
                 try:
                     from distr.core.db import get_session, Settings
+                    from distr.core.workflow.development_threads import resolve_conversational_chat_id
                     with get_session() as session:
                         settings = session.query(Settings).first()
                         if settings:
-                            current_chat_id = getattr(settings, "agent_current_chat_id", None) or getattr(settings, "last_chat_id", None)
+                            current_chat_id = resolve_conversational_chat_id(
+                                session,
+                                getattr(settings, "agent_current_chat_id", None),
+                                getattr(settings, "last_chat_id", None),
+                            )
                 except Exception:
                     current_chat_id = None
             
@@ -721,9 +730,11 @@ class FileConverterTool(BaseTool):
                 summary = f"✅ Converted {completed} of {len(conversion_tasks)} file(s) to {target_format}"
                 if failed:
                     summary += f" ({failed} failed)"
-                self.chat_manager.add_assistant_message(chat_id, summary)
+                chat_row_id = self.chat_manager.add_assistant_message(chat_id, summary)
                 from distr.core.signals import signal_manager
-                signal_manager.chat_message_added.emit(chat_id, "assistant", summary)
+                signal_manager.chat_message_added.emit(
+                    chat_id, "assistant", summary, chat_row_id
+                )
                 signal_manager.chat_updated.emit(chat_id)
             except Exception as e:
                 logger.warning(f"FileConverter: Could not add message to chat: {e}")

@@ -1,0 +1,37 @@
+<dialog class="studio-dialog" id="automation-dialog">
+        <form method="dialog" id="automation-form">
+            <header><div><span>Automation</span><h2 id="automation-dialog-title">Automate this development</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close automation dialog">×</button></header>
+            <input id="automation-id" type="hidden">
+            <label>Name<input id="automation-name" type="text" autocomplete="off" required></label>
+            <label>Instruction<textarea id="automation-instruction" rows="4" required></textarea></label>
+            <div class="dialog-row">
+                <label>Board<select id="automation-board"><option value="">No board</option></select></label>
+                <label>Workflow<select id="automation-workflow"><option value="">No workflow</option></select></label>
+            </div>
+            <label>Trigger<select id="automation-trigger"><option value="scheduled_instruction">Schedule</option><option value="whatsapp">Incoming WhatsApp</option><option value="telegram">Incoming Telegram</option><option value="gmail">Incoming Gmail</option></select></label>
+            <div class="dialog-row automation-schedule-row">
+                <label>Schedule<select id="automation-schedule-kind">
+                    <option value="once">Once</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekdays">Weekdays</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="hourly">Hourly</option>
+                    <option value="interval">Every interval</option>
+                </select></label>
+                <label class="automation-once-field hidden">Run at<input id="automation-once-at" type="datetime-local"></label>
+                <label class="automation-time-field">Time<input id="automation-time" type="time" value="09:00"></label>
+                <label class="automation-interval-field hidden">Every<input id="automation-interval" type="number" min="1" value="30"></label>
+                <label class="automation-interval-field hidden">Unit<select id="automation-interval-unit"><option value="minutes">Minutes</option><option value="seconds">Seconds</option></select></label>
+            </div>
+            <div class="automation-weekly-days-field hidden"><span>Days</span><div class="automation-weekday-options"><label><input type="checkbox" value="1">Mon</label><label><input type="checkbox" value="2">Tue</label><label><input type="checkbox" value="3">Wed</label><label><input type="checkbox" value="4">Thu</label><label><input type="checkbox" value="5">Fri</label><label><input type="checkbox" value="6">Sat</label><label><input type="checkbox" value="0">Sun</label></div></div>
+            <div class="dialog-row automation-calendar-options"><label class="automation-monthly-days-field hidden">Days of month<input id="automation-monthly-days" type="text" inputmode="numeric" placeholder="1, 15, 25"></label><label>Timezone<input id="automation-timezone" type="text" autocomplete="off" placeholder="System default"></label></div>
+            <div class="dialog-row automation-primary-route"><label>Provider<select id="automation-provider"><option value="">Automatic</option></select></label><label>Model<select id="automation-model"><option value="">Automatic</option></select></label></div>
+            <details class="dialog-fieldset automation-model-routing"><summary>Reasoning and fallback</summary>
+                <div class="dialog-row"><label>Reasoning<select id="automation-reasoning"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="xhigh">Extra high</option></select></label></div>
+                <div class="dialog-row"><label>Fallback provider<select id="automation-fallback-provider"><option value="">None</option></select></label><label>Fallback model<select id="automation-fallback-model"><option value="">None</option></select></label></div>
+                <p class="context-help">The fallback is attempted only when the primary provider or model is unavailable.</p>
+            </details>
+            <menu><button type="button" class="danger-text-button hidden" id="delete-automation-button">Delete automation</button><span class="menu-spacer"></span><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button" id="save-automation-button">Create automation</button></menu>
+        </form>
+    </dialog>

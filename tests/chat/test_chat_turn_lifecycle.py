@@ -11,6 +11,8 @@ from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base, Chat, ChatTurnEvent
 from distr.core import chat_turns
+from distr.core import chat_manager as chat_manager_module
+from distr.core.chat_manager import ChatManagerCore
 from distr.gui.web.routes import chat as chat_routes
 
 
@@ -93,6 +95,61 @@ def test_schema_and_ordered_start_to_terminal_update(monkeypatch):
     state = chat_turns.get_turns(root_id)
     assert state["active_turn"] is None
     assert state["turns"][0]["status"] == "completed"
+
+
+def test_active_turn_row_identity_is_resolved_for_root_and_child(monkeypatch):
+    _, factory = _factory()
+    root_id, turn_id = _chat(factory)
+    monkeypatch.setattr(chat_turns, "get_session", lambda: _ctx(factory))
+
+    assert chat_turns.resolve_active_chat_turn_row_id(root_id) == turn_id
+    assert chat_turns.resolve_active_chat_turn_row_id(turn_id) == turn_id
+
+
+def test_assistant_persistence_returns_exact_row_after_active_pointer_is_cleared(monkeypatch):
+    _, factory = _factory()
+    root_id, turn_id = _chat(factory)
+    monkeypatch.setattr(chat_manager_module, "get_session", lambda: factory())
+    monkeypatch.setattr(chat_manager_module, "record_chat_audit_event", lambda **kwargs: None)
+    monkeypatch.setattr(chat_turns, "get_session", lambda: _ctx(factory))
+    monkeypatch.setattr(chat_turns, "_broadcast", lambda payload: None)
+    manager = ChatManagerCore()
+    manager.chat_histories[root_id] = [{"role": "user", "content": "Please inspect this"}]
+    manager.emit = lambda *args, **kwargs: None
+
+    persisted_row_id = manager.add_assistant_message(root_id, "Done.")
+
+    assert persisted_row_id == turn_id
+    assert chat_turns.resolve_active_chat_turn_row_id(root_id) is None
+
+
+def test_assistant_persistence_stays_bound_to_originating_turn(monkeypatch):
+    _, factory = _factory()
+    root_id, first_turn_id = _chat(factory)
+    with factory() as session:
+        root = session.get(Chat, root_id)
+        second = Chat(parent_id=root_id, input="A newer request", response="")
+        session.add(second)
+        session.flush()
+        second_turn_id = int(second.id)
+        root.params = f'{{"active_turn_chat_row_id": {second_turn_id}}}'
+        session.commit()
+    monkeypatch.setattr(chat_manager_module, "get_session", lambda: factory())
+    monkeypatch.setattr(chat_manager_module, "record_chat_audit_event", lambda **kwargs: None)
+    monkeypatch.setattr(chat_turns, "get_session", lambda: _ctx(factory))
+    monkeypatch.setattr(chat_turns, "_broadcast", lambda payload: None)
+    manager = ChatManagerCore()
+    manager.chat_histories[root_id] = [{"role": "user", "content": "Please inspect this"}]
+    manager.emit = lambda *args, **kwargs: None
+    chat_manager_module.bind_active_chat_turn(root_id, first_turn_id)
+
+    persisted_row_id = manager.add_assistant_message(root_id, "First turn answer")
+
+    assert persisted_row_id == first_turn_id
+    with factory() as session:
+        assert session.get(Chat, first_turn_id).response == "First turn answer"
+        assert session.get(Chat, second_turn_id).response == ""
+        assert str(second_turn_id) in str(session.get(Chat, root_id).params)
 
 
 def test_redaction_and_bounded_metadata(monkeypatch):

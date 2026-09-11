@@ -1,0 +1,12 @@
+<dialog class="studio-dialog" id="mode-dialog">
+        <form method="dialog" id="mode-form">
+            <header><div><span>Agent mode</span><h2>Choose how this thread should proceed</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close agent mode dialog">×</button></header>
+            <div class="route-choice">
+                <label><input type="radio" name="run-mode" value="full" checked><span><strong>Develop</strong><small>Plan, implement, test, review, and correct the work</small></span></label>
+                <label><input type="radio" name="run-mode" value="approval"><span><strong>Wait for approval</strong><small>Save the request but do not start work until it is approved</small></span></label>
+                <label><input type="radio" name="run-mode" value="plan"><span><strong>Plan only</strong><small>Create and revise planning artifacts without starting implementation</small></span></label>
+                <label><input type="radio" name="run-mode" value="goal"><span><strong>Goal</strong><small>Keep working toward the defined outcome across multiple development turns</small></span></label>
+            </div>
+            <menu><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button">Apply mode</button></menu>
+        </form>
+    </dialog>

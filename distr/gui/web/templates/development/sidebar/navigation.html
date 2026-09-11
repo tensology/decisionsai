@@ -1,0 +1,16 @@
+<aside class="studio-sidebar" id="studio-sidebar" aria-label="Development boards and threads">
+            <div class="sidebar-scroll">
+                <div class="sidebar-top-row"><button class="sidebar-new-chat" id="new-thread-button" type="button"><span aria-hidden="true">✎</span> New Thread</button><button class="icon-button sidebar-close mobile-only" id="sidebar-close" aria-label="Close development boards">×</button></div>
+                <div class="sidebar-nav-group sidebar-nav-group-single"><button class="sidebar-nav-row" id="sidebar-plan-toggle" type="button"><span class="sidebar-nav-icon" aria-hidden="true">≡</span><span>Plan</span></button></div>
+                <div class="sidebar-nav-group sidebar-nav-group-single"><button class="sidebar-nav-row" id="sidebar-incoming-toggle" type="button"><span class="sidebar-nav-icon" aria-hidden="true">↓</span><span>Incoming</span><small id="sidebar-incoming-count">0</small></button></div>
+                <div class="sidebar-nav-group"><button class="sidebar-nav-row" id="sidebar-rules-toggle" type="button"><span class="sidebar-nav-icon" aria-hidden="true">⚙</span><span>Automations</span><small id="sidebar-rule-count">0</small></button><button class="sidebar-nav-add" id="sidebar-rule-add" type="button" aria-label="Create automation" title="Create automation">+</button></div>
+                <div class="sidebar-nav-group"><button class="sidebar-nav-row" id="sidebar-workflows-toggle" type="button"><span class="sidebar-nav-icon" aria-hidden="true">⟲</span><span>Workflows</span><small id="sidebar-workflow-count">0</small></button><button class="sidebar-nav-add" id="sidebar-workflow-add" type="button" aria-label="Create workflow" title="Create workflow">+</button></div>
+                <div class="sidebar-nav-group sidebar-nav-group-single"><button class="sidebar-nav-row" id="sidebar-terminals-toggle" type="button"><span class="sidebar-nav-icon" aria-hidden="true">›_</span><span>Terminals</span></button></div>
+                <div class="sidebar-nav-group sidebar-nav-group-single"><button class="sidebar-nav-row" id="sidebar-reports-toggle" type="button"><span class="sidebar-nav-icon" aria-hidden="true">▤</span><span>Reports</span></button></div>
+                <section class="sidebar-bucket hidden" id="pinned-board-section"><div class="sidebar-section-label"><span>Pinned</span></div><div id="pinned-board-tree" class="project-task-tree" aria-live="polite"></div></section>
+                <section class="sidebar-bucket"><div class="sidebar-section-label"><span>Boards</span><button type="button" id="new-board-button" aria-label="Create board" title="Create board">+</button></div><div id="board-task-tree" class="project-task-tree" aria-live="polite"></div><button type="button" class="sidebar-show-more hidden" id="boards-show-more">Show more</button></section>
+                <section class="sidebar-bucket hidden" id="recents-section"><div class="sidebar-section-label" id="recents-label"><span>Recents</span></div><div id="unassigned-task-group"></div></section>
+            </div>
+            <div class="sidebar-drop-overlay hidden" id="sidebar-drop-overlay" aria-live="polite"><strong>Drop a project folder</strong><span>Adds the folder as a board and project</span></div>
+
+        </aside>

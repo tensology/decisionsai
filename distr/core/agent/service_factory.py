@@ -374,6 +374,27 @@ def swap_processor_in_pipeline(pipeline, old_service, new_service):
                 old_service._prev = None
                 old_service._next = None
 
+                # Retire the old processor's private drain tasks immediately.
+                # Detaching links alone leaves those tasks alive and able to
+                # consume queued interruption frames after a hot-swap, which
+                # multiplies terminal stream events in the web chat.
+                for task_attr in (
+                    '_FrameProcessor__input_frame_task',
+                    '_FrameProcessor__process_frame_task',
+                ):
+                    task = getattr(old_service, task_attr, None)
+                    if task is not None:
+                        try:
+                            task.cancel()
+                        except Exception as exc:
+                            logger.warning(
+                                "HOT-SWAP: could not cancel retired %s on %s: %s",
+                                task_attr,
+                                type(old_service).__name__,
+                                exc,
+                            )
+                        setattr(old_service, task_attr, None)
+
                 # --- 2. Copy task infrastructure from old service ---
                 # _task_manager and _clock are set by setup() which requires a StartFrame.
                 # We copy them directly so create_task() works on the new service.

@@ -79,6 +79,25 @@ def test_set_window_bounds_local_snaps_left(monkeypatch):
     assert "unix id is 222" in captured["script"]
 
 
+def test_find_element_local_filters_accessibility_tree(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.agent.tools.input.desktop_local._get_window_tree",
+        lambda params: {
+            "pid": 222,
+            "elements": [
+                {"id": 0, "name": "Cancel", "control_type": "AXButton"},
+                {"id": 1, "name": "Save document", "control_type": "AXButton"},
+            ],
+        },
+    )
+
+    result = run_local_desktop_tool("find_element", {"name": "Save"})
+
+    assert result["count"] == 1
+    assert result["elements"][0]["id"] == 1
+    assert result["via"] == "decisions"
+
+
 def test_permissions_ok_without_sidecar(monkeypatch):
     monkeypatch.setattr(
         "distr.core.macos_permissions.is_permissions_setup_dismissed",

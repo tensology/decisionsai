@@ -1,0 +1,53 @@
+{
+  "status": "DONE",
+  "workload": "Implement normalize_tags, modify only task.py, run four unit tests, use RTK where supported",
+  "quality": {
+    "gpt-5.6-sol-medium": {
+      "score": "4/4 tests",
+      "scope_control": "pass",
+      "rtk": "observed"
+    },
+    "muse-glimmer-30b-mlx": {
+      "score": "4/4 tests",
+      "scope_control": "pass",
+      "rtk": "observed"
+    }
+  },
+  "performance": {
+    "gpt-5.6-sol-medium": {
+      "seconds": 61.981,
+      "total_tokens": 243870,
+      "cached_input_tokens": 215808
+    },
+    "muse-glimmer-cold": {
+      "seconds": 234.35,
+      "total_tokens": 8701,
+      "reported_cost": 0
+    },
+    "muse-glimmer-warm": {
+      "seconds": 136.719,
+      "total_tokens": 7902,
+      "reported_cost": 0
+    }
+  },
+  "recommendation": {
+    "interactive_basic_code_edits": "gpt-5.6-sol-medium",
+    "local_private_or_zero_marginal_cost_work": "muse-glimmer:30b-mlx",
+    "routing": "Use GPT-5.6 Sol Medium for latency-sensitive edits and Muse Glimmer for queued/background low-risk work."
+  },
+  "optimizations_applied": [
+    "Codex IDE handoff now resolves and launches codex app instead of Cursor.",
+    "Codex IDE readiness guidance now names Codex CLI instead of Cursor.",
+    "YouTube search now parses yt-dlp JSONL video entries correctly.",
+    "IDE work-packet timestamps use timezone-aware UTC.",
+    "Added a reusable Decisions backend model benchmark runner."
+  ],
+  "validation": {
+    "harness_suite": "208 passed",
+    "focused_post_fix": "9 passed",
+    "python_compile": "pass",
+    "git_diff_check": "pass",
+    "youtube_metadata_live": "pass",
+    "youtube_search_live": "pass"
+  }
+}

@@ -14,6 +14,15 @@ def test_gmail_attachment_intent_forces_google_workspace() -> None:
     )
 
 
+def test_location_specific_business_lookup_forces_web_search() -> None:
+    request = (
+        "Can you find me in Claremont, Cape Town, near Cavendish Square, "
+        "a print shop and get me a list of them?"
+    )
+
+    assert "web_search" in forced_tool_names_for_text(request)
+
+
 def test_forces_clipboard_for_read_and_write_requests():
     assert "clipboard_action" in forced_tool_names_for_text("read my clipboard")
     assert "clipboard_action" in forced_tool_names_for_text("read the clipboard and let's talk about it")
@@ -33,6 +42,8 @@ def test_calendar_event_follow_ups_are_recognized():
     assert is_workflow_follow_up("Try again.")
     assert is_workflow_follow_up("Create the fucking event.")
     assert is_workflow_follow_up("do it, read or ingest the clipboard and do it.")
+    assert is_workflow_follow_up("First option.")
+    assert is_workflow_follow_up("I want you to perform the second option")
     assert not is_workflow_follow_up("Create a ticket for this bug")
 
 
@@ -135,6 +146,26 @@ def test_forces_special_key_for_keypress_requests():
     assert "special_key" in forced_tool_names_for_text("press the space bar")
     assert "special_key" in forced_tool_names_for_text("press enter")
     assert "special_key" in forced_tool_names_for_text("spacebar")
+
+
+def test_forces_desktop_control_tools_for_audited_phrases():
+    window_requests = (
+        "Can you minimize this window?",
+        "Can you maximize Codex?",
+        "Move the terminal to the left screen",
+        "Move the terminal to my second desktop",
+        "Open up my second desktop",
+    )
+    for request in window_requests:
+        assert "window_management" in forced_tool_names_for_text(request), request
+
+    assert "launch_app" in forced_tool_names_for_text("Can you bring up Spotify?")
+    assert "smart_open" in forced_tool_names_for_text("Can you open up my Downloads folder?")
+
+    mouse_tools = forced_tool_names_for_text("Move the mouse to the Save button")
+    assert "find_element" in mouse_tools
+    assert "move_to_element" in mouse_tools
+    assert "screenshot_analyzer" in mouse_tools
 
 
 def test_forces_cursor_ticket_for_decisionsai_ticket_only_in_debug(monkeypatch):

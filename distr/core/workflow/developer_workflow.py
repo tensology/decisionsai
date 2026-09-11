@@ -7,7 +7,7 @@ from typing import Any
 
 DEVELOPER_WORKFLOW_NAME = "Development"
 DEVELOPER_WORKFLOW_SLUG = "development-ticket-to-implementation"
-DEVELOPER_WORKFLOW_VERSION = 12
+DEVELOPER_WORKFLOW_VERSION = 13
 
 DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "execution_mode": "sequential",
@@ -26,6 +26,60 @@ DEVELOPER_WORKFLOW_RUN_SETTINGS: dict[str, Any] = {
     "capture_memory_deltas": True,
     "capture_failures_and_lessons": True,
 }
+
+
+def resolve_development_workflow(
+    *,
+    project_id: int | None = None,
+    ticket_id: int | None = None,
+    board_key: str | None = None,
+) -> int:
+    """Resolve the reusable workflow definition for one Development thread.
+
+    A thread never creates or owns a workflow definition. Ticket and board
+    defaults win, followed by a project board default and the canonical
+    Development workflow.
+    """
+    from distr.core.db import get_session
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.workflow import AutoWorkflow
+
+    with get_session() as db:
+        candidates: list[int] = []
+        if ticket_id is not None:
+            ticket = db.get(KanbanTicket, int(ticket_id))
+            if ticket is not None:
+                if ticket.linked_workflow_id:
+                    candidates.append(int(ticket.linked_workflow_id))
+                lane = db.get(KanbanLane, int(ticket.lane_id)) if ticket.lane_id else None
+                board = db.get(KanbanBoard, int(lane.board_id)) if lane else None
+                if board is not None and board.default_workflow_id:
+                    candidates.append(int(board.default_workflow_id))
+        clean_board = str(board_key or "").strip().lower()
+        if clean_board.startswith("decisions:"):
+            try:
+                board = db.get(KanbanBoard, int(clean_board.split(":", 1)[1]))
+            except (TypeError, ValueError):
+                board = None
+            if board is not None and board.default_workflow_id:
+                candidates.append(int(board.default_workflow_id))
+        if project_id is not None:
+            board = (
+                db.query(KanbanBoard)
+                .filter(
+                    KanbanBoard.default_project_id == int(project_id),
+                    KanbanBoard.default_workflow_id.isnot(None),
+                )
+                .order_by(KanbanBoard.id.asc())
+                .first()
+            )
+            if board is not None and board.default_workflow_id:
+                candidates.append(int(board.default_workflow_id))
+        for workflow_id in candidates:
+            workflow = db.get(AutoWorkflow, int(workflow_id))
+            if workflow is not None and str(workflow.status or "").lower() != "archived":
+                return int(workflow.id)
+    return get_or_create_development_workflow()
 
 
 def get_or_create_development_workflow() -> int:
@@ -61,7 +115,102 @@ def get_or_create_development_workflow() -> int:
         applied = apply_loop_preset(workflow_id, DEVELOPER_WORKFLOW_NAME, mode="replace")
         if not applied.get("success"):
             raise RuntimeError(applied.get("error") or "Could not initialise Development")
+        import json
+
+        with get_session() as db:
+            workflow = db.get(AutoWorkflow, int(workflow_id))
+            settings = json.loads(workflow.run_settings or "{}") or {}
+            settings.update(DEVELOPER_WORKFLOW_RUN_SETTINGS)
+            settings["canonical_workflow_version"] = DEVELOPER_WORKFLOW_VERSION
+            workflow.run_settings = json.dumps(settings, sort_keys=True)
+            db.commit()
+    else:
+        _refresh_development_workflow_definition(workflow_id)
     return workflow_id
+
+
+def _refresh_development_workflow_definition(workflow_id: int) -> dict[str, Any]:
+    """Upgrade only the canonical Development workflow while preserving its evidence."""
+    import json
+
+    from distr.core.db import get_session
+    from distr.core.db.workflow import (
+        AutoWorkflow,
+        AutoWorkflowRun,
+        AutoWorkflowStep,
+        AutoWorkflowVariable,
+    )
+
+    history_id: int | None = None
+    with get_session() as db:
+        workflow = db.get(AutoWorkflow, int(workflow_id))
+        if workflow is None:
+            raise RuntimeError("Canonical Development workflow disappeared during refresh")
+        try:
+            settings = json.loads(workflow.run_settings or "{}") or {}
+        except Exception:
+            settings = {}
+        current_version = int(settings.get("canonical_workflow_version") or 0)
+        if current_version >= DEVELOPER_WORKFLOW_VERSION:
+            merged = {**settings, **DEVELOPER_WORKFLOW_RUN_SETTINGS}
+            if merged != settings:
+                workflow.run_settings = json.dumps(merged, sort_keys=True)
+                db.commit()
+            return {"upgraded": False, "history_workflow_id": None}
+        active = (
+            db.query(AutoWorkflowRun)
+            .filter(
+                AutoWorkflowRun.workflow_id == int(workflow_id),
+                AutoWorkflowRun.status.in_(["initializing", "queued", "running", "waiting", "paused"]),
+            )
+            .first()
+        )
+        if active is not None:
+            return {"upgraded": False, "deferred": True, "history_workflow_id": None}
+        if workflow.steps or workflow.runs or workflow.variables:
+            history = AutoWorkflow(
+                name=f"{DEVELOPER_WORKFLOW_NAME} history before v{DEVELOPER_WORKFLOW_VERSION}",
+                description="Read-only Development definition and run evidence preserved during upgrade.",
+                status="archived",
+                workflow_type="audit",
+                run_settings=workflow.run_settings,
+                workflow_input=workflow.workflow_input,
+                context_rules=workflow.context_rules,
+            )
+            db.add(history)
+            db.flush()
+            history_id = int(history.id)
+            db.query(AutoWorkflowStep).filter(
+                AutoWorkflowStep.workflow_id == int(workflow_id)
+            ).update({AutoWorkflowStep.workflow_id: history_id}, synchronize_session=False)
+            db.query(AutoWorkflowVariable).filter(
+                AutoWorkflowVariable.workflow_id == int(workflow_id)
+            ).update({AutoWorkflowVariable.workflow_id: history_id}, synchronize_session=False)
+            db.query(AutoWorkflowRun).filter(
+                AutoWorkflowRun.workflow_id == int(workflow_id)
+            ).update({AutoWorkflowRun.workflow_id: history_id}, synchronize_session=False)
+        db.commit()
+
+    from distr.core.workflow.loop_presets import apply_loop_preset
+
+    applied = apply_loop_preset(int(workflow_id), DEVELOPER_WORKFLOW_NAME, mode="replace")
+    if not applied.get("success"):
+        raise RuntimeError(applied.get("error") or "Could not upgrade Development")
+    with get_session() as db:
+        workflow = db.get(AutoWorkflow, int(workflow_id))
+        try:
+            settings = json.loads(workflow.run_settings or "{}") or {}
+        except Exception:
+            settings = {}
+        settings.update(DEVELOPER_WORKFLOW_RUN_SETTINGS)
+        settings["canonical_workflow_version"] = DEVELOPER_WORKFLOW_VERSION
+        workflow.run_settings = json.dumps(settings, sort_keys=True)
+        db.commit()
+    return {
+        "upgraded": True,
+        "history_workflow_id": history_id,
+        "step_count": int(applied.get("step_count") or 0),
+    }
 
 
 def consolidate_development_workflows(*, refresh_models: bool = True) -> dict[str, Any]:

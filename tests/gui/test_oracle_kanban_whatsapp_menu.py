@@ -6,12 +6,13 @@ MENU_PY = ROOT / "distr/gui/oracle/menu.py"
 KANBAN_PY = ROOT / "distr/gui/web/routes/kanban.py"
 
 
-def test_ticket_boards_submenu_has_whatsapp_section():
+def test_development_submenu_routes_whatsapp_through_incoming():
     menu = MENU_PY.read_text(encoding="utf-8")
-    assert 'QAction("Manage Ticket Boards"' in menu
-    assert "_kanban_whatsapp_separator" in menu
-    assert 'QAction("Manage Messages"' in menu
-    assert 'QAction("Sync Messages"' in menu
+    assert 'QMenu("Incoming", self.development_submenu)' in menu
+    assert 'QMenu("Ticket Boards", self.menu)' not in menu
+    assert 'QAction("Manage Incoming"' in menu
+    assert 'QAction("Sync WhatsApp"' in menu
+    assert '"/development/incoming/"' in menu
     assert "_sync_whatsapp_messages_from_menu" in menu
     assert "sync_whatsapp_from_relay_and_announce" in menu
     assert 'QAction("Messages"' not in menu

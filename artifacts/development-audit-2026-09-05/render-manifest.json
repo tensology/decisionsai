@@ -1,0 +1,81 @@
+{
+  "views": [
+    {
+      "page": "page-1",
+      "width": 1056,
+      "height": 920,
+      "overflow": false
+    },
+    {
+      "page": "page-2",
+      "width": 1056,
+      "height": 1028,
+      "overflow": false
+    },
+    {
+      "page": "page-3",
+      "width": 1056,
+      "height": 1233,
+      "overflow": false
+    },
+    {
+      "page": "page-4",
+      "width": 1056,
+      "height": 800,
+      "overflow": false
+    },
+    {
+      "page": "page-5",
+      "width": 1056,
+      "height": 818,
+      "overflow": false
+    },
+    {
+      "page": "page-6",
+      "width": 1056,
+      "height": 800,
+      "overflow": false
+    },
+    {
+      "page": "page-7",
+      "width": 1056,
+      "height": 820,
+      "overflow": false
+    },
+    {
+      "page": "page-8",
+      "width": 1056,
+      "height": 820,
+      "overflow": false
+    },
+    {
+      "page": "page-9",
+      "width": 1056,
+      "height": 1408,
+      "overflow": false
+    },
+    {
+      "page": "page-10",
+      "width": 1056,
+      "height": 941,
+      "overflow": false
+    },
+    {
+      "page": "page-11",
+      "width": 1056,
+      "height": 1213,
+      "overflow": false
+    }
+  ],
+  "source_sha256": "68d0b34e5ec7db80cf45ea575362773b55639625aeed750260a2db6eb28bd134",
+  "audited_files": {
+    "distr/gui/web/static/workflows/js/studio.js": "a127425ea449de90266b7183d7f252034011aaed893b7350323929707b97de42",
+    "distr/gui/web/static/workflows/js/plan.js": "0d24cfddc42f8f99fadc83d31c813b602fd9da0e5aee99fd3156380b87fe9d5c",
+    "distr/gui/web/static/workflows/css/studio.css": "92c76237886d8cf22f9d0726414d8819d8a9677ea18d8bb56b59be7ea5566a07",
+    "distr/gui/web/routes/settings/workflows.py": "cdf670b01f48a8b5ceea5c4d7f4668396c6fc117cc07fdd117ab3f3b6c2bcabe",
+    "distr/core/workflow/planning_workspace.py": "0d1cd02d342ed6be45b528d0193de16eef874044994ca2182380e874b1f5f6b3",
+    "distr/core/workflow/development_control.py": "e6b367063a7db5536c2e25048acc2b0e0f80659acb558b38f38eb38fb2df8d11",
+    "distr/core/automation/imports.py": "0f1b42d84f0d388133fa0fad9e178cc418004e49b938166835b69a9e4fd38b36",
+    "distr/core/automation/scheduler.py": "241de2d282db431bb9a1c62c7601885536b0ff15d0076006ef4ebe8414dd370e"
+  }
+}

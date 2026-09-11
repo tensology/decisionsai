@@ -1,5 +1,29 @@
 [
   {
+    "id": "decisions-computer-use",
+    "name": "decisions-computer-use",
+    "description": "Use native computer-use safely in Decisions workflows when the active harness exposes a CUA or computer-use runtime.",
+    "path": "decisions-computer-use",
+    "source": "local",
+    "tags": [
+      "browser",
+      "computer-use",
+      "development"
+    ]
+  },
+  {
+    "id": "decisions-playwright",
+    "name": "decisions-playwright",
+    "description": "Use the DecisionsAI Playwright browser tool and workflow steps for deterministic browser automation and UI verification.",
+    "path": "decisions-playwright",
+    "source": "local",
+    "tags": [
+      "browser",
+      "playwright",
+      "testing"
+    ]
+  },
+  {
     "id": "agent-platform-skill-registry",
     "name": "agent-platform-skill-registry",
     "description": ">",
@@ -809,6 +833,14 @@
     "conflict_policy": "local_preferred",
     "target_surfaces": ["codex", "claude", "cursor", "gemini", "cline", "pi"],
     "tags": ["harness", "audit", "reference-adapted"]
+  },
+  {
+    "id": "decisions-headroom",
+    "name": "decisions-headroom",
+    "description": "Use when a DecisionsAI, Codex, Cursor, or Claude task contains unusually large logs, files, JSON, search results, or tool output that should be compressed locally without losing access to the original.",
+    "path": "decisions-headroom",
+    "source": "local",
+    "tags": ["harness", "context", "compression", "mcp"]
   },
   {
     "id": "domain-modeling",

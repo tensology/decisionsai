@@ -1,0 +1,20 @@
+<dialog class="studio-dialog" id="attach-dialog">
+        <form method="dialog" id="attach-form">
+            <header><div><span>Add to thread</span><h2>Add supporting material</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close attachments">×</button></header>
+            <p class="context-help">The repository and selected ticket are already included. Add images, documents, a board file, related thread, link, or note.</p>
+            <nav class="context-source-tabs" aria-label="Attachment sources">
+                <button type="button" class="active" data-context-source="files">Files</button>
+                <button type="button" data-context-source="project">Board files</button>
+                <button type="button" data-context-source="threads">Threads</button>
+                <button type="button" data-context-source="manual">Link or note</button>
+            </nav>
+            <div class="context-files" id="context-files"><label class="file-picker-button">Choose files<input id="context-file-input" type="file" multiple></label><small>Images, documents, audio, video, and other files are supported.</small></div>
+            <div class="context-manual hidden" id="context-manual">
+                <label>Label<input id="context-manual-label" type="text" autocomplete="off" placeholder="Design reference or implementation note"></label>
+                <label>URL or note<textarea id="context-manual-content" rows="3" placeholder="Paste a URL or the exact context the thread should use"></textarea></label>
+                <button type="button" class="secondary-button" id="context-manual-add">Add context</button>
+            </div>
+            <div class="attachment-list" id="attachment-list"></div>
+            <menu><span class="context-count" id="context-count">Nothing selected</span><span class="menu-spacer"></span><button type="button" data-dialog-close class="primary-button">Done</button></menu>
+        </form>
+    </dialog>

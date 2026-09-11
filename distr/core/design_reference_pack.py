@@ -37,53 +37,37 @@ def _mcp_setup_script_path(home: Path) -> Path:
     return home / ".decisions" / "harness" / "mcp-setup-design.sh"
 
 
-def project_has_ui_surface(folder: str) -> bool:
-    root = Path(folder or "").expanduser()
-    if not root.is_dir():
-        return False
-    markers = (
-        "package.json",
-        "tailwind.config.js",
-        "tailwind.config.ts",
-        "vite.config.ts",
-        "vite.config.js",
-        "next.config.js",
-        "next.config.mjs",
-        "next.config.ts",
-    )
-    if any((root / name).is_file() for name in markers):
-        return True
-    for pattern in ("**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte"):
-        try:
-            if next(root.glob(pattern), None) is not None:
-                return True
-        except Exception:
-            pass
-    return False
-
-
 def _skill_ids_mention_ui(skill_ids: list[str]) -> bool:
     ui_tokens = (
-        "frontend",
-        "design",
-        "landing",
-        "dashboard",
-        "ui",
+        "design-reference",
+        "ui-ideation",
         "aceternity",
         "mobbin",
         "refero",
-        "tailwind",
-        "react",
-        "vue",
     )
     blob = " ".join(skill_ids).lower()
     return any(token in blob for token in ui_tokens)
 
 
+def impeccable_skill_available(*, home: Path | None = None) -> bool:
+    base_home = Path(home).expanduser() if home is not None else Path.home()
+    return any(
+        (base_home / candidate / "SKILL.md").is_file()
+        for candidate in (".agents/skills/impeccable", ".codex/skills/impeccable")
+    )
+
+
 def default_design_pre_chain(*, project_folder: str = "", skill_ids: list[str] | None = None) -> list[str]:
-    chain = ["decisions-design-references"]
-    if project_has_ui_surface(project_folder) or _skill_ids_mention_ui(skill_ids or []):
-        chain = ["decisions-ui-ideation", "decisions-design-references", "frontend-design-direction"]
+    _ = project_folder
+    chain: list[str] = []
+    if _skill_ids_mention_ui(skill_ids or []):
+        chain = [
+            "decisions-ui-ideation",
+            "decisions-design-references",
+            "frontend-design-direction",
+        ]
+        if impeccable_skill_available():
+            chain.insert(2, "impeccable")
     return chain
 
 
@@ -107,7 +91,7 @@ def design_mcp_recommendations() -> dict[str, Any]:
             "description": "130k+ real product screens, flows, and DESIGN.md style tokens via official MCP",
             "docs": "https://refero.design/mcp",
             "requires": "Refero Pro subscription (OAuth on first use in Cursor)",
-            "auto_merge": True,
+            "auto_merge": False,
             "cursor_name": "refero",
             "skill": "decisions-design-references",
             "refero_agent_skill": "npx skills add https://github.com/referodesign/refero_skill",
@@ -130,7 +114,7 @@ def design_mcp_recommendations() -> dict[str, Any]:
             "docs": "https://mobbin.com",
             "endpoint": "https://api.mobbin.com/mcp",
             "requires": "Mobbin Pro (~€10/month) + browser OAuth on first call",
-            "auto_merge": True,
+            "auto_merge": False,
             "cursor_name": "mobbin",
             "skill": "decisions-design-references",
             "mcp": {

@@ -1,0 +1,72 @@
+[
+  {
+    "case": "Cross-board replacement bypasses workspace ownership",
+    "observed": "Cross-board replacement"
+  },
+  {
+    "case": "Content edit retains prior approval",
+    "observed": "approved"
+  },
+  {
+    "case": "Stale tab update overwrites newer content without version token",
+    "observed": "Tab B stale update"
+  },
+  {
+    "case": "Repeated discovery replaces user-curated overview",
+    "observed": true
+  },
+  {
+    "case": "Language request loses requested subject in created content",
+    "observed": "template only"
+  },
+  {
+    "case": "Commit failure diverges file and database",
+    "observed": {
+      "file": "File changed before database commit",
+      "database": "Database baseline"
+    }
+  },
+  {
+    "case": "Import matches deeper descendant instead of exact cwd",
+    "observed": {
+      "matched_nested_project": true
+    }
+  },
+  {
+    "case": "RRULE loses two-week interval and finite run count",
+    "observed": {
+      "kind": "weekly",
+      "time": "09:00",
+      "run_at": "",
+      "interval": 15,
+      "interval_unit": "minutes",
+      "days": "1",
+      "timezone": ""
+    }
+  },
+  {
+    "case": "One-shot schedule consumed and reported dispatched after failure result",
+    "observed": {
+      "scheduler_return": true,
+      "enabled": false,
+      "next_run": null
+    }
+  },
+  {
+    "case": "Delivered command starves next queued command",
+    "observed": {
+      "statuses": [
+        "delivered",
+        "queued"
+      ],
+      "worker_deliveries": 1
+    }
+  },
+  {
+    "case": "Idle timer without response never auto-pauses",
+    "observed": {
+      "running": true,
+      "hours": 72.0
+    }
+  }
+]

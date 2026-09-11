@@ -43,12 +43,45 @@ def _center_dialog_position(
     return int(screen_x) + x_offset, int(screen_y) + y_offset
 
 
+class _OraclePositionedMessageBox(QtWidgets.QMessageBox):
+    """A single-presentation message box positioned after its native show event."""
+
+    def __init__(self, position_callback):
+        super().__init__(None)
+        self._position_callback = position_callback
+
+    def _reposition_if_visible(self) -> None:
+        if not self.isVisible():
+            return
+        self._position_callback(self)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._position_callback(self)
+        QTimer.singleShot(0, self._reposition_if_visible)
+        QTimer.singleShot(100, self._reposition_if_visible)
+
+
 class LifecycleMixin:
     """Restart and exit handling for OracleWindow."""
 
     def _oracle_target_screen(self):
         """Return the screen containing the oracle's current/last geometry."""
         app = QApplication.instance()
+        try:
+            oracle_geometry = self.frameGeometry()
+            screens = app.screens() if app is not None else []
+            overlap = []
+            for screen in screens:
+                intersection = screen.geometry().intersected(oracle_geometry)
+                area = max(0, intersection.width()) * max(0, intersection.height())
+                overlap.append((area, screen))
+            if overlap:
+                area, target_screen = max(overlap, key=lambda row: row[0])
+                if area > 0:
+                    return target_screen
+        except Exception:
+            pass
         try:
             center = self.frameGeometry().center()
             target_screen = QApplication.screenAt(center)
@@ -75,23 +108,21 @@ class LifecycleMixin:
             return None
 
     def _position_dialog_on_oracle_screen(self, dialog: QtWidgets.QDialog) -> None:
-        """Center a dialog on the same screen as the oracle window."""
+        """Center a dialog on the screen containing the oracle window."""
         try:
             target_screen = self._oracle_target_screen()
             if target_screen is None:
                 return
 
             geom = target_screen.availableGeometry()
-            # Ensure the dialog has a real size before centering.
             dialog.adjustSize()
             if dialog.windowHandle() is not None:
                 dialog.windowHandle().setScreen(target_screen)
-            dialog.move(
-                *_center_dialog_position(
-                    screen_geometry=(geom.x(), geom.y(), geom.width(), geom.height()),
-                    dialog_size=(dialog.width(), dialog.height()),
-                )
+            position = _center_dialog_position(
+                screen_geometry=(geom.x(), geom.y(), geom.width(), geom.height()),
+                dialog_size=(dialog.width(), dialog.height()),
             )
+            dialog.move(*position)
         except Exception as e:
             logger.debug("[EXIT] Failed positioning quit dialog on oracle screen: %s", e)
 
@@ -178,7 +209,7 @@ class LifecycleMixin:
 
     def exit_app(self, confirm: bool = True):
         if confirm:
-            msg = QtWidgets.QMessageBox(self)
+            msg = _OraclePositionedMessageBox(self._position_dialog_on_oracle_screen)
             msg.setWindowTitle("Quit")
             msg.setText("Quit DecisionsAI?")
             msg.setIcon(QtWidgets.QMessageBox.Icon.NoIcon)
@@ -199,7 +230,8 @@ class LifecycleMixin:
                 | QtWidgets.QMessageBox.StandardButton.No
             )
             msg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
-            self._keep_dialog_on_oracle_screen(msg)
+            msg.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+            msg.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
             if msg.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
                 return
 

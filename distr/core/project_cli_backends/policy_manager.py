@@ -137,6 +137,7 @@ def _counts_as_model_health_failure(error: str) -> bool:
         "unauthorized",
         "authentication required",
         "add credits",
+        "credit balance",
         "rate limit",
         "quota",
         "insufficient credit",
@@ -366,6 +367,76 @@ def _discover_routes(settings: dict[str, Any], *, complexity: str) -> list[dict[
     )
 
 
+def _ranked_free_routes(settings: dict[str, Any], *, complexity: str = "high") -> list[dict[str, Any]]:
+    """Rank free, healthy coding routes using the live provider leaderboard."""
+    routes = [
+        dict(route)
+        for route in _discover_routes(settings, complexity=complexity)
+        if route.get("free") or route.get("local")
+    ]
+    return sorted(
+        routes,
+        key=lambda route: (
+            1 if route.get("certification_status") == "certified" else 0,
+            _route_strength(route),
+        ),
+        reverse=True,
+    )
+
+
+def refresh_global_auto_model_policy() -> dict[str, Any]:
+    """Select the strongest currently usable free route on every app launch.
+
+    Auto is deliberately free-only. The primary comes from the live ranked
+    catalogue, and the fallback prefers another provider so a provider-wide
+    outage or quota failure does not repeat on the same service.
+    """
+    from distr.core.project_cli_backends.provider_preflight import probe_openrouter_model_readiness
+    from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+    settings = load_settings_from_db()
+    ranked = _ranked_free_routes(settings, complexity="high")
+    ready: list[dict[str, Any]] = []
+    for route in ranked:
+        provider = str(route.get("model_provider") or "").strip().lower()
+        if provider == "openrouter":
+            check = probe_openrouter_model_readiness(
+                model=str(route.get("model") or ""),
+                api_key=str(settings.get("openrouter_key") or ""),
+                timeout_seconds=5.0,
+            )
+            if check.ready is not True:
+                continue
+        ready.append(route)
+    if not ready:
+        raise RuntimeError("Auto could not find a ready free coding model.")
+
+    primary = dict(ready[0])
+    primary_provider = str(primary.get("model_provider") or "").strip().lower()
+    fallback = next(
+        (
+            dict(route)
+            for route in ready[1:]
+            if str(route.get("model_provider") or "").strip().lower() != primary_provider
+        ),
+        dict(ready[1]) if len(ready) > 1 else {},
+    )
+    updates: dict[str, Any] = {}
+    for level in LEVELS:
+        updates[f"project_cli_{level}_backend"] = str(primary.get("backend") or "pi")
+        updates[f"project_cli_{level}_model"] = str(primary.get("model") or "")
+        updates[f"project_cli_{level}_model_provider"] = primary_provider
+        updates[f"project_cli_{level}_fallback_backend"] = str(fallback.get("backend") or "")
+        updates[f"project_cli_{level}_fallback_model"] = str(fallback.get("model") or "")
+    save_settings_to_db(updates)
+    return {
+        "primary": primary,
+        "fallback": fallback,
+        "candidate_count": len(ranked),
+        "ready_count": len(ready),
+    }
+
+
 def _automatic_level_routes(
     settings: dict[str, Any],
     preference: str,
@@ -389,7 +460,12 @@ def _automatic_level_routes(
     elif preference == "balanced":
         levels = {"low": economical or codex, "medium": codex, "high": codex}
     else:
-        levels = {"low": economical or codex, "medium": strongest_free or codex, "high": codex}
+        selected = strongest_free or economical
+        levels = {
+            "low": selected or codex,
+            "medium": selected or codex,
+            "high": selected or codex,
+        }
     return {level: dict(route) for level, route in levels.items()}, candidates
 
 

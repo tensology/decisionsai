@@ -1,0 +1,34 @@
+<section class="development-workspace incoming-workspace hidden" id="incoming-workspace" aria-label="Incoming communications">
+                <div class="scheduled-workspace-inner">
+                    <div class="incoming-layout">
+                        <nav class="incoming-folder-tabs" role="tablist" aria-label="Incoming folders" aria-orientation="vertical">
+                            <button type="button" class="active" id="incoming-folder-whatsapp" data-incoming-filter="whatsapp" role="tab" aria-selected="true" aria-controls="incoming-panel-whatsapp"><span aria-hidden="true">◫</span><strong>WhatsApp</strong><small id="incoming-whatsapp-count">0</small></button>
+                            <button type="button" id="incoming-folder-gmail" data-incoming-filter="gmail" role="tab" aria-selected="false" aria-controls="incoming-panel-gmail"><span aria-hidden="true">✉</span><strong>Gmail</strong><small id="incoming-gmail-count">0</small></button>
+                            <button type="button" id="incoming-folder-mailshot" data-incoming-filter="mailshot" role="tab" aria-selected="false" aria-controls="incoming-panel-mailshot"><span aria-hidden="true">✉</span><strong>Mailshot</strong><small id="incoming-mailshot-count">0</small></button>
+                        </nav>
+                        <div class="incoming-folder-containers">
+                            <section class="incoming-folder-panel" id="incoming-panel-whatsapp" role="tabpanel" aria-labelledby="incoming-folder-whatsapp">
+                                <header class="incoming-folder-header"><div><h2>WhatsApp</h2><p>Linked work first, followed by the rest of your conversations.</p></div></header>
+                                <div class="incoming-whatsapp-layout">
+                                    <div class="incoming-list" id="incoming-list" aria-label="WhatsApp conversations" aria-live="polite"></div>
+                                    <article class="incoming-whatsapp-reader" id="incoming-whatsapp-reader" aria-live="polite"></article>
+                                </div>
+                            </section>
+                            <section class="incoming-folder-panel hidden" id="incoming-panel-gmail" role="tabpanel" aria-labelledby="incoming-folder-gmail">
+                                <header class="incoming-folder-header"><div><h2>Gmail</h2><p>Inbox threads. Select a thread to open and read its messages.</p></div></header>
+                                <div class="incoming-gmail-layout">
+                                    <div class="incoming-gmail-list" id="incoming-gmail-list" aria-label="Gmail inbox threads" aria-live="polite"></div>
+                                    <article class="incoming-gmail-reader" id="incoming-gmail-reader" aria-live="polite"></article>
+                                </div>
+                            </section>
+                            <section class="incoming-folder-panel hidden" id="incoming-panel-mailshot" role="tabpanel" aria-labelledby="incoming-folder-mailshot">
+                                <header class="incoming-folder-header"><div><h2>Mailshot</h2><p>Tensology mail. Select a thread to open and read its messages.</p></div></header>
+                                <div class="incoming-gmail-layout">
+                                    <div class="incoming-gmail-list" id="incoming-mailshot-list" aria-label="Tensology Mailshot inbox" aria-live="polite"></div>
+                                    <article class="incoming-gmail-reader" id="incoming-mailshot-reader" aria-live="polite"></article>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+                </div>
+            </section>

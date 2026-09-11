@@ -1,0 +1,40 @@
+<dialog class="studio-dialog kanban-ticket-dialog" id="kanban-ticket-dialog">
+        <form method="dialog" id="kanban-ticket-form">
+            <header><div><span class="hidden" id="kanban-ticket-provider"></span><h2 id="kanban-ticket-heading">Ticket details</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close ticket details">×</button></header>
+            <input id="kanban-ticket-id" type="hidden">
+            <div class="kanban-ticket-tabs" id="kanban-ticket-tabs" role="tablist" aria-label="Ticket content">
+                <button type="button" id="kanban-ticket-details-tab" role="tab" aria-selected="true" aria-controls="kanban-ticket-details-panel">Details</button>
+                <button type="button" id="kanban-ticket-notes-tab" role="tab" aria-selected="false" aria-controls="kanban-ticket-notes-panel">Notes</button>
+                <button type="button" id="kanban-ticket-attachments-tab" role="tab" aria-selected="false" aria-controls="kanban-ticket-attachments-panel">Links &amp; files <span id="kanban-ticket-attachment-count"></span></button>
+                <button type="button" id="kanban-ticket-todos-tab" role="tab" aria-selected="false" aria-controls="kanban-ticket-todos-panel">To-do <span id="kanban-ticket-todo-count"></span></button>
+            </div>
+            <div class="kanban-ticket-panels">
+                <section class="kanban-ticket-panel" id="kanban-ticket-details-panel" role="tabpanel" aria-labelledby="kanban-ticket-details-tab">
+                    <div class="kanban-ticket-title-row"><label>Title<input id="kanban-ticket-title" type="text" autocomplete="off" required></label><label id="kanban-ticket-complexity-field">Complexity<select id="kanban-ticket-complexity"><option value="trivial">Trivial</option><option value="simple">Simple</option><option value="moderate">Moderate</option><option value="complex">Complex</option><option value="very_complex">Very complex</option></select></label></div>
+                    <label>Description<textarea id="kanban-ticket-description" rows="7"></textarea></label>
+                    <select class="hidden" id="kanban-ticket-lane" aria-hidden="true" tabindex="-1"></select>
+                    <select class="hidden" id="kanban-ticket-priority" aria-hidden="true" tabindex="-1"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select>
+                    <div class="kanban-ticket-readonly hidden" id="kanban-ticket-readonly">External ticket details are managed by the connected provider. You can move the ticket here or open its source.</div>
+                </section>
+                <section class="kanban-ticket-panel" id="kanban-ticket-notes-panel" role="tabpanel" aria-labelledby="kanban-ticket-notes-tab" hidden>
+                    <label>Context notes<textarea id="kanban-ticket-context-notes" rows="10" placeholder="Add constraints, decisions, and context for this ticket"></textarea></label>
+                    <p class="kanban-ticket-panel-help">These notes are included when the ticket is handed to an agent.</p>
+                </section>
+                <section class="kanban-ticket-panel kanban-ticket-attachments-panel" id="kanban-ticket-attachments-panel" role="tabpanel" aria-labelledby="kanban-ticket-attachments-tab" hidden>
+                    <div class="kanban-ticket-material" id="kanban-ticket-material">
+                        <div class="kanban-ticket-material-heading"><strong>Links</strong><span id="kanban-ticket-comment-count"></span></div>
+                        <div class="kanban-ticket-links" id="kanban-ticket-links"></div>
+                        <div class="kanban-ticket-inline-form" id="kanban-ticket-link-form"><input id="kanban-ticket-link-title" type="text" placeholder="Link title" aria-label="Link title"><input id="kanban-ticket-link-url" type="url" placeholder="https://" aria-label="Link URL"><button type="button" class="secondary-button" id="kanban-ticket-add-link">Add</button></div>
+                        <div class="kanban-ticket-material-heading"><strong>Files</strong><button type="button" class="secondary-button" id="kanban-ticket-upload">Upload</button></div>
+                        <input class="hidden" id="kanban-ticket-file-input" type="file" multiple>
+                        <div class="kanban-ticket-attachments" id="kanban-ticket-attachments"></div>
+                    </div>
+                </section>
+                <section class="kanban-ticket-panel" id="kanban-ticket-todos-panel" role="tabpanel" aria-labelledby="kanban-ticket-todos-tab" hidden>
+                    <div class="kanban-ticket-todos" id="kanban-ticket-todos"></div>
+                    <div class="kanban-ticket-inline-form kanban-ticket-todo-form"><input id="kanban-ticket-todo-input" type="text" placeholder="Add a to-do item" aria-label="New to-do item"><button type="button" class="secondary-button" id="kanban-ticket-add-todo">Add</button></div>
+                </section>
+            </div>
+            <menu><button type="button" class="danger-text-button hidden" id="kanban-ticket-delete">Delete</button><a class="secondary-button hidden" id="kanban-ticket-source-link" href="#" target="_blank" rel="noopener">Open source</a><button type="button" class="secondary-button hidden" id="kanban-ticket-run-workflow">Run workflow</button><button type="button" class="secondary-button hidden" id="kanban-ticket-run-agent">Run with Codex</button><span class="menu-spacer"></span><button type="button" class="primary-button" id="kanban-ticket-create-thread">Create thread</button><button type="submit" value="default" class="primary-button" id="kanban-ticket-save">Save ticket</button></menu>
+        </form>
+    </dialog>

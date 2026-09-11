@@ -170,7 +170,12 @@ class ExecuteCodeTool(BaseTool):
                         settings = session.query(Settings).first()
                         active_chat_id = None
                         if settings:
-                            active_chat_id = getattr(settings, "agent_current_chat_id", None) or getattr(settings, "last_chat_id", None)
+                            from distr.core.workflow.development_threads import resolve_conversational_chat_id
+                            active_chat_id = resolve_conversational_chat_id(
+                                session,
+                                getattr(settings, "agent_current_chat_id", None),
+                                getattr(settings, "last_chat_id", None),
+                            )
                         if active_chat_id is not None:
                             chat_bucket = chat_files_index.get(str(active_chat_id), {})
                             if isinstance(chat_bucket, dict) and chat_bucket.get("files"):
@@ -832,4 +837,3 @@ Corrected code:"""
     async def _arun(self, code: str = "", description: Optional[str] = None, **kwargs) -> str:
         """Async version of _run."""
         return self._run(code=code, description=description, **kwargs)
-

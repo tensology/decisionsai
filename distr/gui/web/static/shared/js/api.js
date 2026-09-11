@@ -108,6 +108,7 @@ function showSnackbar(message, type, opts) {
         var confirmLabel = opts.confirmLabel || "Confirm";
         var cancelLabel = opts.cancelLabel || "Cancel";
         var danger = !!opts.danger;
+        var checkbox = opts.checkbox && typeof opts.checkbox === "object" ? opts.checkbox : null;
         var onConfirm = typeof opts.onConfirm === "function" ? opts.onConfirm : null;
         var onCancel = typeof opts.onCancel === "function" ? opts.onCancel : null;
         var previousActive = document.activeElement;
@@ -126,6 +127,7 @@ function showSnackbar(message, type, opts) {
                 '<div class="decisions-confirm-modal">' +
                     '<h3 id="decisions-confirm-title" class="decisions-confirm-title">' + esc(title) + '</h3>' +
                     '<p class="decisions-confirm-message">' + esc(message) + '</p>' +
+                    (checkbox ? '<label class="decisions-confirm-option"><input type="checkbox" class="decisions-confirm-checkbox"' + (checkbox.checked !== false ? ' checked' : '') + '><span>' + esc(checkbox.label || "Include related item") + '</span></label>' : '') +
                     '<div class="decisions-confirm-hotkeys" aria-label="Keyboard shortcuts">' +
                         '<kbd>Enter</kbd><span>confirm</span><kbd>Esc</kbd><span>cancel</span>' +
                     '</div>' +
@@ -139,6 +141,7 @@ function showSnackbar(message, type, opts) {
 
             var okBtn = overlay.querySelector(".decisions-confirm-ok");
             var cancelBtn = overlay.querySelector(".decisions-confirm-cancel");
+            var checkboxInput = overlay.querySelector(".decisions-confirm-checkbox");
             var settled = false;
 
             function close(result) {
@@ -154,7 +157,7 @@ function showSnackbar(message, type, opts) {
                 } else if (onCancel) {
                     onCancel();
                 }
-                resolve(!!result);
+                resolve(checkbox ? { confirmed: !!result, checked: !!(checkboxInput && checkboxInput.checked) } : !!result);
             }
 
             function onKeyDown(evt) {

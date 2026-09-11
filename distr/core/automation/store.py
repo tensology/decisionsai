@@ -96,7 +96,12 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
             "interval": schedule.get("interval") or 30,
             "interval_unit": schedule.get("interval_unit") or "minutes",
         }
+    if kind == "weekdays":
+        kind = "weekly"
+        schedule = {**schedule, "kind": "weekly", "days": "1,2,3,4,5"}
     if kind not in {"once", "interval", "15min", "30min", "hourly", "daily", "weekly", "monthly"}:
+        if strict:
+            raise AutomationStoreError(f"Unsupported schedule kind: {kind or 'empty'}")
         kind = "daily"
     time_value = str(schedule.get("time") or "09:00")
     if kind in {"daily", "weekly", "monthly"}:
@@ -113,11 +118,12 @@ def normalize_schedule(schedule: dict[str, Any] | None, *, strict: bool = False)
         try:
             from distr.core.workflow.scheduler import normalize_once_run_at_storage, parse_once_run_at_as_utc
 
-            parsed = parse_once_run_at_as_utc(run_at)
+            timezone_name = str(schedule.get("timezone") or "").strip()
+            parsed = parse_once_run_at_as_utc(run_at, timezone_name)
             if not parsed:
                 raise ValueError(f"Invalid run-at time: {run_at!r}")
-            run_at = normalize_once_run_at_storage(run_at)
-        except ValueError as exc:
+            run_at = normalize_once_run_at_storage(run_at, timezone_name)
+        except (ValueError, KeyError) as exc:
             raise AutomationStoreError(str(exc)) from exc
     interval_value = 15
     interval_unit = "minutes"
@@ -213,8 +219,17 @@ def serialize_automation(row: Automation) -> dict[str, Any]:
     schedule = schedule_dict_from_row(row)
     run_at_display = schedule.get("run_at") or ""
     if schedule.get("kind") == "once" and run_at_display:
-        run_at_display = once_run_at_for_datetime_local_input(run_at_display)
+        run_at_display = once_run_at_for_datetime_local_input(run_at_display, schedule.get("timezone") or "")
     action_config = json_config(row.action_config)
+    # Keep old clients working while exposing typed ownership directly.
+    if row.board_id is not None:
+        action_config["linked_board_id"] = int(row.board_id)
+    if row.project_id is not None:
+        action_config["linked_project_id"] = int(row.project_id)
+    if row.thread_chat_id is not None:
+        action_config["development_chat_id"] = int(row.thread_chat_id)
+    if row.linked_workflow_id is not None:
+        action_config["development_workflow_id"] = int(row.linked_workflow_id)
     return {
         "id": public_id(row.id),
         "record_id": row.id,
@@ -224,6 +239,10 @@ def serialize_automation(row: Automation) -> dict[str, Any]:
         "automation_type": row.automation_type or "scheduled_instruction",
         "preset_id": str(row.preset_id or "").strip(),
         "action_config": dict(action_config),
+        "linked_board_id": row.board_id,
+        "linked_project_id": row.project_id,
+        "thread_chat_id": row.thread_chat_id,
+        "optional_workflow_id": row.linked_workflow_id,
         "status": row.status or "active",
         "instruction": (row.instruction or "") or "",
         "schedule": {
@@ -270,7 +289,7 @@ def serialize_legacy_workflow(workflow: AutoWorkflow) -> dict[str, Any]:
 
     run_at_display = schedule.get("run_at") or ""
     if schedule.get("kind") == "once" and run_at_display:
-        run_at_display = once_run_at_for_datetime_local_input(run_at_display)
+        run_at_display = once_run_at_for_datetime_local_input(run_at_display, schedule.get("timezone") or "")
     return {
         "id": legacy_public_id(workflow.id),
         "record_id": None,
@@ -355,6 +374,7 @@ def list_due_automations() -> list[dict[str, Any]]:
             session.query(Automation)
             .filter(
                 Automation.schedule_enabled == True,  # noqa: E712
+                Automation.automation_type != "channel_intake",
                 Automation.next_run_at.isnot(None),
                 Automation.next_run_at <= now,
             )
@@ -362,6 +382,7 @@ def list_due_automations() -> list[dict[str, Any]]:
         )
         due: list[dict[str, Any]] = []
         for row in rows:
+            _sync_development_automation_runs(session, row.id)
             active = (
                 session.query(AutomationRun)
                 .filter(
@@ -403,6 +424,10 @@ def create_automation(
     preset_id: str,
     schedule: dict[str, Any],
     action_config: dict[str, Any],
+    board_id: int | None = None,
+    project_id: int | None = None,
+    thread_chat_id: int | None = None,
+    linked_workflow_id: int | None = None,
 ) -> dict[str, Any]:
     schedule = normalize_schedule(schedule, strict=True)
     now = utc_now()
@@ -415,10 +440,17 @@ def create_automation(
             preset_id=str(preset_id or "").strip(),
             instruction=instruction or "",
             action_config=json.dumps(action_config or {}, ensure_ascii=False, default=str),
+            board_id=board_id,
+            project_id=project_id,
+            thread_chat_id=thread_chat_id,
+            linked_workflow_id=linked_workflow_id,
             created_date=now,
             modified_date=now,
         )
         apply_schedule_to_row(row, schedule)
+        if row.automation_type == "channel_intake":
+            row.schedule_enabled = False
+            row.next_run_at = None
         session.add(row)
         session.commit()
         session.refresh(row)
@@ -446,11 +478,24 @@ def update_automation(public: str | int, **fields: Any) -> dict[str, Any]:
             db_row.action_config = json.dumps(fields["action_config"], ensure_ascii=False, default=str)
         if "automation_type" in fields and fields["automation_type"]:
             db_row.automation_type = fields["automation_type"]
+        ownership_fields = {
+            "linked_board_id": "board_id",
+            "linked_project_id": "project_id",
+            "thread_chat_id": "thread_chat_id",
+            "optional_workflow_id": "linked_workflow_id",
+        }
+        for public_name, column_name in ownership_fields.items():
+            if public_name in fields:
+                value = fields[public_name]
+                setattr(db_row, column_name, int(value) if value not in (None, "") else None)
         schedule = schedule_dict_from_row(db_row)
         if "schedule" in fields and isinstance(fields["schedule"], dict):
             schedule = normalize_schedule(fields["schedule"], strict=True)
         if "schedule" in fields or "status" in fields:
             apply_schedule_to_row(db_row, schedule)
+        if db_row.automation_type == "channel_intake":
+            db_row.schedule_enabled = False
+            db_row.next_run_at = None
         db_row.modified_date = utc_now()
         session.commit()
         session.refresh(db_row)
@@ -465,14 +510,79 @@ def delete_automation(public: str | int) -> bool:
         return False
     if kind != "auto":
         return False
+    thread_chat_id: int | None = None
+    deleted_owned_thread = False
     with get_session() as session:
         db_row = session.query(Automation).filter(Automation.id == raw_id).first()
         if not db_row:
             return False
+        thread_chat_id = int(db_row.thread_chat_id) if db_row.thread_chat_id else None
         session.delete(db_row)
+        if thread_chat_id is not None:
+            from distr.core.chat import cleanup_chat_dependencies
+            from distr.core.db import Chat
+            from distr.core.db.workflow import DevelopmentWorkItem
+
+            owned_item = session.query(DevelopmentWorkItem).filter(
+                DevelopmentWorkItem.chat_id == thread_chat_id,
+                DevelopmentWorkItem.source_type == "automation",
+                DevelopmentWorkItem.identity_key == f"source:automation:{public_id(int(db_row.id)).lower()}",
+            ).first()
+            if owned_item is None:
+                thread_chat_id = None
+            else:
+                deleted_owned_thread = True
+
+            if thread_chat_id is not None:
+                cleanup_chat_dependencies(
+                    session,
+                    thread_chat_id,
+                    delete_owned_ticket=False,
+                    delete_owned_workflows=False,
+                )
+                session.query(Chat).filter(Chat.parent_id == thread_chat_id).delete(synchronize_session=False)
+                root = session.get(Chat, thread_chat_id)
+                if root is not None:
+                    session.delete(root)
         session.commit()
-        notify_automation_data_changed()
-        return True
+    if deleted_owned_thread and thread_chat_id is not None:
+        from distr.core.chat import remove_chat_transcript_audit_events
+
+        remove_chat_transcript_audit_events(thread_chat_id)
+    notify_automation_data_changed()
+    return True
+
+
+def delete_all_automations() -> dict[str, int]:
+    """Delete every first-class and legacy automation definition."""
+    with get_session() as session:
+        automation_ids = [row[0] for row in session.query(Automation.id).all()]
+        legacy_workflow_ids = [
+            workflow.id
+            for workflow in (
+                session.query(AutoWorkflow)
+                .filter(AutoWorkflow.workflow_type == "scheduled")
+                .all()
+            )
+            if is_automation_workflow(workflow)
+        ]
+
+    deleted_automations = sum(
+        1 for automation_id in automation_ids if delete_automation(public_id(automation_id))
+    )
+    deleted_legacy = 0
+    if legacy_workflow_ids:
+        from distr.core.workflow.service import delete_workflow
+
+        deleted_legacy = sum(
+            1 for workflow_id in legacy_workflow_ids if delete_workflow(workflow_id)
+        )
+    notify_automation_data_changed()
+    return {
+        "deleted": deleted_automations + deleted_legacy,
+        "automations": deleted_automations,
+        "legacy_workflows": deleted_legacy,
+    }
 
 
 def advance_automation_next_run(record_id: int) -> None:
@@ -518,6 +628,11 @@ def record_automation_run(
         "is_workflow_attached": bool(automation.get("is_workflow_attached")),
         "orchestration_event_ids": event_ids or [],
         "prompt_preview": (prompt or "")[:1500],
+        "invocation_context": (
+            dict(automation.get("_invocation_context") or {})
+            if isinstance(automation.get("_invocation_context"), dict)
+            else {}
+        ),
         **(schedule_metadata or {}),
     }
     if tool_result:
@@ -561,6 +676,54 @@ def record_automation_run(
         return run.id
 
 
+def _sync_development_automation_runs(session, automation_id: int) -> None:
+    """Project Development completion into Automation run history."""
+    active_rows = (
+        session.query(AutomationRun)
+        .filter(
+            AutomationRun.automation_id == int(automation_id),
+            AutomationRun.status.in_(["running", "waiting", "dispatched", "initializing", "queued"]),
+        )
+        .all()
+    )
+    terminal = {"completed", "failed", "cancelled", "stopped", "skipped"}
+    for row in active_rows:
+        data = json_config(row.run_data)
+        if data.get("execution_mode") != "development_harness":
+            continue
+        next_status = ""
+        summary = ""
+        development_run_id = data.get("development_run_id")
+        workflow_id = data.get("development_workflow_id")
+        if workflow_id is not None and development_run_id is not None:
+            try:
+                linked = session.get(AutoWorkflowRun, int(development_run_id))
+            except (TypeError, ValueError):
+                linked = None
+            if linked is not None:
+                next_status = str(linked.status or "").lower()
+                linked_data = json_config(linked.run_data)
+                summary = str(linked_data.get("summary") or linked_data.get("message") or "").strip()
+        elif data.get("chat_id"):
+            try:
+                from distr.core.workflow.development_harness import development_execution_state
+
+                execution = development_execution_state(int(data["chat_id"]))
+            except Exception:
+                execution = {}
+            if str(execution.get("job_id") or "") == str(development_run_id or ""):
+                next_status = str(execution.get("status") or "").lower()
+                summary = str(execution.get("summary") or execution.get("error") or "").strip()
+        if next_status not in terminal:
+            continue
+        row.status = "cancelled" if next_status == "stopped" else next_status
+        row.completed_at = utc_now()
+        if summary:
+            data["summary"] = summary
+            data["message"] = summary
+            row.run_data = json.dumps(data, ensure_ascii=False, default=str)
+
+
 def list_automation_runs(public: str | int, *, limit: int = 50) -> list[dict[str, Any]]:
     automation = get_automation(public)
     if not automation:
@@ -569,6 +732,8 @@ def list_automation_runs(public: str | int, *, limit: int = 50) -> list[dict[str
     record_id = automation.get("record_id")
     if record_id:
         with get_session() as session:
+            _sync_development_automation_runs(session, int(record_id))
+            session.flush()
             rows = (
                 session.query(AutomationRun)
                 .filter(AutomationRun.automation_id == int(record_id))
@@ -595,6 +760,8 @@ def list_automation_runs(public: str | int, *, limit: int = 50) -> list[dict[str
                         "orchestration_event_ids": data.get("orchestration_event_ids") or [],
                         "retry_count": int(data.get("retry_count") or 0),
                         "manual": bool(data.get("manual")),
+                        "chat_id": data.get("chat_id"),
+                        "execution_mode": data.get("execution_mode"),
                     }
                 )
         return runs
@@ -629,6 +796,8 @@ def list_automation_runs(public: str | int, *, limit: int = 50) -> list[dict[str
                     "orchestration_event_ids": data.get("orchestration_event_ids") or [],
                     "retry_count": int(data.get("retry_count") or 0),
                     "manual": bool(data.get("manual")),
+                    "chat_id": data.get("chat_id"),
+                    "execution_mode": data.get("execution_mode"),
                 }
             )
     return runs
@@ -659,6 +828,7 @@ def migrate_legacy_automation_workflows() -> int:
                 continue
             marker = json_config(workflow.context_rules)
             schedule = normalize_schedule(marker.get("schedule") if isinstance(marker.get("schedule"), dict) else {})
+            action_config = marker.get("action_config") if isinstance(marker.get("action_config"), dict) else {}
             step = _first_instruction_step(workflow)
             now = utc_now()
             row = Automation(
@@ -669,10 +839,14 @@ def migrate_legacy_automation_workflows() -> int:
                 preset_id=str(marker.get("preset_id") or "").strip(),
                 instruction=(step.instruction if step else "") or "",
                 action_config=json.dumps(
-                    marker.get("action_config") if isinstance(marker.get("action_config"), dict) else {},
+                    action_config,
                     ensure_ascii=False,
                     default=str,
                 ),
+                board_id=action_config.get("linked_board_id"),
+                project_id=action_config.get("linked_project_id"),
+                thread_chat_id=action_config.get("development_chat_id"),
+                linked_workflow_id=action_config.get("development_workflow_id"),
                 schedule_enabled=bool(workflow.schedule_enabled),
                 schedule_preset=workflow.schedule_preset,
                 schedule_time=workflow.schedule_time,

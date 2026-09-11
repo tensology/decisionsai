@@ -16,11 +16,13 @@ def test_shared_api_exposes_consistent_confirm_modal_contract():
 
     assert base.index('/static/shared/css/base.css') < base.index("{% block head_styles %}")
     assert base.index('/static/shared/css/decisions_datetime.css') < base.index("{% block head_styles %}")
-    assert '<script src="/static/shared/js/api.js"></script>' in base
+    assert '/static/shared/js/api.js' in base
     assert "function showConfirm(opts)" in api_js
     assert "decisions-confirm-modal" in api_js
     assert "decisions-confirm-ok" in api_js
     assert "decisions-confirm-cancel" in api_js
+    assert "decisions-confirm-option" in api_js
+    assert "checkboxInput.checked" in api_js
     assert 'evt.key === "Escape"' in api_js
     assert 'evt.key === "Enter"' in api_js
     assert "previousActive = document.activeElement" in api_js
@@ -30,6 +32,7 @@ def test_shared_api_exposes_consistent_confirm_modal_contract():
     assert ".decisions-confirm-overlay" in css
     assert ".decisions-confirm-hotkeys" in css
     assert ".decisions-confirm-ok.is-danger" in css
+    assert ".decisions-confirm-option" in css
 
 
 def test_chat_page_cannot_override_shared_modal_styles():

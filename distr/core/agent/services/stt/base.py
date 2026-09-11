@@ -110,6 +110,9 @@ class BaseSTTService(STTService):
         # that the NLMS filter couldn't fully cancel. We suppress those false
         # interruptions unless the mic energy is high enough to indicate real speech.
         self._aec_ref_buf = aec_ref_buf
+        self._aec_filter = None
+        self._audio_timing = None
+        self._echo_dominance_history: deque[bool | None] = deque(maxlen=15)
 
         # --- Adaptive echo floor tracking ---
         # Instead of a fixed RMS threshold, we track the actual echo residual
@@ -352,6 +355,8 @@ class BaseSTTService(STTService):
                 )
                 if self._is_dictating:
                     self._schedule_dictation_empty_transcription_unblock()
+                else:
+                    self._schedule_agent_empty_transcription_feedback()
 
     def _merge_pre_buffer_into_ptt_on_release(self):
         """Fold rolling pre-buffer frames collected during dictation/PTT hand-off."""
@@ -440,6 +445,31 @@ class BaseSTTService(STTService):
         except Exception as exc:
             logger.warning("STT: Could not schedule dictation unblock: %s", exc)
 
+    async def _emit_empty_ptt_transcription(self, direction):
+        """Terminate an agent PTT capture that produced no usable transcript."""
+        try:
+            frame = TranscriptionFrame(text="", user_id="", timestamp=time.time())
+            await self.push_frame(frame, direction)
+            logger.info("STT: Sent empty TranscriptionFrame for unsuccessful PTT capture")
+        except Exception as exc:
+            logger.warning("STT: Could not emit empty PTT transcription: %s", exc)
+
+    def _schedule_agent_empty_transcription_feedback(self):
+        """Send a terminal empty transcript when an agent PTT captured no audio."""
+        direction = self._pipeline_direction
+        loop = self._event_loop
+        if direction is None or loop is None or not getattr(loop, "is_running", lambda: False)():
+            logger.warning(
+                "STT: Empty PTT feedback skipped because the pipeline is not ready"
+            )
+            return
+        coro = self._emit_empty_ptt_transcription(direction)
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception as exc:
+            coro.close()
+            logger.warning("STT: Could not schedule empty PTT feedback: %s", exc)
+
     # ------------------------------------------------------------------
     # Interruption helper
     # ------------------------------------------------------------------
@@ -447,10 +477,48 @@ class BaseSTTService(STTService):
     async def _send_interruption(self, direction):
         """Push an InterruptionFrame downstream to kill current TTS/LLM."""
         try:
-            await self.push_frame(InterruptionFrame(), direction)
+            await self._push_marked_interruption(direction)
             logger.debug("STT: InterruptionFrame sent")
         except Exception as e:
             logger.error(f"Error sending InterruptionFrame: {e}", exc_info=True)
+
+    async def _push_marked_interruption(self, direction):
+        """Push a real barge-in while bypassing the output transport's stale-frame guard."""
+        output = getattr(self, "_audio_output_transport", None)
+        tts = getattr(self, "_tts_service", None)
+        if output is not None:
+            output._accept_bargein_interrupt = True
+        if tts is not None:
+            tts._accept_bargein_interrupt = True
+        try:
+            await self.push_frame(InterruptionFrame(), direction)
+        finally:
+            if output is not None:
+                output._accept_bargein_interrupt = False
+            if tts is not None:
+                tts._accept_bargein_interrupt = False
+
+    async def _push_bargein_interruption(self):
+        """Interrupt TTS and mark the frame as an intentional barge-in."""
+        # Continuous-mode interruption has two consumers: the pipeline and
+        # the desktop player. Close the player at the same moment as the
+        # interruption, rather than waiting for a later transport callback.
+        # The event handler deduplicates the provider/transport cleanup burst.
+        if (self._is_hands_free or self._is_dictating) and self._is_tts_playing():
+            self._notify_tts_interrupted()
+        output = getattr(self, "_audio_output_transport", None)
+        tts = getattr(self, "_tts_service", None)
+        if output is not None:
+            output._accept_bargein_interrupt = True
+        if tts is not None:
+            tts._accept_bargein_interrupt = True
+        try:
+            await self.push_interruption_task_frame_and_wait()
+        finally:
+            if output is not None:
+                output._accept_bargein_interrupt = False
+            if tts is not None:
+                tts._accept_bargein_interrupt = False
 
     # ------------------------------------------------------------------
     # Common frame-processing helpers  (called from subclass process_frame)
@@ -487,6 +555,11 @@ class BaseSTTService(STTService):
         if not isinstance(frame, InterruptionFrame):
             return False
         if self._is_hands_free or self._is_dictating:
+            if self._is_tts_playing():
+                # VAD or another processor may deliver the interruption
+                # directly, bypassing the speaking-started helper. Preserve
+                # the same player-close invariant for that path too.
+                self._notify_tts_interrupted()
             return False
         if self._ptt_active:
             # PTT sends its own InterruptionFrame — let it through
@@ -519,6 +592,125 @@ class BaseSTTService(STTService):
         )
         return threshold
 
+    def _is_reference_dominated(self) -> bool:
+        """Return whether the latest frame is strongly explained by TTS.
+
+        RMS alone cannot distinguish loud speaker echo from a person talking.
+        The AEC records the normalized reference correlation for the same
+        frame, so the gate can reject reference-dominated frames while leaving
+        double-talk frames available to the VAD.
+        """
+        if not self._is_tts_playing():
+            return False
+        aec_filter = getattr(self, "_aec_filter", None)
+        metrics = getattr(aec_filter, "last_metrics", {}) or {}
+        current = self._reference_dominance_from_metrics(metrics)
+        if current is False and self._is_measured_double_talk(metrics):
+            # A VAD SpeakingStartedFrame already represents sustained speech
+            # energy. Do not let earlier AEC warm-up frames turn a current,
+            # measured double-talk frame back into an echo classification.
+            return False
+        if current is not True:
+            recent = list(getattr(self, "_echo_dominance_history", ()))
+            # A single uncorrelated frame is not enough to call barge-in. If
+            # the latest three measured frames, including this frame, are all
+            # non-echo, the user has established sustained double-talk and
+            # should be allowed through even when earlier frames were echo.
+            sequence = recent + [current]
+            if len(sequence) >= 3 and sequence[-3:] == [False, False, False]:
+                return False
+            # Once playback has produced measured echo, keep the gate closed
+            # until the three-frame confirmed non-echo streak is complete.
+            # Unknown alignment is deliberately conservative here. It cannot
+            # approve an interruption while TTS is active.
+            if recent:
+                return True
+        return current is True
+
+    @staticmethod
+    def _reference_dominance_from_metrics(metrics: dict) -> bool | None:
+        correlation = metrics.get("reference_correlation")
+        reference_rms = float(metrics.get("reference_rms", 0.0) or 0.0)
+        input_rms = float(metrics.get("input_rms", 0.0) or 0.0)
+        residual_rms = float(metrics.get("residual_rms", 0.0) or 0.0)
+
+        # During the first few frames of a new utterance the adaptive filter
+        # may not have a stable correlation estimate yet. If the residual is
+        # several times larger than the known speaker reference and the raw
+        # input is at speech level, that is measured double-talk evidence, not
+        # an unknown echo frame. This keeps the initial user word interruptible
+        # while the temporal streak below still prevents a one-frame transient.
+        if (
+            correlation is not None
+            and float(correlation) < 0.35
+            and reference_rms > 0.0
+            and input_rms >= 0.12
+            and residual_rms >= reference_rms * 2.5
+        ):
+            return False
+
+        if correlation is None or float(correlation) < 0.35:
+            if (
+                reference_rms > 0.0
+                and input_rms >= 0.07
+                and residual_rms >= reference_rms * 1.35
+                and residual_rms <= reference_rms * 2.0
+            ):
+                return False
+            return None
+
+        # Correlation is evidence of a shared component, not proof that the
+        # whole frame is echo. Double-talk can remain correlated because the
+        # user's voice is mixed with the speaker signal. Only suppress when
+        # the measured speaker reference is also large enough to explain the
+        # microphone frame relative to the AEC residual.
+        if reference_rms <= 0.0 or input_rms <= 0.0:
+            # Preserve compatibility with lightweight test doubles and older
+            # filters that only exposed correlation.
+            return float(correlation) >= 0.7
+        return (
+            float(correlation) >= 0.45
+            and reference_rms >= residual_rms * 1.15
+            and reference_rms >= input_rms * 0.55
+        )
+
+    @staticmethod
+    def _is_measured_double_talk(metrics: dict) -> bool:
+        correlation = metrics.get("reference_correlation")
+        reference_rms = float(metrics.get("reference_rms", 0.0) or 0.0)
+        input_rms = float(metrics.get("input_rms", 0.0) or 0.0)
+        residual_rms = float(metrics.get("residual_rms", 0.0) or 0.0)
+        if correlation is None or reference_rms <= 0.0:
+            return False
+        correlation = float(correlation)
+        if correlation < 0.35:
+            return bool(
+                input_rms >= 0.07
+                and residual_rms >= reference_rms * 1.35
+                and residual_rms <= reference_rms * 2.0
+            )
+
+        # Double-talk can retain moderate correlation because both voices are
+        # present in the mic frame. In that band, require the mic to be above
+        # the reference while keeping the residual below the large, poorly
+        # cancelled echo spikes seen in the TTS-only room test.
+        return bool(
+            correlation < 0.60
+            and input_rms >= max(0.07, reference_rms * 1.35)
+            and residual_rms >= reference_rms * 1.15
+            and residual_rms <= reference_rms * 1.60
+        )
+
+    def _record_echo_frame_metrics(self) -> None:
+        """Keep a short history of measured echo dominance for VAD decisions."""
+        if not self._is_tts_playing():
+            self._echo_dominance_history.clear()
+            return
+        metrics = getattr(getattr(self, "_aec_filter", None), "last_metrics", {}) or {}
+        self._echo_dominance_history.append(
+            self._reference_dominance_from_metrics(metrics)
+        )
+
     def _update_echo_floor(self, chunk_rms: float):
         """Update the echo floor estimate with a new mic RMS sample.
 
@@ -545,6 +737,17 @@ class BaseSTTService(STTService):
             alpha = self._echo_floor_alpha
         self._echo_floor_rms = (1 - alpha) * self._echo_floor_rms + alpha * chunk_rms
 
+    def _turn_taking_metrics(self) -> dict[str, float]:
+        """Expose the raw and filtered levels used by the turn-taking gate."""
+        metrics = getattr(getattr(self, "_aec_filter", None), "last_metrics", {}) or {}
+        return {
+            "input_rms": float(metrics.get("input_rms", 0.0) or 0.0),
+            "residual_rms": float(metrics.get("residual_rms", 0.0) or 0.0),
+            "reference_rms": float(metrics.get("reference_rms", 0.0) or 0.0),
+            "reference_correlation": float(metrics.get("reference_correlation", 0.0) or 0.0),
+            "threshold": float(self._get_adaptive_threshold()),
+        }
+
     def _check_bargein_energy(self) -> bool:
         """Check if the pre-buffer audio has enough energy to be real speech.
 
@@ -570,6 +773,16 @@ class BaseSTTService(STTService):
             return False
 
         threshold = self._get_adaptive_threshold()
+
+        if self._is_reference_dominated():
+            m = self._turn_taking_metrics()
+            logger.info(
+                "STT: Barge-in suppressed as echo: mic=%.4f residual=%.4f tts_ref=%.4f "
+                "corr=%.3f threshold=%.4f",
+                m["input_rms"], m["residual_rms"], m["reference_rms"],
+                m["reference_correlation"], m["threshold"],
+            )
+            return False
 
         try:
             # Scan the pre-buffer from newest to oldest, counting consecutive
@@ -653,6 +866,10 @@ class BaseSTTService(STTService):
             chunk_f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             chunk_rms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
 
+            if self._is_reference_dominated():
+                self._bargein_consecutive_count = 0
+                return
+
             if chunk_rms >= threshold:
                 self._bargein_consecutive_count += 1
             else:
@@ -686,7 +903,7 @@ class BaseSTTService(STTService):
         await self._on_speaking_started(synthetic_frame, direction)
 
         logger.debug("STT: Deferred barge-in — triggering pipeline interruption")
-        await self.push_interruption_task_frame_and_wait()
+        await self._push_bargein_interruption()
 
         if self._cancel_welcome_callback:
             self._cancel_welcome_callback()
@@ -704,6 +921,24 @@ class BaseSTTService(STTService):
     # ------------------------------------------------------------------
     # Continuous-speech re-interruption
     # ------------------------------------------------------------------
+
+    def _notify_tts_interrupted(self) -> None:
+        """Close the desktop player immediately for VAD-driven cut-offs.
+
+        Push-to-talk interruption goes through the command handler, which
+        already emits this terminal event. Hands-free interruption originates
+        here, so it must publish the same event before the asynchronous
+        pipeline interruption is processed.
+        """
+        if self.event_queue is None:
+            return
+        try:
+            self.event_queue.put(
+                ("tts_stopped", {"duration": 0.0, "interrupted": True}),
+                block=False,
+            )
+        except Exception as exc:
+            logger.debug("STT: Could not notify player of interrupted TTS: %s", exc)
 
     async def _check_continuous_speech_interruption(self, audio_bytes, direction):
         """Re-interrupt if the user is still speaking when a new TTS response starts.
@@ -754,6 +989,20 @@ class BaseSTTService(STTService):
             chunk_f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             chunk_rms = float(np.sqrt(np.mean(chunk_f32 ** 2)))
 
+            # A new TTS response can arrive while the user-speaking flag from
+            # the previous turn is still true. Do not mistake that response's
+            # own audio for continued user speech.
+            if self._is_reference_dominated():
+                m = self._turn_taking_metrics()
+                logger.info(
+                    "STT: Continuous gate suppressed TTS echo: mic=%.4f residual=%.4f "
+                    "tts_ref=%.4f corr=%.3f threshold=%.4f",
+                    m["input_rms"], m["residual_rms"], m["reference_rms"],
+                    m["reference_correlation"], m["threshold"],
+                )
+                self._bargein_consecutive_count = 0
+                return
+
             if chunk_rms >= threshold:
                 self._bargein_consecutive_count += 1
             else:
@@ -768,7 +1017,8 @@ class BaseSTTService(STTService):
         logger.info("STT: User still speaking during new TTS — re-interrupting pipeline")
         self._tts_interrupted = True
         self._bargein_consecutive_count = 0
-        await self.push_interruption_task_frame_and_wait()
+        self._notify_tts_interrupted()
+        await self._push_bargein_interruption()
 
     # ------------------------------------------------------------------
     # SpeakingStarted / Stopped  (template-method pattern)
@@ -806,6 +1056,8 @@ class BaseSTTService(STTService):
             return True  # swallow the frame for now
 
         mode = "dictation" if self._is_dictating else "hands-free"
+        if self._audio_timing is not None:
+            self._audio_timing.mark("vad_started")
         pre_buf_ms = len(self._pre_buffer) * 20
         logger.debug(f"STT: User started speaking ({mode}), seeding {pre_buf_ms}ms pre-buffer")
 
@@ -828,7 +1080,8 @@ class BaseSTTService(STTService):
         logger.debug(f"STT: TTS playing check: {tts_playing} (ref_buf.is_active={self._aec_ref_buf.is_active if self._aec_ref_buf else 'N/A'})")
         if tts_playing:
             logger.info("STT: Barge-in confirmed — triggering pipeline interruption")
-            await self.push_interruption_task_frame_and_wait()
+            self._notify_tts_interrupted()
+            await self._push_bargein_interruption()
 
             # Cancel the welcome message task if it's still running — the pipeline
             # interruption sets _cancelled on the LLM (stops new TextFrames), but
@@ -874,6 +1127,8 @@ class BaseSTTService(STTService):
             return True
 
         self._user_speaking = False
+        if self._audio_timing is not None:
+            self._audio_timing.mark("vad_stopped")
 
         # Glow off
         if self._is_hands_free and not self._ptt_active and self.event_queue:

@@ -21,6 +21,16 @@ _PAGE_MAP = {
     # Chat
     "chat":           "/chat/",
     "chats":          "/chat/",
+    # Development workspace
+    "development":    "/development/",
+    "development threads": "/development/",
+    "incoming":       "/development/incoming/",
+    "automations":    "/development/automations/",
+    "automation":     "/development/automations/",
+    "terminals":      "/development/terminals/",
+    "terminal":       "/development/terminals/",
+    "reports":        "/development/reports/",
+    "report":         "/development/reports/",
     # Settings / Preferences
     "settings":       "/settings",
     "preferences":    "/settings",
@@ -95,7 +105,8 @@ _PAGE_MAP = {
 _KNOWN_PAGES = ", ".join(sorted({
     "chat", "settings/preferences", "general & audio", "initiative", "audio",
     "third party/providers/api keys", "llms/models", "skins/avatar",
-    "advanced", "actions", "skills", "projects",
+    "advanced", "actions", "skills", "projects", "development",
+    "incoming", "automations", "terminals", "reports",
     "workflows", "ticket board", "docs/api docs",
     "activity log", "about", "diagram/mermaid viewer", "download manager",
 }))
@@ -107,6 +118,16 @@ def _confirmation_for_path(path: str) -> str:
         return "I've opened that page in your browser."
     if "/chat" in path or path.startswith("/chat"):
         return "I've opened Chat in your browser."
+    if path.startswith("/development/incoming"):
+        return "I've opened Development Incoming in your browser."
+    if path.startswith("/development/automations"):
+        return "I've opened Development Automations in your browser."
+    if path.startswith("/development/terminals"):
+        return "I've opened Development Terminals in your browser."
+    if path.startswith("/development/reports"):
+        return "I've opened Development Reports in your browser."
+    if path.startswith("/development"):
+        return "I've opened Development in your browser."
     if "/tickets" in path:
         return "I've opened the Ticket Board in your browser."
     if "/projects" in path:
@@ -215,7 +236,7 @@ class OpenPageTool(BaseTool):
                 )
             url = f"{base_url}{path}"
 
-            webbrowser.open(url)
+            accepted = webbrowser.open(url)
             logger.info(f"OpenPageTool: Opened {url}")
 
             # If this is a Telegram request, take a screenshot after a short delay
@@ -234,7 +255,10 @@ class OpenPageTool(BaseTool):
 
             # Return plain language for chat + TTS. JSON with URLs was shown verbatim and
             # clean_text_for_tts replaces https://... with "a web link", corrupting JSON.
-            return _confirmation_for_path(path)
+            return (
+                f"{_confirmation_for_path(path)} "
+                f"Opened URL: {url}. Browser request accepted: {bool(accepted)}."
+            )
         except Exception as e:
             logger.error(f"OpenPageTool: Error opening page: {e}", exc_info=True)
             return f"Error opening page: {e}"

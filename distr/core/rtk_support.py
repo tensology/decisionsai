@@ -11,7 +11,10 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import signal
 import subprocess
+import time
+from threading import Event
 from typing import Sequence
 
 _ACCEPT_REWRITE_EXIT_CODES = frozenset({0, 3})
@@ -70,6 +73,70 @@ def run_shell_command(
         timeout=timeout,
         cwd=cwd,
         env=merged_env,
+    )
+
+
+def run_cancellable_shell_command(
+    command: str,
+    *,
+    cwd: str | None = None,
+    timeout: int | float = 60,
+    env: dict[str, str] | None = None,
+    cancel_event: Event | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run an RTK-rewritten command and terminate its process group on cancellation."""
+    effective = rewrite_shell_command(command)
+    merged_env = {**os.environ, **(env or {})}
+    process = subprocess.Popen(
+        effective,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=merged_env,
+        start_new_session=True,
+    )
+    started = time.monotonic()
+
+    def terminate() -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGTERM)
+            else:
+                process.terminate()
+            process.wait(timeout=1)
+        except Exception:
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except Exception:
+                pass
+
+    while process.poll() is None:
+        if cancel_event is not None and cancel_event.is_set():
+            terminate()
+            stdout, stderr = process.communicate()
+            return subprocess.CompletedProcess(
+                args=effective,
+                returncode=130,
+                stdout=stdout,
+                stderr=(stderr or "") + "\nCommand cancelled by the user.",
+            )
+        if time.monotonic() - started >= float(timeout):
+            terminate()
+            raise subprocess.TimeoutExpired(effective, timeout)
+        time.sleep(0.05)
+    stdout, stderr = process.communicate()
+    return subprocess.CompletedProcess(
+        args=effective,
+        returncode=int(process.returncode or 0),
+        stdout=stdout,
+        stderr=stderr,
     )
 
 

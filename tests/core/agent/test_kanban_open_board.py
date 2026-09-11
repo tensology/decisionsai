@@ -37,19 +37,16 @@ def _memory_session(monkeypatch):
 
 
 def test_ticket_board_path_local():
-    assert KanbanTicketTool._ticket_board_path("database", 42) == "/tickets/?board_id=42"
+    assert KanbanTicketTool._ticket_board_path("database", 42) == "/development/boards/decisions/42/kanban/"
 
 
 def test_ticket_board_path_jira():
-    assert KanbanTicketTool._ticket_board_path("jira", 99) == "/tickets/?source=jira&board_id=99"
+    assert KanbanTicketTool._ticket_board_path("jira", 99) == "/development/boards/jira/99/kanban/"
 
 
 def test_ticket_board_path_trello_with_url():
     path = KanbanTicketTool._ticket_board_path("trello", "abc", "https://trello.com/b/abc/board")
-    assert path.startswith("/tickets/?")
-    assert "source=trello" in path
-    assert "board_id=abc" in path
-    assert "board_url=" in path
+    assert path == "/development/boards/trello/abc/kanban/"
 
 
 def test_open_board_local_deep_link(monkeypatch):
@@ -79,7 +76,7 @@ def test_open_board_local_deep_link(monkeypatch):
         source_provider="local",
     )
 
-    assert opened == [f"http://127.0.0.1:8765/tickets/?board_id={board_id}"]
+    assert opened == [f"http://127.0.0.1:8765/development/boards/decisions/{board_id}/kanban/"]
     assert "Player One Sport" in result
     assert "opened" in result.lower()
 
@@ -108,8 +105,8 @@ def test_open_board_disambiguates_local_and_jira(monkeypatch):
     assert "Multiple boards match" in result
     assert "local" in result.lower()
     assert "jira" in result.lower()
-    assert "/tickets/?board_id=7" in result
-    assert "/tickets/?source=jira&board_id=55" in result
+    assert "/development/boards/decisions/7/kanban/" in result
+    assert "/development/boards/jira/55/kanban/" in result
 
 
 def test_open_ticket_board_fast_action():

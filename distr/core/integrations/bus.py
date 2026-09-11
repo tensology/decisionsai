@@ -333,6 +333,58 @@ class IntegrationMessageBus:
             sink, routed_text, True, image_path, metadata, "telegram"
         )
 
+    def deliver_remote_user_input(
+        self,
+        *,
+        text: str,
+        request_id: str | None,
+        image_path: str | None = None,
+        speak: bool | None = False,
+        input_type: str | None = None,
+        allow_queue: bool = True,
+    ) -> bool:
+        """Route a remote-app turn without relabeling it as Telegram.
+
+        ``is_telegram=True`` remains the legacy external-input switch used by
+        the agent to suppress desktop playback. The metadata carries the real
+        surface and request identity across that legacy boundary.
+        """
+        metadata: dict[str, Any] = {
+            "speak": speak,
+            "surface": "remote",
+            "request_id": str(request_id or "").strip() or None,
+        }
+        if input_type:
+            metadata["input_type"] = str(input_type)
+        current_chat_id = None
+        provider = self._chat_id_provider
+        if provider:
+            try:
+                current_chat_id = provider()
+            except Exception:
+                logger.debug("message bus chat_id_provider failed", exc_info=True)
+        self._set_target_chat_metadata(metadata, current_chat_id)
+
+        with self._route_lock:
+            sink = self._text_sink
+            if sink is None:
+                if not allow_queue:
+                    logger.error(
+                        "IntegrationMessageBus: live sink required but unavailable for remote input"
+                    )
+                    return False
+                self._queue_pending_sink_call_unlocked(
+                    text=text,
+                    is_telegram=True,
+                    image_path=image_path,
+                    speak=metadata,
+                    platform="remote",
+                )
+                return True
+        return self._deliver_to_sink(
+            sink, text, True, image_path, metadata, "remote"
+        )
+
     def ingest_incoming(self, msg: IncomingMessage) -> bool:
         """Route normalized inbound text to the agent (Discord / Slack / WhatsApp / etc.).
 

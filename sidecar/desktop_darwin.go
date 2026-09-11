@@ -24,6 +24,9 @@ import (
 // offsets for multi-monitor setups.
 
 type screenDef struct {
+	index       int
+	name        string
+	displayID   int
 	logicalW    int
 	logicalH    int
 	xOffset     int
@@ -46,7 +49,52 @@ func loadAllScreens(force bool) []screenDef {
 		return screensCache.screens
 	}
 
-	// ── Method 1: osascript desktop bounds (primary screen, logical size) ────
+	// Method 1: enumerate every NSScreen. This preserves negative offsets and
+	// per-display scale factors, which Finder's desktop bounds cannot provide.
+	py := `import Cocoa,json
+items=[]
+screens=Cocoa.NSScreen.screens()
+main_height=screens[0].frame().size.height if screens else 0
+for i,s in enumerate(screens):
+    f=s.frame()
+    desc=s.deviceDescription() or {}
+    items.append({
+        "index":i,
+        "name":str(s.localizedName() or "Screen %d" % (i+1)),
+        "display_id":int(desc.get("NSScreenNumber", 0) or 0),
+        "logical_width":int(f.size.width),
+        "logical_height":int(f.size.height),
+        "x_offset":int(f.origin.x),
+        "y_offset":int(main_height-(f.origin.y+f.size.height)),
+        "scale_factor":float(s.backingScaleFactor()),
+    })
+print(json.dumps(items))`
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	raw, pyErr := runSidecarPythonOutput(ctx, py)
+	cancel()
+	if pyErr == nil {
+		var rows []map[string]any
+		if json.Unmarshal(raw, &rows) == nil && len(rows) > 0 {
+			defs := make([]screenDef, 0, len(rows))
+			for i, row := range rows {
+				defs = append(defs, screenDef{
+					index:       i,
+					name:        stringOrDefault(row["name"], fmt.Sprintf("Screen %d", i+1)),
+					displayID:   toInt(row["display_id"]),
+					logicalW:    toInt(row["logical_width"]),
+					logicalH:    toInt(row["logical_height"]),
+					xOffset:     toInt(row["x_offset"]),
+					yOffset:     toInt(row["y_offset"]),
+					scaleFactor: toFloat(row["scale_factor"]),
+				})
+			}
+			screensCache.screens = defs
+			screensCache.loaded = true
+			return defs
+		}
+	}
+
+	// Method 2: Finder desktop bounds, primary screen only.
 	osaOut, osaErr := runOsascript(`tell application "Finder" to get bounds of window of desktop`, 5*time.Second)
 	if osaErr == nil {
 		parts := strings.Split(strings.TrimSpace(osaOut), ",")
@@ -55,7 +103,7 @@ func loadAllScreens(force bool) []screenDef {
 			h, _ := strconv.Atoi(strings.TrimSpace(parts[3]))
 			if w > 0 && h > 0 {
 				// Scale factor unknown via this method; default to 2.0 for Retina.
-				defs := []screenDef{{logicalW: w, logicalH: h, scaleFactor: 2.0}}
+				defs := []screenDef{{index: 0, name: "Primary", logicalW: w, logicalH: h, scaleFactor: 2.0}}
 				screensCache.screens = defs
 				screensCache.loaded = true
 				return defs
@@ -63,8 +111,8 @@ func loadAllScreens(force bool) []screenDef {
 		}
 	}
 
-	// ── Method 3: hard fallback — 1440×900 at 2× (safe-ish for M-series) ─────
-	defs := []screenDef{{logicalW: 1440, logicalH: 900, scaleFactor: 2.0}}
+	// Method 3: hard fallback.
+	defs := []screenDef{{index: 0, name: "Primary", logicalW: 1440, logicalH: 900, scaleFactor: 2.0}}
 	screensCache.screens = defs
 	screensCache.loaded = true
 	return defs
@@ -79,7 +127,7 @@ func screenRect(idx int) screenDef {
 	if len(defs) > 0 {
 		return defs[0]
 	}
-	return screenDef{logicalW: 1440, logicalH: 900, scaleFactor: 2.0}
+	return screenDef{index: 0, name: "Primary", logicalW: 1440, logicalH: 900, scaleFactor: 2.0}
 }
 
 // logicalScreenSize returns primary screen dimensions for backward compat.
@@ -92,7 +140,7 @@ func logicalScreenSize() (w, h int, sf float64) {
 //
 // Accepted formats (in priority order):
 //  1. norm_x / norm_y  (float 0.0–1.0) — fraction of screen width/height
-//  2. model_x / model_y + optional model_space (default 1000) — UI-TARS style
+//  2. model_x / model_y + optional model_space (default 1000) — normalized model coordinates
 //  3. x / y — raw logical pixels (passed through unchanged)
 //
 // Optional param "screen" (int) selects which monitor; 0 = primary (default).
@@ -135,6 +183,10 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 	m["launch_app"] = handleLaunchApp
 	m["focus_window"] = handleFocusWindow
 	m["set_window_bounds"] = handleSetWindowBounds
+	m["window_action"] = handleWindowAction
+	m["list_spaces"] = handleListSpaces
+	m["switch_space"] = handleSwitchSpace
+	m["move_window_to_space"] = handleMoveWindowToSpace
 	m["find_element"] = handleFindElement
 	m["get_clipboard"] = handleGetClipboard
 	m["set_clipboard"] = handleSetClipboard
@@ -237,6 +289,7 @@ from Quartz import (
     kCGWindowListExcludeDesktopElements,
     kCGWindowListOptionOnScreenOnly,
     kCGWindowName,
+    kCGWindowNumber,
     kCGWindowOwnerName,
     kCGWindowOwnerPID,
 )
@@ -258,6 +311,7 @@ for window in CGWindowListCopyWindowInfo(
         continue
     pid = int(window.get(kCGWindowOwnerPID, 0) or 0)
     items.append({
+        'window_id': int(window.get(kCGWindowNumber, 0) or 0),
         'title': str(window.get(kCGWindowName, '') or ''),
         'pid': pid,
         'process_name': str(window.get(kCGWindowOwnerName, '') or ''),
@@ -497,7 +551,7 @@ CGEventPost(kCGHIDEventTap,ev)`, x, y)
 // Params:
 //   x, y            int   — raw logical pixel coords
 //   norm_x, norm_y  float — 0.0–1.0 normalized (multiplied by screen size)
-//   model_x, model_y int  — UI-TARS style; divide by model_space (default 1000) then multiply by screen
+//   model_x, model_y int  — divide by model_space (default 1000) then multiply by screen
 //   model_space     int   — denominator for model coords (default 1000)
 //   action          str   — "click" | "double_click" | "right_click" (default "click")
 
@@ -543,31 +597,20 @@ func handleRightClickAt(params map[string]any) (any, error) {
 // ── get_screen_info (NEW) ─────────────────────────────────────────────────────
 
 func handleGetScreenInfo(params map[string]any) (any, error) {
-	py := `import Cocoa,json,sys
-screens=[]
-for i,s in enumerate(Cocoa.NSScreen.screens()):
-    f=s.frame()
-    screens.append({
-        "index":i,
-        "logical_width":int(f.size.width),
-        "logical_height":int(f.size.height),
-        "x_offset":int(f.origin.x),
-        "y_offset":int(f.origin.y),
-        "scale_factor":s.backingScaleFactor(),
-        "is_primary":i==0
-    })
-print(json.dumps(screens))`
-
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	out, err := runSidecarPythonOutput(ctx, py)
-	if err != nil {
-		return nil, fmt.Errorf("get_screen_info: %w", err)
-	}
-
-	var screens []map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &screens); err != nil {
-		return nil, fmt.Errorf("parse screen info: %w", err)
+	defs := loadAllScreens(true)
+	screens := make([]map[string]any, 0, len(defs))
+	for _, sc := range defs {
+		screens = append(screens, map[string]any{
+			"index":          sc.index,
+			"name":           sc.name,
+			"display_id":     sc.displayID,
+			"logical_width":  sc.logicalW,
+			"logical_height": sc.logicalH,
+			"x_offset":       sc.xOffset,
+			"y_offset":       sc.yOffset,
+			"scale_factor":   sc.scaleFactor,
+			"is_primary":     sc.index == 0,
+		})
 	}
 
 	result := map[string]any{"screens": screens}
@@ -716,13 +759,42 @@ func handleLaunchApp(params map[string]any) (any, error) {
 			return nil, fmt.Errorf("launch_app: %w", err)
 		}
 	}
-	return map[string]any{"success": true, "app": app}, nil
+	requestedJSON, _ := json.Marshal(strings.ToLower(app))
+	query := fmt.Sprintf(`ObjC.import('AppKit');
+var requested = %s;
+var apps = $.NSWorkspace.sharedWorkspace.runningApplications.js;
+var match = apps.find(function(a) {
+  var name = a.localizedName.js || '';
+  var bundle = a.bundleIdentifier.js || '';
+  return name.toLowerCase() === requested || bundle.toLowerCase() === requested;
+});
+if (!match) { console.log(JSON.stringify({success:false})); }
+else {
+  match.activateWithOptions(3);
+  console.log(JSON.stringify({success:true, pid:Number(match.processIdentifier), name:match.localizedName.js, bundle_id:match.bundleIdentifier.js || ''}));
+}`, string(requestedJSON))
+	var verified map[string]any
+	for attempt := 0; attempt < 20; attempt++ {
+		out, verifyErr := runOsascriptJS(query, 3*time.Second)
+		if verifyErr == nil && json.Unmarshal([]byte(out), &verified) == nil {
+			if ok, _ := verified["success"].(bool); ok {
+				verified["app"] = app
+				verified["activated"] = true
+				return verified, nil
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("launch_app: %s started but could not be verified in NSWorkspace", app)
 }
 
 // ── focus_window ──────────────────────────────────────────────────────────────
 
 func handleFocusWindow(params map[string]any) (any, error) {
-	pid := toInt(params["pid"])
+	pid, err := resolveTargetPID(params)
+	if err != nil {
+		return nil, err
+	}
 	if pid == 0 {
 		return nil, fmt.Errorf("missing required parameter: pid")
 	}
@@ -730,8 +802,23 @@ func handleFocusWindow(params map[string]any) (any, error) {
 	set proc to first process whose unix id is %d
 	set frontmost of proc to true
 end tell`, pid)
-	_, err := runOsascript(script, 5*time.Second)
+	_, err = runOsascript(script, 5*time.Second)
 	return map[string]any{"success": err == nil, "pid": pid}, nil
+}
+
+func resolveTargetPID(params map[string]any) (int, error) {
+	if pid := toInt(params["pid"]); pid > 0 {
+		return pid, nil
+	}
+	out, err := runOsascript(`tell application "System Events" to unix id of first process whose frontmost is true`, 5*time.Second)
+	if err != nil {
+		return 0, fmt.Errorf("resolve frontmost process: %w: %s", err, out)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(out))
+	if pid <= 0 {
+		return 0, fmt.Errorf("no frontmost process")
+	}
+	return pid, nil
 }
 
 // ── set_window_bounds ─────────────────────────────────────────────────────────
@@ -739,14 +826,15 @@ end tell`, pid)
 // (Finder, top-left coords — same space as list_windows / System Events).
 
 func handleSetWindowBounds(params map[string]any) (any, error) {
-	pid := toInt(params["pid"])
-	if pid == 0 {
-		return nil, fmt.Errorf("missing required parameter: pid")
+	pid, err := resolveTargetPID(params)
+	if err != nil {
+		return nil, err
 	}
 	snap := strings.ToLower(stringOrDefault(params["snap"], ""))
 	x, y, w, h := toInt(params["x"]), toInt(params["y"]), toInt(params["w"]), toInt(params["h"])
+	screenIdx := toInt(params["screen"])
 	if snap != "" {
-		sc := screenRect(0)
+		sc := screenRect(screenIdx)
 		switch snap {
 		case "left":
 			x, y, w, h = sc.xOffset, sc.yOffset, sc.logicalW/2, sc.logicalH
@@ -754,8 +842,12 @@ func handleSetWindowBounds(params map[string]any) (any, error) {
 			x, y, w, h = sc.xOffset+sc.logicalW/2, sc.yOffset, sc.logicalW-sc.logicalW/2, sc.logicalH
 		case "maximize":
 			x, y, w, h = sc.xOffset, sc.yOffset, sc.logicalW, sc.logicalH
+		case "center":
+			w, h = sc.logicalW*4/5, sc.logicalH*4/5
+			x = sc.xOffset + (sc.logicalW-w)/2
+			y = sc.yOffset + (sc.logicalH-h)/2
 		default:
-			return nil, fmt.Errorf("unknown snap %q (use left, right, maximize)", snap)
+			return nil, fmt.Errorf("unknown snap %q (use left, right, center, maximize)", snap)
 		}
 	}
 	if w <= 0 || h <= 0 {
@@ -769,11 +861,238 @@ func handleSetWindowBounds(params map[string]any) (any, error) {
 		set size of first window to {%d, %d}
 	end tell
 end tell`, pid, x, y, w, h)
-	_, err := runOsascript(script, 5*time.Second)
+	_, err = runOsascript(script, 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"success": true, "pid": pid, "x": x, "y": y, "w": w, "h": h, "snap": snap}, nil
+	return map[string]any{"success": true, "pid": pid, "x": x, "y": y, "w": w, "h": h, "snap": snap, "screen": screenIdx}, nil
+}
+
+// window_action applies stateful operations to an exact process window instead
+// of sending a global shortcut to whichever application happens to have focus.
+func handleWindowAction(params map[string]any) (any, error) {
+	pid, err := resolveTargetPID(params)
+	if err != nil {
+		return nil, err
+	}
+	action := strings.ToLower(strings.TrimSpace(stringOrDefault(params["action"], "")))
+	if action == "" {
+		return nil, fmt.Errorf("missing required parameter: action")
+	}
+	if action == "maximize" {
+		forward := map[string]any{"pid": pid, "snap": "maximize", "screen": params["screen"]}
+		return handleSetWindowBounds(forward)
+	}
+
+	var body string
+	switch action {
+	case "minimize", "minimise":
+		body = `set value of attribute "AXMinimized" of first window to true`
+	case "restore", "unminimize", "unminimise":
+		body = `try
+			set value of attribute "AXFullScreen" of first window to false
+		end try
+		set value of attribute "AXMinimized" of first window to false`
+	case "fullscreen":
+		body = `set currentValue to value of attribute "AXFullScreen" of first window
+		set value of attribute "AXFullScreen" of first window to (not currentValue)`
+	case "close":
+		body = `click (first button of first window whose subrole is "AXCloseButton")`
+	case "hide":
+		body = `set visible to false`
+	case "focus":
+		body = `set frontmost to true
+		try
+			set value of attribute "AXMinimized" of first window to false
+		end try`
+	default:
+		return nil, fmt.Errorf("unknown window action %q", action)
+	}
+
+	script := fmt.Sprintf(`tell application "System Events"
+	set proc to first process whose unix id is %d
+	tell proc
+		if (count of windows) is 0 then error "no window"
+		%s
+	end tell
+end tell`, pid, body)
+	out, err := runOsascript(script, 8*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("window_action %s: %w: %s", action, err, out)
+	}
+	return map[string]any{"success": true, "pid": pid, "action": action}, nil
+}
+
+const managedSpacesPython = `
+import ctypes, json, objc, time
+sky = ctypes.CDLL('/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight')
+sky.CGSMainConnectionID.restype = ctypes.c_uint32
+conn = sky.CGSMainConnectionID()
+sky.CGSCopyManagedDisplaySpaces.argtypes = [ctypes.c_uint32]
+sky.CGSCopyManagedDisplaySpaces.restype = ctypes.c_void_p
+raw = objc.objc_object(c_void_p=sky.CGSCopyManagedDisplaySpaces(conn))
+def plain(value):
+    if hasattr(value, 'items'):
+        return {str(k): plain(v) for k, v in value.items()}
+    if hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+        return [plain(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+displays = plain(raw)
+`
+
+func loadManagedSpaces() (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := runSidecarPythonOutput(ctx, managedSpacesPython+`print(json.dumps({'displays': displays}))`)
+	if err != nil {
+		return nil, fmt.Errorf("list_spaces: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("list_spaces parse: %w", err)
+	}
+	return result, nil
+}
+
+func handleListSpaces(params map[string]any) (any, error) {
+	return loadManagedSpaces()
+}
+
+func managedSpaceParams(params map[string]any) (int, int, uint64, error) {
+	displayIdx := toInt(params["display"])
+	spaceIdx := toInt(params["space"])
+	spaceID := uint64(toInt(params["space_id"]))
+	data, err := loadManagedSpaces()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	displays, _ := data["displays"].([]any)
+	if displayIdx < 0 || displayIdx >= len(displays) {
+		return 0, 0, 0, fmt.Errorf("display %d not found; available displays: 0-%d", displayIdx, len(displays)-1)
+	}
+	display, _ := displays[displayIdx].(map[string]any)
+	spaces, _ := display["Spaces"].([]any)
+	if spaceID == 0 {
+		if spaceIdx <= 0 || spaceIdx > len(spaces) {
+			return 0, 0, 0, fmt.Errorf("space %d not found on display %d; available spaces: 1-%d", spaceIdx, displayIdx, len(spaces))
+		}
+		space, _ := spaces[spaceIdx-1].(map[string]any)
+		spaceID = uint64(toInt(space["id64"]))
+		if spaceID == 0 {
+			spaceID = uint64(toInt(space["ManagedSpaceID"]))
+		}
+	}
+	return displayIdx, spaceIdx, spaceID, nil
+}
+
+func handleSwitchSpace(params map[string]any) (any, error) {
+	displayIdx, spaceIdx, spaceID, err := managedSpaceParams(params)
+	if err != nil {
+		return nil, err
+	}
+	py := managedSpacesPython + fmt.Sprintf(`
+target_display = displays[%d]
+display_identifier = target_display['Display Identifier']
+sky.CGSManagedDisplaySetCurrentSpace.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint64]
+sky.CGSManagedDisplaySetCurrentSpace.restype = None
+cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+cf.CFRelease.argtypes = [ctypes.c_void_p]
+display_string = cf.CFStringCreateWithCString(None, display_identifier.encode('utf-8'), 0x08000100)
+sky.CGSManagedDisplaySetCurrentSpace(conn, display_string, ctypes.c_uint64(%d))
+cf.CFRelease(display_string)
+time.sleep(0.25)
+updated_raw = objc.objc_object(c_void_p=sky.CGSCopyManagedDisplaySpaces(conn))
+updated_displays = plain(updated_raw)
+current = updated_displays[%d].get('Current Space', {})
+current_id = int(current.get('id64') or current.get('ManagedSpaceID') or 0)
+print(json.dumps({'success': current_id == %d, 'current_space_id': current_id}))`, displayIdx, spaceID, displayIdx, spaceID)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, runErr := runSidecarPythonOutput(ctx, py)
+	if runErr != nil {
+		return nil, fmt.Errorf("switch_space: %w: %s", runErr, strings.TrimSpace(string(out)))
+	}
+	var result map[string]any
+	if json.Unmarshal(out, &result) != nil {
+		return nil, fmt.Errorf("switch_space parse: %s", strings.TrimSpace(string(out)))
+	}
+	if ok, _ := result["success"].(bool); !ok {
+		return nil, fmt.Errorf("switch_space failed: %s", strings.TrimSpace(string(out)))
+	}
+	result["display"] = displayIdx
+	result["space"] = spaceIdx
+	result["space_id"] = spaceID
+	return result, nil
+}
+
+func resolveWindowID(params map[string]any) (int, error) {
+	if id := toInt(params["window_id"]); id > 0 {
+		return id, nil
+	}
+	pid, err := resolveTargetPID(params)
+	if err != nil {
+		return 0, err
+	}
+	dataAny, err := handleListWindows(nil)
+	if err != nil {
+		return 0, err
+	}
+	data, _ := dataAny.(map[string]any)
+	windows, _ := data["windows"].([]any)
+	for _, item := range windows {
+		window, _ := item.(map[string]any)
+		if toInt(window["pid"]) == pid {
+			if id := toInt(window["window_id"]); id > 0 {
+				return id, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("no visible window id for pid %d", pid)
+}
+
+func handleMoveWindowToSpace(params map[string]any) (any, error) {
+	windowID, err := resolveWindowID(params)
+	if err != nil {
+		return nil, err
+	}
+	displayIdx, spaceIdx, spaceID, err := managedSpaceParams(params)
+	if err != nil {
+		return nil, err
+	}
+	py := managedSpacesPython + fmt.Sprintf(`
+from Foundation import NSArray
+sky.CGSMoveWindowsToManagedSpace.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint64]
+sky.CGSMoveWindowsToManagedSpace.restype = None
+windows = NSArray.arrayWithObject_(%d)
+sky.CGSMoveWindowsToManagedSpace(conn, ctypes.c_void_p(objc.pyobjc_id(windows)), ctypes.c_uint64(%d))
+time.sleep(0.25)
+sky.CGSCopySpacesForWindows.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+sky.CGSCopySpacesForWindows.restype = ctypes.c_void_p
+membership_raw = sky.CGSCopySpacesForWindows(conn, 0x7, ctypes.c_void_p(objc.pyobjc_id(windows)))
+membership = [] if not membership_raw else [int(value) for value in objc.objc_object(c_void_p=membership_raw)]
+print(json.dumps({'success': %d in membership, 'space_ids': membership}))`, windowID, spaceID, spaceID)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, runErr := runSidecarPythonOutput(ctx, py)
+	if runErr != nil {
+		return nil, fmt.Errorf("move_window_to_space: %w: %s", runErr, strings.TrimSpace(string(out)))
+	}
+	var result map[string]any
+	if json.Unmarshal(out, &result) != nil {
+		return nil, fmt.Errorf("move_window_to_space parse: %s", strings.TrimSpace(string(out)))
+	}
+	if ok, _ := result["success"].(bool); !ok {
+		return nil, fmt.Errorf("move_window_to_space failed: %s", strings.TrimSpace(string(out)))
+	}
+	result["window_id"] = windowID
+	result["display"] = displayIdx
+	result["space"] = spaceIdx
+	result["space_id"] = spaceID
+	return result, nil
 }
 
 // ── find_element ──────────────────────────────────────────────────────────────
@@ -1201,14 +1520,14 @@ print(base64.b64encode(buf.getvalue()).decode())
 func runOsascript(script string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "osascript", "-e", script).Output()
+	out, err := exec.CommandContext(ctx, "osascript", "-e", script).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
 func runOsascriptJS(script string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).Output()
+	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 

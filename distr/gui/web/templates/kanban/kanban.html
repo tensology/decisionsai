@@ -11,6 +11,23 @@
 /* Drag states */
 .kb-card.dragging,
 .kb-ticket-list-row.dragging { opacity: 0.4; }
+.kb-run-popover {
+    background: #1a2550;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 0.5rem;
+    box-shadow: 0 18px 45px rgba(0,0,0,0.48);
+    color: #e5e7eb;
+}
+.kb-run-popover .kb-run-actions > div {
+    background: #111936;
+    border-color: rgba(255,255,255,0.15);
+    box-shadow: 0 14px 32px rgba(0,0,0,0.5);
+    min-width: 10.5rem;
+}
+.kb-run-popover .kb-run-actions > div a,
+.kb-run-popover .kb-run-actions > div button {
+    white-space: nowrap;
+}
 .kb-lane-body.drag-over,
 .kb-ticket-list-section.drag-over .kb-ticket-list-section-head,
 .kb-ticket-list-section.drag-over .kb-ticket-list-section-body,

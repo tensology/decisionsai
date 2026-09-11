@@ -5,7 +5,7 @@ The actual ChatManager logic now lives in distr.core.chat_manager.ChatManagerCor
 The Qt signal bridge is in distr.core.chat_qt_adapter.ChatManagerQt.
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 import logging
 import hashlib
 import json
@@ -272,6 +272,155 @@ def remove_chat_transcript_audit_events(chat_id: int) -> int:
     return deleted
 
 
+def cleanup_chat_dependencies(
+    session,
+    chat_id: int,
+    *,
+    delete_owned_ticket: bool = True,
+    delete_owned_workflows: bool = True,
+) -> dict[str, int]:
+    """Remove durable state owned by one root chat identity.
+
+    This is deliberately explicit instead of relying on SQLite foreign-key
+    cascades, which may be disabled in existing installations. It is safe to
+    call immediately after allocating a new root row because no new
+    Development state exists at that point.
+    """
+    from sqlalchemy import or_
+
+    from distr.core.db import ChatTurnEvent, TrelloTicket
+    from distr.core.db.kanban import KanbanTicket
+    from distr.core.db.workflow import (
+        AutoWorkflow,
+        AutoWorkflowRun,
+        AutoWorkflowStep,
+        AutoWorkflowStepResult,
+        DevelopmentCommand,
+        DevelopmentPlanRevision,
+        DevelopmentWorkItem,
+        StudioArtifact,
+    )
+
+    target_id = int(chat_id)
+    counts: dict[str, int] = {}
+
+    work_items = (
+        session.query(DevelopmentWorkItem)
+        .filter(DevelopmentWorkItem.chat_id == target_id)
+        .all()
+    )
+    ticket_ids = {
+        int(row.local_ticket_id)
+        for row in work_items
+        if row.local_ticket_id is not None
+    }
+    owned_workflow_ids = {
+        int(row.id)
+        for row in session.query(AutoWorkflow.id)
+        .filter(AutoWorkflow.chat_id == target_id)
+        .all()
+    }
+    run_rows = (
+        session.query(AutoWorkflowRun)
+        .filter(
+            or_(
+                AutoWorkflowRun.chat_id == target_id,
+                AutoWorkflowRun.workflow_id.in_(owned_workflow_ids)
+                if owned_workflow_ids
+                else False,
+            )
+        )
+        .all()
+    )
+    run_ids = {int(row.id) for row in run_rows}
+
+    counts["turn_events"] = (
+        session.query(ChatTurnEvent)
+        .filter(ChatTurnEvent.chat_id == target_id)
+        .delete(synchronize_session=False)
+    )
+    counts["artifacts"] = (
+        session.query(StudioArtifact)
+        .filter(StudioArtifact.chat_id == target_id)
+        .delete(synchronize_session=False)
+    )
+    counts["plans"] = (
+        session.query(DevelopmentPlanRevision)
+        .filter(DevelopmentPlanRevision.chat_id == target_id)
+        .delete(synchronize_session=False)
+    )
+    counts["commands"] = (
+        session.query(DevelopmentCommand)
+        .filter(DevelopmentCommand.chat_id == target_id)
+        .delete(synchronize_session=False)
+    )
+    counts["work_items"] = (
+        session.query(DevelopmentWorkItem)
+        .filter(DevelopmentWorkItem.chat_id == target_id)
+        .delete(synchronize_session=False)
+    )
+    counts["trello_links"] = (
+        session.query(TrelloTicket)
+        .filter(TrelloTicket.chat_id == target_id)
+        .update({TrelloTicket.chat_id: None}, synchronize_session=False)
+    )
+
+    if run_ids:
+        counts["step_results"] = (
+            session.query(AutoWorkflowStepResult)
+            .filter(AutoWorkflowStepResult.run_id.in_(run_ids))
+            .delete(synchronize_session=False)
+        )
+    else:
+        counts["step_results"] = 0
+    for row in run_rows:
+        session.delete(row)
+    counts["runs"] = len(run_rows)
+
+    if delete_owned_ticket:
+        owned_tickets = (
+            session.query(KanbanTicket)
+            .filter(
+                or_(
+                    KanbanTicket.source_chat_id == target_id,
+                    KanbanTicket.id.in_(ticket_ids) if ticket_ids else False,
+                )
+            )
+            .all()
+        )
+        for row in owned_tickets:
+            session.delete(row)
+        counts["tickets"] = len(owned_tickets)
+    else:
+        counts["tickets"] = 0
+
+    if delete_owned_workflows and owned_workflow_ids:
+        # Delete result rows first for installations where SQLite FK cascades
+        # were not enabled when the database was created.
+        step_ids = {
+            int(row.id)
+            for row in session.query(AutoWorkflowStep.id)
+            .filter(AutoWorkflowStep.workflow_id.in_(owned_workflow_ids))
+            .all()
+        }
+        if step_ids:
+            session.query(AutoWorkflowStepResult).filter(
+                AutoWorkflowStepResult.step_id.in_(step_ids)
+            ).delete(synchronize_session=False)
+        workflows = (
+            session.query(AutoWorkflow)
+            .filter(AutoWorkflow.id.in_(owned_workflow_ids))
+            .all()
+        )
+        for row in workflows:
+            session.delete(row)
+        counts["workflows"] = len(workflows)
+    else:
+        counts["workflows"] = 0
+
+    return counts
+
+
 def _setting_val(settings, key: str):
     """Read a Settings column from a SQLAlchemy row or dict."""
     if settings is None:
@@ -362,9 +511,17 @@ class ChatService:
         tts_voice: Optional[str] = None,
         title: Optional[str] = None,
         starting_question: Optional[str] = None,
+        project_id: Optional[int] = None,
+        route_mode: str = "auto",
+        execution_profile: str = "code",
+        autonomy_level: str = "full",
+        starting_metadata: Optional[dict[str, Any]] = None,
+        activate: bool = True,
+        _session_provider=None,
     ) -> Tuple[int, Optional[str]]:
-        """Create a new chat (root + child). Sets last_chat_id and agent_current_chat_id. Returns (chat_id, starting_question or None)."""
-        with get_session() as session:
+        """Create a chat, optionally making it the active conversational agent chat."""
+        session_provider = _session_provider or get_session
+        with session_provider() as session:
             settings = session.query(Settings).first()
             if settings:
                 if not llm_provider:
@@ -395,14 +552,18 @@ class ChatService:
         from distr.core.db.time import utc_now_naive
 
         now = utc_now_naive()
-        with get_session() as session:
+        with session_provider() as session:
             root = Chat(
                 parent_id=None,
+                project_id=project_id,
                 title=title,
                 input=None,
                 response=None,
                 provider=provider,
                 model_name=model_name,
+                route_mode=(route_mode or "auto").strip().lower(),
+                execution_profile=(execution_profile or "code").strip().lower(),
+                autonomy_level=(autonomy_level or "full").strip().lower(),
                 voice_provider=voice_provider,
                 voice_model=voice_model,
                 created_date=now,
@@ -412,14 +573,30 @@ class ChatService:
             session.commit()
             session.refresh(root)
             chat_id = root.id
+            # SQLite can reuse the id of a deleted root chat. Older releases only
+            # removed the transcript rows, leaving Development state keyed by that
+            # id behind. Clear any such orphaned state before this new identity is
+            # exposed to the harness or given its first turn.
+            cleanup_chat_dependencies(
+                session,
+                int(chat_id),
+                delete_owned_ticket=True,
+                delete_owned_workflows=True,
+            )
+            session.commit()
             if starting_question:
                 child = Chat(
                     parent_id=chat_id,
+                    project_id=project_id,
                     title=None,
                     input=starting_question,
+                    params=json.dumps({"development_turn": starting_metadata}, ensure_ascii=False, default=str) if starting_metadata else None,
                     response=None,
                     provider=provider,
                     model_name=model_name,
+                    route_mode=(route_mode or "auto").strip().lower(),
+                    execution_profile=(execution_profile or "code").strip().lower(),
+                    autonomy_level=(autonomy_level or "full").strip().lower(),
                     voice_provider=voice_provider,
                     voice_model=voice_model,
                     created_date=now,
@@ -445,7 +622,7 @@ class ChatService:
                     content=starting_question,
                 )
             settings_row = session.query(Settings).first()
-            if settings_row:
+            if settings_row and activate:
                 settings_row.last_chat_id = chat_id
                 settings_row.agent_current_chat_id = chat_id
                 session.commit()
@@ -453,7 +630,7 @@ class ChatService:
                     "ChatService: set last_chat_id and agent_current_chat_id to %s",
                     chat_id,
                 )
-            else:
+            elif not settings_row:
                 logger.warning("ChatService: no Settings row to update")
         return (chat_id, starting_question if starting_question else None)
 
@@ -500,7 +677,7 @@ class ChatService:
             return messages
 
     @staticmethod
-    def add_user_message(chat_id: int, message: str) -> None:
+    def add_user_message(chat_id: int, message: str, *, metadata: Optional[dict[str, Any]] = None) -> None:
         """Append a user message to the chat thread in the DB."""
         cleaned = (message or "").strip()
         if not cleaned:
@@ -531,6 +708,7 @@ class ChatService:
                 title=cleaned.split("\n")[0][:50] if cleaned else None,
                 input=cleaned,
                 response=None,
+                params=json.dumps({"development_turn": metadata}, ensure_ascii=False, default=str) if metadata else None,
                 provider=root.provider,
                 model_name=root.model_name,
                 voice_provider=root.voice_provider,
@@ -559,7 +737,7 @@ class ChatService:
             )
 
     @staticmethod
-    def append_assistant_notice(chat_id: int, message: str, *, hidden: bool = False) -> bool:
+    def append_assistant_notice(chat_id: int, message: str, *, hidden: bool = False) -> Optional[int]:
         """Append an assistant-only row (no user message) for system/board notices."""
         cleaned = (message or "").strip()
         if not cleaned:
@@ -571,7 +749,7 @@ class ChatService:
                     "ChatService.append_assistant_notice: Chat %s missing, skipped",
                     chat_id,
                 )
-                return False
+                return None
             root_query = text("""
                 WITH RECURSIVE parents(id, parent_id) AS (
                     SELECT id, parent_id FROM chats WHERE id = :start_id
@@ -584,7 +762,7 @@ class ChatService:
             root_id = root_row[0] if root_row else chat_id
             root = session.get(Chat, root_id)
             if not root:
-                return False
+                return None
             child = Chat(
                 parent_id=root_id,
                 title=None,
@@ -601,29 +779,56 @@ class ChatService:
             session.add(child)
             root.modified_date = datetime.now(timezone.utc)
             session.commit()
+            # SQLAlchemy expires ORM instances on commit by default. Capture
+            # the generated id while the session is still active so callers
+            # can safely receive it after the context closes.
+            child_id = int(child.id) if child.id is not None else None
             record_chat_audit_event(
                 chat_id=int(root_id),
-                chat_row_id=int(child.id) if child.id is not None else None,
+                chat_row_id=child_id,
                 role="assistant",
                 content=cleaned,
                 hidden=hidden,
             )
-        return True
+        return child_id
 
     @staticmethod
     def get_current_chat_id() -> Optional[int]:
         with get_session() as session:
             settings = session.query(Settings).first()
-            return (
-                getattr(settings, "agent_current_chat_id", None)
-                or getattr(settings, "last_chat_id", None)
-                if settings
-                else None
-            )
+            if settings is None:
+                return None
+            from distr.core.workflow.development_threads import is_development_thread
+
+            contaminated = False
+            for key in ("agent_current_chat_id", "last_chat_id"):
+                candidate = getattr(settings, key, None)
+                if candidate is None:
+                    continue
+                chat = session.get(Chat, int(candidate))
+                if chat is not None and not is_development_thread(session, chat):
+                    if contaminated:
+                        session.commit()
+                    return int(chat.id)
+                setattr(settings, key, None)
+                contaminated = True
+            if contaminated:
+                session.commit()
+            return None
 
     @staticmethod
     def set_current_chat_id(chat_id: Optional[int]) -> None:
         with get_session() as session:
+            if chat_id is not None:
+                chat = session.get(Chat, int(chat_id))
+                if chat is None:
+                    raise LookupError("Chat not found.")
+                from distr.core.workflow.development_threads import is_development_thread
+
+                if is_development_thread(session, chat):
+                    raise ValueError(
+                        "Development tasks cannot become the current Chat conversation."
+                    )
             settings = session.query(Settings).first()
             if settings:
                 settings.last_chat_id = chat_id

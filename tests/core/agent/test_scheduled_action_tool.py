@@ -1,11 +1,65 @@
 import contextlib
 
+import pytest
+from pydantic import ValidationError
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
 from distr.core.db.workflow import AutoWorkflow
+
+
+def test_scheduled_action_input_normalizes_json_object_strings():
+    from distr.core.agent.tools.step_runner.workflow_tools import ScheduledActionInput
+
+    existing = {"bring_app_to_front": True}
+    parsed = ScheduledActionInput.model_validate({
+        "action": "create",
+        "schedule": '{"kind":"daily","time":"08:30"}',
+        "desktop_action": '{"type":"open_app","app_name":"Chrome"}',
+        "target_context": '{"app_name":"Chrome"}',
+        "safety": existing,
+    })
+
+    assert parsed.schedule == {"kind": "daily", "time": "08:30"}
+    assert parsed.desktop_action == {"type": "open_app", "app_name": "Chrome"}
+    assert parsed.target_context == {"app_name": "Chrome"}
+    assert parsed.safety == existing
+
+
+def test_scheduled_action_tool_accepts_json_object_strings_from_tool_call():
+    from distr.core.agent.tools.step_runner.workflow_tools import ScheduledActionTool
+
+    result = ScheduledActionTool().invoke({
+        "action": "preview",
+        "title": "Open dashboard",
+        "schedule": '{"kind":"daily","time":"08:30"}',
+        "desktop_action": '{"type":"open_app","app_name":"Chrome"}',
+        "target_context": '{"app_name":"Chrome"}',
+        "safety": '{"bring_app_to_front":true}',
+    })
+
+    assert "Scheduled action preview" in result
+    assert '"app_name": "Chrome"' in result
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ('{"kind":', "valid JSON object"),
+        ('["daily"]', "JSON object"),
+        (42, "dictionary or JSON object string"),
+    ],
+)
+def test_scheduled_action_input_rejects_invalid_nested_objects(value, message):
+    from distr.core.agent.tools.step_runner.workflow_tools import ScheduledActionInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        ScheduledActionInput.model_validate({"schedule": value})
+
+    assert message.lower() in str(exc_info.value).lower()
 
 
 def _session_ctx_factory():

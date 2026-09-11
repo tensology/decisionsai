@@ -218,6 +218,8 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 if event_type == "conversation.item.input_audio_transcription.completed":
                     transcript = event.get("transcript", "")
                     if transcript and transcript.strip():
+                        if self._audio_timing is not None:
+                            self._audio_timing.mark("stt_final")
                         logger.debug(f"🎤 Realtime transcription: '{transcript.strip()}'")
                         self._pending_transcripts.append(transcript.strip())
                 
@@ -279,6 +281,8 @@ class OpenAIWhisperSTTService(BaseSTTService):
         if not self._realtime_connected or not self._realtime_ws:
             return
         try:
+            if self._audio_timing is not None:
+                self._audio_timing.mark("stt_commit")
             await self._realtime_ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
         except Exception as e:
             logger.warning(f"Failed to commit audio to Realtime API: {e}")
@@ -363,17 +367,18 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 
                 if frame_count == 0:
                     logger.warning("STT: run_stt() did not yield any frames!")
+                    await self._emit_empty_ptt_transcription(direction)
                 else:
                     logger.debug(f"STT: PTT transcription complete ({frame_count} frames)")
             except Exception as e:
                 logger.error(f"STT: Error in run_stt(): {e}", exc_info=True)
+                await self._emit_empty_ptt_transcription(direction)
     
     async def _send_interruption(self, direction):
         """Send interruption frame to cancel TTS and LLM"""
         try:
-            interruption_frame = InterruptionFrame()
             logger.debug("PTT activated - sending InterruptionFrame")
-            await self.push_frame(interruption_frame, direction)
+            await self._push_marked_interruption(direction)
         except Exception as e:
             logger.error(f"Error sending InterruptionFrame: {e}")
     
@@ -634,6 +639,7 @@ class OpenAIWhisperSTTService(BaseSTTService):
         
         # Handle audio frames (transport emits InputAudioRawFrame; both needed for PTT)
         if isinstance(frame, (AudioRawFrame, InputAudioRawFrame)):
+            self._record_echo_frame_metrics()
             if self._ptt_active:
                 # PTT mode: accumulate for batch processing
                 self._ptt_buffer_accumulator.append(frame.audio)

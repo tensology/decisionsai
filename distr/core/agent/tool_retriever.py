@@ -302,9 +302,11 @@ class ToolRetriever:
 
     def _retrieve_tfidf(self, user_message: str, k: int) -> set:
         """Retrieve top-K tool names using TF-IDF cosine sim."""
-        from sklearn.metrics.pairwise import cosine_similarity
         query_vec = self._vectorizer.transform([user_message])
-        scores = cosine_similarity(query_vec, self._tfidf_matrix)[0]
+        # TfidfVectorizer rows are already L2 normalized. Sparse matrix
+        # multiplication is both cheaper and more robust than passing an empty
+        # out-of-vocabulary csr_matrix through sklearn's array validation.
+        scores = (query_vec @ self._tfidf_matrix.T).toarray()[0]
         top_k = np.argsort(scores)[::-1][:k]
         return {self._names[i] for i in top_k}
 

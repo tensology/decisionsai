@@ -32,6 +32,7 @@ class Settings(Base):
     load_on_startup = Column(Boolean, default=True)
     always_confirm_file_operations = Column(Boolean, default=True)  # Always show confirmation dialog for file operations
     startup_listening_state = Column(String, default='remember')  # values: 'remember', 'stop', 'start'
+    default_project_editor = Column(String, default='codex')
 
     restore_position = Column(Boolean, default=True)
     oracle_position = Column(String, default='Middle Right')
@@ -287,6 +288,9 @@ class Chat(Base):
 
     id = Column(Integer, primary_key=True)
     parent_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
+    # Cross-module project reference. The projects model registers after the core
+    # chat tables during cold start, so API validation enforces referential integrity.
+    project_id = Column(Integer, nullable=True)
     title = Column(String)
     input = Column(Text)
     response = Column(Text)
@@ -299,6 +303,9 @@ class Chat(Base):
     is_hidden = Column(Boolean, default=False)  # Flag to hide message from UI but keep in database/memory
     model_name = Column(String, nullable=True)  # Store the model name used for this chat
     provider = Column(String, nullable=True)  # Store the provider used for this chat (e.g., 'Ollama', 'OpenAI')
+    route_mode = Column(String, nullable=False, default='auto')
+    execution_profile = Column(String, nullable=False, default='code')
+    autonomy_level = Column(String, nullable=False, default='full')
     voice_provider = Column(String, nullable=True)  # Store the TTS provider (e.g., 'Kokoro', 'OpenAI', 'ElevenLabs')
     voice_model = Column(String, nullable=True)  # Store the voice/speaker used (e.g., 'af_sky', 'alloy')
     created_date = Column(DateTime, default=utc_now_naive)
@@ -663,6 +670,7 @@ try:
                 ("telegram_auto_match_mode", "BOOLEAN DEFAULT 0"),
                 # Load on startup
                 ("load_on_startup", "BOOLEAN DEFAULT 1"),
+                ("default_project_editor", "VARCHAR DEFAULT 'codex'"),
                 # Masko (AI skin generation)
                 ("masko_enabled", "BOOLEAN DEFAULT 0"),
                 ("masko_key", "VARCHAR DEFAULT ''"),
@@ -783,7 +791,11 @@ class SessionContext:
                                 raise
                             time.sleep(backoff_s[attempt])
             except Exception as e:
+                # A commit failure must never be downgraded to a warning.  The
+                # caller needs to know that its transaction did not complete.
                 logging.getLogger(__name__).warning(f"Error during session cleanup: {e}")
+                if not exc_type:
+                    raise
             finally:
                 self.session.close()
                 self.session = None

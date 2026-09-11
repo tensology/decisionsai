@@ -1,0 +1,35 @@
+{
+  "status": "DONE",
+  "benchmark": "complex-project-cross-stack",
+  "workload": "Implement archived-ticket visibility through Python repository, service, view, JavaScript API, React hook, React component, and HTML mount while preserving inherited contracts and avoiding legacy, generated, and vendor decoys.",
+  "scoring": {
+    "executable_tests": 26,
+    "cross_layer_gates": 7,
+    "scope_gates": 8,
+    "hidden_contract_gates": 10,
+    "total": 51
+  },
+  "results": {
+    "gpt-5.6-sol-medium": {
+      "score": "51/51",
+      "seconds": 96.176,
+      "total_tokens": 312181,
+      "cached_input_tokens": 283008,
+      "scope_control": "pass",
+      "result": "model-benchmark-complex-gpt-rerun-2026-09-03/gpt-5.6-sol-medium-result.json"
+    },
+    "muse-glimmer-30b-mlx": {
+      "score": "51/51",
+      "seconds": 784.794,
+      "total_tokens": 21372,
+      "reported_cost": 0,
+      "scope_control": "pass",
+      "result": "model-benchmark-complex-glimmer-rerun-2026-09-03/muse-glimmer-30b-mlx-result.json"
+    }
+  },
+  "interpretation": {
+    "quality": "Both models completed the cross-stack task without touching protected or decoy files.",
+    "latency": "GPT-5.6 Sol Medium was 8.16 times faster on the corrected run.",
+    "routing": "Use GPT-5.6 Sol Medium for interactive or time-sensitive complex changes. Muse Glimmer is suitable for queued local work when a roughly 13-minute completion time is acceptable and the external verification gate remains mandatory."
+  }
+}

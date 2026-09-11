@@ -1,0 +1,84 @@
+{
+  "benchmark": "glimmer-product-ui",
+  "model": "muse-glimmer:30b-mlx",
+  "method": "single-model generation followed by independent static, interaction, detector, and visual review",
+  "generation": {
+    "success": true,
+    "elapsed_seconds": 1207.818,
+    "time_to_first_edit_seconds_approx": 880,
+    "static_score": 25,
+    "static_max": 25,
+    "contract_tests_passed": 10,
+    "contract_tests_total": 10,
+    "scope_violations": 0
+  },
+  "harness": {
+    "impeccable_projected": true,
+    "ponytail_projected": true,
+    "ecc_browser_qa_projected": true,
+    "decisions_harness_stack_projected": true,
+    "agent_watchdog_gap_detected": true,
+    "agent_watchdog_gap_fixed_in_provisioner": true
+  },
+  "browser": {
+    "console_errors": 0,
+    "interactions_passed": [
+      "status filtering",
+      "search",
+      "run selection",
+      "cancel confirmation",
+      "cancel feedback toast",
+      "board/list toggle"
+    ],
+    "screenshots": {
+      "desktop": ".impeccable/review/desktop.png",
+      "tablet": ".impeccable/review/tablet.png",
+      "mobile": ".impeccable/review/mobile.png"
+    },
+    "visual_regression_verdict": "inconclusive because this is the first run and no baseline exists"
+  },
+  "impeccable_audit": {
+    "score": 15,
+    "max_score": 20,
+    "rating": "Good, with a release-blocking mobile defect",
+    "dimensions": {
+      "accessibility": 3,
+      "performance": 4,
+      "theming": 4,
+      "responsive_design": 2,
+      "implementation_integrity": 2
+    },
+    "detector": "degraded regex fallback because htmlparser2, css-select, css-tree, and domutils are unavailable",
+    "detector_findings": 0,
+    "detector_interpretation": "undercount, not a clean bill of health"
+  },
+  "findings": [
+    {
+      "severity": "P1",
+      "category": "Responsive",
+      "finding": "The 375px render has horizontal overflow. The header description and system health badge are clipped, and the List view control is pushed outside the viewport.",
+      "evidence": "muse-glimmer-30b-mlx-ui/.impeccable/review/mobile.png"
+    },
+    {
+      "severity": "P2",
+      "category": "Implementation integrity",
+      "finding": "The output claims no horizontal overflow even though the rendered mobile evidence disproves that claim. Glimmer relied on source inspection and unit tests instead of a real mobile render."
+    },
+    {
+      "severity": "P2",
+      "category": "Implementation integrity",
+      "finding": "Four-pixel colored status borders violate the loaded Impeccable craft-floor rule limiting colored side borders on cards to one pixel."
+    },
+    {
+      "severity": "P2",
+      "category": "Functionality",
+      "finding": "New run and project buttons are presented as actions but have no behavior, which weakens interface honesty even though they were not part of the supplied interaction contract."
+    },
+    {
+      "severity": "P3",
+      "category": "Copy",
+      "finding": "The count renders as '1 runs' after filtering."
+    }
+  ],
+  "verdict": "Glimmer produced disciplined, readable desktop and tablet UI code with strong scope control and working core interactions, but it is not release-ready because mobile overflow escaped both its tests and its completion report."
+}

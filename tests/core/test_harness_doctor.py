@@ -30,6 +30,7 @@ def test_harness_doctor_reports_pack_cli_projection_and_repair_state(tmp_path, m
         "decisions-frontier-prep",
         "decisions-harness-audit",
         "decisions-harness-optimize",
+        "decisions-headroom",
         "codebase-design",
         "domain-modeling",
         "architecture-deepening-review",

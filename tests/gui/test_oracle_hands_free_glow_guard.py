@@ -15,8 +15,18 @@ def test_manual_disable_clears_pending_hands_free_restore():
     assert "clear_pending_restore: bool = False" in disable_block
     assert "self._hands_free_before_dictation = False" in disable_block
     assert "self.disable_hands_free(clear_pending_restore=True)" in toggle_block
-    assert "'clear_pending_restore': True" in disable_block
+    assert "hands_free_command_requested.emit(False, clear_pending_restore)" in disable_block
     assert 'force_idle("hands_free_disable_safety")' in disable_block
+
+
+def test_manual_disable_uses_one_hands_free_agent_command():
+    source = Path("distr/gui/oracle/window.py").read_text(encoding="utf-8")
+    disable_block = source.split("def disable_hands_free", 1)[1].split(
+        "def save_hands_free_state", 1
+    )[0]
+
+    assert "hands_free_command_requested.emit(False, clear_pending_restore)" in disable_block
+    assert "_send_command_to_agent" not in disable_block
 
 
 def test_dictation_suspend_does_not_persist_hands_free_off():

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -58,9 +59,46 @@ func probeMacOSPermissions() map[string]any {
 	exe, _ := os.Executable()
 	return map[string]any{
 		"executable":       exe,
+		"code_identity":    sidecarCodeIdentity(),
 		"screen_recording": probeScreenRecordingPermission(),
 		"automation":       probeAutomationPermission(),
 		"accessibility":    probeAccessibilityPermission(),
+	}
+}
+
+func sidecarCodeIdentity() map[string]any {
+	exe, err := os.Executable()
+	if err != nil {
+		return map[string]any{"stable": false, "detail": err.Error()}
+	}
+	hash, _ := sidecarExecutableHash()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, signErr := exec.CommandContext(
+		ctx,
+		"codesign",
+		"-d",
+		"-r-",
+		"--verbose=4",
+		exe,
+	).CombinedOutput()
+	detail := strings.TrimSpace(string(out))
+	stable := signErr == nil && !strings.Contains(detail, "Signature=adhoc")
+	identifier := ""
+	for _, line := range strings.Split(detail, "\n") {
+		if strings.HasPrefix(line, "Identifier=") {
+			identifier = strings.TrimSpace(strings.TrimPrefix(line, "Identifier="))
+			break
+		}
+	}
+	if signErr != nil && detail == "" {
+		detail = signErr.Error()
+	}
+	return map[string]any{
+		"stable":     stable,
+		"identifier": identifier,
+		"build_hash": hash,
+		"detail":     detail,
 	}
 }
 
@@ -116,25 +154,20 @@ func probeAutomationPermission() map[string]any {
 }
 
 func probeAccessibilityPermission() map[string]any {
-	// Prefer cliclick — never spawn Python from /health (shows in Dock and bounces).
-	if _, err := exec.LookPath("cliclick"); err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		out, err := exec.CommandContext(ctx, "cliclick", "p").Output()
-		text := strings.TrimSpace(string(out))
-		ok := err == nil && strings.Contains(text, ",")
-		detail := text
-		if err != nil {
-			detail = err.Error()
-		}
-		if detail == "" {
-			detail = "ok (cliclick)"
-		}
-		return map[string]any{"ok": ok, "detail": detail, "via": "cliclick"}
+	// Reading the cursor with `cliclick p` does not require enough privilege to
+	// prove UI automation. Ask System Events for its AX trust state instead. The
+	// request is attributed by TCC to this Sidecar process, including subprocesses.
+	out, err := runOsascript(`tell application "System Events" to return UI elements enabled`, 3*time.Second)
+	text := strings.ToLower(strings.TrimSpace(out))
+	ok := err == nil && text == "true"
+	if ok {
+		return map[string]any{"ok": true, "verified": true, "detail": "ok", "via": "system_events_ax"}
 	}
-	return map[string]any{
-		"ok":     false,
-		"detail": "install cliclick for accessibility checks (brew install cliclick)",
-		"via":    "none",
+	detail := strings.TrimSpace(out)
+	if err != nil {
+		detail = fmt.Sprintf("Accessibility denied or stale for this Sidecar build: %v", err)
+	} else if detail == "" || text == "false" {
+		detail = "Accessibility denied or stale for this Sidecar build"
 	}
+	return map[string]any{"ok": false, "verified": true, "detail": detail, "via": "system_events_ax"}
 }

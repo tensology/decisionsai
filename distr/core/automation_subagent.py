@@ -131,11 +131,15 @@ def _deliver_automation_speech(
     *,
     automation_name: str,
     manual: bool,
+    origin_surface: str = "automation",
 ) -> tuple[str, str]:
-    """Deliver the automation body to the user. Returns (channel, status_detail)."""
+    """Return an automation result only to the channel that invoked it."""
     body = (speech_text or "").strip()
     if not body:
         return "none", "nothing to deliver"
+
+    if str(origin_surface or "").strip().lower() != "telegram":
+        return "none", "saved in automation run history"
 
     if _telegram_connected():
         queued = _put_main_event(
@@ -147,20 +151,17 @@ def _deliver_automation_speech(
                 "skip_screenshot": True,
                 "explicit_artifact_intent": False,
                 "input_type": "automation",
-                # Automations must reach the Telegram chat, not the remote web UI.
                 "force_telegram_delivery": True,
                 "explicit_notification_intent": True,
                 "engagement_source": "automation",
+                "origin_surface": "telegram",
             },
         )
         if queued:
             return "telegram", "queued for Telegram"
         return "telegram", "Telegram is connected but the send queue is unavailable"
 
-    queued = _speak_orchestrator(body[:650])
-    if queued:
-        return "desktop_tts", "queued for voice"
-    return "none", "voice queue unavailable"
+    return "none", "Telegram origin is no longer connected"
 
 
 def _orchestrator_delivery_ack(
@@ -171,23 +172,8 @@ def _orchestrator_delivery_ack(
     channel_detail: str,
     manual: bool = True,
 ) -> None:
-    """Brief spoken status — never recap where the summary was routed."""
-    if success:
-        if channel == "desktop_tts":
-            return
-        if channel == "telegram":
-            if not manual:
-                return
-            _speak_orchestrator("Done. I put it on Telegram.")
-            return
-        _speak_orchestrator("Done.")
-        return
-    label = (automation_name or "That").strip()
-    detail = (channel_detail or "").strip()
-    if not detail or "run history" in detail.lower() or "queue" in detail.lower():
-        _speak_orchestrator(f"{label} didn't work.")
-        return
-    _speak_orchestrator(f"{label} didn't work. {detail}")
+    """Automation status belongs to its run ledger, never desktop speech."""
+    return None
 
 
 def update_automation_run(
@@ -254,6 +240,7 @@ def finalize_automation_subagent_from_agent(
             speech_text,
             automation_name=automation_name,
             manual=True,
+            origin_surface="automation",
         )
     status = "completed" if success else "failed"
     update_automation_run(
@@ -326,10 +313,17 @@ def _execute_instruction_automation(
     try:
         from distr.core.signals import signal_manager
 
+        action_config = automation.get("action_config")
+        config = action_config if isinstance(action_config, dict) else {}
+        independent_thread = bool(config.get("run_in_new_thread", True))
         options = {
-            "skip_user_persist": True,
+            "skip_user_persist": not independent_thread,
             "automation_run_id": int(run_id),
             "automation_name": str(automation.get("name") or "Automation"),
+            "reasoning_effort": str(config.get("reasoning_effort") or "medium"),
+            "fallback_backend": str(config.get("fallback_backend") or ""),
+            "fallback_model_provider": str(config.get("fallback_model_provider") or ""),
+            "fallback_model": str(config.get("fallback_model") or ""),
         }
         signal_manager.web_send_to_agent_requested.emit(
             int(chat_id),
@@ -365,6 +359,12 @@ def _automation_worker(
     action_config = automation.get("action_config")
     if isinstance(action_config, dict):
         tool_name = str(action_config.get("tool") or "").strip()
+    invocation_context = (
+        automation.get("_invocation_context")
+        if isinstance(automation.get("_invocation_context"), dict)
+        else {}
+    )
+    origin_surface = str(invocation_context.get("origin_surface") or "automation").strip().lower()
 
     try:
         if tool_name:
@@ -386,11 +386,12 @@ def _automation_worker(
                 return
 
             channel, channel_detail = ("none", "saved in run history")
-            if success and speech_text and speak:
+            if success and speech_text and origin_surface == "telegram":
                 channel, channel_detail = _deliver_automation_speech(
                     speech_text,
                     automation_name=name,
                     manual=manual,
+                    origin_surface=origin_surface,
                 )
 
             status = "completed" if success else "failed"
@@ -459,7 +460,6 @@ def _automation_worker(
             summary=summary,
             extra={"execution_mode": "automation_subagent_instruction"},
         )
-        _speak_orchestrator("On it.")
     except Exception as exc:
         logger.error("Automation subagent failed for run %s: %s", run_id, exc, exc_info=True)
         update_automation_run(
@@ -487,7 +487,7 @@ def start_automation_subagent(
     run_id: int,
     manual: bool = True,
     chat_id: int | None = None,
-    speak: bool = True,
+    speak: bool = False,
     schedule_metadata: dict[str, Any] | None = None,
     emit_event: Callable[..., int | None] | None = None,
 ) -> None:

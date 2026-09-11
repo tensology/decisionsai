@@ -11,10 +11,35 @@ import io
 import logging
 from typing import Any, Optional
 
-from distr.core.agent.services.tts.elevenlabs_config import resolve_elevenlabs_tts_model
+from distr.core.agent.services.tts.elevenlabs_config import (
+    ELEVENLABS_DIALOGUE_MODELS,
+    is_elevenlabs_v3_compatibility_error,
+    resolve_elevenlabs_tts_model,
+)
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
 
 logger = logging.getLogger(__name__)
+
+_ELEVENLABS_PREVIEW_TIMEOUT_SECONDS = 15
+_ELEVENLABS_PREVIEW_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _collect_preview_audio(audio_stream) -> bytes:
+    """Collect a short preview with a hard response-size ceiling."""
+    chunks = []
+    total = 0
+    try:
+        for chunk in audio_stream:
+            chunk = bytes(chunk)
+            total += len(chunk)
+            if total > _ELEVENLABS_PREVIEW_MAX_BYTES:
+                raise ValueError("ElevenLabs preview exceeded the maximum audio size.")
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        close = getattr(audio_stream, "close", None)
+        if close:
+            close()
 
 # --- ElevenLabs defaults (moved from constants.py) ---
 ELEVENLABS_DEFAULTS = {
@@ -197,43 +222,105 @@ class ElevenLabsDescriptor(TTSProviderDescriptor):
 
         api_speed = max(0.7, min(1.2, float(speed)))
 
+        model_id = resolve_elevenlabs_tts_model(settings.get("elevenlabs_tts_model"))
+        pcm_sample_rate = None
         try:
-            audio_stream = client.text_to_speech.convert(
-                text=text,
-                voice_id=resolved_voice,
-                model_id=resolve_elevenlabs_tts_model(settings.get("elevenlabs_tts_model")),
-                output_format="mp3_44100_128",
-                voice_settings={
-                    "stability": stability,
-                    "similarity_boost": similarity_boost,
-                    "style": style,
-                    "use_speaker_boost": use_speaker_boost,
-                    "speed": api_speed,
-                },
-            )
-            audio_bytes = b"".join(audio_stream)
-        except Exception as err:
-            kind, message = _clean_elevenlabs_descriptor_error(err)
-            if kind in {"quota_exceeded", "rate_limited", "auth_failed"}:
-                logger.warning("ElevenLabs TTS unavailable: %s", message)
-                raise ValueError(message) from None
-            raise
+            if model_id in ELEVENLABS_DIALOGUE_MODELS:
+                from elevenlabs.types import DialogueInput, ModelSettingsResponseModel
 
-        try:
-            from pydub import AudioSegment
-            seg = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-            if seg.channels > 1:
-                seg = seg.set_channels(1)
-            sample_rate = seg.frame_rate
-            samples = seg.get_array_of_samples()
-            audio = np.array(samples, dtype=np.float32) / 32768.0
-        except ImportError:
-            with io.BytesIO(audio_bytes) as f:
-                audio, sample_rate = sf.read(f)
-            if audio.ndim > 1:
-                audio = np.mean(audio, axis=1)
-            if audio.dtype != np.float32:
-                audio = audio.astype(np.float32) / (32768.0 if audio.dtype == np.int16 else 2147483648.0)
+                audio_stream = client.text_to_dialogue.stream(
+                    inputs=[DialogueInput(text=text, voice_id=resolved_voice)],
+                    model_id=model_id,
+                    output_format="pcm_24000",
+                    settings=ModelSettingsResponseModel(
+                        stability=min(
+                            (0.0, 0.5, 1.0),
+                            key=lambda candidate: abs(candidate - stability),
+                        )
+                    ),
+                    request_options={
+                        "timeout_in_seconds": _ELEVENLABS_PREVIEW_TIMEOUT_SECONDS,
+                        "max_retries": 0,
+                    },
+                )
+                audio_bytes = _collect_preview_audio(audio_stream)
+                pcm_sample_rate = 24000
+            else:
+                audio_stream = client.text_to_speech.convert(
+                    text=text,
+                    voice_id=resolved_voice,
+                    model_id=model_id,
+                    output_format="mp3_44100_128",
+                    voice_settings={
+                        "stability": stability,
+                        "similarity_boost": similarity_boost,
+                        "style": style,
+                        "use_speaker_boost": use_speaker_boost,
+                        "speed": api_speed,
+                    },
+                    request_options={
+                        "timeout_in_seconds": _ELEVENLABS_PREVIEW_TIMEOUT_SECONDS,
+                        "max_retries": 0,
+                    },
+                )
+                audio_bytes = _collect_preview_audio(audio_stream)
+        except Exception as err:
+            if (
+                model_id in ELEVENLABS_DIALOGUE_MODELS
+                and is_elevenlabs_v3_compatibility_error(err)
+            ):
+                logger.warning(
+                    "ElevenLabs v3 preview was incompatible; retrying with Flash"
+                )
+                try:
+                    audio_stream = client.text_to_speech.convert(
+                        text=text,
+                        voice_id=resolved_voice,
+                        model_id="eleven_flash_v2_5",
+                        output_format="mp3_44100_128",
+                        voice_settings={
+                            "stability": stability,
+                            "similarity_boost": similarity_boost,
+                            "style": style,
+                            "use_speaker_boost": use_speaker_boost,
+                            "speed": api_speed,
+                        },
+                        request_options={
+                            "timeout_in_seconds": _ELEVENLABS_PREVIEW_TIMEOUT_SECONDS,
+                            "max_retries": 0,
+                        },
+                    )
+                    audio_bytes = _collect_preview_audio(audio_stream)
+                    pcm_sample_rate = None
+                except Exception as fallback_err:
+                    kind, message = _clean_elevenlabs_descriptor_error(fallback_err)
+                    logger.warning("ElevenLabs Flash preview fallback failed (%s)", kind)
+                    raise ValueError(message) from None
+            else:
+                kind, message = _clean_elevenlabs_descriptor_error(err)
+                logger.warning("ElevenLabs preview failed (%s)", kind)
+                raise ValueError(message) from None
+
+        if pcm_sample_rate:
+            aligned = audio_bytes[: len(audio_bytes) - (len(audio_bytes) % 2)]
+            audio = np.frombuffer(aligned, dtype="<i2").astype(np.float32) / 32768.0
+            sample_rate = pcm_sample_rate
+        else:
+            try:
+                from pydub import AudioSegment
+                seg = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+                if seg.channels > 1:
+                    seg = seg.set_channels(1)
+                sample_rate = seg.frame_rate
+                samples = seg.get_array_of_samples()
+                audio = np.array(samples, dtype=np.float32) / 32768.0
+            except ImportError:
+                with io.BytesIO(audio_bytes) as f:
+                    audio, sample_rate = sf.read(f)
+                if audio.ndim > 1:
+                    audio = np.mean(audio, axis=1)
+                if audio.dtype != np.float32:
+                    audio = audio.astype(np.float32) / (32768.0 if audio.dtype == np.int16 else 2147483648.0)
 
         from distr.core.audio.tts_handler import _resample_audio
         audio, sample_rate = _resample_audio(audio, sample_rate, 48000)
@@ -326,6 +413,7 @@ class ElevenLabsDescriptor(TTSProviderDescriptor):
         return {
             'engine': 'elevenlabs',
             'voice_id': voice_model or '',
+            'model_id': resolve_elevenlabs_tts_model(settings.get('elevenlabs_tts_model')),
             'api_key': (settings.get('elevenlabs_key') or '').strip(),
             'in_place': False,
             'unload_kanade': True,

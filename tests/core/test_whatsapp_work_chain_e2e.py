@@ -84,4 +84,10 @@ def test_whatsapp_message_to_ticket_to_qa_reply_review_chain(monkeypatch, tmp_pa
         final_state = conn.execute(text(
             "SELECT status FROM whatsapp_work_lifecycles WHERE ticket_id=:id"
         ), {"id": ticket_id}).scalar_one()
+        audit_statuses = [
+            row[0] for row in conn.execute(text(
+                "SELECT status FROM kanban_ticket_audit_entries WHERE ticket_id=:id ORDER BY id"
+            ), {"id": ticket_id}).fetchall()
+        ]
     assert final_state == "reply_draft_ready"
+    assert audit_statuses == ["source_ingested", "awaiting_reply_review", "reply_draft_ready"]

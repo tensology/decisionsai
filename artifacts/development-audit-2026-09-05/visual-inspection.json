@@ -1,0 +1,29 @@
+{
+  "reviewed_views": [
+    "render-01.png",
+    "render-02.png",
+    "render-03.png",
+    "render-04.png",
+    "render-05.png",
+    "render-06.png",
+    "render-07.png",
+    "render-08.png",
+    "render-09.png",
+    "render-10.png",
+    "render-11.png"
+  ],
+  "method": "Each final rendered view inspected visually after the last report content/layout change",
+  "checks": {
+    "clipping": "pass",
+    "overflow": "pass",
+    "overlapping elements": "pass",
+    "broken page breaks": "pass",
+    "orphaned headings": "pass",
+    "split or repeated table rows": "pass",
+    "action items separated from owners": "pass",
+    "missing headers or footers": "pass",
+    "unreadable fonts": "pass",
+    "inconsistent branding": "pass"
+  },
+  "notes": "Eleven continuous HTML sections with individual headers and footers. No clipped report content, split table rows, or orphaned action owners observed. Embedded screenshots document defects in the application; original full-size screenshots were also inspected."
+}

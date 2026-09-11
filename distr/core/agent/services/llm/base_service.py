@@ -223,6 +223,20 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         if callable(argument_normalizer):
             normalized = argument_normalizer(normalized)
 
+        schema = getattr(tool, "args_schema", None)
+        schema_config = getattr(schema, "model_config", {}) if schema is not None else {}
+        schema_fields = (
+            getattr(schema, "model_fields", None)
+            or getattr(schema, "__fields__", None)
+            or {}
+        )
+        if schema_fields and schema_config.get("extra") == "forbid":
+            normalized = {
+                name: value
+                for name, value in normalized.items()
+                if name in schema_fields
+            }
+
         missing = [] if allow_var_kwargs else [
             param.name
             for param in params.values()
@@ -260,7 +274,6 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                 f"{tool_name}._run() missing required argument(s): {', '.join(missing)}"
             )
 
-        schema = getattr(tool, "args_schema", None)
         if schema is not None:
             try:
                 if hasattr(schema, "model_validate"):

@@ -249,6 +249,29 @@ class FileDropMixin:
                         logger.info(f"[DROP] Using current chat_id: {current_chat_id}")
                 except Exception as e:
                     logger.error(f"[DROP] Error getting current_chat_id: {e}", exc_info=True)
+
+            # Never attach Oracle drops to a Development work item. The sphere
+            # is a conversational Chat surface; Development attachments enter
+            # through the Studio upload endpoint with an explicit task id.
+            if current_chat_id:
+                try:
+                    from distr.core.db import get_session
+                    from distr.core.workflow.development_threads import resolve_conversational_chat_id
+
+                    with get_session() as session:
+                        current_chat_id = resolve_conversational_chat_id(
+                            session,
+                            current_chat_id,
+                        )
+                except Exception:
+                    logger.exception("[DROP] Could not validate Chat surface ownership")
+                    current_chat_id = None
+            if current_chat_id is None and hasattr(self, 'chat_manager') and self.chat_manager:
+                current_chat_id = self.chat_manager.create_chat("New Conversation", is_new=True)
+                logger.info(
+                    "[DROP] Created conversational chat %s because no Chat surface was active",
+                    current_chat_id,
+                )
             
             # Store file-to-chat mapping (which chats each file was dropped in)
             # CRITICAL: Files can be associated with MULTIPLE chats - each chat_id is stored in a list

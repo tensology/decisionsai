@@ -36,23 +36,19 @@ def notify_source_chat_ticket_moved(
         logger.debug("notify_source_chat_ticket_moved: load ticket failed", exc_info=True)
         return
 
-    board_part = f' on board "{board_name}"' if board_name else ""
     if reason == "manual":
-        from_part = f' from "{from_lane_name}"' if from_lane_name else ""
         body = (
-            f'Ticket #{ticket_id} "{title}"{board_part} was moved{from_part} '
-            f'to lane "{to_lane_name}".'
+            f"Ticket moved: {from_lane_name} to {to_lane_name}."
+            if from_lane_name
+            else f"Ticket moved to {to_lane_name}."
         )
     else:
-        body = (
-            f'Ticket #{ticket_id} "{title}"{board_part} advanced to lane "{to_lane_name}" '
-            f"after the board workflow completed."
-        )
+        body = f"Ticket moved to {to_lane_name} after workflow completion."
 
     try:
         from distr.core.chat import ChatService
 
-        ChatService.append_assistant_notice(chat_id, body, hidden=False)
+        chat_row_id = ChatService.append_assistant_notice(chat_id, body, hidden=False)
     except Exception:
         logger.debug("notify_source_chat_ticket_moved: persist notice failed", exc_info=True)
         return
@@ -60,7 +56,7 @@ def notify_source_chat_ticket_moved(
     try:
         from distr.core.signals import signal_manager
 
-        signal_manager.chat_message_added.emit(chat_id, "assistant", body)
+        signal_manager.chat_message_added.emit(chat_id, "assistant", body, chat_row_id)
         signal_manager.chat_updated.emit(chat_id)
     except Exception:
         logger.debug("notify_source_chat_ticket_moved: signal emit failed", exc_info=True)

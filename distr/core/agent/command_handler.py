@@ -86,6 +86,22 @@ def _cmd_reload(session, params):
     session._reload_event.set()
 
 
+def _cmd_agent_health_probe(session, params):
+    """Acknowledge that the agent command worker is still consuming input."""
+    if not session.event_queue:
+        return
+    session.event_queue.put(
+        (
+            'agent_health_ack',
+            {
+                'probe_id': params.get('probe_id') if isinstance(params, dict) else None,
+                'timestamp': time.time(),
+            },
+        ),
+        block=False,
+    )
+
+
 def _cmd_file_operation_confirmation_response(session, params):
     confirmation_id = params.get('confirmation_id')
     confirmed = params.get('confirmed', False)
@@ -168,22 +184,19 @@ def _cmd_hot_swap_llm(session, params):
     voice_provider = (params.get('voice_provider') or '').strip() or None
     voice_model = (params.get('voice_model') or '').strip() or None
 
-    from distr.core.openai_s2s import completions_model_for_chat, is_openai_s2s_model
-    if is_openai_s2s_model(model_name):
-        twin = completions_model_for_chat(
-            model_name,
-            (session.settings or {}).get("conversational_llm_model")
-            or (session.settings or {}).get("agent_model"),
-        )
-        session.logger.info(
-            "hot_swap_llm: S2S model %s requested; Completions twin=%s (Realtime runtime pending)",
-            model_name,
-            twin,
-        )
-        if session.config and session.config.get("llm") is not None:
-            session.config["llm"]["s2s_active"] = True
-            session.config["llm"]["s2s_model"] = model_name
-        model_name = twin
+    from distr.core.openai_s2s import apply_s2s_voice_defaults
+
+    # Preserve the selected chat model through the session hot-swap. The session
+    # owns the split between Realtime intent and the safe Completions twin. If we
+    # pass the twin here, it looks exactly like the user left Realtime and the
+    # bridge is disabled again.
+    s2s_provider, voice_provider, voice_model = apply_s2s_voice_defaults(
+        model_name=model_name,
+        voice_provider=voice_provider,
+        voice_model=voice_model,
+    )
+    if s2s_provider:
+        provider = s2s_provider
 
     session.logger.debug(
         "hot_swap_llm: chat_id=%s provider=%s model_name=%s voice=%s/%s (will swap LLM then TTS)",
@@ -723,6 +736,16 @@ def _cmd_process_text_input(session, params):
         if isinstance(params, dict) and params.get('telegram_input_type') in ('text', 'voice')
         else None
     )
+    external_surface = (
+        str(params.get('external_surface') or '').strip().lower()
+        if isinstance(params, dict)
+        else ''
+    ) or None
+    external_request_id = (
+        str(params.get('external_request_id') or '').strip()
+        if isinstance(params, dict)
+        else ''
+    ) or None
     work_intake_uid = str(
         params.get("work_intake_uid") or ""
     ).strip() if isinstance(params, dict) else ""
@@ -782,6 +805,8 @@ def _cmd_process_text_input(session, params):
                         uploaded_image_path=uploaded_image_path or None,
                         speaker_enabled=speaker_override,
                         telegram_input_type=telegram_input_type,
+                        external_surface=external_surface,
+                        external_request_id=external_request_id,
                         skip_user_persist=skip_user_persist,
                         requested_chat_id=requested_chat_id,
                     )
@@ -832,13 +857,28 @@ def _cmd_process_text_input(session, params):
 
 
 
+_MIN_PTT_HOLD_SECONDS = 0.25
+
+
+def _cancel_pending_ptt_release(session):
+    handle = getattr(session, "_ptt_release_handle", None)
+    if handle is not None:
+        try:
+            handle.cancel()
+        except Exception:
+            session.logger.debug("PTT: Could not cancel pending release", exc_info=True)
+        session._ptt_release_handle = None
+
+
 def _cmd_push_to_talk_start(session, params):
+    _cancel_pending_ptt_release(session)
     for_dictation = bool((params or {}).get("for_dictation"))
     session.logger.debug(
         "PTT: Push-to-talk START received (for_dictation=%s)",
         for_dictation,
     )
     session.ptt_active = True
+    session._ptt_started_at = time.monotonic()
     # Capture the mode for this specific press. The session-level dictation
     # flag can remain true while an asynchronous dictation transcript drains;
     # using it at release time can therefore reject a later, valid agent PTT.
@@ -942,10 +982,11 @@ def _cmd_push_to_talk_start(session, params):
 
 
 
-def _cmd_push_to_talk_stop(session, params):
+def _finish_ptt_stop(session):
     session.logger.debug("PTT: Push-to-talk STOP received")
     was_ptt_active = bool(getattr(session, 'ptt_active', False))
     was_dictation_ptt = bool(getattr(session, '_ptt_for_dictation', False))
+    session._ptt_release_handle = None
     session.ptt_active = False
     session._ptt_for_dictation = False
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, 'set_ptt_active'):
@@ -969,6 +1010,35 @@ def _cmd_push_to_talk_stop(session, params):
     # Keep mic open longer after dictation so scheduled PTT flush can finish Whisper work
     idle_delay = 2.5 if getattr(session, 'is_dictating', False) else 1.0
     _schedule_audio_input_idle_pause(session, "push_to_talk_stop", delay=idle_delay)
+
+
+def _cmd_push_to_talk_stop(session, params):
+    """Release PTT after a short hold so the first mic callbacks can arrive.
+
+    macOS can deliver a key/button release before the resumed input transport
+    has produced its first callback. Finalising in that window turns a valid
+    tap into an empty transcription. The delayed release only applies to an
+    active PTT session and does not affect hands-free VAD.
+    """
+    started_at = getattr(session, "_ptt_started_at", None)
+    was_active = bool(getattr(session, "ptt_active", False))
+    if was_active and not getattr(session, "is_hands_free", False) and started_at is not None:
+        remaining = _MIN_PTT_HOLD_SECONDS - (time.monotonic() - started_at)
+        if remaining > 0:
+            loop = getattr(getattr(session, "runner", None), "_loop", None) or getattr(session, "_main_loop", None)
+            if loop is not None and getattr(loop, "is_running", lambda: False)():
+                if getattr(session, "_ptt_release_handle", None) is None:
+                    session.logger.info(
+                        "PTT: Deferring release for %.0fms to allow mic warmup",
+                        remaining * 1000,
+                    )
+                    session._ptt_release_handle = loop.call_later(
+                        remaining,
+                        _finish_ptt_stop,
+                        session,
+                    )
+                return
+    _finish_ptt_stop(session)
 
 
 def _cmd_dictation_hotkey_pressed(session, params):
@@ -1033,6 +1103,9 @@ def _cmd_dictation_hotkey_released(session, params):
 
 def _cmd_interrupt_tts(session, params):
     session.logger.info("⏹ TTS interrupted")
+    timing = getattr(getattr(session, "stt_service", None), "_audio_timing", None)
+    if timing is not None:
+        timing.mark("interruption_requested")
 
     _loop = getattr(session.runner, '_loop', None) if session.runner else None
     if _loop is None:
@@ -1150,6 +1223,16 @@ def _split_text_for_direct_tts(text: str, max_chunk: int = 300) -> list[str]:
     return parts if parts else [t]
 
 
+async def _direct_tts_worker(session, queue):
+    """Play direct-speech requests serially in arrival order."""
+    while True:
+        speak_request = await queue.get()
+        try:
+            await speak_request()
+        finally:
+            queue.task_done()
+
+
 def _cmd_speak_text_directly(session, params):
     """Speak text directly via TTS without going through LLM."""
     from .libs import TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
@@ -1241,7 +1324,19 @@ def _cmd_speak_text_directly(session, params):
                         session.tts_service._force_desktop_tts = prev_tts_force
                     session.logger.info("_cmd_speak_text_directly done id=%s", direct_tts_id)
 
-            asyncio.run_coroutine_threadsafe(speak_directly(), session.runner._loop)
+            async def enqueue_directly():
+                queue = getattr(session, '_direct_tts_queue', None)
+                if queue is None:
+                    queue = asyncio.Queue(maxsize=64)
+                    session._direct_tts_queue = queue
+                worker = getattr(session, '_direct_tts_worker', None)
+                if worker is None or worker.done():
+                    worker = asyncio.create_task(_direct_tts_worker(session, queue))
+                    session._direct_tts_worker = worker
+                await queue.put(speak_directly)
+                await queue.join()
+
+            asyncio.run_coroutine_threadsafe(enqueue_directly(), session.runner._loop)
         else:
             session.logger.warning("Cannot speak text directly: event loop not available")
     elif text:
@@ -1281,8 +1376,11 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
 
     # Check if voice_model is a known Kokoro voice
     is_kokoro = vm in KOKORO_VOICES or vm in KOKORO_VOICE_BY_DISPLAY_NAME
-    # Check if voice_model is a known OpenAI voice
-    openai_voices = {'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'}
+    # Check both chained-TTS and Realtime OpenAI voices. Realtime voices such as
+    # Marin and Cedar must never be "corrected" to ElevenLabs.
+    from distr.core.openai_s2s import OPENAI_REALTIME_VOICES
+
+    openai_voices = set(OPENAI_REALTIME_VOICES) | {'fable', 'onyx', 'nova'}
     is_openai = vm.lower() in openai_voices
     try:
         from distr.core.agent.services.tts.supertonic_descriptor import SUPERTONIC_VOICES
@@ -1498,26 +1596,7 @@ def _cmd_current_chat_changed(session, params):
         session.logger.warning("Load chat %s: DB read failed: %s", chat_id, e)
 
     # ---------------------------------------------------------------
-    # 2. Correct voice provider mismatches (e.g. kokoro + ElevenLabs voice)
-    # ---------------------------------------------------------------
-    if chat_voice_provider and chat_voice_model:
-        corrected = _detect_correct_voice_provider(chat_voice_provider, chat_voice_model)
-        if corrected != chat_voice_provider:
-            session.logger.info("Load chat %s: voice provider corrected %s -> %s (voice_model=%s)",
-                                chat_id, chat_voice_provider, corrected, chat_voice_model)
-            chat_voice_provider = corrected
-            # Persist correction so it doesn't happen again
-            try:
-                with get_session() as db:
-                    c = db.get(Chat, chat_id)
-                    if c:
-                        c.voice_provider = corrected
-                        db.commit()
-            except Exception:
-                pass
-
-    # ---------------------------------------------------------------
-    # 3. Determine what needs swapping
+    # 2. Apply Realtime invariants before generic voice correction
     # ---------------------------------------------------------------
     from distr.core.openai_s2s import (
         apply_s2s_voice_defaults,
@@ -1525,17 +1604,47 @@ def _cmd_current_chat_changed(session, params):
         is_openai_s2s_model,
     )
     provider = chat_provider or "Ollama"
+    original_voice = (chat_voice_provider, chat_voice_model)
     s2s_prov, chat_voice_provider, chat_voice_model = apply_s2s_voice_defaults(
         model_name=chat_model,
         voice_provider=chat_voice_provider,
         voice_model=chat_voice_model,
     )
     if s2s_prov:
-        provider = s2s_prov
+        provider = normalize_provider(s2s_prov)
+
+    # ---------------------------------------------------------------
+    # 3. Correct non-Realtime provider mismatches
+    # ---------------------------------------------------------------
+    if chat_voice_provider and chat_voice_model:
+        corrected = _detect_correct_voice_provider(chat_voice_provider, chat_voice_model)
+        if corrected != chat_voice_provider:
+            session.logger.info("Load chat %s: voice provider corrected %s -> %s (voice_model=%s)",
+                                chat_id, chat_voice_provider, corrected, chat_voice_model)
+            chat_voice_provider = corrected
+
+    # Persist either a Realtime default or a genuine provider correction. This
+    # prevents the next load from resolving an OpenAI Realtime voice through an
+    # ElevenLabs catalogue.
+    if original_voice != (chat_voice_provider, chat_voice_model):
+        try:
+            with get_session() as db:
+                c = db.get(Chat, chat_id)
+                if c:
+                    c.voice_provider = chat_voice_provider
+                    c.voice_model = chat_voice_model
+                    db.commit()
+        except Exception:
+            pass
+
+    # ---------------------------------------------------------------
+    # 4. Determine what needs swapping
+    # ---------------------------------------------------------------
     chat_engine = PROVIDER_TO_ENGINE.get(provider, "ollama")
     raw_model = (chat_model or "").strip() or DEFAULT_MODELS.get(chat_engine, DEFAULT_MODELS["ollama"])
-    # Completions twin when chat is S2S (Realtime runtime still pending)
-    model_name = (
+    # Compare the safe Completions service model, while retaining raw_model as
+    # the authoritative chat intent passed into the hot-swap.
+    completions_model = (
         completions_model_for_chat(
             raw_model,
             (session.settings or {}).get("conversational_llm_model")
@@ -1544,22 +1653,31 @@ def _cmd_current_chat_changed(session, params):
         if is_openai_s2s_model(raw_model)
         else raw_model
     )
-    if is_openai_s2s_model(raw_model) and session.config and session.config.get("llm") is not None:
-        session.config["llm"]["s2s_active"] = True
-        session.config["llm"]["s2s_model"] = raw_model
+    llm_config = (session.config or {}).get("llm", {})
+    cur_engine = llm_config.get("engine", "ollama")
+    cur_model = (llm_config.get("model_name") or "").strip()
+    target_s2s_active = is_openai_s2s_model(raw_model)
+    s2s_changed = (
+        bool(llm_config.get("s2s_active")) != target_s2s_active
+        or (
+            target_s2s_active
+            and (llm_config.get("s2s_model") or "").strip() != raw_model
+        )
+    )
+    need_llm_swap = (
+        (cur_engine != chat_engine)
+        or (cur_model != completions_model)
+        or s2s_changed
+    )
 
-    cur_engine = (session.config or {}).get("llm", {}).get("engine", "ollama")
-    cur_model = ((session.config or {}).get("llm", {}).get("model_name") or "").strip()
-    need_llm_swap = (cur_engine != chat_engine) or (cur_model != model_name)
-
-    session.logger.debug("Load chat %s: provider=%s model=%s voice=%s/%s need_llm_swap=%s",
-                         chat_id, provider, model_name, chat_voice_provider, chat_voice_model, need_llm_swap)
+    session.logger.debug("Load chat %s: provider=%s model=%s completions_model=%s voice=%s/%s need_llm_swap=%s",
+                         chat_id, provider, raw_model, completions_model, chat_voice_provider, chat_voice_model, need_llm_swap)
 
     # ---------------------------------------------------------------
-    # 4. Swap LLM if needed
+    # 5. Swap LLM if needed
     # ---------------------------------------------------------------
     if need_llm_swap:
-        session._hot_swap_llm_service(provider, model_name, chat_id,
+        session._hot_swap_llm_service(provider, raw_model, chat_id,
                                        voice_provider=chat_voice_provider,
                                        voice_model=chat_voice_model)
 
@@ -1591,8 +1709,14 @@ def _cmd_current_chat_changed(session, params):
     # 9. Restore speaker (TTS) state from global settings
     # ---------------------------------------------------------------
     if session.llm_service:
-        voice_enabled = (session.settings or {}).get(
-            'voice_enabled', (session.settings or {}).get('chat_voice_enabled', True))
+        settings = session.settings or {}
+        # The current persisted key must win over the legacy alias. A stale
+        # `voice_enabled=False` otherwise silences chat replies after loading a
+        # chat, even when the web chat speaker setting is enabled.
+        voice_enabled = settings.get(
+            'chat_voice_enabled',
+            settings.get('voice_enabled', True),
+        )
         session.llm_service.set_speaker_enabled(bool(voice_enabled))
 
     session.logger.debug("=== LOAD CHAT %s COMPLETE ===", chat_id)
@@ -1600,14 +1724,14 @@ def _cmd_current_chat_changed(session, params):
     # ---------------------------------------------------------------
     # 10. Warm the Ollama model into memory (fire-and-forget)
     # ---------------------------------------------------------------
-    if chat_engine == "ollama" and model_name:
+    if chat_engine == "ollama" and completions_model:
         import threading
 
         def _warm_model():
             try:
                 requests.post(
                     "http://localhost:11434/api/generate",
-                    json={"model": model_name, "prompt": "", "keep_alive": -1},
+                    json={"model": completions_model, "prompt": "", "keep_alive": -1},
                     timeout=30,
                 )
             except Exception:
@@ -1650,6 +1774,7 @@ _COMMAND_MAP = {
     # Lifecycle
     'shutdown': _cmd_shutdown,
     'reload': _cmd_reload,
+    'agent_health_probe': _cmd_agent_health_probe,
     'file_operation_confirmation_response': _cmd_file_operation_confirmation_response,
     # Model / service updates
     'update_model': _cmd_update_model,

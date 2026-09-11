@@ -71,7 +71,7 @@ def next_run_for_interval(
     return base + interval_timedelta(value, unit)
 
 
-def parse_once_run_at_as_utc(raw: str) -> Optional[datetime]:
+def parse_once_run_at_as_utc(raw: str, timezone_name: str = "") -> Optional[datetime]:
     """Parse a one-time schedule timestamp for UTC storage/comparison.
 
   ``datetime-local`` values from the automation UI are naive local wall-clock
@@ -94,23 +94,34 @@ def parse_once_run_at_as_utc(raw: str) -> Optional[datetime]:
         from datetime import timezone
 
         return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    if str(timezone_name or "").strip():
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        return parsed.replace(tzinfo=ZoneInfo(str(timezone_name).strip())).astimezone(timezone.utc).replace(tzinfo=None)
     return parsed - _utc_offset()
 
 
-def normalize_once_run_at_storage(raw: str) -> str:
+def normalize_once_run_at_storage(raw: str, timezone_name: str = "") -> str:
     """Normalize a one-time run-at value to UTC ISO for persistence."""
-    parsed = parse_once_run_at_as_utc(raw)
+    parsed = parse_once_run_at_as_utc(raw, timezone_name)
     if not parsed:
         return str(raw or "").strip()
     return parsed.replace(microsecond=0).isoformat() + "Z"
 
 
-def once_run_at_for_datetime_local_input(stored: str) -> str:
+def once_run_at_for_datetime_local_input(stored: str, timezone_name: str = "") -> str:
     """Convert a stored one-time run-at value to ``datetime-local`` input text."""
     parsed = parse_once_run_at_as_utc(stored)
     if not parsed:
         return str(stored or "").strip().replace("Z", "")
-    local = parsed + _utc_offset()
+    if str(timezone_name or "").strip():
+        from datetime import timezone
+        from zoneinfo import ZoneInfo
+
+        local = parsed.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(str(timezone_name).strip())).replace(tzinfo=None)
+    else:
+        local = parsed + _utc_offset()
     return local.replace(second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M")
 
 
@@ -413,7 +424,7 @@ def _next_run_from_cron(
         if not raw:
             return None
         try:
-            return parse_once_run_at_as_utc(raw)
+            return parse_once_run_at_as_utc(raw, timezone or "")
         except Exception as e:
             logger.warning("Could not parse one-time schedule %r: %s", raw, e)
             return None
@@ -706,10 +717,10 @@ def run_scheduled_workflow(
     """
     Trigger a scheduled workflow run and advance next_run_at.
 
-    Uses the unified workflow service's start_workflow_run() for execution.
+    Uses the canonical thread-first Development dispatch gateway.
     Advances next_run_at immediately to prevent re-firing on the next tick.
     """
-    from distr.core.workflow.service import start_workflow_run
+    from distr.core.workflow.work_dispatch import dispatch_work_item
 
     now = datetime.utcnow()
     with get_session() as session:
@@ -817,16 +828,19 @@ def run_scheduled_workflow(
             return False
 
     # Start the workflow run via the unified service
-    result = start_workflow_run(
-        workflow_id,
+    result = dispatch_work_item(
+        workflow_id=int(workflow_id),
         context="Scheduled Run",
         event_queue=event_queue,
+        source_type="scheduled",
+        source_ref=f"workflow:{int(workflow_id)}:schedule:{due_at.isoformat() if due_at else 'manual'}",
         run_metadata={
             "source_type": "scheduled",
             "source_label": "Scheduled",
             "phase": "scheduled_action",
             **timing_metadata,
         },
+        _session_provider=get_session,
     )
     if "error" in result:
         logger.error(

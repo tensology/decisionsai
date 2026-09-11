@@ -68,6 +68,7 @@ def _project_reference_skills(base_home: Path) -> list[str]:
         "decisions-frontier-prep",
         "decisions-harness-audit",
         "decisions-harness-optimize",
+        "decisions-headroom",
         "codebase-design",
         "domain-modeling",
         "architecture-deepening-review",

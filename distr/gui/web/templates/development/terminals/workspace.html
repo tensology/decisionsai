@@ -1,0 +1,29 @@
+<section class="development-workspace terminal-workspace hidden" id="terminal-workspace" aria-label="Project terminals">
+                <div class="terminal-detail-shell">
+                    <header class="terminal-project-header">
+                        <nav class="terminal-project-breadcrumb" aria-label="Terminal location and controls">
+                            <button type="button" class="terminal-back-button" id="terminal-projects-back" aria-label="Back to terminal projects"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m9.5 3.5-4.5 4.5 4.5 4.5"/></svg><span>Terminals</span></button>
+                            <i aria-hidden="true">/</i>
+                            <strong id="terminal-project-name" aria-current="page">Project terminals</strong>
+                            <span class="terminal-project-actions">
+                                <span class="terminal-running-count" id="terminal-running-count" role="status">Stopped</span>
+                                <button type="button" class="terminal-tool-button terminal-bulk-action danger hidden" id="terminal-stop-all" aria-label="Stop all terminals" title="Stop all terminals"><svg aria-hidden="true" viewBox="0 0 20 20"><rect x="6" y="6" width="8" height="8" rx="1.5"></rect></svg></button>
+                                <button type="button" class="terminal-tool-button terminal-bulk-action primary" id="terminal-start-all" aria-label="Start all terminals" title="Start all terminals"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="M7 5.5v9l7-4.5z"></path></svg></button>
+                            </span>
+                        </nav>
+                    </header>
+                    <form class="terminal-command-editor" id="terminal-command-form">
+                        <div class="terminal-command-rows" id="terminal-command-rows"></div>
+                        <footer>
+                            <button type="button" class="terminal-add-command" id="terminal-add-command">+ Add terminal</button>
+                            <span class="terminal-command-tools" aria-label="Command list controls">
+                                <button type="button" class="terminal-command-tool" id="terminal-copy-commands" aria-label="Copy all terminal commands" title="Copy commands"><svg aria-hidden="true" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.25"></rect><path d="M10.5 5.5v-3h-8v8h3"></path></svg></button>
+                                <button type="button" class="terminal-command-tool" id="terminal-paste-commands" aria-label="Paste terminal commands" title="Paste commands"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M5 4H3.5v9.5h9V4H11"></path><rect x="5" y="2.5" width="6" height="3" rx="1"></rect><path d="M8 7v4m-2-2 2 2 2-2"></path></svg></button>
+                                <button type="submit" class="terminal-command-tool terminal-save-commands" id="terminal-save-commands" aria-label="Save terminal commands" title="Save commands"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 2.5h8.25l2.75 2.75v8.25h-11z"></path><path d="M5 2.5v4h6v-4M5 13.5v-4h6v4"></path></svg></button>
+                            </span>
+                        </footer>
+                        <textarea class="hidden" id="terminal-command-lines" aria-hidden="true" tabindex="-1"></textarea>
+                    </form>
+                    <div class="terminal-session-list" id="terminal-session-list" aria-live="polite"></div>
+                </div>
+            </section>

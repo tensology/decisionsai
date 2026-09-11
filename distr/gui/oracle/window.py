@@ -902,7 +902,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         action.setChecked(enabled)
         action.setText(f"Hands-Free Mode: {'ON' if enabled else 'OFF'}")
 
-    def enable_hands_free(self, *, persist: bool = True):
+    def enable_hands_free(self, *, persist: bool = True, notify_agent: bool = True):
         """Enable hands-free mode and start the glow (oracle only — avatar skins have glow: false)."""
         if not self.is_listening:
             logging.warning("Cannot enable hands-free mode when listening is disabled")
@@ -910,6 +910,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
         self.is_hands_free = True
         self._sync_hands_free_menu_state()
+        if notify_agent:
+            signal_manager.hands_free_command_requested.emit(True, False)
         signal_manager.hands_free_mode_changed.emit(True)
         if persist:
             self.save_hands_free_state()
@@ -921,6 +923,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         *,
         clear_pending_restore: bool = False,
         persist: bool = True,
+        notify_agent: bool = True,
     ):
         """Disable hands-free mode.
 
@@ -939,15 +942,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             if getattr(self, '_hands_free_before_dictation', False):
                 logging.info("[ORACLE] Clearing pending hands-free restore after explicit manual disable")
             self._hands_free_before_dictation = False
-            # The agent process keeps its own dictation restore snapshot. Tell
-            # it that this was an explicit user choice so a late dictation-stop
-            # event cannot switch hands-free back on.
-            app = QtWidgets.QApplication.instance()
-            if app is not None and hasattr(app, '_send_command_to_agent'):
-                app._send_command_to_agent(
-                    'set_hands_free',
-                    {'enabled': False, 'clear_pending_restore': True},
-                )
+        if notify_agent:
+            signal_manager.hands_free_command_requested.emit(False, clear_pending_restore)
         signal_manager.hands_free_mode_changed.emit(False)
         if persist:
             self.save_hands_free_state()
@@ -975,7 +971,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         When mouse is clicked down, this triggers:
         1. Visual feedback immediately (UI update)
-        2. After a short delay (to prevent double-click interrupts), sends:
+        2. Immediately sends:
            - STT interruption (via stt_service.set_ptt_active(True))
            - TTS/LLM interruption (InterruptionFrame sent to KILL audio)
         
@@ -1030,9 +1026,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.hold_to_talk_active = True
         self._event_dispatcher.fire_hook("ptt_active", trigger="oracle:ptt_mouse_down")
 
-        # Start delay timer - only emit interrupt signal after delay completes
-        logging.info(f"[ORACLE] Starting PTT delay timer ({self.ptt_delay_ms}ms) before sending interrupt")
-        self.ptt_delay_timer.start(self.ptt_delay_ms)
+        # Arm capture on mouse-down. Delaying this used to make presses shorter
+        # than the debounce window disappear without ever reaching STT.
+        logging.info("[ORACLE] Emitting push_to_talk_start immediately")
+        signal_manager.push_to_talk_start.emit()
+        self.ptt_requested = True
     
     def _on_ptt_delay_complete(self):
         """
@@ -2346,7 +2344,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     
 
     def handle_new_chat(self):
-        """Handle New Chat action - creates new chat without opening the chat window."""
+        """Create a Chat conversation and open it on the Chat surface."""
         # Check if EULA is accepted
         if not self._check_eula_accepted():
             return
@@ -2360,12 +2358,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         except Exception as e:
             logger.error(f"Error emitting interrupt_tts signal: {e}")
         
-        # Create new chat directly via chat_manager (don't open/show chat window)
-        # After this, STT should continue normally without further interruptions
+        # Create the conversation through Chat, then keep it on the Chat surface.
+        # Development threads are created only by Development actions.
         try:
             if self.chat_manager:
                 new_chat_id = self.chat_manager.create_chat("New Conversation", is_new=True)
-                logger.info(f"Oracle: Created new chat {new_chat_id} without opening chat window")
+                self._open_web_url(f"/chat/?id={int(new_chat_id)}")
+                logger.info("Oracle: Created chat %s and opened Chat", new_chat_id)
             else:
                 logger.warning("Oracle: Cannot create new chat - chat_manager not available")
         except Exception as e:
@@ -2730,10 +2729,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Handle hands-free mode changed signal (from agent during dictation)"""
         if enabled:
             if not self.is_hands_free:
-                self.enable_hands_free()
+                self.enable_hands_free(notify_agent=False)
         else:
             if self.is_hands_free:
-                self.disable_hands_free(persist=not self.is_dictating)
+                self.disable_hands_free(
+                    persist=not self.is_dictating,
+                    notify_agent=False,
+                )
     
     def on_dictation_stopped(self):
         """Handle dictation stopped signal"""

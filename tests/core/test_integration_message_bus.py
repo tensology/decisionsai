@@ -32,6 +32,42 @@ def test_deliver_telegram_user_input_calls_sink_and_persists_mapping(tmp_path: P
     assert bus2.resolve_mapped_chat_id("telegram", "777001") == 42
 
 
+def test_deliver_remote_user_input_keeps_remote_identity_out_of_telegram(tmp_path: Path) -> None:
+    bus = IntegrationMessageBus(mapping_path=tmp_path / "remote.json")
+    received: list[tuple] = []
+    bus.set_text_sink(
+        lambda text, external, image, metadata: received.append(
+            (text, external, image, metadata)
+        )
+    )
+    bus.set_chat_id_provider(lambda: 42)
+
+    accepted = bus.deliver_remote_user_input(
+        text="remote transcript",
+        request_id="remote-voice-1",
+        input_type="voice",
+        speak=False,
+        allow_queue=False,
+    )
+
+    assert accepted is True
+    assert received == [
+        (
+            "remote transcript",
+            True,
+            None,
+            {
+                "speak": False,
+                "surface": "remote",
+                "input_type": "voice",
+                "request_id": "remote-voice-1",
+                "chat_id": 42,
+            },
+        )
+    ]
+    assert bus.resolve_mapped_chat_id("telegram", "remote-voice-1") is None
+
+
 def test_deliver_without_telegram_thread_id_still_calls_sink(tmp_path: Path) -> None:
     """Rare path: transcription event without Telegram manager — no mapping key."""
     mapping = tmp_path / "m.json"

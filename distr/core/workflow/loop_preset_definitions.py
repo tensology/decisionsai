@@ -308,9 +308,9 @@ _DEVELOPMENT_STEPS = [
             "read_only": True,
             "model_policy": {"mode": "auto", "free_only": True, "prefer_local": True},
             "inspection_budget": {
-                "max_tool_calls": 18,
+                "max_tool_calls": 60,
                 "max_files": 24,
-                "max_tool_calls_by_complexity": {"low": 10, "medium": 18, "high": 30},
+                "max_tool_calls_by_complexity": {"low": 30, "medium": 60, "high": 99},
             },
             "required_context": ["ticket", "board", "project", "workflow_memory", "project_memory", "linked_attachments"],
             "expected_outputs": ["context_packet", "unknowns", "route_recommendation", "ui_design_read_if_applicable"],

@@ -1,6 +1,7 @@
 from distr.core.developer_context import (
     DeveloperBoardContext,
     DeveloperContextAssembler,
+    DeveloperPlanContext,
     DeveloperProjectContext,
     DeveloperRuntimeContext,
     DeveloperSkillContext,
@@ -77,9 +78,59 @@ def test_prompt_text_includes_project_board_tickets_workflows_and_skills():
     assert "webapp-testing" in text
 
 
+def test_explicit_thread_scope_wins_and_plan_is_carried_into_context(monkeypatch):
+    assembler = DeveloperContextAssembler()
+    default_project = DeveloperProjectContext(id=1, name="Default", folder_location="/default")
+    scoped_project = DeveloperProjectContext(id=9, name="CV Parser", folder_location="/cv-parser")
+    default_board = DeveloperBoardContext(id=2, name="Default board")
+    scoped_board = DeveloperBoardContext(id=14, name="CV Parser board")
+    plan = DeveloperPlanContext(
+        id=5,
+        board_key="decisions:14",
+        board_name="CV Parser board",
+        project_id=9,
+        root_path="/cv-parser",
+        item_count=8,
+        artifact_types=["brief", "prd", "wireframe"],
+    )
+
+    monkeypatch.setattr(assembler, "_fetch_active_project", lambda: default_project)
+    monkeypatch.setattr(
+        assembler,
+        "_fetch_active_thread_scope",
+        lambda chat_id: {"chat_id": chat_id, "title": "CV Parser plan", "project_id": 9, "board_key": "decisions:14"},
+    )
+    monkeypatch.setattr(assembler, "_fetch_project_for_scope", lambda scope: scoped_project)
+    monkeypatch.setattr(assembler, "_fetch_active_board", lambda project: default_board)
+    monkeypatch.setattr(assembler, "_fetch_board_for_scope", lambda scope, project: scoped_board)
+    monkeypatch.setattr(assembler, "_fetch_active_plan", lambda board, project: plan)
+    monkeypatch.setattr(assembler, "_fetch_active_tickets", lambda board, chat_id: [])
+    monkeypatch.setattr(assembler, "_fetch_active_workflows", lambda board, tickets: [])
+    monkeypatch.setattr(assembler, "_fetch_active_executions", lambda project: [])
+    monkeypatch.setattr(assembler, "_fetch_external_agent_context", lambda: {})
+    monkeypatch.setattr(assembler, "_fetch_user_memory_context", lambda *args: "")
+    monkeypatch.setattr(assembler, "_fetch_board_notes", lambda board: [])
+    monkeypatch.setattr(assembler, "_recommend_skills", lambda request: [])
+    monkeypatch.setattr(assembler, "_fetch_workspace", lambda *args: {})
+    monkeypatch.setattr(assembler, "_fetch_ecosystem_snapshot", lambda: {})
+
+    context = assembler.build(user_request="update the plan", chat_id=42)
+
+    assert context.active_project == scoped_project
+    assert context.active_board == scoped_board
+    assert context.active_thread["project_id"] == 9
+    assert context.active_plan == plan
+    prompt = context.to_prompt_text()
+    assert "active_thread: chat=42" in prompt
+    assert "active_plan: #5 CV Parser board" in prompt
+    assert "plan_artifacts: brief, prd, wireframe" in prompt
+
+
 def test_build_is_defensive_when_fetchers_fail(monkeypatch):
     assembler = DeveloperContextAssembler()
+    from distr.core.chat import ChatService
 
+    monkeypatch.setattr(ChatService, "get_current_chat_id", lambda: None)
     monkeypatch.setattr(assembler, "_fetch_active_project", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
     monkeypatch.setattr(assembler, "_fetch_active_board", lambda _project: None)
     monkeypatch.setattr(assembler, "_fetch_active_tickets", lambda _board, _chat_id: [])
@@ -88,7 +139,7 @@ def test_build_is_defensive_when_fetchers_fail(monkeypatch):
 
     context = assembler.build({"agent_current_chat_id": "5"})
 
-    assert context.runtime.current_chat_id == 5
+    assert context.runtime.current_chat_id is None
     assert context.active_project is None
     assert "active project unavailable" in context.warnings
 

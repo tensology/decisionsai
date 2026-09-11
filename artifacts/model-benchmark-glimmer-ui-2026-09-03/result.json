@@ -1,0 +1,84 @@
+{
+  "benchmark": "glimmer-product-ui",
+  "model": "muse-glimmer:30b-mlx",
+  "success": true,
+  "elapsed_seconds": 1207.818,
+  "engine": "pi_cli",
+  "error": "",
+  "output": "All requirements have been implemented in the three allowed files.\n\n**Tests**\n```\nRan 10 tests in 0.001s\nOK\n```\n* `test_design_tokens_exist` – 13 tokens defined  \n* `test_focus_visible_is_authored` – `:focus-visible` present  \n* `test_reduced_motion_is_handled` – `prefers-reduced-motion` block present  \n* `test_responsive_breakpoint_exists` – media queries for 1024/900/768/375 px  \n* `test_landmarks_and_dialog_remain`, `test_search_has_programmatic_label`, `test_live_regions_remain`, `test_interactions_remain`, `test_no_remote_dependencies`, `test_no_unicode_icon_substitutes` – all pass\n\n**Changes**\n\n* `index.html` – app-shell starts with `nav-closed` for mobile off-canvas, nav-toggle `aria-expanded=\"false\"` set initially. Landmarks and dialog preserved.\n* `styles.css` – coherent dark token system with one restrained amber accent, WCAG AA contrast, 44 px mobile targets, `:focus-visible`, `prefers-reduced-motion`. Operate-mode dense layout, product hierarchy, state styles:\n  * `.run-card[data-status=\"active|waiting|failed\"]` border-left colors\n  * `.run-card.is-selected` outline\n  * hover / focus / disabled / empty / dialog / toast all styled\n  * board/list via `[data-view]` grid rules, sticky inspector, off-canvas project nav reachable on ≤900 px, no horizontal overflow at 1440/768/375 px.\n* `app.js` – behaviour preserved. Render now adds `data-id` and `is-selected` class; `selectRun` toggles `is-selected` on cards so selected state is legible without changing API.\n\nDependency-free, no remote assets, only `index.html`, `styles.css`, `app.js` modified.",
+  "event_count": 9449,
+  "harness": {
+    "merged_pre_chain": [
+      "agent-watchdog",
+      "decisions-design-aesthetics",
+      "design-taste-frontend",
+      "decisions-harness-stack",
+      "decisions-ui-ideation",
+      "decisions-design-references",
+      "decisions-headroom",
+      "impeccable",
+      "browser-qa",
+      "decisions-playwright",
+      "ponytail",
+      "fallow",
+      "frontend-design-direction"
+    ],
+    "projected": [
+      "decisions-design-aesthetics",
+      "design-taste-frontend",
+      "decisions-harness-stack",
+      "decisions-ui-ideation",
+      "decisions-design-references",
+      "decisions-headroom",
+      "impeccable",
+      "browser-qa",
+      "decisions-playwright",
+      "ponytail",
+      "fallow",
+      "frontend-design-direction"
+    ],
+    "required_present": [
+      "browser-qa",
+      "decisions-harness-stack",
+      "decisions-headroom",
+      "decisions-playwright",
+      "frontend-design-direction",
+      "impeccable",
+      "ponytail"
+    ],
+    "missing_required": [
+      "agent-watchdog"
+    ]
+  },
+  "static_grade": {
+    "score": 25,
+    "max_score": 25,
+    "tests": {
+      "passed": 10,
+      "expected": 10,
+      "exit_code": 0,
+      "output": "test_design_tokens_exist (test_contract.UIContractTests.test_design_tokens_exist) ... ok\ntest_focus_visible_is_authored (test_contract.UIContractTests.test_focus_visible_is_authored) ... ok\ntest_interactions_remain (test_contract.UIContractTests.test_interactions_remain) ... ok\ntest_landmarks_and_dialog_remain (test_contract.UIContractTests.test_landmarks_and_dialog_remain) ... ok\ntest_live_regions_remain (test_contract.UIContractTests.test_live_regions_remain) ... ok\ntest_no_remote_dependencies (test_contract.UIContractTests.test_no_remote_dependencies) ... ok\ntest_no_unicode_icon_substitutes (test_contract.UIContractTests.test_no_unicode_icon_substitutes) ... ok\ntest_reduced_motion_is_handled (test_contract.UIContractTests.test_reduced_motion_is_handled) ... ok\ntest_responsive_breakpoint_exists (test_contract.UIContractTests.test_responsive_breakpoint_exists) ... ok\ntest_search_has_programmatic_label (test_contract.UIContractTests.test_search_has_programmatic_label) ... ok\n\n----------------------------------------------------------------------\nRan 10 tests in 0.001s\n\nOK"
+    },
+    "quality_checks": {
+      "all_editable_files_changed": true,
+      "css_token_system": true,
+      "focus_visible": true,
+      "reduced_motion": true,
+      "responsive_mobile": true,
+      "semantic_dialog": true,
+      "search_filter_view_contract": true,
+      "mobile_navigation_reachable": true,
+      "no_remote_dependencies": true,
+      "no_inline_style_sprawl": true
+    },
+    "scope": {
+      "changed": [
+        "app.js",
+        "index.html",
+        "styles.css"
+      ],
+      "protected_changes": [],
+      "unexpected_files": []
+    }
+  }
+}

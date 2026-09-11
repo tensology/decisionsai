@@ -1,0 +1,83 @@
+{
+  "name": "muse-glimmer-30b-mlx",
+  "backend": "pi",
+  "provider": "ollama",
+  "model": "muse-glimmer:30b-mlx",
+  "reasoning_effort": "medium",
+  "success": true,
+  "elapsed_seconds": 784.794,
+  "engine": "pi_cli",
+  "error": "",
+  "output": "All 26 tests pass.\n\n**Changes made**\n\n- `app/repositories/tickets.py`\n  - `list_for_board(board_id, include_archived=False)` now filters out archived tickets by default, respects `include_archived=True`, and returns items sorted by `(position, id)`.\n\n- `app/services/tickets.py`\n  - `list_board_tickets(board_id, include_archived=False)` normalises `board_id` with `int(board_id)` and forwards `include_archived` to the repository.\n\n- `app/web/views.py`\n  - Imports `query_flag`, parses `include_archived` from the query with the existing helper, forwards it to the service, and returns `meta` with both `count` and the normalised `include_archived` boolean while keeping the item shape.\n\n- `web/api/tickets.js`\n  - `fetchBoardTickets(boardId, { includeArchived = false } = {})` keeps backward compatibility, URL-encodes the board id, and only appends `?include_archived=true` when `includeArchived` is truthy via an `if (includeArchived)` guard.\n\n- `web/hooks/useTickets.js`\n  - Owns `includeArchived` state via `useState(false)`, passes it to `fetchBoardTickets`, includes it in the `useCallback` dependency array, and returns `{ tickets, loading, reload, includeArchived, setIncludeArchived }`.\n\n- `web/components/TicketBoard.jsx`\n  - Consumes `includeArchived` / `setIncludeArchived` from the hook and renders an accessible controlled checkbox labelled “Show archived” while preserving the Refresh button, loading `aria-busy`, count paragraph and ticket list.\n\n- `templates/board.html`\n  - Adds `data-include-archived=\"false\"` to the mount `<main>` element.\n\nTest run:\n\n```\n$ python3 -m unittest discover -s tests -v\ntest_invalid_board_id_is_rejected ... ok\ntest_repository_can_include_archived ... ok\ntest_repository_does_not_leak_other_boards ... ok\ntest_repository_hides_archived_by_default ... ok\ntest_repository_orders_by_position_then_id ... ok\ntest_service_forwards_include_archived ... ok\ntest_service_normalizes_numeric_board_id ... ok\ntest_service_preserves_default ... ok\ntest_view_default_contract ... ok\ntest_view_false_query_spellings ... ok\ntest_view_item_shape_is_stable ... ok\ntest_view_true_query_spellings ... ok\ntest_api_accepts_options_without_breaking_old_callers ... ok\ntest_api_only_adds_true_value_when_enabled ... ok\ntest_api_still_encodes_board_id ... ok\ntest_api_uses_include_archived_query_name ... ok\ntest_component_checkbox_is_controlled ... ok\ntest_component_has_accessible_label ... ok\ntest_component_keeps_refresh_action ... ok\ntest_component_renders_checkbox ... ok\ntest_hook_owns_include_archived_state ... ok\ntest_hook_passes_flag_to_api ... ok\ntest_hook_reload_tracks_flag_dependency ... ok\ntest_hook_returns_toggle_contract ... ok\ntest_hook_uses_idiomatic_callback_shape ... ok\ntest_template_exposes_archived_default ... ok\n\n----------------------------------------------------------------------\nRan 26 tests in 0.002s\n\nOK\n```\n\nNo tests, models, base classes, URLs, README, AGENTS.md, `legacy/`, `generated/`, or `vendor/` were modified.",
+  "usage": {
+    "input": 20610,
+    "output": 762,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "totalTokens": 21372,
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "total": 0
+    }
+  },
+  "event_count": 6234,
+  "grade": {
+    "score": 51,
+    "max_score": 51,
+    "behavior": {
+      "passed": 26,
+      "failed": 0,
+      "max_points": 26
+    },
+    "cross_layer": {
+      "changed": [
+        "app/repositories/tickets.py",
+        "app/services/tickets.py",
+        "app/web/views.py",
+        "templates/board.html",
+        "web/api/tickets.js",
+        "web/components/TicketBoard.jsx",
+        "web/hooks/useTickets.js"
+      ],
+      "expected": [
+        "app/repositories/tickets.py",
+        "app/services/tickets.py",
+        "app/web/views.py",
+        "templates/board.html",
+        "web/api/tickets.js",
+        "web/components/TicketBoard.jsx",
+        "web/hooks/useTickets.js"
+      ],
+      "points": 7,
+      "max_points": 7
+    },
+    "scope_discipline": {
+      "points": 8,
+      "max_points": 8,
+      "protected_changes": [],
+      "missing_files": [],
+      "unexpected_files": []
+    },
+    "hidden_contracts": {
+      "points": 10,
+      "max_points": 10,
+      "checks": {
+        "repository_inheritance_preserved": true,
+        "repository_get_contract_preserved": true,
+        "service_dependency_preserved": true,
+        "view_reuses_shared_query_helper": true,
+        "api_error_handling_preserved": true,
+        "hook_loading_lifecycle_preserved": true,
+        "component_loading_contract_preserved": true,
+        "component_stable_ticket_keys_preserved": true,
+        "template_entrypoint_preserved": true,
+        "active_code_avoids_decoy_paths": true
+      }
+    },
+    "tests_exit_code": 0,
+    "tests_output": "test_invalid_board_id_is_rejected (test_backend_behavior.BackendBehaviorTests.test_invalid_board_id_is_rejected) ... ok\ntest_repository_can_include_archived (test_backend_behavior.BackendBehaviorTests.test_repository_can_include_archived) ... ok\ntest_repository_does_not_leak_other_boards (test_backend_behavior.BackendBehaviorTests.test_repository_does_not_leak_other_boards) ... ok\ntest_repository_hides_archived_by_default (test_backend_behavior.BackendBehaviorTests.test_repository_hides_archived_by_default) ... ok\ntest_repository_orders_by_position_then_id (test_backend_behavior.BackendBehaviorTests.test_repository_orders_by_position_then_id) ... ok\ntest_service_forwards_include_archived (test_backend_behavior.BackendBehaviorTests.test_service_forwards_include_archived) ... ok\ntest_service_normalizes_numeric_board_id (test_backend_behavior.BackendBehaviorTests.test_service_normalizes_numeric_board_id) ... ok\ntest_service_preserves_default (test_backend_behavior.BackendBehaviorTests.test_service_preserves_default) ... ok\ntest_view_default_contract (test_backend_behavior.BackendBehaviorTests.test_view_default_contract) ... ok\ntest_view_false_query_spellings (test_backend_behavior.BackendBehaviorTests.test_view_false_query_spellings) ... ok\ntest_view_item_shape_is_stable (test_backend_behavior.BackendBehaviorTests.test_view_item_shape_is_stable) ... ok\ntest_view_true_query_spellings (test_backend_behavior.BackendBehaviorTests.test_view_true_query_spellings) ... ok\ntest_api_accepts_options_without_breaking_old_callers (test_frontend_contract.FrontendContractTests.test_api_accepts_options_without_breaking_old_callers) ... ok\ntest_api_only_adds_true_value_when_enabled (test_frontend_contract.FrontendContractTests.test_api_only_adds_true_value_when_enabled) ... ok\ntest_api_still_encodes_board_id (test_frontend_contract.FrontendContractTests.test_api_still_encodes_board_id) ... ok\ntest_api_uses_include_archived_query_name (test_frontend_contract.FrontendContractTests.test_api_uses_include_archived_query_name) ... ok\ntest_component_checkbox_is_controlled (test_frontend_contract.FrontendContractTests.test_component_checkbox_is_controlled) ... ok\ntest_component_has_accessible_label (test_frontend_contract.FrontendContractTests.test_component_has_accessible_label) ... ok\ntest_component_keeps_refresh_action (test_frontend_contract.FrontendContractTests.test_component_keeps_refresh_action) ... ok\ntest_component_renders_checkbox (test_frontend_contract.FrontendContractTests.test_component_renders_checkbox) ... ok\ntest_hook_owns_include_archived_state (test_frontend_contract.FrontendContractTests.test_hook_owns_include_archived_state) ... ok\ntest_hook_passes_flag_to_api (test_frontend_contract.FrontendContractTests.test_hook_passes_flag_to_api) ... ok\ntest_hook_reload_tracks_flag_dependency (test_frontend_contract.FrontendContractTests.test_hook_reload_tracks_flag_dependency) ... ok\ntest_hook_returns_toggle_contract (test_frontend_contract.FrontendContractTests.test_hook_returns_toggle_contract) ... ok\ntest_hook_uses_idiomatic_callback_shape (test_frontend_contract.FrontendContractTests.test_hook_uses_idiomatic_callback_shape) ... ok\ntest_template_exposes_archived_default (test_frontend_contract.FrontendContractTests.test_template_exposes_archived_default) ... ok\n\n----------------------------------------------------------------------\nRan 26 tests in 0.002s\n\nOK"
+  }
+}

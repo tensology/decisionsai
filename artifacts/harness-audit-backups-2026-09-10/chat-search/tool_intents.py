@@ -1,0 +1,281 @@
+"""Deterministic tool-intent hints for obvious user requests.
+
+Semantic retrieval is useful for fuzzy requests, but common operational
+commands should not depend on embedding luck.  These hints force key tools into
+the candidate set while still leaving the LLM room to choose and fill args.
+"""
+
+from __future__ import annotations
+
+import re
+
+try:
+    from distr.core.agent.ticket_intent import classify_ticket_intent
+except Exception:  # pragma: no cover - routing should never fail on import noise
+    classify_ticket_intent = None
+
+
+_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "whatsapp_toolkit",
+        (
+            r"\b(whats\s*app|whatsapp)\b.*\b(messages?|chat|thread|contact|screenshots?|photos?|media|read|search|find|ingest|analy[sz]e|draft|reply|send)\b",
+            r"\b(search|find|read|show|ingest|analy[sz]e|draft|write|send)\b.*\b(whats\s*app|whatsapp)\b",
+        ),
+    ),
+    (
+        "codex_thread_context",
+        (
+            r"\b(codex|codecs)\b.*\b(conversations?|threads?|chats?|sessions?|transcripts?|history)\b",
+            r"\b(conversations?|threads?|chats?|sessions?|transcripts?|history)\b.*\b(codex|codecs)\b",
+            r"\b(codex|codecs)\b.*\b(work\s+with|bring\s+in|pull\s+in|load|summari[sz]e|turn\s+.*\b(ticket|plan|skill)|what\s+happened)\b",
+            r"\b(what\s+am\s+i\s+doing|where\s+am\s+i|workload|working\s+on)\b.*\b(codex|codecs)\b",
+        ),
+    ),
+    (
+        "ide_thread",
+        (
+            r"\b(cursor|codex|codecs)\b.*\b(thread|chat|session|response|reply|doing|status|latest)\b",
+            r"\b(read|check|what\s+did|latest)\b.*\b(cursor|codex|codecs)\b",
+            r"\b(send|prompt|continue|amend|resume)\b.*\b(cursor|codex|codecs)\b.*\b(thread|chat|session)\b",
+            r"\bwhat\s+is\s+(cursor|codex|codecs)\b.*\b(doing|working)\b",
+        ),
+    ),
+    (
+        "work_ops",
+        (
+            r"\b(what'?s?\s+coming\s+in|check\s+(?:my\s+)?(?:work|inbox|intake)|work\s+intake)\b",
+            r"\b(intake|stage)\b.+\b(jira|email|gmail|tickets?)\b",
+            r"\b(run|start|execute)\b.+\b(ticket|issue)\b\s*#?\d+",
+            r"\b(run|start)\b.+\bticket\b",
+            r"\b(work\s+status|status\s+of\s+(?:the\s+)?(?:work|ticket)|where\s+is\s+ticket)\b",
+            r"\b(show|read)\b.+\b(client\s+)?draft\b.+\bticket\b",
+            r"\b(send|approve)\b.+\b(client|draft)\b",
+            r"\bsend\s+(?:it\s+)?to\s+the\s+client\b",
+        ),
+    ),
+    (
+        "proactive_orchestrator",
+        (
+            r"\b(proactive|morning|lunch|evening|check\s+work|work\s+coming\s+in|prioriti[sz]e|what\s+is\s+important)\b.*\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?|codex|codecs|cursor|project)\b",
+            r"\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?)\b.*\b(prioriti[sz]e|important|check|scan|work\s+coming\s+in|what\s+matters)\b",
+            r"\b(daily\s+plan|day\s+plan|today'?s\s+plan|plan\s+my\s+day|morning\s+brief|what\s+should\s+i\s+do\s+today|what'?s\s+my\s+plan)\b",
+            r"\b(plan|prioriti[sz]e)\b.*\b(today|my\s+day|daily|emails?|gmail|whats\s*app|tickets?|boards?|projects?|workflows?)\b",
+            r"\b(where\s+am\s+i|what\s+am\s+i\s+doing|workload|working\s+on)\b.*\b(cursor|codex|codecs)\b",
+            r"\b(cursor|codex|codecs)\b.*\b(workload|working\s+on|what\s+am\s+i\s+doing|where\s+am\s+i)\b",
+            r"\b(turn\s+on|enable|start|set\s+up|setup|activate)\b.+\b(jira)\b.+\b(morning\s+)?(intake|automation|batch|notifications?|email)\b",
+            r"\b(jira)\b.+\b(morning\s+)?(intake|automation)\b.+\b(turn\s+on|enable|start|set\s+up|setup|activate)\b",
+            r"\b(turn\s+on|enable|start)\b.+\bjira\b.+\b(tickets?|issues?)\b.+\b(from\s+)?(email|gmail|telegram)\b",
+            r"\b(run|do|start)\b.+\bjira\b.+\b(intake|morning\s+intake|email\s+batch)\b\s*(now)?\b",
+        ),
+    ),
+    (
+        "clipboard_action",
+        (
+            r"\b(what'?s?|what\s+is|show|get|read|see)\s+(?:in|on)?\s*(?:my\s+|the\s+)?clipboard\b",
+            r"\b(?:read|ingest|consume|inspect|load|get)\b.*\b(?:my\s+|the\s+)?clipboard\b",
+            r"\b(read|inspect|check|look\s+at|review|load)\b.*\bclipboard\b.*\b(talk|discuss|go\s+through|about\s+it|with\s+me)\b",
+            r"\b(explain|elaborate|summari[sz]e|rework|rewrite)\s+(?:on\s+)?this\b",
+            r"\b(?:set|write|put|copy)\s+(?:the\s+)?clipboard\s+(?:to|as)\b",
+            r"\b(?:set|write|put|copy)\s+.+\s+(?:to|into|onto)\s+(?:my\s+|the\s+)?clipboard\b",
+        ),
+    ),
+    (
+        "window_management",
+        (
+            r"\b(minimi[sz]e|maximi[sz]e|restore|unminimi[sz]e|full\s*screen|hide|focus)\b.*\b(window|app|application|terminal|codex|codecs|spotify|finder|chrome|safari)\b",
+            r"\b(window|app|application|terminal|codex|codecs|spotify|finder|chrome|safari)\b.*\b(minimi[sz]e|maximi[sz]e|restore|unminimi[sz]e|full\s*screen|hide|focus)\b",
+            r"\b(move|send|put)\b.*\b(window|terminal|codex|codecs|app|application)\b.*\b(screen|monitor|display|desktop|space)\b",
+            r"\b(move|send|put)\b.*\b(left|right|cent(?:er|re)|second|third)\b.*\b(screen|monitor|display|desktop|space)\b",
+            r"\b(open|switch|go|take\s+me)\b.*\b(first|second|third|\d+)\s+(desktop|space)\b",
+            r"\b(list|show)\b.*\b(desktops?|spaces?)\b",
+            r"^(?:please\s+|can\s+you\s+)?(?:minimi[sz]e|maximi[sz]e|full\s*screen|restore)\s+(?:this|the)\s+window\b",
+        ),
+    ),
+    (
+        "launch_app",
+        (
+            r"\b(open|launch|start|bring\s+up|show)\b.*\b(spotify|music|terminal|finder|safari|chrome|brave|codex|codecs|notes|calculator|textedit)\b",
+        ),
+    ),
+    (
+        "smart_open",
+        (
+            r"\b(open|bring\s+up|show)\b.*\b(downloads?|documents?|desktop|home)\s+folder\b",
+            r"\b(open|bring\s+up|show)\b.*\bmy\s+(downloads?|documents?|desktop)\b",
+        ),
+    ),
+    (
+        "move_to_element",
+        (
+            r"\b(move|put|position)\b.*\b(mouse|cursor|pointer)\b.*\b(to|over|on)\b",
+        ),
+    ),
+    (
+        "find_element",
+        (
+            r"\b(move|put|position)\b.*\b(mouse|cursor|pointer)\b.*\b(to|over|on)\b",
+        ),
+    ),
+    (
+        "create_ticket",
+        (
+            r"\b(create|make|add|new|draft)\s+(?:a\s+|an\s+)?(?:ticket|card|issue)\b",
+            r"\b(create|make|add|new|draft)\s+(?:a\s+|an\s+)?(?:jira|trello)\s+(?:ticket|card|issue)\b",
+            r"\b(?:break|split|turn|convert|scope)\b.{0,80}\b(?:work|request|project|brief|instructions?|it|this)\b.{0,40}\b(?:into|as)\b.{0,20}\b(?:tickets?|work\s+items?|tasks?)\b",
+            r"\b(?:break|split|turn|convert|scope)\s+(?:it|this|that|the\s+(?:work|request|project|brief))\s+(?:down\s+)?into\s+(?:separate\s+|individual\s+|a\s+group\s+of\s+)?(?:tickets?|work\s+items?|tasks?)\b",
+            r"\b(?:break|split|turn|convert|scope)\b.{0,140}\b(?:tickets?|work\s+items?)\b",
+            r"\b(?:tickets?|work\s+items?)\b.{0,80}\b(?:independently\s+executable|dependencies|dependency|workflow|backlog)\b",
+            r"\b(move|transfer|relocate)\b.+\b(ticket|card|issue)\b.+\bboard\b",
+            r"\b(ticket|card|issue)\b.+\b(move|transfer|relocate)\b.+\bboard\b",
+            r"\bwhats\s*app\b.+\b(sync|latest|activity|overview|contacts?|chats?|messages?|thread|context|snapshot|ticket|reply|send)\b",
+            r"\b(sync|latest|activity|overview|list|show|read|open|snapshot|create|make|draft|reply|send)\b.+\bwhats\s*app\b",
+            r"\b(groups?|chats?|threads?)\b.+\b(messages?|photos?|screenshots?|voice\s+notes?)\b",
+            r"\b(messages?|photos?|screenshots?|voice\s+notes?)\b.+\b(groups?|chats?|threads?)\b",
+            r"\b(open|show|go\s+to|switch\s+to|launch)\b.+\b(ticket\s+board|kanban(?:\s+board)?)\b",
+            r"\b(ticket\s+board|kanban(?:\s+board)?)\b.+\b(open|show)\b",
+            r"\b(open|show|go\s+to|launch)\b.+\b(?:jira|trello|local)\b.+\bboard\b",
+            r"\b(open|show|go\s+to)\b.+\bboard\b.*\b(jira|trello|local)\b",
+        ),
+    ),
+    (
+        "file_operations",
+        (
+            r"\b(rename|move|delete|remove|list|show|create|copy)\s+.+\b(file|folder|directory|downloads|desktop|documents)\b",
+            r"\bwhat\s+files\s+are\s+on\b",
+        ),
+    ),
+    (
+        "convert_document",
+        (
+            r"\b(convert|turn|export|make)\s+.+\b(pdf|word|docx|document)\b",
+            r"\bexport\s+as\s+pdf\b",
+        ),
+    ),
+    (
+        "create_step_runner",
+        (
+            r"\b(create|build|make|generate)\s+(?:a\s+|an\s+)?(?:step\s+runner|automation|workflow)\b",
+        ),
+    ),
+    (
+        "build_tool",
+        (
+            r"\b(build|create|make|generate|save)\s+(?:a\s+|an\s+|this\s+)?(?:reusable\s+|custom\s+)?(?:tool|capability)\b",
+            r"\b(turn|save|make)\s+(?:this|that|it)\s+into\s+(?:a\s+)?(?:tool|repeatable\s+action)\b",
+        ),
+    ),
+    (
+        "computer_use",
+        (
+            r"\b(on\s+(?:my|the)\s+(?:screen|desktop)|in\s+the\s+(?:app|window))\b.*\b(first|then|after|finally)\b",
+            r"\b(first|then|after\s+that|finally)\b.*\b(click|type|select|open|scroll|drag|press)\b.*\b(click|type|select|open|scroll|drag|press)\b",
+            r"\b(complete|handle|do)\s+(?:this\s+)?(?:multi[- ]step\s+)?(?:desktop|screen|gui)\s+(?:task|workflow)\b",
+        ),
+    ),
+    (
+        "scheduled_action",
+        (
+            r"\b(schedule|scheduled|recurring|every\s+(?:day|weekday|week|morning|evening))\b.*\b(action|desktop|keypress|key\s*press|type|open|recording|chrome|app|automation)\b",
+            r"\b(list|show|what|cancel|delete|disable|enable|reschedule|move)\b.*\bscheduled\s+(?:desktop\s+)?actions?\b",
+            r"\b(cancel|delete|disable|enable|reschedule|move)\b.*\baction\s+\d+\b",
+            r"\bopen\s+\w+\b.*\b(every\s+(?:day|weekday|week)|daily|weekly|weekdays?)\b",
+        ),
+    ),
+    (
+        "google_workspace",
+        (
+            r"\b(?:google\s+)?calendar\b.*\b(?:create|add|make|schedule|event|appointment)\b",
+            r"\b(?:create|add|make|schedule)\b.*\b(?:google\s+)?calendar\b",
+            r"\b(?:create|add|make|schedule)\s+(?:the\s+|an?\s+)?(?:calendar\s+)?event\b",
+            r"\b(gmail|email)\b.*\battachment",
+            r"\battachment\b.*\b(gmail|email|inbox)\b",
+            r"\bdownload\b.*\b(gmail|email)\b.*\battachment",
+            r"\b(get|grab|pull|save)\b.*\b(gmail|email)\b.*\battachment",
+        ),
+    ),
+    (
+        "screenshot_analyzer",
+        (
+            r"\b(take|capture|grab|get)\s+(?:a\s+)?(?:screenshot|screen\s*shot|picture)\b",
+            r"\b(give|send|show)\s+(?:me\s+)?(?:a\s+)?screenshots?\b",
+            r"\bscreenshot\s+(?:of\s+)?screen\s+\d+\b",
+            r"\b(what\s+do\s+you\s+see|what'?s?\s+on\s+(?:the\s+)?screen|describe\s+(?:the\s+)?screen|what'?s?\s+on\s+my\s+screen)\b",
+            r"\b(see|look\s+at|analyze|check|examine)\b.*?\b(?:my\s+)?(?:screen|display|monitor)\b",
+            r"\bsee\s+what\s+i(?:'m|\s+am)\s+looking\s+at\b",
+            r"\bscreen\s+(?:capture|interaction|shot)\b",
+            r"\b(move|put|position)\b.*\b(mouse|cursor|pointer)\b.*\b(to|over|on)\b",
+        ),
+    ),
+    (
+        "visual_baseline",
+        (
+            r"\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?|gold(?:en)?\s+standard)\b",
+            r"\b(save|capture|create|add)\b.*\b(screenshot|screen)\b.*\b(baseline|reference|gold(?:en)?\s+standard)\b",
+            r"\b(list|show|get|inspect|check|audit|ready|readiness)\b.*\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?)\b",
+            r"\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?)\b.*\b(ready|readiness|missing|exist|usable)\b",
+        ),
+    ),
+    (
+        "special_key",
+        (
+            r"\b(?:press|hit|tap)\s+(?:the\s+)?(?:space\s*bar|spacebar|space|enter|return|tab|escape|esc|backspace|delete|up|down|left|right|page\s+up|page\s+down|home|end|[a-z0-9])\b",
+            r"^(?:space\s*bar|spacebar|space|enter|return|tab|escape|esc|backspace|delete|up|down|left|right|home|end)\.?$",
+        ),
+    ),
+    (
+        "exit_app",
+        (
+            r"\b(exit|quit|close)\s+(?:the\s+)?(?:app|application|decisionsai)\b",
+            r"^quit$",
+        ),
+    ),
+)
+
+
+def forced_tool_names_for_text(text: str) -> list[str]:
+    """Return tool names that should be force-included for this request."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+
+    forced: list[str] = []
+    ticket_intent_kind = ""
+    if classify_ticket_intent:
+        try:
+            ticket_intent_kind = classify_ticket_intent(raw).kind
+        except Exception:
+            ticket_intent_kind = ""
+
+    if ticket_intent_kind == "debug_decisions_ticket":
+        forced.append("create_cursor_ticket")
+    elif ticket_intent_kind == "ticket_file":
+        forced.append("file_operations")
+    elif ticket_intent_kind == "type_text":
+        forced.append("type_text")
+
+    for tool_name, patterns in _RULES:
+        if ticket_intent_kind in {"debug_decisions_ticket", "ticket_file", "type_text"} and tool_name == "create_ticket":
+            continue
+        if any(re.search(pattern, raw, re.IGNORECASE) for pattern in patterns):
+            forced.append(tool_name)
+    return forced
+
+
+_WORKFLOW_FOLLOW_UP_PATTERNS: tuple[str, ...] = (
+    r"^(?:please\s+)?(?:try|retry)(?:\s+it|\s+that)?\s+again[.!]?$",
+    r"^(?:please\s+)?do\s+(?:it|that)(?:\s+again)?[.!]?$",
+    r"^(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!]?$",
+    r"^(?:please\s+)?create\s+the\b.*\bevent\b[.!]?$",
+    r"\bclipboard\b.*\bdo\s+it\b",
+    r"^(?:i\s+want\s+you\s+to\s+)?(?:perform|do|choose|use|take)?\s*(?:the\s+)?(?:first|second|third|fourth|fifth|last)\s+option[.!]?$",
+)
+
+
+def is_workflow_follow_up(text: str) -> bool:
+    """Return whether a short instruction should retain an active tool chain."""
+    raw = (text or "").strip()
+    return bool(raw) and any(
+        re.search(pattern, raw, re.IGNORECASE)
+        for pattern in _WORKFLOW_FOLLOW_UP_PATTERNS
+    )

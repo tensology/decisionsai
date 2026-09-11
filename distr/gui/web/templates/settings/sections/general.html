@@ -75,6 +75,14 @@
                     <input type="checkbox" id="load_on_startup" name="load_on_startup" class="settings-toggle__input">
                     <span class="settings-toggle__switch" aria-hidden="true"></span>
                 </label>
+                <label class="block md:col-span-2">
+                    <span class="block text-sm font-medium text-[#ececf1] mb-2">Default project editor</span>
+                    <select id="default_project_editor" class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white">
+                        <option value="codex">Codex</option>
+                        <option value="cursor">Cursor</option>
+                    </select>
+                    <span class="block text-xs text-gray-400 mt-2">Used when opening a project from DecisionsAI. An explicit voice or chat request can choose the other editor for that action.</span>
+                </label>
             </div>
 
             <!-- Listening State on Start Up Sub-Group -->
@@ -388,9 +396,9 @@
                                     class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
                                             focus:outline-none focus:border-[#10a37f] transition-colors cursor-pointer">
                                 <option value="eleven_flash_v2_5">eleven_flash_v2_5 (default, low latency)</option>
-                                <option value="eleven_turbo_v2_5">eleven_turbo_v2_5</option>
                                 <option value="eleven_multilingual_v2">eleven_multilingual_v2</option>
                                 <option value="eleven_v3">eleven_v3</option>
+                                <option value="eleven_v3_conversational">eleven_v3_conversational (expressive streaming)</option>
                             </select>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -403,7 +411,7 @@
                                     <span id="elevenlabs_stability_value" class="text-sm text-[#ececf1] w-12 text-right">50%</span>
                                 </div>
                             </div>
-                            <div>
+                            <div id="elevenlabs_similarity_control">
                                 <label for="elevenlabs_similarity" class="block text-sm font-semibold text-[#ececf1] mb-2">Similarity:</label>
                                 <div class="flex items-center gap-3">
                                     <input type="range" id="elevenlabs_similarity" name="elevenlabs_similarity"
@@ -412,7 +420,7 @@
                                     <span id="elevenlabs_similarity_value" class="text-sm text-[#ececf1] w-12 text-right">60%</span>
                                 </div>
                             </div>
-                            <div>
+                            <div id="elevenlabs_style_control">
                                 <label for="elevenlabs_style" class="block text-sm font-semibold text-[#ececf1] mb-2">Style:</label>
                                 <div class="flex items-center gap-3">
                                     <input type="range" id="elevenlabs_style" name="elevenlabs_style"
@@ -421,7 +429,7 @@
                                     <span id="elevenlabs_style_value" class="text-sm text-[#ececf1] w-12 text-right">25%</span>
                                 </div>
                             </div>
-                            <div class="flex items-end min-h-[42px]">
+                            <div id="elevenlabs_speaker_boost_control" class="flex items-end min-h-[42px]">
                                 <label class="settings-toggle min-h-[42px]">
                                     <input type="checkbox" id="elevenlabs_speaker_boost" name="elevenlabs_speaker_boost" checked class="settings-toggle__input">
                                     <span class="settings-toggle__switch" aria-hidden="true"></span>
@@ -429,6 +437,9 @@
                                 </label>
                             </div>
                         </div>
+                        <p id="elevenlabs_v3_settings_note" class="hidden text-xs text-[#9b9dac] mt-3">
+                            Eleven v3 uses Stability only (Creative, Natural, or Robust). Similarity, Style, and Speaker boost are not sent to this model.
+                        </p>
                     </div>
 
                     <!-- Pixazo VoxCPM speed -->

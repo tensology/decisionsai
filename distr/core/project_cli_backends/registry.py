@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
 # the per-line ceiling bounded, but large enough that transport does not turn a
 # valid tool result into a false model failure.
 PI_JSONL_STREAM_LIMIT = 4 * 1024 * 1024
+PI_WORKFLOW_REPORT_FINALIZATION_TIMEOUT_SECONDS = 300.0
 
 DEFAULT_BACKEND_ID = "pi"
 
 _ONE_SHOT_PROCESS_LOCK = threading.RLock()
-_ONE_SHOT_PROCESSES: dict[tuple[int, str, int | None], asyncio.subprocess.Process] = {}
+_ONE_SHOT_PROCESSES: dict[tuple[int, str, int | None, str | None, int | None], asyncio.subprocess.Process] = {}
 _KIRO_SESSION_CONNECTED: dict[int, bool] = {}
 _BACKEND_STATUS_CACHE_LOCK = threading.RLock()
 _BACKEND_STATUS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -49,8 +50,50 @@ def _normalize_board_id(board_id: int | None) -> int | None:
         return None
 
 
-def _oneshot_key(project_id: int, backend_id: str, board_id: int | None = None) -> tuple[int, str, int | None]:
-    return int(project_id), str(backend_id or "").strip(), _normalize_board_id(board_id)
+def _oneshot_key(
+    project_id: int,
+    backend_id: str,
+    board_id: int | None = None,
+    execution_id: int | None = None,
+    execution_kind: str | None = None,
+) -> tuple[int, str, int | None, str | None, int | None]:
+    return (
+        int(project_id),
+        str(backend_id or "").strip(),
+        _normalize_board_id(board_id),
+        str(execution_kind or "").strip().lower() or None,
+        int(execution_id) if execution_id is not None else None,
+    )
+
+
+def _task_execution_id(task: ProjectTask) -> int | None:
+    value = task.run_id or task.chat_id or task.execution_session_id
+    return int(value) if value is not None else None
+
+
+def _task_execution_kind(task: ProjectTask) -> str | None:
+    if task.run_id is not None:
+        return "workflow"
+    if task.chat_id is not None:
+        return "development"
+    if task.execution_session_id is not None:
+        return "session"
+    return None
+
+
+def _find_oneshot_key(
+    project_id: int,
+    backend_id: str,
+    board_id: int | None,
+    execution_id: int | None,
+    execution_kind: str | None,
+) -> tuple[int, str, int | None, str | None, int | None] | None:
+    exact = _oneshot_key(project_id, backend_id, board_id, execution_id, execution_kind)
+    if execution_id is not None:
+        return exact if exact in _ONE_SHOT_PROCESSES else None
+    prefix = exact[:3]
+    matches = [key for key in _ONE_SHOT_PROCESSES if key[:3] == prefix]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _register_oneshot_process(
@@ -59,9 +102,13 @@ def _register_oneshot_process(
     process: asyncio.subprocess.Process,
     *,
     board_id: int | None = None,
+    execution_id: int | None = None,
+    execution_kind: str | None = None,
 ) -> None:
     with _ONE_SHOT_PROCESS_LOCK:
-        _ONE_SHOT_PROCESSES[_oneshot_key(project_id, backend_id, board_id)] = process
+        _ONE_SHOT_PROCESSES[
+            _oneshot_key(project_id, backend_id, board_id, execution_id, execution_kind)
+        ] = process
 
 
 def _clear_oneshot_process(
@@ -70,25 +117,41 @@ def _clear_oneshot_process(
     process: asyncio.subprocess.Process | None = None,
     *,
     board_id: int | None = None,
+    execution_id: int | None = None,
+    execution_kind: str | None = None,
 ) -> None:
-    key = _oneshot_key(project_id, backend_id, board_id)
     with _ONE_SHOT_PROCESS_LOCK:
+        key = _find_oneshot_key(project_id, backend_id, board_id, execution_id, execution_kind)
+        if key is None:
+            return
         current = _ONE_SHOT_PROCESSES.get(key)
         if process is not None and current is not process:
             return
         _ONE_SHOT_PROCESSES.pop(key, None)
 
 
-async def abort_backend_process(project_id: int, backend_id: str, *, board_id: int | None = None) -> bool:
-    key = _oneshot_key(project_id, backend_id, board_id)
+async def abort_backend_process(
+    project_id: int,
+    backend_id: str,
+    *,
+    board_id: int | None = None,
+    execution_id: int | None = None,
+    execution_kind: str | None = None,
+) -> bool:
     with _ONE_SHOT_PROCESS_LOCK:
+        key = _find_oneshot_key(project_id, backend_id, board_id, execution_id, execution_kind)
+        if key is None:
+            return False
         process = _ONE_SHOT_PROCESSES.get(key)
     if not process:
         return False
     try:
         process.terminate()
     except ProcessLookupError:
-        _clear_oneshot_process(project_id, backend_id, process, board_id=board_id)
+        _clear_oneshot_process(
+            project_id, backend_id, process, board_id=board_id,
+            execution_id=execution_id, execution_kind=execution_kind,
+        )
         return False
     except Exception:
         try:
@@ -102,14 +165,26 @@ async def abort_backend_process(project_id: int, backend_id: str, *, board_id: i
             process.kill()
         except Exception:
             pass
-    _clear_oneshot_process(project_id, backend_id, process, board_id=board_id)
+    _clear_oneshot_process(
+        project_id, backend_id, process, board_id=board_id,
+        execution_id=execution_id, execution_kind=execution_kind,
+    )
     return True
 
 
-def terminate_backend_process(project_id: int, backend_id: str, *, board_id: int | None = None) -> bool:
+def terminate_backend_process(
+    project_id: int,
+    backend_id: str,
+    *,
+    board_id: int | None = None,
+    execution_id: int | None = None,
+    execution_kind: str | None = None,
+) -> bool:
     """Thread-safe best-effort termination used by synchronous run cancellation."""
-    key = _oneshot_key(project_id, backend_id, board_id)
     with _ONE_SHOT_PROCESS_LOCK:
+        key = _find_oneshot_key(project_id, backend_id, board_id, execution_id, execution_kind)
+        if key is None:
+            return False
         process = _ONE_SHOT_PROCESSES.pop(key, None)
     if not process:
         return False
@@ -325,7 +400,9 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
         if provider:
             command.extend(["--provider", provider])
         command.extend(["--model", model])
-    if task.execution_session_id and (task.origin == "workflow" or task.ticket_id):
+    if task.execution_session_id and (
+        task.origin in {"workflow", "development"} or task.ticket_id
+    ):
         command.extend(["--session-id", _pi_workflow_session_id(task)])
     system_prompt = f"You are working on project: {task.project_name}"
     if task.origin == "workflow":
@@ -380,6 +457,9 @@ def _pi_print_command(pi_path: str, task: ProjectTask) -> list[str]:
 
 def _pi_workflow_session_id(task: ProjectTask) -> str:
     """Return a stable UUID so a failed one-shot can be finalized in place."""
+    if task.origin == "development" and task.chat_id:
+        source = f"decisionsai-development:{task.project_id}:{task.chat_id}"
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, source))
     source = ":".join(
         str(value or "")
         for value in (
@@ -457,6 +537,20 @@ async def _finalize_pi_workflow_session(
         command.extend(["--model", model])
     command.append(instruction)
 
+    try:
+        finalization_timeout = max(
+            30.0,
+            min(
+                600.0,
+                float(
+                    task.adapter_options.get("report_timeout_seconds")
+                    or PI_WORKFLOW_REPORT_FINALIZATION_TIMEOUT_SECONDS
+                ),
+            ),
+        )
+    except (TypeError, ValueError):
+        finalization_timeout = PI_WORKFLOW_REPORT_FINALIZATION_TIMEOUT_SECONDS
+
     _emit(on_event, {
         "type": "workflow_report_finalization_started",
         "backend": "pi",
@@ -474,13 +568,23 @@ async def _finalize_pi_workflow_session(
             cwd=task.folder,
             limit=PI_JSONL_STREAM_LIMIT,
         )
-        _register_oneshot_process(task.project_id, "pi", process, board_id=task.board_id)
+        _register_oneshot_process(
+            task.project_id,
+            "pi",
+            process,
+            board_id=task.board_id,
+            execution_id=_task_execution_id(task),
+            execution_kind=_task_execution_kind(task),
+        )
         assert process.stdout is not None
         while True:
             try:
-                raw = await asyncio.wait_for(process.stdout.readline(), timeout=120.0)
+                raw = await asyncio.wait_for(process.stdout.readline(), timeout=finalization_timeout)
             except asyncio.TimeoutError:
-                errors.append("Pi workflow report finalization timed out after 120 seconds.")
+                errors.append(
+                    "Pi workflow report finalization timed out after "
+                    f"{int(finalization_timeout)} seconds."
+                )
                 process.terminate()
                 break
             if not raw:
@@ -518,7 +622,14 @@ async def _finalize_pi_workflow_session(
         errors.append(str(exc))
     finally:
         if process is not None:
-            _clear_oneshot_process(task.project_id, "pi", process, board_id=task.board_id)
+            _clear_oneshot_process(
+                task.project_id,
+                "pi",
+                process,
+                board_id=task.board_id,
+                execution_id=_task_execution_id(task),
+                execution_kind=_task_execution_kind(task),
+            )
     final_output = output.render().strip()
     _emit(on_event, {
         "type": "workflow_report_finalization_finished",
@@ -919,6 +1030,8 @@ class PiBackend(ProjectCliBackend):
                 self.id,
                 process,
                 board_id=task.board_id,
+                execution_id=_task_execution_id(task),
+                execution_kind=_task_execution_kind(task),
             )
             assert process.stdout is not None
             while True:
@@ -1082,6 +1195,8 @@ class PiBackend(ProjectCliBackend):
                     self.id,
                     process,
                     board_id=task.board_id,
+                    execution_id=_task_execution_id(task),
+                    execution_kind=_task_execution_kind(task),
                 )
 
         # Pi can emit a complete workflow report and then add a short epilogue
@@ -1233,6 +1348,7 @@ class PiBackend(ProjectCliBackend):
 class OneShotCliBackend(ProjectCliBackend):
     executable_candidates: list[str] = []
     command_args: list[str] = []
+    structured_jsonl = False
     capabilities = BackendCapabilities(
         steering=True,
         tools=True,
@@ -1283,6 +1399,29 @@ class OneShotCliBackend(ProjectCliBackend):
         """Return normalized usage when a one-shot CLI exposes it."""
         return {}
 
+    def _protocol_events(
+        self,
+        text: str,
+        buffered: str = "",
+        *,
+        flush: bool = False,
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Decode complete JSONL protocol records without exposing transport text."""
+        payload = buffered + text
+        lines = payload.splitlines(keepends=True)
+        remainder = ""
+        if lines and not lines[-1].endswith(("\n", "\r")) and not flush:
+            remainder = lines.pop()
+        events: list[dict[str, Any]] = []
+        for line in lines:
+            try:
+                event = json.loads(line.strip())
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        return events, remainder
+
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
         status = self.setup_status()
         if not status.ready or not status.path:
@@ -1310,7 +1449,14 @@ class OneShotCliBackend(ProjectCliBackend):
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._task_subprocess_env(task),
             )
-            _register_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
+            _register_oneshot_process(
+                task.project_id,
+                self.id,
+                process,
+                board_id=task.board_id,
+                execution_id=_task_execution_id(task),
+                execution_kind=_task_execution_kind(task),
+            )
         except Exception as exc:
             msg = f"Failed to start {self.name}: {exc}"
             _emit(on_event, {"type": "error", "message": msg})
@@ -1318,6 +1464,7 @@ class OneShotCliBackend(ProjectCliBackend):
             return BackendTaskResult(False, self.id, self.id, error=msg, session_id=task.audit_id)
 
         output_buffer = _BoundedCliOutput()
+        protocol_buffer = ""
         started_at = time.monotonic()
         last_heartbeat_at = started_at
         try:
@@ -1366,7 +1513,15 @@ class OneShotCliBackend(ProjectCliBackend):
                     break
                 text = chunk.decode("utf-8", errors="replace")
                 output_buffer.append(text)
-                _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}})
+                if self.structured_jsonl:
+                    protocol_events, protocol_buffer = self._protocol_events(
+                        text,
+                        protocol_buffer,
+                    )
+                    for protocol_event in protocol_events:
+                        _emit(on_event, protocol_event)
+                else:
+                    _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}})
                 # A chatty CLI can continuously produce output, so the read
                 # timeout above never fires. Emit a real heartbeat on elapsed
                 # time as well; otherwise Mission Control falsely reports a
@@ -1382,7 +1537,13 @@ class OneShotCliBackend(ProjectCliBackend):
             # Workflow timeouts and user cancellation must stop the underlying
             # provider process too. Without this, the run can be marked failed
             # while Codex/Pi/Claude continues consuming resources in the background.
-            await abort_backend_process(task.project_id, self.id, board_id=task.board_id)
+            await abort_backend_process(
+                task.project_id,
+                self.id,
+                board_id=task.board_id,
+                execution_id=_task_execution_id(task),
+                execution_kind=_task_execution_kind(task),
+            )
             _emit(on_event, {"type": "error", "message": f"{self.name} execution cancelled."})
             _emit(on_event, {"type": "agent_end", "backend": self.id})
             raise
@@ -1394,9 +1555,20 @@ class OneShotCliBackend(ProjectCliBackend):
             rc = -1
             output_buffer.append(f"\n{exc}")
         finally:
-            _clear_oneshot_process(task.project_id, self.id, process, board_id=task.board_id)
+            _clear_oneshot_process(
+                task.project_id,
+                self.id,
+                process,
+                board_id=task.board_id,
+                execution_id=_task_execution_id(task),
+                execution_kind=_task_execution_kind(task),
+            )
 
         output = output_buffer.render().strip()
+        if self.structured_jsonl and protocol_buffer:
+            protocol_events, _ = self._protocol_events("", protocol_buffer, flush=True)
+            for protocol_event in protocol_events:
+                _emit(on_event, protocol_event)
         _emit(on_event, {"type": "message_update", "assistantMessageEvent": {"type": "done"}})
         assistant_message: dict[str, Any] = {"role": "assistant", "content": output}
         usage = self._usage_from_output(output)
@@ -1537,15 +1709,16 @@ class IdeHandoffBackend(ProjectCliBackend):
     def check_availability(self) -> BackendStatus:
         from .ide_handoff import _ide_open_command
 
-        path = _ide_open_command()
+        path = _ide_open_command(self.id)
         installed = bool(path)
+        requirement = "Codex CLI with app support" if self.id == "codex_ide" else "Cursor or VS Code"
         return BackendStatus(
             id=self.id,
             name=self.name,
             installed=installed,
             ready=installed,
             state="ready" if installed else "missing",
-            message=f"{self.name} is ready for IDE handoff." if installed else f"{self.name} requires Cursor or VS Code on PATH.",
+            message=f"{self.name} is ready for IDE handoff." if installed else f"{self.name} requires {requirement} on PATH.",
             path=path,
             setup_required=not installed,
             setup_instructions=self.setup_instructions,
@@ -1612,7 +1785,7 @@ class IdeHandoffBackend(ProjectCliBackend):
         if self.id == "cursor_ide":
             harness = start_cursor_harness_agent(task, packet_path)
 
-        opened = open_ide_project(task.folder, packet_path)
+        opened = open_ide_project(task.folder, packet_path, backend_id=self.id)
         _emit(
             on_event,
             {
@@ -1665,6 +1838,7 @@ class CodexIdeBackend(IdeHandoffBackend):
     name = "Codex IDE"
     description = "Visible Codex IDE handoff via DecisionsAI work packet and plugin bridge."
     plugin_label = "Codex"
+    setup_instructions = "Install and authenticate Codex CLI, then make sure the codex command is on PATH."
 
 
 class ClaudeCodeBackend(OneShotCliBackend):
@@ -1688,6 +1862,7 @@ class CodexBackend(OneShotCliBackend):
     description = "OpenAI Codex CLI backend for project implementation tasks."
     executable_candidates = ["codex"]
     command_args = ["exec"]
+    structured_jsonl = True
     setup_instructions = (
         "Install and authenticate Codex CLI, then make sure the codex command is on PATH."
     )
@@ -2787,6 +2962,7 @@ async def run_project_task(
         progress_state["message"] = message
         progress_state["at"] = now
         compact_event = _compact_execution_event(safe_event)
+        compact_event["execution_session_id"] = int(execution_session_id)
         try:
             from distr.core.project_cli_backends.live_sessions import publish_live_session_event
 

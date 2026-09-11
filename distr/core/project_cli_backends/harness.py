@@ -23,6 +23,7 @@ class HarnessContext:
     project: Any
     instruction: str
     backend_id: str
+    chat_id: int | None = None
     model: str = ""
     ticket_id: int | None = None
     board_id: int | None = None

@@ -81,6 +81,19 @@ def _write_json(path: Path, payload: Any) -> None:
 def merge_visual_plan_pre_chain(skill_ids: list[str]) -> list[str]:
     blob = " ".join(skill_ids).lower()
     prepend: list[str] = []
+    if any(
+        token in blob
+        for token in (
+            "agent-watchdog",
+            "watchdog",
+            "babysit",
+            "audit agent",
+            "compare agents",
+            "session audit",
+            "run summary",
+        )
+    ):
+        prepend.append("agent-watchdog")
     if any(t in blob for t in ("plan", "architecture", "diagram", "mermaid", "visual", "recap", "pr review")):
         prepend.append("decisions-visual-plan")
     if any(t in blob for t in ("diagram", "mermaid", "erdiagram", "sequence", "flowchart")):
@@ -110,7 +123,7 @@ description: Visual planning for {harness} — Mermaid viewer, BuilderIO visual-
 - **decisions-visual-plan** — route between surfaces
 - **decisions-mermaid-diagrams** — freestanding Mermaid viewer (`/diagram/`)
 - **decisions-open-design** — Open Design app + MCP for UI/decks/motion
-- **visual-plan**, **visual-recap**, **quick-recap** — BuilderIO skills (vendored)
+- **visual-plan**, **visual-recap**, **quick-recap**, **agent-watchdog** — BuilderIO skills (vendored)
 
 Registry: `{registry_path}`
 

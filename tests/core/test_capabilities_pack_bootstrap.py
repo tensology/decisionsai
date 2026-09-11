@@ -19,6 +19,10 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
         lambda **kwargs: {"installed": False, "reason": "test"},
     )
 
+    impeccable = tmp_path / ".agents" / "skills" / "impeccable"
+    impeccable.mkdir(parents=True)
+    (impeccable / "SKILL.md").write_text("# Impeccable\n", encoding="utf-8")
+
     result = ensure_capabilities_pack_setup(
         home=tmp_path,
         run_full=True,
@@ -39,17 +43,40 @@ def test_capabilities_pack_projects_browser_skills(tmp_path, monkeypatch):
     assert "Playwright" in harness.read_text(encoding="utf-8")
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "browser-qa" / "SKILL.md").is_file()
     assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "decisions-playwright" / "SKILL.md").is_file()
+    assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "decisions-computer-use" / "SKILL.md").is_file()
+    assert (tmp_path / "plugins" / "decisions-codex" / "skills" / "impeccable" / "SKILL.md").is_file()
+    assert (tmp_path / ".codex" / "skills" / "impeccable" / "SKILL.md").is_file()
+    registry = (tmp_path / ".decisions" / "harness" / "capabilities-skills-registry.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"id": "impeccable"' in registry
+    assert '"source": "external"' in registry
     assert (tmp_path / ".decisions" / "harness" / "mcp-recommendations.json").is_file()
 
 
-def test_merge_browser_content_pre_chain_includes_baseline(tmp_path):
+def test_merge_browser_content_pre_chain_keeps_generic_workflow_lean(tmp_path):
     from distr.core.capabilities_pack import merge_browser_content_pre_chain
 
     chain = merge_browser_content_pre_chain(["tdd-workflow"], project_folder=str(tmp_path))
     assert chain[0] == "decisions-harness-stack"
-    assert "decisions-design-references" in chain
     assert "ponytail" in chain
     assert "tdd-workflow" in chain
+    assert "fallow" not in chain
+    assert "impeccable" not in chain
+    assert "decisions-playwright" not in chain
+    assert "decisions-design-references" not in chain
+
+
+def test_merge_browser_content_pre_chain_routes_ui_tools_on_demand(tmp_path, monkeypatch):
+    from distr.core.capabilities_pack import merge_browser_content_pre_chain
+
+    monkeypatch.setattr("distr.core.design_reference_pack.impeccable_skill_available", lambda: True)
+    chain = merge_browser_content_pre_chain(["frontend-polish"], project_folder=str(tmp_path))
+
+    assert "impeccable" in chain
+    assert "decisions-playwright" in chain
+    assert "browser-qa" not in chain
+    assert "decisions-design-references" not in chain
 
 
 def test_harness_stack_runs_all_packs(tmp_path, monkeypatch):

@@ -83,12 +83,27 @@ def _root_and_turn(session, chat_id: int, turn_id: Optional[int] = None) -> tupl
         return int(root.id), None
 
 
+def resolve_active_chat_turn_row_id(chat_id: int) -> Optional[int]:
+    """Return the durable message-row identity for a chat's active turn.
+
+    Browser delivery can arrive through WebSocket and polling in either order.
+    Exposing the persisted row id lets the client reconcile those paths without
+    treating message text as identity.
+    """
+    try:
+        with get_session() as session:
+            _root_id, turn_id = _root_and_turn(session, int(chat_id))
+            return int(turn_id) if turn_id is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def redact_text(value: Any, *, limit: int = 8000, preserve_paths: bool = False) -> str:
     """Return a bounded human-readable value safe for persistence/broadcast."""
     if value is None:
         return ""
     text = str(value).replace("\x00", "").replace("\r\n", "\n").strip()
-    text = _SECRET_VALUE_RE.sub(lambda m: (m.group(1) if m.lastindex else "") + "[redacted]", text)
+    text = _SECRET_VALUE_RE.sub(lambda m: ((m.group(1) or "") if m.lastindex else "") + "[redacted]", text)
     text = _ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}=[redacted]", text)
     if not preserve_paths:
         text = _ABS_PATH_RE.sub("[local path]", text)

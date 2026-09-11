@@ -44,6 +44,82 @@ def test_normal_desktop_action_is_not_blocked():
     ) == ""
 
 
+def test_computer_use_requires_explicit_desktop_intent():
+    reason = OpenAICompatibleLLMService._tool_intent_block_reason(
+        "computer_use", "I don't know how you're holding up."
+    )
+
+    assert "unrequested computer use" in reason.lower()
+    assert OpenAICompatibleLLMService._tool_intent_block_reason(
+        "computer_use", "On my screen, first open Terminal, then type hello."
+    ) == ""
+
+
+def test_tool_building_requires_explicit_user_authorization():
+    reason = OpenAICompatibleLLMService._tool_intent_block_reason(
+        "build_tool", "First option."
+    )
+
+    assert "explicit" in reason.lower()
+    assert OpenAICompatibleLLMService._tool_intent_block_reason(
+        "build_tool", "Build a reusable tool for moving Terminal"
+    ) == ""
+
+
+def test_system_info_requires_a_system_or_model_question():
+    assert OpenAICompatibleLLMService._tool_intent_block_reason(
+        "system_info", "I want you to perform the first option."
+    )
+    assert OpenAICompatibleLLMService._tool_intent_block_reason(
+        "system_info", "Which model are you using?"
+    ) == ""
+
+
+def test_raw_window_bounds_cannot_bypass_numbered_display_resolver():
+    reason = OpenAICompatibleLLMService._tool_intent_block_reason(
+        "set_window_bounds", "Move the terminal to the third screen."
+    )
+
+    assert "window_management" in reason
+
+
+def test_provider_tool_cap_prioritizes_forced_tool():
+    class Tool:
+        def __init__(self, name):
+            self.name = name
+
+    tools = [Tool(f"tool_{index}") for index in range(130)]
+    window_tool = Tool("window_management")
+    tools.append(window_tool)
+
+    capped = OpenAICompatibleLLMService._cap_provider_tools(
+        tools, "Move the terminal to the third screen"
+    )
+
+    assert len(capped) == 128
+    assert window_tool in capped
+
+
+def test_generic_done_is_replaced_by_last_tool_evidence():
+    service = object.__new__(OpenAICompatibleLLMService)
+    service._messages = [
+        {"role": "tool", "name": "set_window_bounds", "content": "Moved Terminal to display 3 and verified its position."}
+    ]
+
+    assert service._ground_follow_up_content("Done.") == (
+        "Moved Terminal to display 3 and verified its position."
+    )
+
+
+def test_generic_done_surfaces_last_tool_failure():
+    service = object.__new__(OpenAICompatibleLLMService)
+    service._messages = [
+        {"role": "tool", "name": "set_window_bounds", "content": "Error: display 3 was not found"}
+    ]
+
+    assert service._ground_follow_up_content("Done.").startswith("I couldn't complete that")
+
+
 def test_ticket_scope_blocks_worker_before_tickets_exist():
     reason = OpenAICompatibleLLMService._tool_intent_block_reason(
         "pi_agent",

@@ -1,0 +1,24 @@
+[
+  {
+    "case": "Failed save still permits item navigation and discards editor text",
+    "observed": "Original 1",
+    "toasts": [
+      [
+        "409: Planning file changed outside Decisions AI",
+        "error"
+      ],
+      [
+        "409: Planning file changed outside Decisions AI",
+        "error"
+      ]
+    ]
+  },
+  {
+    "case": "Mobile hides every item selection control",
+    "observed": "Second item cannot be selected from UI"
+  },
+  {
+    "case": "Slower Plan-home request overwrites already opened board workspace",
+    "observed": "Home painted last"
+  }
+]

@@ -295,7 +295,8 @@ def register_routes(router, templates):
         s2s_selected = is_openai_s2s_model(conv_model)
         if s2s_selected:
             # S2S is chat-scoped: stamp loaded chat only; never poison global Completions defaults.
-            chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+            from distr.core.chat import ChatService
+            chat_id = ChatService.get_current_chat_id()
             if chat_id:
                 try:
                     from distr.core.db import get_session, Chat
@@ -372,7 +373,8 @@ def register_routes(router, templates):
         # orchestrator matches what the user just saved.
         _fp_after = _agent_llm_settings_fingerprint(settings)
         if _fp_before != _fp_after or s2s_selected:
-            chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+            from distr.core.chat import ChatService
+            chat_id = ChatService.get_current_chat_id()
             if s2s_selected:
                 notify_conversational_llm_saved_for_running_agent(
                     "openai",
@@ -408,7 +410,8 @@ def register_routes(router, templates):
                 from distr.core.settings import load_settings_from_db
                 from distr.core.db import get_session, Chat
                 settings = load_settings_from_db()
-                chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+                from distr.core.chat import ChatService
+                chat_id = ChatService.get_current_chat_id()
                 if chat_id:
                     with get_session() as db:
                         chat = db.get(Chat, int(chat_id))

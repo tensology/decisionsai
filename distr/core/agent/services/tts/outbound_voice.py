@@ -41,6 +41,13 @@ def resolve_outbound_voice_settings(settings: dict[str, Any] | None = None) -> t
         from distr.core.db import Chat, get_session
 
         chat_id = settings.get("agent_current_chat_id")
+        if not chat_id:
+            # The web chat keeps the authoritative active-chat selection in
+            # ChatService. The DB setting can be absent or stale after a chat
+            # switch, which would otherwise make Telegram use the global voice.
+            from distr.core.chat import ChatService
+
+            chat_id = ChatService.get_current_chat_id()
         if chat_id:
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == int(chat_id)).first()

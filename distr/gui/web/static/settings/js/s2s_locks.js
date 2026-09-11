@@ -71,7 +71,7 @@
                 applyDisabled(opts.voiceProvider, true);
             }
             if (typeof opts.onRealtimeVoices === 'function' && locks.voice_set) {
-                opts.onRealtimeVoices(locks.voice_set, locks.default_voice || 'marin');
+                await opts.onRealtimeVoices(locks.voice_set, locks.default_voice || 'marin');
             }
         } else {
             if (opts.voiceProvider) {
@@ -81,13 +81,13 @@
                 var stash = _voiceStash;
                 _voiceStash = null;
                 if (typeof opts.onRestoreVoices === 'function') {
-                    opts.onRestoreVoices(stash);
+                    await opts.onRestoreVoices(stash);
                 } else {
                     opts.voiceProvider.value = stash.provider;
                     opts.voiceModel.value = stash.model;
                 }
             } else if (typeof opts.onRestoreVoices === 'function') {
-                opts.onRestoreVoices(null);
+                await opts.onRestoreVoices(null);
             }
         }
 

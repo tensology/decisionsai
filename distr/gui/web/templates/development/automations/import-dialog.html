@@ -1,0 +1,22 @@
+<dialog class="studio-dialog automation-import-dialog" id="automation-import-dialog">
+        <form method="dialog" id="automation-import-form">
+            <header>
+                <div><h2 id="automation-import-title">Configure imported schedules</h2><p id="automation-import-summary">Choose how these tasks should run before anything is imported.</p></div>
+                <button type="button" class="icon-button" data-dialog-close aria-label="Close automation import">×</button>
+            </header>
+            <input id="automation-import-source" type="hidden">
+            <div class="automation-import-route-note" id="automation-import-route-note" role="status"></div>
+            <div class="dialog-row">
+                <label>Provider<select id="automation-import-provider"><option value="">Automatic</option></select><small>The first provider used for these tasks.</small></label>
+                <label>Model<select id="automation-import-model"><option value="">Automatic</option></select><small>Local Muse Glimmer is preferred when available.</small></label>
+            </div>
+            <div class="dialog-row">
+                <label>Complexity<select id="automation-import-complexity"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select><small>Controls planning depth and escalation.</small></label>
+                <label>Reasoning<select id="automation-import-reasoning"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="xhigh">Extra high</option></select><small>Starting effort for each scheduled run.</small></label>
+            </div>
+            <label>Execution location<select id="automation-import-environment"><option value="local" selected>Local first</option><option value="auto">Automatic</option><option value="hosted">Hosted</option></select><small>Local first keeps routine work on this machine and allows the workflow to escalate when required.</small></label>
+            <label class="check-control"><input id="automation-import-adaptive" type="checkbox" checked><span><strong>Allow adaptive routing</strong><small>The workflow may choose a stronger or independent model for implementation, review, or recovery.</small></span></label>
+            <label class="check-control"><input id="automation-import-update-existing" type="checkbox" checked><span><strong>Update existing imports</strong><small>Apply this route to schedules already imported from the selected source without creating duplicates.</small></span></label>
+            <menu><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button" id="automation-import-submit">Import schedules</button></menu>
+        </form>
+    </dialog>

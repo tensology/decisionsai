@@ -1,6 +1,7 @@
 """Browser coverage for the Google disconnect flow on Third Party settings."""
 
 import json
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from playwright.sync_api import Page, Route, expect
@@ -43,3 +44,41 @@ def test_google_disconnect_confirms_executes_and_refreshes_ui(page: Page):
     expect(page.get_by_role("button", name="Connect", exact=True)).to_be_visible()
     expect(page.locator("#thirdparty_connect_google_disconnect")).to_have_count(0)
     assert state["disconnect_calls"] == 1
+
+
+def test_google_reconnect_reports_unhealthy_token_and_preserves_third_party_return(page: Page):
+    requested_oauth_urls = []
+
+    def route_connection_status(route: Route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "google_connected": False,
+                "google_error": "Google authentication expired. Reconnect the account.",
+            }),
+        )
+
+    def route_oauth_url(route: Route):
+        requested_oauth_urls.append(route.request.url)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"url": f"{BASE_URL}/oauth-test-complete"}),
+        )
+
+    page.route("**/api/advanced/connection-status", route_connection_status)
+    page.route("**/api/advanced/google/oauth-url?*", route_oauth_url)
+    page.goto(
+        f"{BASE_URL}/settings?subtab=connect&provider=google#thirdparty",
+        wait_until="domcontentloaded",
+    )
+
+    expect(page.get_by_text("Google needs to be reconnected.", exact=False)).to_be_visible()
+    expect(page.get_by_text("Google authentication expired.", exact=False)).to_be_visible()
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.wait_for_url(f"{BASE_URL}/oauth-test-complete")
+
+    assert len(requested_oauth_urls) == 1
+    return_to = parse_qs(urlparse(requested_oauth_urls[0]).query)["return_to"][0]
+    assert return_to == "/settings?subtab=connect&provider=google#thirdparty"

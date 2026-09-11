@@ -57,6 +57,8 @@ async function loadGeneralSettings() {
         document.getElementById('welcome_greet_me').checked = settings.welcome_greet_me || false;
         document.getElementById('telegram_send_online_notice').checked = settings.telegram_send_online_notice === true;
         document.getElementById('load_on_startup').checked = settings.load_on_startup || false;
+        const defaultEditor = document.getElementById('default_project_editor');
+        if (defaultEditor) defaultEditor.value = settings.default_project_editor || 'codex';
 
         // Load listening state radio buttons
         const listeningState = settings.listening_state || 'remember';
@@ -111,6 +113,7 @@ async function loadGeneralSettings() {
         const elevenlabsModelEl = document.getElementById('elevenlabs_tts_model');
         if (elevenlabsModelEl) {
             elevenlabsModelEl.value = settings.elevenlabs_tts_model || 'eleven_flash_v2_5';
+            updateElevenLabsModelControls();
         }
         const elevenlabsOpts = document.getElementById('elevenlabs_voice_options');
         if (elevenlabsOpts) elevenlabsOpts.classList.toggle('hidden', voiceProvider !== 'elevenlabs');
@@ -170,6 +173,7 @@ async function saveGeneralSettings() {
             welcome_greet_me: document.getElementById('welcome_greet_me').checked,
             telegram_send_online_notice: document.getElementById('telegram_send_online_notice').checked,
             load_on_startup: document.getElementById('load_on_startup').checked,
+            default_project_editor: (document.getElementById('default_project_editor') || {}).value || 'codex',
             listening_state: listeningState,
             voice_provider: voiceProvider,
             playback_speed: parseFloat(document.getElementById('playback_speed').value),
@@ -681,6 +685,37 @@ function setupGeneralSliders() {
     }
 }
 
+function updateElevenLabsModelControls() {
+    const model = (document.getElementById('elevenlabs_tts_model') || {}).value || '';
+    const isV3 = model === 'eleven_v3' || model === 'eleven_v3_conversational';
+    const stability = document.getElementById('elevenlabs_stability');
+    const stabilityValue = document.getElementById('elevenlabs_stability_value');
+    if (stability) {
+        stability.step = isV3 ? '50' : '1';
+        if (isV3) {
+            const snapped = [0, 50, 100].reduce(function(best, candidate) {
+                return Math.abs(candidate - Number(stability.value)) < Math.abs(best - Number(stability.value))
+                    ? candidate : best;
+            }, 0);
+            stability.value = String(snapped);
+            if (stabilityValue) stabilityValue.textContent = snapped + '%';
+        }
+    }
+
+    [
+        ['elevenlabs_similarity', 'elevenlabs_similarity_control'],
+        ['elevenlabs_style', 'elevenlabs_style_control'],
+        ['elevenlabs_speaker_boost', 'elevenlabs_speaker_boost_control']
+    ].forEach(function(ids) {
+        const input = document.getElementById(ids[0]);
+        const wrapper = document.getElementById(ids[1]);
+        if (input) input.disabled = isV3;
+        if (wrapper) wrapper.classList.toggle('opacity-50', isV3);
+    });
+    const note = document.getElementById('elevenlabs_v3_settings_note');
+    if (note) note.classList.toggle('hidden', !isV3);
+}
+
 // Initialize general settings when DOM is loaded
 function initGeneralTabs() {
     const tabButtons = Array.from(document.querySelectorAll('[data-general-subtab]'));
@@ -737,6 +772,11 @@ function _initGeneral() {
                 await updateOpenAIVoicesForModel(this.value);
             }
         });
+    }
+    const elevenlabsModelSelect = document.getElementById('elevenlabs_tts_model');
+    if (elevenlabsModelSelect) {
+        elevenlabsModelSelect.addEventListener('change', updateElevenLabsModelControls);
+        updateElevenLabsModelControls();
     }
     const addBtn = document.getElementById('add_custom_voice_btn');
     if (addBtn) addBtn.addEventListener('click', openCustomVoiceModal);

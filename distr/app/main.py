@@ -109,7 +109,7 @@ from distr.gui.dialogs.eula import EulaWindow
 from distr.gui.dialogs.audio import DeviceSelectionDialog
 from distr.core.audio.utils import (
     get_current_device_list_hash,
-    get_system_default_device_fingerprint,
+    get_system_default_device_fingerprints,
     is_system_default_device_name,
     restore_locked_devices,
     detect_devices,
@@ -151,9 +151,13 @@ class DeviceCheckWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         try:
+            default_fingerprint, default_output_fingerprint = (
+                get_system_default_device_fingerprints()
+            )
             payload = {
                 "device_hash": get_current_device_list_hash(),
-                "default_fingerprint": get_system_default_device_fingerprint(),
+                "default_fingerprint": default_fingerprint,
+                "default_output_fingerprint": default_output_fingerprint,
             }
             self._safe_emit(json.dumps(payload))
         except Exception as e:
@@ -611,6 +615,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         )
         self._last_device_hash = None
         self._last_default_device_fingerprint = None
+        self._last_default_output_fingerprint = None
         self._device_check_enabled = False  # Will be enabled after initialization
 
         # Run one-time StepRunner → Workflow data migration before any workflow operations
@@ -629,6 +634,18 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             _cleanup_orphaned_runs_on_startup()
         except Exception as _cleanup_err:
             logger.warning("Orphaned workflow run cleanup failed: %s", _cleanup_err)
+
+        try:
+            from distr.core.automation.scheduler import reconcile_automation_startup_state
+
+            automation_state = reconcile_automation_startup_state()
+            if automation_state.get("recovered_runs"):
+                logger.info(
+                    "Recovered %d orphaned automation run(s) from the prior process.",
+                    automation_state["recovered_runs"],
+                )
+        except Exception as _automation_cleanup_err:
+            logger.warning("Automation startup reconciliation failed: %s", _automation_cleanup_err)
 
         try:
             from distr.core.orchestrator_memory import run_weekly_machine_activity_compaction
@@ -815,9 +832,11 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 payload = json.loads(payload_raw)
                 device_hash = payload.get('device_hash') or ''
                 default_fingerprint = payload.get('default_fingerprint') or ''
+                default_output_fingerprint = payload.get('default_output_fingerprint') or ''
             except (json.JSONDecodeError, TypeError):
                 device_hash = payload_raw
                 default_fingerprint = ''
+                default_output_fingerprint = ''
 
             settings = load_settings_from_db()
             uses_system_default = (
@@ -830,6 +849,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 self._last_device_hash = device_hash or None
                 if track_defaults:
                     self._last_default_device_fingerprint = default_fingerprint or None
+                    self._last_default_output_fingerprint = default_output_fingerprint or None
                 logger.info(
                     "Initialized audio monitor baseline (devices=%s, defaults=%s)",
                     self._last_device_hash,
@@ -843,8 +863,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 and default_fingerprint
                 and default_fingerprint != self._last_default_device_fingerprint
             )
+            output_default_changed = (
+                track_defaults
+                and default_output_fingerprint
+                and default_output_fingerprint
+                != getattr(self, '_last_default_output_fingerprint', None)
+            )
 
-            if not list_changed and not default_changed:
+            if not list_changed and not default_changed and not output_default_changed:
                 return
 
             if list_changed:
@@ -875,9 +901,37 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                     default_fingerprint,
                 )
                 self._last_default_device_fingerprint = default_fingerprint
+            if output_default_changed:
+                logger.info(
+                    "System default output route changed: %s -> %s",
+                    getattr(self, '_last_default_output_fingerprint', None),
+                    default_output_fingerprint,
+                )
+                self._last_default_output_fingerprint = default_output_fingerprint
 
             restore_result = restore_locked_devices(settings)
-            self._sync_agent_audio_from_settings(settings)
+            should_reload_for_macos_default_output = (
+                sys.platform == 'darwin'
+                and output_default_changed
+                and is_system_default_device_name(settings.get('output_device'))
+            )
+            if should_reload_for_macos_default_output:
+                # PortAudio's CoreAudio registry is process-global on macOS. A
+                # second PyAudio instance in the existing agent process can keep
+                # the stale device catalog, so a Bluetooth default-route handoff
+                # needs a fresh worker process to become visible reliably.
+                input_device = settings.get('input_device', 'System Default')
+                output_device = settings.get('output_device', 'System Default')
+                self.settings['input_device'] = input_device
+                self.settings['output_device'] = output_device
+                self.selected_input_device = input_device
+                self.selected_output_device = output_device
+                logger.info(
+                    "Reloading agent to follow macOS System Default output route"
+                )
+                self.reload_agent_session(skip_welcome=True)
+            else:
+                self._sync_agent_audio_from_settings(settings)
             logger.info(
                 "Audio monitor applied changes (list_changed=%s, default_changed=%s, restore=%s)",
                 list_changed,
@@ -2037,6 +2091,15 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                     )
                 else:
                     logger.warning("No valid app_user_id or telegram_user_id found in stored connection")
+            else:
+                mobile_account = next(
+                    (a for a in connected_accounts if isinstance(a, dict) and a.get("provider") == "mobile"),
+                    None,
+                )
+                mobile_uid = str((mobile_account or {}).get("app_user_id") or "").strip()
+                if mobile_uid:
+                    logger.info("Found Mobile App relay identity on startup: %s", mobile_uid)
+                    self.telegram_manager.connect(app_user_id=mobile_uid)
         except Exception as e:
             logger.error(f"Error checking Telegram connection on startup: {e}", exc_info=True)
     

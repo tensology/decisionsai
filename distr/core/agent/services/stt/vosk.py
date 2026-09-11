@@ -128,6 +128,7 @@ class VoskSTTService(BaseSTTService):
                     logger.debug(f"STT: Finished processing FULL PTT transcription ({frame_count} frames)")
             except Exception as e:
                 logger.error(f"STT: Error in run_stt() loop: {e}", exc_info=True)
+                await self._emit_empty_ptt_transcription(direction)
         else:
             logger.error("STT: audio_bytes is empty after extraction!")
     
@@ -631,4 +632,3 @@ class VoskSTTService(BaseSTTService):
         
         # Pass through other frames
         await super().process_frame(frame, direction)
-

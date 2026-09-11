@@ -244,7 +244,7 @@ def test_record_tool_execution_hides_events_outside_active_turn(monkeypatch):
     assert events[0]["chat_visible"] is False
 
 
-def test_record_chat_settings_change_persists_visible_activity(monkeypatch):
+def test_record_chat_settings_change_persists_hidden_audit_activity(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -293,7 +293,7 @@ def test_record_chat_settings_change_persists_visible_activity(monkeypatch):
 
     assert event is not None
     assert event["tool_name"] == "chat_settings"
-    assert event["chat_visible"] is True
+    assert event["chat_visible"] is False
     assert "LLM:" in event["result_summary"]
     assert "turn_chat_id" not in event
 
@@ -304,3 +304,4 @@ def test_record_chat_settings_change_persists_visible_activity(monkeypatch):
     events = params["tool_events"]
     assert len(events) == 1
     assert events[0]["title"].startswith("LLM:")
+    assert events[0]["chat_visible"] is False

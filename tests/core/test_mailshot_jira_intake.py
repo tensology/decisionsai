@@ -9,11 +9,17 @@ def test_mailshot_message_normalizes_to_intake_shape():
         "subject": "[JIRA] (PLAYER1-69) assigned you",
         "preview": "PLAYER1-69 on board",
         "date": "2026-08-11T20:20:51.000Z",
+        "to": "paul@tensology.com",
+        "read": False,
+        "attachments": [{"filename": "issue.png"}],
     })
     assert msg["id"] == "email-abc"
     assert "jira@snuzadev.atlassian.net" in msg["from"]
     assert "PLAYER1-69" in msg["subject"]
     assert msg["source"] == "mailshot"
+    assert msg["thread_id"] == "email-abc"
+    assert msg["to"] == "paul@tensology.com"
+    assert msg["attachments"] == [{"filename": "issue.png"}]
     assert intake.is_jira_notification_email(from_addr=msg["from"], subject=msg["subject"])
     assert intake.collect_jira_keys_from_emails([msg]) == ["PLAYER1-69"]
 

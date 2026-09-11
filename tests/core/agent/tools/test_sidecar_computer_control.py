@@ -2,12 +2,10 @@
 Sidecar computer-control test suite.
 
 Tests the full pipeline from sidecar HTTP tools through vision analysis
-and coordinate-based UI interaction — the same capability surface as
-UI-TARS Desktop but running through the DecisionsAI relay architecture.
+and coordinate-based UI interaction in the DecisionsAI relay architecture.
 
 Markers:
   requires_sidecar — needs live sidecar on :11435 (run with -m requires_sidecar)
-  requires_ui_tars — needs UI-TARS model pulled in Ollama (subset of requires_sidecar)
 
 Fast (no marker): all unit tests mock the HTTP layer and run in CI.
 """
@@ -419,21 +417,21 @@ class TestExecutionTools:
 
 
 # ===========================================================================
-# 7. Vision / UI-TARS configuration
+# 7. Vision model configuration
 # ===========================================================================
 
 class TestVisionConfig:
-    """Tests for vision model resolution and UI-TARS integration."""
+    """Tests for generic vision model resolution."""
 
     def test_resolve_vision_uses_vision_llm_settings(self):
         from distr.core.agent.tools.vision.vision_api import resolve_vision_llm_config
         settings = {
             "vision_llm_provider": "ollama",
-            "vision_llm_model": "hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0",
+            "vision_llm_model": "qwen3-vl:2b",
         }
         provider, model = resolve_vision_llm_config(settings)
         assert provider == "ollama"
-        assert "UI-TARS" in model
+        assert model == "qwen3-vl:2b"
 
     def test_resolve_vision_falls_back_to_conversational(self):
         from distr.core.agent.tools.vision.vision_api import resolve_vision_llm_config
@@ -454,7 +452,7 @@ class TestVisionConfig:
 
     def test_is_vision_model_supported_true_when_model_set(self):
         from distr.core.agent.tools.vision.vision_api import is_vision_model_supported
-        assert is_vision_model_supported("ollama", "hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0") is True
+        assert is_vision_model_supported("ollama", "qwen3-vl:2b") is True
 
     def test_is_vision_model_supported_false_when_empty(self):
         from distr.core.agent.tools.vision.vision_api import is_vision_model_supported
@@ -476,7 +474,7 @@ class TestVisionConfig:
 
         monkeypatch.setattr(_requests, "post", fake_post)
 
-        # Patch settings to return UI-TARS config
+        # Patch the vision call so this remains a unit test.
         with patch("distr.core.agent.tools.vision.screenshot_analyzer.ScreenshotAnalyzerTool._call_vision_llm",
                    return_value='{"type":"action","x":500,"y":300,"screen":1,"action":"click","description":"ok","summary":"ok"}'):
             from distr.core.agent.tools.vision.screenshot_analyzer import ScreenshotAnalyzerTool
@@ -485,7 +483,7 @@ class TestVisionConfig:
                 MagicMock(),
                 vision_provider="ollama",
                 vision_provider_key="ollama",
-                vision_model="hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0",
+                vision_model="qwen3-vl:2b",
                 base64_images=[_b64_png()],
                 enhanced_prompt="click the save button",
                 is_action_request=True,
@@ -499,7 +497,7 @@ class TestVisionConfig:
 # ===========================================================================
 
 class TestVisionIntentClassifier:
-    """Tests for intent → prompt builder routing (UI-TARS-style action types)."""
+    """Tests for intent-to-prompt builder routing."""
 
     def test_click_intent_produces_action_json_instructions(self):
         from distr.core.agent.services.vision.intent_classifier import VisionIntent
@@ -689,7 +687,7 @@ class TestComputerUseContext:
 # ===========================================================================
 
 class TestComputerUseGuard:
-    """Ensures only one physical action fires per LLM round (UI-TARS parity)."""
+    """Ensures only one physical action fires per LLM round."""
 
     def test_single_click_allowed(self):
         from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
@@ -750,7 +748,7 @@ class TestComputerUseGuard:
 
 class TestComputerUsePipelineMocked:
     """
-    Simulates the full UI-TARS loop:
+    Simulates the full vision-action loop:
       screenshot → vision model → parse coordinates → execute action
 
     All I/O is mocked — no live sidecar or Ollama needed.
@@ -798,7 +796,7 @@ class TestComputerUsePipelineMocked:
                 result = tool._call_vision_llm(
                     vision_provider="ollama",
                     vision_provider_key="ollama",
-                    vision_model="hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0",
+                    vision_model="qwen3-vl:2b",
                     base64_images=[b64],
                     enhanced_prompt="click the Save button",
                     is_action_request=True,
@@ -910,7 +908,7 @@ class TestComputerUsePipelineMocked:
     def test_scroll_until_element_visible(self, monkeypatch):
         """
         Simulates: element not visible → scroll down → element appears → click.
-        This replicates UI-TARS's scroll + wait pattern.
+        This verifies the generic scroll-and-wait pattern.
         """
         scroll_count = [0]
         visible_after = 2  # element appears after 2 scrolls
@@ -1020,106 +1018,3 @@ class TestSidecarLive:
         call_sidecar_tool("set_clipboard", {"content": test_val}, timeout=5)
         result = call_sidecar_tool("get_clipboard", {}, timeout=5)
         assert result.get("content") == test_val
-
-
-@pytest.mark.requires_sidecar
-@pytest.mark.requires_ui_tars
-class TestUITARSVisionLive:
-    """
-    Live UI-TARS vision tests — require:
-      1. Sidecar running on :11435
-      2. Ollama running with hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0 pulled
-
-    Run with: pytest -m "requires_sidecar and requires_ui_tars"
-    """
-
-    def _get_screenshot_b64(self) -> str:
-        from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
-        result = call_sidecar_tool("capture_screen", {}, timeout=15)
-        return result["data"]
-
-    def test_ui_tars_model_loaded_in_ollama(self):
-        import requests
-        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
-        assert resp.status_code == 200
-        models = [m["name"] for m in resp.json().get("models", [])]
-        ui_tars_models = [m for m in models if "UI-TARS" in m or "ui-tars" in m.lower()]
-        assert len(ui_tars_models) > 0, f"No UI-TARS model found. Available: {models}"
-
-    def test_ui_tars_screen_describe(self):
-        """Ask UI-TARS to describe the current screen."""
-        b64 = self._get_screenshot_b64()
-        import requests
-        resp = requests.post(
-            "http://localhost:11434/api/chat",
-            json={
-                "model": "hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0",
-                "messages": [{
-                    "role": "user",
-                    "content": "Describe what you see on this screen in one sentence.",
-                    "images": [b64],
-                }],
-                "stream": False,
-            },
-            timeout=120,
-        )
-        assert resp.status_code == 200
-        content = resp.json()["message"]["content"]
-        assert len(content) > 10, f"Expected description, got: {content!r}"
-
-    def test_ui_tars_locate_element_returns_json_coordinates(self):
-        """Ask UI-TARS to locate a UI element and return JSON with x,y coordinates."""
-        b64 = self._get_screenshot_b64()
-        from distr.core.agent.tools.vision.vision_api import build_click_prompt
-        prompt = build_click_prompt(
-            "Find the close button (red X) of any window visible on screen.",
-            screen_info_text="\nScreen 1: 2560x1600",
-        )
-        import requests
-        resp = requests.post(
-            "http://localhost:11434/api/chat",
-            json={
-                "model": "hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0",
-                "messages": [{
-                    "role": "user",
-                    "content": prompt,
-                    "images": [b64],
-                }],
-                "stream": False,
-            },
-            timeout=120,
-        )
-        assert resp.status_code == 200
-        content = resp.json()["message"]["content"]
-        # Attempt to parse JSON response
-        try:
-            # UI-TARS may wrap in markdown code block
-            import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
-                assert "x" in parsed or "type" in parsed
-        except (json.JSONDecodeError, AttributeError):
-            # If JSON parsing fails, at least verify we got a non-empty response
-            assert len(content) > 5
-
-    def test_screenshot_analyzer_tool_with_ui_tars(self):
-        """Full ScreenshotAnalyzerTool with UI-TARS as vision model."""
-        # Patch settings to use UI-TARS
-        mock_settings = {
-            "vision_llm_provider": "ollama",
-            "vision_llm_model": "hf.co/bartowski/UI-TARS-7B-DPO-GGUF:Q8_0",
-            "ollama_url": "http://localhost:11434/",
-        }
-        with patch("distr.core.agent.tools.vision.screenshot_analyzer.load_settings_from_db",
-                   return_value=mock_settings):
-            from distr.core.agent.tools.vision.screenshot_analyzer import ScreenshotAnalyzerTool
-            tool = ScreenshotAnalyzerTool()
-            result = tool._run(
-                prompt="Describe what application is currently in focus on screen.",
-                region="full",
-            )
-        assert isinstance(result, str)
-        assert len(result) > 5
-        # Should not be an error
-        assert not result.startswith("Error: Ollama vision API failed")

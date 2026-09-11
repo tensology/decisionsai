@@ -1,0 +1,23 @@
+Implement an optional "Show archived" feature across this ticket board.
+
+This is a mixed Python, JavaScript, React, and HTML project. Trace the active code path before editing. Similar files exist under legacy/, generated/, and vendor/ but they are decoys and must not be changed.
+
+Required behavior:
+1. TicketRepository.list_for_board accepts include_archived=False, hides archived tickets by default, optionally includes them, never leaks another board, and always sorts by (position, id).
+2. TicketService.list_board_tickets keeps the same default, normalizes board_id to int, and forwards include_archived.
+3. board_tickets_view parses query["include_archived"] with the existing app.utils.query.query_flag helper. Its meta object contains both count and the normalized include_archived boolean. Keep the existing item shape.
+4. fetchBoardTickets remains backward-compatible, accepts an optional { includeArchived = false } options object, and only appends include_archived=true when enabled. Keep board ID URL encoding and error handling.
+5. useTickets owns includeArchived state, passes it to the API, reloads when it changes, and returns includeArchived plus setIncludeArchived.
+6. TicketBoard renders an accessible controlled checkbox labelled "Show archived", without removing refresh, loading, count, or ticket rendering.
+7. The server-rendered mount in templates/board.html declares data-include-archived="false".
+
+You may modify only:
+- app/repositories/tickets.py
+- app/services/tickets.py
+- app/web/views.py
+- web/api/tickets.js
+- web/hooks/useTickets.js
+- web/components/TicketBoard.jsx
+- templates/board.html
+
+Do not modify tests, models, base classes, URLs, README, AGENTS.md, legacy/, generated/, or vendor/. Run `python -m unittest discover -s tests -v` and report what changed and the test result.

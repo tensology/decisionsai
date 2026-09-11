@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Northstar Run Control</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Project navigation">
+      <div class="brand">Northstar</div>
+      <button id="new-run" type="button">New run</button>
+      <nav aria-label="Primary"><a href="#overview">Overview</a><a href="#runs" aria-current="page">Runs</a><a href="#reports">Reports</a></nav>
+      <div class="project-list"><p>Projects</p><button type="button" data-project="DecisionsAI">DecisionsAI</button><button type="button" data-project="Player1Sport">Player1Sport</button><button type="button" data-project="AuctionNow">AuctionNow</button></div>
+    </aside>
+    <main id="runs">
+      <header class="topbar">
+        <button id="nav-toggle" type="button" aria-label="Toggle project navigation" aria-expanded="true">Menu</button>
+        <div><h1>Run control</h1><p>Monitor agents, inspect checkpoints, and intervene when work needs judgment.</p></div>
+        <span id="system-health">Systems nominal</span>
+      </header>
+      <section class="toolbar" aria-label="Run controls">
+        <label for="run-search">Search runs</label><input id="run-search" type="search" placeholder="Ticket, project, or run ID">
+        <div role="group" aria-label="Filter runs"><button type="button" data-filter="all" aria-pressed="true">All</button><button type="button" data-filter="active" aria-pressed="false">Active</button><button type="button" data-filter="waiting" aria-pressed="false">Waiting</button><button type="button" data-filter="failed" aria-pressed="false">Failed</button></div>
+        <div role="group" aria-label="Change view"><button type="button" data-view="board" aria-pressed="true">Board</button><button type="button" data-view="list" aria-pressed="false">List</button></div>
+      </section>
+      <div class="workspace">
+        <section class="run-area" aria-labelledby="run-heading"><div class="section-heading"><h2 id="run-heading">Live workflow runs</h2><span id="result-count"></span></div><div id="run-grid" aria-live="polite"></div><div id="empty-state" hidden><h3>No matching runs</h3><p>Clear the search or choose another status.</p><button type="button" id="clear-filters">Clear filters</button></div></section>
+        <aside class="inspector" aria-labelledby="inspector-title"><p>Selected run</p><h2 id="inspector-title">Choose a run</h2><div id="inspector-body"><p>Select a workflow to see its checkpoints and controls.</p></div></aside>
+      </div>
+    </main>
+  </div>
+  <dialog id="cancel-dialog"><form method="dialog"><h2>Cancel this run?</h2><p>The agent will stop after its current safe checkpoint.</p><menu><button value="close">Keep running</button><button id="confirm-cancel" value="confirm">Cancel run</button></menu></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+from types import MethodType
+from types import SimpleNamespace
+
 
 def test_is_openai_s2s_model_matrix():
     from distr.core.openai_s2s import is_openai_s2s_model
@@ -142,6 +146,232 @@ def test_hot_swap_llm_service_twins_realtime(monkeypatch):
     twin = completions_model_for_chat("gpt-realtime-2.1", "gpt-4o")
     assert twin == "gpt-4o"
     assert not is_openai_s2s_model(twin)
+
+
+class _Logger:
+    def debug(self, *args, **kwargs):
+        pass
+
+    def info(self, *args, **kwargs):
+        pass
+
+    def warning(self, *args, **kwargs):
+        pass
+
+
+def test_hot_swap_command_preserves_realtime_intent_and_openai_voice():
+    from distr.core.agent.command_handler import _cmd_hot_swap_llm
+
+    llm_swaps = []
+    tts_swaps = []
+    session = SimpleNamespace(
+        logger=_Logger(),
+        config={"llm": {"engine": "openai", "model_name": "gpt-4o"}},
+        settings={"conversational_llm_model": "gpt-4o"},
+        _hot_swap_llm_service=lambda *args, **kwargs: llm_swaps.append(
+            (args, kwargs)
+        ),
+        _hot_swap_tts_service=lambda *args, **kwargs: tts_swaps.append(args),
+    )
+
+    _cmd_hot_swap_llm(
+        session,
+        {
+            "provider": "openai",
+            "model_name": "gpt-realtime",
+            "chat_id": 7,
+            "voice_provider": "openai",
+            "voice_model": "marin",
+        },
+    )
+
+    assert llm_swaps == [
+        (
+            ("openai", "gpt-realtime", 7),
+            {
+                "speak": None,
+                "voice_provider": "openai",
+                "voice_model": "marin",
+            },
+        )
+    ]
+    assert tts_swaps == [("openai", "marin")]
+
+
+def test_current_chat_changed_preserves_realtime_intent_before_provider_correction(
+    monkeypatch,
+):
+    from distr.core.agent.command_handler import _cmd_current_chat_changed
+
+    chat = SimpleNamespace(
+        id=7,
+        provider="openai",
+        model_name="gpt-realtime",
+        voice_provider="elevenlabs",
+        voice_model="Rachel",
+    )
+    settings_row = SimpleNamespace(
+        conversational_llm_provider="openai",
+        conversational_llm_model="gpt-4o",
+        agent_provider="openai",
+        agent_model="gpt-4o",
+        tts_provider="elevenlabs",
+    )
+
+    class _Query:
+        def first(self):
+            return settings_row
+
+    class _Db:
+        def get(self, model, chat_id):
+            return chat if chat_id == 7 else None
+
+        def query(self, model):
+            return _Query()
+
+        def commit(self):
+            pass
+
+    @contextlib.contextmanager
+    def fake_get_session():
+        yield _Db()
+
+    monkeypatch.setattr("distr.core.db.get_session", fake_get_session)
+
+    llm_swaps = []
+    tts_swaps = []
+    session = SimpleNamespace(
+        logger=_Logger(),
+        config={
+            "llm": {
+                "engine": "openai",
+                "model_name": "gpt-4o",
+                "s2s_active": False,
+                "s2s_model": None,
+            }
+        },
+        settings={"conversational_llm_model": "gpt-4o"},
+        chat_manager=None,
+        llm_service=None,
+        _hot_swap_llm_service=lambda *args, **kwargs: llm_swaps.append(
+            (args, kwargs)
+        ),
+        _hot_swap_tts_service=lambda *args, **kwargs: tts_swaps.append(args),
+    )
+
+    _cmd_current_chat_changed(session, {"chat_id": 7})
+
+    assert llm_swaps == [
+        (
+            ("OpenAI", "gpt-realtime", 7),
+            {"voice_provider": "openai", "voice_model": "marin"},
+        )
+    ]
+    assert tts_swaps == [("openai", "marin")]
+    assert chat.voice_provider == "openai"
+    assert chat.voice_model == "marin"
+
+    # Leaving Realtime must still call the hot-swap when the safe Completions
+    # service already uses the requested non-Realtime model.
+    llm_swaps.clear()
+    tts_swaps.clear()
+    chat.model_name = "gpt-4o"
+    chat.voice_provider = "openai"
+    chat.voice_model = "alloy"
+    session.config["llm"].update(
+        s2s_active=True,
+        s2s_model="gpt-realtime",
+    )
+
+    _cmd_current_chat_changed(session, {"chat_id": 7})
+
+    assert llm_swaps == [
+        (
+            ("OpenAI", "gpt-4o", 7),
+            {"voice_provider": "openai", "voice_model": "alloy"},
+        )
+    ]
+
+
+def test_session_hot_swap_keeps_safe_twin_and_syncs_realtime_bridge(monkeypatch):
+    from distr.core.agent.session import AgentSession
+
+    bridge_updates = []
+
+    class _Bridge:
+        def set_s2s_enabled(self, enabled, **kwargs):
+            bridge_updates.append((enabled, kwargs))
+
+    session = object.__new__(AgentSession)
+    session.logger = _Logger()
+    session.config = {
+        "llm": {
+            "engine": "openai",
+            "model_name": "gpt-4o",
+            "s2s_active": False,
+            "s2s_model": None,
+        },
+        "tts": {"voice_name": "alloy"},
+    }
+    session.settings = {
+        "conversational_llm_model": "gpt-4o",
+        "openai_key": "sk-test",
+    }
+    session.llm_service = None
+    session.s2s_service = _Bridge()
+    session.chat_manager = None
+    session.pipeline = None
+    session.transport = None
+    session.event_queue = None
+    session.is_hands_free = False
+    session.is_dictating = False
+    session.ptt_active = False
+    session.agent_name = "Assistant"
+    session.role = "Helpful assistant"
+    session._load_agent_role = lambda: "Helpful assistant"
+
+    created_models = []
+
+    def create_llm_service(this):
+        created_models.append(this.config["llm"]["model_name"])
+        this.llm_service = SimpleNamespace()
+
+    session._create_llm_service_only = MethodType(create_llm_service, session)
+
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: dict(session.settings),
+    )
+    monkeypatch.setattr(
+        "distr.core.agent.service_factory.resolve_voice_to_display_name",
+        lambda *args, **kwargs: "Assistant",
+    )
+
+    session._hot_swap_llm_service(
+        "openai",
+        "gpt-realtime",
+        voice_provider="openai",
+        voice_model="cedar",
+    )
+
+    assert created_models == ["gpt-4o"]
+    assert session.config["llm"]["s2s_active"] is True
+    assert session.config["llm"]["s2s_model"] == "gpt-realtime"
+    assert bridge_updates[-1][0] is True
+    assert bridge_updates[-1][1]["model"] == "gpt-realtime"
+    assert bridge_updates[-1][1]["voice"] == "cedar"
+
+    session._hot_swap_llm_service(
+        "openai",
+        "gpt-4o",
+        voice_provider="openai",
+        voice_model="alloy",
+    )
+
+    assert created_models == ["gpt-4o", "gpt-4o"]
+    assert session.config["llm"]["s2s_active"] is False
+    assert session.config["llm"]["s2s_model"] is None
+    assert bridge_updates[-1][0] is False
 
 
 def test_s2s_locks_endpoint_helper_matches_matrix():

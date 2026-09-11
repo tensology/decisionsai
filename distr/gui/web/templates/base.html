@@ -31,7 +31,7 @@
             :root { --app-rem-base: 13.75px; }
         }
     </style>
-    <link rel="stylesheet" href="/static/shared/css/base.css">
+    <link rel="stylesheet" href="/static/shared/css/base.css?v=20260827-1">
     <link rel="stylesheet" href="/static/shared/css/decisions_datetime.css">
     <link rel="stylesheet" href="/static/shared/css/model_popups.css">
     {% block head_styles %}{% endblock %}
@@ -65,10 +65,6 @@
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 21l1.395-4.116C3.507 15.23 3 13.66 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
                             <span class="nav-tab-label">Chat</span>
                         </a>
-                        <a href="/projects/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                            <span class="nav-tab-label">Projects</span>
-                        </a>
                         <a href="/actions/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                             <span class="nav-tab-label">Actions</span>
@@ -77,17 +73,9 @@
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h8M8 11h8M8 15h5M6 3h12a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
                             <span class="nav-tab-label">Snippets</span>
                         </a>
-                        <a href="/automations/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h7M4 12h10M4 17h7m10-10h-6m6 5h-3m3 5h-6"/></svg>
-                            <span class="nav-tab-label">Automations</span>
-                        </a>
-                        <a href="/tickets/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-                            <span class="nav-tab-label">Ticket Boards</span>
-                        </a>
-                        <a href="/workflows/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
+                        <a href="/development/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                            <span class="nav-tab-label">Workflows/Loops</span>
+                            <span class="nav-tab-label">Development</span>
                         </a>
                     </div>
                 </div>
@@ -151,7 +139,7 @@
       };
     })();
     </script>
-    <script src="/static/shared/js/api.js"></script>
+    <script src="/static/shared/js/api.js?v=20260827-1"></script>
     <script src="/static/shared/js/list_keyboard.js"></script>
     {% block body_scripts %}{% endblock %}
     <script src="/static/shared/js/decisions_datetime.js"></script>
@@ -164,7 +152,7 @@
           var href = tab.getAttribute('href');
           if (!href) return;
           var tabPath = href.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/';
-          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/automations' && (path === '/automations' || path.startsWith('/automations/'))) || (tabPath === '/tickets' && (path === '/tickets' || path.startsWith('/tickets/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
+          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/tickets' && (path === '/tickets' || path.startsWith('/tickets/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
           tab.classList.toggle('active', isActive);
         });
         // Highlight settings gear icon when on /settings

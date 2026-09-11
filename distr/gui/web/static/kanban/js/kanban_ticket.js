@@ -455,6 +455,7 @@
             }
             var wfBadge = rootEl.querySelector(".kb-wf-status-badge");
             if (wfBadge && wfBadge.tagName === "BUTTON" && isLocal && typeof deps.showRunPopover === "function") {
+                wfBadge.dataset.runPopoverBound = "1";
                 wfBadge.addEventListener("click", function(e) {
                     e.stopPropagation();
                     deps.showRunPopover(wfBadge, ticket.id);
@@ -786,6 +787,21 @@
             var canDelete = isLocal;
             var canTransfer = !listOpts.hideTransfer && !isLocal;
             var source = ticket.source_provider || (currentBoard && currentBoard.source ? currentBoard.source : "database");
+            var workflowStatus = (ticket.workflow_status || "").toLowerCase();
+            var workflowStatusBadgeHtml = "";
+            if (workflowStatus) {
+                var wfIsActive = isLocal && (workflowStatus === "running" || workflowStatus === "waiting");
+                var wfColorClass = "bg-gray-500/25 text-gray-200";
+                if (workflowStatus === "running" || workflowStatus === "waiting") {
+                    wfColorClass = "bg-sky-500/25 text-sky-200" + (wfIsActive ? " cursor-pointer hover:bg-sky-500/40" : "");
+                } else if (workflowStatus === "completed") {
+                    wfColorClass = "bg-green-500/25 text-green-200";
+                } else if (workflowStatus === "failed" || workflowStatus === "cancelled") {
+                    wfColorClass = "bg-red-500/25 text-red-200";
+                }
+                var wfTag = wfIsActive ? "button" : "span";
+                workflowStatusBadgeHtml = '<' + wfTag + ' class="kb-wf-status-badge ' + wfColorClass + ' text-[10px] px-1.5 py-0.5 rounded font-medium">' + deps.esc(workflowStatus) + "</" + wfTag + ">";
+            }
             var cleanDesc = deps.stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
             var descHtml = ticketListDescriptionHtml(cleanDesc);
             var contentClass = "kb-ticket-list-content" + (cleanDesc ? "" : " kb-ticket-list-content--no-desc");
@@ -802,7 +818,7 @@
             row.innerHTML =
                 '<div class="kb-ticket-list-prefix">' +
                     buildListDragHandleHtml(canDrag) +
-                    '<span class="kb-ticket-list-badges">' + buildSourceBadge(source) + buildComplexityBadge(ticket.complexity) + buildPriorityBadge(ticket.priority) + "</span>" +
+                    '<span class="kb-ticket-list-badges">' + buildSourceBadge(source) + buildComplexityBadge(ticket.complexity) + buildPriorityBadge(ticket.priority) + workflowStatusBadgeHtml + "</span>" +
                 "</div>" +
                 '<div class="' + contentClass + '">' +
                     '<span class="kb-ticket-list-title">' + deps.esc(ticket.title || "") + "</span>" +

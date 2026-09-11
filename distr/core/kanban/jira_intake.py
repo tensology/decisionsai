@@ -739,13 +739,19 @@ def collect_jira_keys_from_emails(messages: Iterable[dict[str, Any]]) -> list[st
 def mailshot_message_to_intake_dict(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize a Tensology Mailshot email row into the Gmail-shaped intake dict."""
     snippet = str(raw.get("preview") or raw.get("snippet") or raw.get("body") or "").strip()
+    message_id = str(raw.get("_id") or raw.get("id") or raw.get("messageId") or "").strip()
     return {
-        "id": str(raw.get("_id") or raw.get("id") or raw.get("messageId") or "").strip(),
+        "id": message_id,
+        "thread_id": str(raw.get("thread_id") or raw.get("threadId") or message_id).strip(),
         "from": str(raw.get("from") or raw.get("from_addr") or raw.get("sender") or "").strip(),
+        "to": str(raw.get("to") or "").strip(),
         "subject": str(raw.get("subject") or "").strip(),
         "snippet": snippet[:500],
         "body": str(raw.get("body") or snippet or ""),
         "date": str(raw.get("date") or "").strip(),
+        "labels": list(raw.get("labels") or []),
+        "read": bool(raw.get("read")),
+        "attachments": list(raw.get("attachments") or []),
         "source": "mailshot",
     }
 

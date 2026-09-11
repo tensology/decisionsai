@@ -101,7 +101,7 @@ def test_echo_suppression():
         reference_buffer=ref_buf, filter_length=800, mu=0.5,
         output_sample_rate=SR,
     )
-    asyncio.get_event_loop().run_until_complete(aec.start(SR))
+    asyncio.run(aec.start(SR))
 
     # Generate 1.5s of echo signal (same tone in ref and mic)
     duration = 1.5
@@ -123,7 +123,7 @@ def test_echo_suppression():
         mic_bytes = f32_to_int16_bytes(chunk)
 
         # AEC filters it
-        filtered_bytes = asyncio.get_event_loop().run_until_complete(aec.filter(mic_bytes))
+        filtered_bytes = asyncio.run(aec.filter(mic_bytes))
         filtered = int16_bytes_to_f32(filtered_bytes)
 
         raw_rms_values.append(rms(chunk))
@@ -173,6 +173,48 @@ def test_reference_buffer():
     print("  Reference buffer: OK")
 
 
+def test_reference_buffer_supports_explicit_past_delay():
+    """AEC can read an older speaker window to model hardware/room delay."""
+    ref_buf = ReferenceBuffer(max_duration_secs=1.0, sample_rate=SR)
+    data = np.arange(1000, dtype=np.float32)
+    ref_buf.push(data)
+
+    delayed = ref_buf.pull(100, delay_samples=40)
+    assert np.allclose(delayed, data[860:960])
+
+
+def test_aec_calibrates_reference_delay_from_speaker_path():
+    """Automatic calibration should recover a delayed broadband reference."""
+    ref_buf = ReferenceBuffer(max_duration_secs=2.0, sample_rate=SR)
+    aec = NLMSEchoCanceller(
+        reference_buffer=ref_buf, filter_length=800, mu=0.5,
+        output_sample_rate=SR,
+    )
+    asyncio.run(aec.start(SR))
+    ref_buf.set_active(True)
+    ref_buf._activated_at = time.time() - 1.0
+
+    rng = np.random.default_rng(42)
+    reference = rng.normal(0.0, 0.2, SR).astype(np.float32)
+    ref_buf.push(reference)
+    delay_samples = int(0.10 * SR)
+    mic = reference[-delay_samples - CHUNK_SAMPLES:-delay_samples]
+
+    estimated = aec._estimate_reference_delay(mic)
+    assert estimated is not None
+    assert abs(estimated - 100.0) <= 10.0
+
+
+def test_tts_sentence_activation_does_not_restart_grace_window():
+    """Per-sentence TTS lifecycle frames share one response activation epoch."""
+    ref_buf = ReferenceBuffer(max_duration_secs=1.0, sample_rate=SR)
+    ref_buf.set_active(True)
+    first_activation = ref_buf._activated_at
+    time.sleep(0.001)
+    ref_buf.set_active(True)
+    assert ref_buf._activated_at == first_activation
+
+
 # ---------------------------------------------------------------------------
 # Test 3: Echo gate — _check_bargein_energy
 # ---------------------------------------------------------------------------
@@ -199,6 +241,24 @@ def test_echo_gate_logic():
     stt._pre_buffer = [f32_to_int16_bytes(high_energy)] * 15
     assert stt._check_bargein_energy(), "High energy should pass barge-in gate"
 
+    class _AecMetrics:
+        last_metrics = {
+            "reference_correlation": 0.9,
+            "reference_rms": 0.10,
+            "input_rms": 0.05,
+            "residual_rms": 0.02,
+        }
+
+    stt._aec_filter = _AecMetrics()
+    assert not stt._check_bargein_energy(), "Reference-dominated audio should be suppressed"
+    stt._aec_filter.last_metrics = {
+        "reference_correlation": 0.2,
+        "reference_rms": 0.10,
+        "input_rms": 0.10,
+        "residual_rms": 0.10,
+    }
+    assert stt._check_bargein_energy(), "Uncorrelated speech should remain interruptible"
+
     ref_buf.set_active(False)
     print("  Echo gate logic: OK")
 
@@ -215,7 +275,7 @@ def test_speech_over_echo():
         reference_buffer=ref_buf, filter_length=800, mu=0.5,
         output_sample_rate=SR,
     )
-    asyncio.get_event_loop().run_until_complete(aec.start(SR))
+    asyncio.run(aec.start(SR))
 
     duration = 1.5
     # Echo = 440Hz tone, Speech = 880Hz tone (different frequency)
@@ -238,7 +298,7 @@ def test_speech_over_echo():
         mic_chunk = echo_chunk + speech_chunk
         mic_bytes = f32_to_int16_bytes(mic_chunk)
 
-        filtered_bytes = asyncio.get_event_loop().run_until_complete(aec.filter(mic_bytes))
+        filtered_bytes = asyncio.run(aec.filter(mic_bytes))
         filtered = int16_bytes_to_f32(filtered_bytes)
         aec_rms_values.append(rms(filtered))
 
@@ -264,14 +324,14 @@ def test_silence_passthrough():
         reference_buffer=ref_buf, filter_length=800, mu=0.5,
         output_sample_rate=SR,
     )
-    asyncio.get_event_loop().run_until_complete(aec.start(SR))
+    asyncio.run(aec.start(SR))
 
     # ref_buf is NOT active — AEC should be a no-op
     speech = make_tone(440.0, 0.1, SR, amplitude=0.2)
     for i in range(len(speech) // CHUNK_SAMPLES):
         chunk = speech[i * CHUNK_SAMPLES:(i + 1) * CHUNK_SAMPLES]
         mic_bytes = f32_to_int16_bytes(chunk)
-        out_bytes = asyncio.get_event_loop().run_until_complete(aec.filter(mic_bytes))
+        out_bytes = asyncio.run(aec.filter(mic_bytes))
         # Should be identical (passthrough)
         assert mic_bytes == out_bytes, "AEC should passthrough when inactive"
 
@@ -343,21 +403,21 @@ def test_adaptive_echo_floor():
 
 
 # ---------------------------------------------------------------------------
-# Test 8: Activation timestamp resets on every set_active(True)
+# Test 8: Activation timestamp remains stable within one TTS response
 # ---------------------------------------------------------------------------
 
-def test_activation_timestamp_resets():
-    """Each set_active(True) should reset _activated_at for fresh grace period."""
+def test_activation_timestamp_is_stable_within_response():
+    """Per-sentence TTS frames must not restart the barge-in grace period."""
     ref_buf = ReferenceBuffer(max_duration_secs=2.0, sample_rate=SR)
 
     ref_buf.set_active(True)
     t1 = ref_buf._activated_at
     time.sleep(0.05)
 
-    # Second activation (new TTS sentence) should reset timestamp
+    # A second sentence in the same response must keep the activation epoch.
     ref_buf.set_active(True)
     t2 = ref_buf._activated_at
-    assert t2 > t1, "Activation timestamp should reset on each set_active(True)"
+    assert t2 == t1, "Activation timestamp should remain stable within a response"
 
     # Deactivate and reactivate
     ref_buf.set_active(False)
@@ -367,7 +427,7 @@ def test_activation_timestamp_resets():
     assert t3 > t2, "Timestamp should reset after deactivate/reactivate cycle"
 
     ref_buf.set_active(False)
-    print("  Activation timestamp resets: OK")
+    print("  Activation timestamp stability: OK")
 
 
 # ---------------------------------------------------------------------------

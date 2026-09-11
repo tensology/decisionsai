@@ -190,6 +190,37 @@ def test_telegram_voice_reply_stays_in_chat_when_remote_open(monkeypatch):
     assert app.worker_calls and app.worker_calls[0]["input_type"] == "voice"
 
 
+def test_remote_voice_reply_uses_remote_instead_of_telegram(monkeypatch):
+    app = DummyApp(DummyTelegramManager(connected=True))
+    remote_calls = []
+    monkeypatch.setattr("distr.app.events.threading.Thread", ImmediateThread)
+    monkeypatch.setattr(
+        "distr.core.integrations.telegram.remote_tts_delivery.resolve_remote_delivery_context",
+        lambda manager, data, consume_pending=False: {
+            "request_id": "remote-voice-1",
+            "source_command": "voice_transcribe",
+            "mode": "command",
+        },
+    )
+    monkeypatch.setattr(
+        app,
+        "_send_to_remote_worker",
+        lambda data, remote_ctx: remote_calls.append((data, remote_ctx)),
+    )
+
+    app._evt_send_to_telegram({
+        "text": "Remote voice answer.",
+        "provider": "kokoro",
+        "input_type": "voice",
+        "origin_surface": "remote",
+        "origin_request_id": "remote-voice-1",
+    })
+
+    assert len(remote_calls) == 1
+    assert remote_calls[0][1]["request_id"] == "remote-voice-1"
+    assert app.worker_calls == []
+
+
 def test_remote_voice_reply_still_uses_remote_when_no_telegram_input_type(monkeypatch):
     app = DummyApp(DummyTelegramManager(connected=True))
     remote_calls = []
@@ -236,6 +267,7 @@ def test_automation_delivery_payload_requests_telegram(monkeypatch):
         "Finish Player1Sport today.",
         automation_name="Daily plan",
         manual=True,
+        origin_surface="telegram",
     )
 
     assert channel == "telegram"

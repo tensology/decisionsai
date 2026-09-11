@@ -13,6 +13,7 @@ from distr.core.services.model_recommendations import load_recommendations
 
 # (model_id prefix, context tokens) — longest prefixes first.
 _MODEL_PREFIX_WINDOWS: tuple[tuple[str, int], ...] = (
+    ("muse-glimmer", 131_072),
     ("gpt-4.1-nano", 1_047_576),
     ("gpt-4.1-mini", 1_047_576),
     ("gpt-4.1", 1_047_576),
@@ -73,7 +74,7 @@ def _model_matches_prefix(model: str, prefix: str) -> bool:
         return False
     if model == prefix:
         return True
-    return model.startswith(prefix + "-")
+    return model.startswith((prefix + "-", prefix + ":"))
 
 
 def _from_recommendations(model: str) -> Optional[int]:

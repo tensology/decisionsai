@@ -404,7 +404,7 @@ def execute_project_ops_plan(
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanTicket
     from distr.core.kanban.ticket_policy import infer_ticket_complexity, normalize_ticket_complexity
-    from distr.core.workflow.dispatcher import start_workflow_run
+    from distr.core.workflow.work_dispatch import dispatch_work_item
 
     with get_session() as session:
         board, lane = _resolve_intake_lane(session, board_id)
@@ -452,19 +452,28 @@ def execute_project_ops_plan(
             "phase": "implementing" if route in {"implement_ticket", "cursor_implement"} else "investigating",
             "project_ops_route": route,
         }
-        run_result = start_workflow_run(
-            workflow_id,
-            context=context,
-            board_id=board_id,
-            ticket_id=target_ticket_id,
-            run_metadata=run_metadata,
-        )
-        if "error" in run_result:
-            return {
-                "status": "failed",
-                "message": run_result["error"],
-                "human_status": "Blocked",
-            }
+        ticket_title = ticket.title if ticket else f"Ticket #{target_ticket_id}"
+        project_id = int(board.default_project_id) if board.default_project_id else None
+        session.commit()
+
+    run_result = dispatch_work_item(
+        workflow_id=int(workflow_id),
+        context=context,
+        board_id=int(board_id),
+        ticket_id=int(target_ticket_id),
+        title=ticket_title,
+        project_id=project_id,
+        source_type="project_ops",
+        source_ref=f"ticket:{int(target_ticket_id)}",
+        run_metadata=run_metadata,
+        dispatch_async=True,
+    )
+    if "error" in run_result:
+        return {
+            "status": "failed",
+            "message": run_result["error"],
+            "human_status": "Blocked",
+        }
 
     phase = run_metadata["phase"]
     return {

@@ -49,10 +49,10 @@ def resolve_inspection_budget(
     role = str(step_role or "").strip().lower()
     if maximum == 0 and role in {"implementation", "correction", "review", "validation"}:
         role_defaults = {
-            "implementation": {"low": 8, "medium": 12, "high": 16},
-            "correction": {"low": 6, "medium": 10, "high": 14},
-            "review": {"low": 8, "medium": 12, "high": 16},
-            "validation": {"low": 8, "medium": 12, "high": 16},
+            "implementation": {"low": 30, "medium": 60, "high": 99},
+            "correction": {"low": 24, "medium": 48, "high": 80},
+            "review": {"low": 24, "medium": 48, "high": 80},
+            "validation": {"low": 24, "medium": 48, "high": 80},
         }
         maximum = role_defaults[role][level]
         budget["defaulted_for_step_role"] = role

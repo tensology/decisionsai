@@ -138,20 +138,38 @@ def resolve_remote_delivery_context(
             len(stale_request_ids),
             ", ".join(value for value in stale_request_ids if value) or "unknown",
         )
-    pending = pending_queue[0] if pending_queue else None
+    requested_id = str(
+        payload.get("origin_request_id")
+        or payload.get("external_request_id")
+        or ""
+    ).strip()
+    pending_index = 0
+    if requested_id:
+        matching_indexes = [
+            index
+            for index, ctx in enumerate(pending_queue)
+            if str(ctx.get("request_id") or "") == requested_id
+        ]
+        if not matching_indexes:
+            return None
+        pending_index = matching_indexes[0]
+    pending = pending_queue[pending_index] if pending_queue else None
     if isinstance(pending, dict) and pending.get("request_id"):
         if proactive:
             if is_remote_delivery_available(manager):
                 return build_synthetic_remote_context(payload)
             return None
         if consume_pending:
-            _store_pending_remote_contexts(manager, pending_queue[1:])
+            remaining = [
+                ctx for index, ctx in enumerate(pending_queue) if index != pending_index
+            ]
+            _store_pending_remote_contexts(manager, remaining)
             logger.info(
                 "[REMOTE TTS] Consumed remote context: request_id=%s source=%s mode=%s remaining=%s",
                 pending.get("request_id"),
                 pending.get("source_command"),
                 pending.get("mode"),
-                len(pending_queue[1:]),
+                len(remaining),
             )
             return pending
         return pending

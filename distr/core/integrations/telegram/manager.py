@@ -378,7 +378,8 @@ class TelegramWebSocketManager(
             # Try current chat's voice first
             provider = None
             voice_id = None
-            chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+            from distr.core.chat import ChatService
+            chat_id = ChatService.get_current_chat_id()
             if chat_id:
                 try:
                     from distr.core.db import get_session, Chat

@@ -368,9 +368,13 @@ Setup installs or repairs the local [Codex](plugins/codex-ide/README.md) and [Cu
 | Community skills | humanizer, last30days, curated marketing + design aesthetics |
 | yt-dlp | YouTube metadata/subtitles + workflow `ytdlp` steps |
 | Composio Connect | SaaS tool Router MCP (replaces deprecated Rube) |
+| Agent accountability | BuilderIO Agent Watchdog audits Codex, Cursor, Claude, PR, branch, and workflow completion claims |
+| Context compression | Headroom standalone MCP and skill are enabled by default with a local store; provider traffic proxying stays off |
 | MCP harness | Catalog + add-only merge into Cursor/Codex; see `~/.decisions/harness/mcp-recommendations.json` |
 
-Workflow runs can push a **pre_chain** of skills into the active project harness (browser, design, agent-reach, composio, yt-dlp, etc.) based on ticket text and project surface.
+Workflow runs can push a **pre_chain** of skills into the active project harness (browser, design, agent-watchdog, agent-reach, composio, yt-dlp, etc.) based on ticket text and project surface.
+
+Development threads own their workflow runs. Deterministic instruction analysis chooses direct execution or launches a `workflow_orchestrator` sub-agent in the same thread; its step workers inherit the run's model route, infrastructure skills, evidence contract, and parent-thread reporting identity.
 
 The Decisions agent exposes **`ide_thread`** to list, read, and prompt Codex/Cursor sessions. **Composio** API keys live under **Preferences → API Keys**; saving recalibrates MCP headers automatically.
 

@@ -11,6 +11,7 @@ import re
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -205,6 +206,10 @@ class EventHandlerMixin:
                 self.oracle_window.restart_app()
             else:
                 logger.warning("[EVENT QUEUE] No oracle_window available for restart")
+        elif event == 'agent_health_ack':
+            self._last_agent_health_ack = time.monotonic()
+            self._agent_health_probe_sent_at = None
+            logger.debug("[HEALTH CHECK] Agent command heartbeat acknowledged")
         elif event == 'get_current_mouse_screen':
             self._evt_get_mouse_screen()
         elif event == 'file_operation_confirmation_request':
@@ -289,22 +294,49 @@ class EventHandlerMixin:
             self._tts_player_generation = 0
         if not hasattr(self, '_tts_current_playback_id'):
             self._tts_current_playback_id = None
+        if not hasattr(self, '_tts_current_playback_source'):
+            self._tts_current_playback_source = None
+        if not hasattr(self, '_tts_interrupt_barrier_until'):
+            self._tts_interrupt_barrier_until = 0.0
         if event == 'tts_started':
             source = data.get("source") if isinstance(data, dict) else None
-            if source != "transport":
+            if source not in ("transport", "direct_desktop"):
                 logger.info(
-                    "[EVENT QUEUE] Non-transport tts_started received before confirmed audio output; "
-                    "deferring player open until transport audio starts (source=%s)",
+                    "[EVENT QUEUE] Ignoring unsupported tts_started source=%s",
                     source or "provider",
                 )
                 return
 
             playback_id = data.get("playback_id")
             if not playback_id:
-                logger.warning("[EVENT QUEUE] Ignoring transport tts_started without playback_id")
+                playback_id = f"provider-{uuid.uuid4()}"
+                logger.info(
+                    "[EVENT QUEUE] Using provisional playback id for %s tts_started",
+                    source,
+                )
+            if (
+                time.time() < self._tts_interrupt_barrier_until
+                and self._tts_active_sessions <= 0
+            ):
+                logger.warning(
+                    "[EVENT QUEUE] Ignoring stale tts_started during interrupt barrier playback_id=%s",
+                    playback_id,
+                )
                 return
             if playback_id == self._tts_current_playback_id:
                 logger.debug("[EVENT QUEUE] Duplicate tts_started playback_id=%s", playback_id)
+                return
+
+            if (
+                source == "transport"
+                and getattr(self, '_tts_current_playback_source', None) == "direct_desktop"
+            ):
+                self._tts_current_playback_id = playback_id
+                self._tts_current_playback_source = source
+                logger.info(
+                    "[EVENT QUEUE] Promoted provisional TTS playback to transport id=%s",
+                    playback_id,
+                )
                 return
 
             # Dedup bursty duplicate starts (e.g., direct speak + provider start).
@@ -326,6 +358,7 @@ class EventHandlerMixin:
                 return
             self._event_dedup_cache[dedup_key] = now
             self._tts_current_playback_id = playback_id
+            self._tts_current_playback_source = source
             self._tts_active_sessions = 1
             self.last_tts_start_time = time.time()
             logger.info(
@@ -369,6 +402,7 @@ class EventHandlerMixin:
                 self._player_safety_timer.stop()
             if self._tts_active_sessions <= 0:
                 self._tts_current_playback_id = None
+                self._tts_current_playback_source = None
                 self._tts_player_generation += 1
             # Important: do NOT cancel fallback if there are still pending non-interrupt
             # closes (multi-utterance/subagent bursts may emit fewer playback_finished events).
@@ -392,8 +426,31 @@ class EventHandlerMixin:
             # Dedup all bursty tts_stopped events (interrupt and non-interrupt).
             # We round duration to reduce float jitter while still distinguishing
             # genuinely different utterances.
-            dedup_key = ('tts_stopped', interrupted, round(float(duration or 0.0), 1))
+            # An explicit interrupt and the provider/transport cleanup it
+            # triggers can report the same zero-duration stop with different
+            # ``interrupted`` flags. Treat that burst as one terminal event.
+            # Otherwise the player generation advances more than once and a
+            # late callback can reopen or flicker the player.
+            normalized_duration = round(float(duration or 0.0), 1)
+            dedup_key = (
+                ('tts_stopped', 'zero')
+                if normalized_duration <= 0.0
+                else ('tts_stopped', interrupted, normalized_duration)
+            )
             now = time.time()
+
+            # A provider's zero-duration completion is not authoritative
+            # while transport playback is active. Do not put it in the
+            # deduplication cache: a real interruption may arrive immediately
+            # afterwards and must still close the player.
+            if duration <= 0.0 and not interrupted and self._tts_active_sessions > 0:
+                logger.warning(
+                    "[EVENT QUEUE] Ignoring zero-duration tts_stopped while playback is active "
+                    "(active_sessions=%d). Waiting for playback_finished or safety fallback.",
+                    self._tts_active_sessions,
+                )
+                return
+
             last_time = self._event_dedup_cache.get(dedup_key, 0)
             if now - last_time < 0.6:
                 logger.debug(
@@ -403,22 +460,17 @@ class EventHandlerMixin:
                 )
                 return
             self._event_dedup_cache[dedup_key] = now
-            if duration <= 0.0 and not interrupted and self._tts_active_sessions > 0:
-                logger.warning(
-                    "[EVENT QUEUE] Ignoring zero-duration tts_stopped while playback is active "
-                    "(active_sessions=%d). Waiting for playback_finished or safety fallback.",
-                    self._tts_active_sessions,
-                )
-                return
 
             # Interrupt stops are authoritative. Zero-duration non-interrupt
             # stops only close the player when no active playback session exists;
             # otherwise they can race ahead of audio and make TTS look silent.
             if interrupted or duration <= 0.0:
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
+                self._tts_interrupt_barrier_until = time.time() + 0.5
                 self._tts_active_sessions = 0
                 self._tts_pending_non_interrupt_closes = 0
                 self._tts_current_playback_id = None
+                self._tts_current_playback_source = None
                 self._tts_player_generation += 1
                 if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                     self._player_safety_timer.stop()
@@ -429,7 +481,10 @@ class EventHandlerMixin:
                 # Provider synthesis completion is not playback completion.
                 # The correlated transport playback_finished event is the sole
                 # normal authority, avoiding cross-producer queue reordering.
-                if not data.get("playback_id"):
+                if (
+                    not data.get("playback_id")
+                    and getattr(self, '_tts_current_playback_source', None) != "direct_desktop"
+                ):
                     logger.debug(
                         "[EVENT QUEUE] Ignoring uncorrelated provider tts_stopped duration=%.3f",
                         float(duration or 0.0),
@@ -717,7 +772,12 @@ class EventHandlerMixin:
                 except Exception:
                     pass
         elif event == 'chat_message_added':
-            signal_manager.chat_message_added.emit(data.get('chat_id'), data.get('role'), data.get('content'))
+            signal_manager.chat_message_added.emit(
+                data.get('chat_id'),
+                data.get('role'),
+                data.get('content'),
+                data.get('chat_row_id'),
+            )
 
     # ------------------------------------------------------------------
     # Actions (recording, playback, naming)
@@ -965,7 +1025,11 @@ class EventHandlerMixin:
         explicit_text_notification = bool(
             data.get("explicit_notification_intent") and str(text or "").strip()
         )
-        telegram_chat_voice_reply = str(data.get("input_type") or "").strip().lower() == "voice"
+        origin_surface = str(data.get("origin_surface") or "").strip().lower()
+        telegram_chat_voice_reply = (
+            str(data.get("input_type") or "").strip().lower() == "voice"
+            and origin_surface != "remote"
+        )
         if (
             remote_ctx
             and is_voice_delivery_provider(provider)
@@ -984,7 +1048,8 @@ class EventHandlerMixin:
 
             threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
         elif (
-            (
+            origin_surface != "remote"
+            and (
                 is_voice_delivery_provider(provider)
                 or data.get('input_type') == 'text'
                 or explicit_text_notification

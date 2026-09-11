@@ -344,7 +344,7 @@ def record_chat_settings_change(
     previous: Dict[str, Optional[str]],
     current: Dict[str, Optional[str]],
 ) -> Optional[Dict[str, Any]]:
-    """Record LLM/voice settings changes as visible system activity in the chat feed."""
+    """Record LLM/voice settings changes in the durable audit ledger."""
     def _norm_pair(provider: Optional[str], model: Optional[str]) -> tuple[str, str]:
         return ((provider or "").strip(), (model or "").strip())
 
@@ -386,7 +386,7 @@ def record_chat_settings_change(
         None,
         turn_chat_id=None,
     )
-    event["chat_visible"] = True
+    event["chat_visible"] = False
     event["chat_compact"] = False
     if not _persist_chat_tool_event(event):
         return None

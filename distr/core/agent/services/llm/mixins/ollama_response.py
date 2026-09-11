@@ -926,8 +926,10 @@ class OllamaResponseMixin:
     def _save_and_signal(self, chat_id, text):
         if self.chat_manager and chat_id:
             try:
-                self.chat_manager.add_assistant_message(chat_id, text)
-                signal_manager.chat_message_added.emit(chat_id, "assistant", text)
+                chat_row_id = self.chat_manager.add_assistant_message(chat_id, text)
+                signal_manager.chat_message_added.emit(
+                    chat_id, "assistant", text, chat_row_id
+                )
                 signal_manager.chat_stream_finished.emit(chat_id)
             except (RuntimeError, Exception) as e:
                 logger.warning("LLM: Could not save/signal: %s", e)

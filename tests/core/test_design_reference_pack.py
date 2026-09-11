@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-def test_merge_design_reference_adds_baseline(tmp_path):
+def test_merge_design_reference_skips_generic_work(tmp_path):
     from distr.core.design_reference_pack import merge_design_reference_pre_chain
 
     chain = merge_design_reference_pre_chain(
@@ -8,24 +8,40 @@ def test_merge_design_reference_adds_baseline(tmp_path):
         project_folder=str(tmp_path),
     )
     assert chain[0] == "decisions-harness-stack"
-    assert "decisions-design-references" in chain
-    assert chain.index("decisions-design-references") < chain.index("tdd-workflow")
+    assert "decisions-design-references" not in chain
     assert "tdd-workflow" in chain
 
 
-def test_merge_design_reference_ui_project(tmp_path):
+def test_merge_design_reference_ui_project(tmp_path, monkeypatch):
     from distr.core.design_reference_pack import merge_design_reference_pre_chain
+
+    monkeypatch.setattr("distr.core.design_reference_pack.impeccable_skill_available", lambda: True)
 
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     chain = merge_design_reference_pre_chain(
-        ["decisions-harness-stack"],
+        ["decisions-harness-stack", "ui-ideation"],
         project_folder=str(tmp_path),
     )
-    assert chain[1:4] == [
+    assert chain[1:5] == [
         "decisions-ui-ideation",
         "decisions-design-references",
+        "impeccable",
         "frontend-design-direction",
     ]
+
+
+def test_merge_design_reference_skips_missing_impeccable(tmp_path, monkeypatch):
+    from distr.core.design_reference_pack import merge_design_reference_pre_chain
+
+    monkeypatch.setattr("distr.core.design_reference_pack.impeccable_skill_available", lambda: False)
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+
+    chain = merge_design_reference_pre_chain(
+        ["decisions-harness-stack", "ui-ideation"],
+        project_folder=str(tmp_path),
+    )
+
+    assert "impeccable" not in chain
 
 
 def test_design_reference_bootstrap_writes_mcp_script(tmp_path, monkeypatch):

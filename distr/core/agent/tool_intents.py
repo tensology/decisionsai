@@ -17,6 +17,13 @@ except Exception:  # pragma: no cover - routing should never fail on import nois
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "whatsapp_toolkit",
+        (
+            r"\b(whats\s*app|whatsapp)\b.*\b(messages?|chat|thread|contact|screenshots?|photos?|media|read|search|find|ingest|analy[sz]e|draft|reply|send)\b",
+            r"\b(search|find|read|show|ingest|analy[sz]e|draft|write|send)\b.*\b(whats\s*app|whatsapp)\b",
+        ),
+    ),
+    (
         "codex_thread_context",
         (
             r"\b(codex|codecs)\b.*\b(conversations?|threads?|chats?|sessions?|transcripts?|history)\b",
@@ -71,6 +78,43 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(explain|elaborate|summari[sz]e|rework|rewrite)\s+(?:on\s+)?this\b",
             r"\b(?:set|write|put|copy)\s+(?:the\s+)?clipboard\s+(?:to|as)\b",
             r"\b(?:set|write|put|copy)\s+.+\s+(?:to|into|onto)\s+(?:my\s+|the\s+)?clipboard\b",
+        ),
+    ),
+    (
+        "window_management",
+        (
+            r"\b(minimi[sz]e|maximi[sz]e|restore|unminimi[sz]e|full\s*screen|hide|focus)\b.*\b(window|app|application|terminal|codex|codecs|spotify|finder|chrome|safari)\b",
+            r"\b(window|app|application|terminal|codex|codecs|spotify|finder|chrome|safari)\b.*\b(minimi[sz]e|maximi[sz]e|restore|unminimi[sz]e|full\s*screen|hide|focus)\b",
+            r"\b(move|send|put)\b.*\b(window|terminal|codex|codecs|app|application)\b.*\b(screen|monitor|display|desktop|space)\b",
+            r"\b(move|send|put)\b.*\b(left|right|cent(?:er|re)|second|third)\b.*\b(screen|monitor|display|desktop|space)\b",
+            r"\b(open|switch|go|take\s+me)\b.*\b(first|second|third|\d+)\s+(desktop|space)\b",
+            r"\b(list|show)\b.*\b(desktops?|spaces?)\b",
+            r"^(?:please\s+|can\s+you\s+)?(?:minimi[sz]e|maximi[sz]e|full\s*screen|restore)\s+(?:this|the)\s+window\b",
+        ),
+    ),
+    (
+        "launch_app",
+        (
+            r"\b(open|launch|start|bring\s+up|show)\b.*\b(spotify|music|terminal|finder|safari|chrome|brave|codex|codecs|notes|calculator|textedit)\b",
+        ),
+    ),
+    (
+        "smart_open",
+        (
+            r"\b(open|bring\s+up|show)\b.*\b(downloads?|documents?|desktop|home)\s+folder\b",
+            r"\b(open|bring\s+up|show)\b.*\bmy\s+(downloads?|documents?|desktop)\b",
+        ),
+    ),
+    (
+        "move_to_element",
+        (
+            r"\b(move|put|position)\b.*\b(mouse|cursor|pointer)\b.*\b(to|over|on)\b",
+        ),
+    ),
+    (
+        "find_element",
+        (
+            r"\b(move|put|position)\b.*\b(mouse|cursor|pointer)\b.*\b(to|over|on)\b",
         ),
     ),
     (
@@ -160,6 +204,18 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\b(see|look\s+at|analyze|check|examine)\b.*?\b(?:my\s+)?(?:screen|display|monitor)\b",
             r"\bsee\s+what\s+i(?:'m|\s+am)\s+looking\s+at\b",
             r"\bscreen\s+(?:capture|interaction|shot)\b",
+            r"\b(move|put|position)\b.*\b(mouse|cursor|pointer)\b.*\b(to|over|on)\b",
+        ),
+    ),
+    (
+        "web_search",
+        (
+            # Current, location-specific listings are research requests even when
+            # the user does not say "search the web" explicitly. Keep this
+            # deterministic so semantic retrieval cannot hide the web tool.
+            r"\b(find|search|look\s+for|locate|list)\b.{0,140}\b(?:in|near|around|at|within)\b.{0,100}\b(?:shop|store|restaurant|cafe|coffee|pharmacy|doctor|dentist|hotel|salon|barber|print|copy|repair|service)\b",
+            r"\b(find|search|look\s+for|locate|list)\b.{0,100}\b(?:shop|store|restaurant|cafe|coffee|pharmacy|doctor|dentist|hotel|salon|barber|print|copy|repair|service)\b.{0,100}\b(?:in|near|around|at|within)\b",
+            r"\b(?:shop|store|restaurant|cafe|coffee|pharmacy|doctor|dentist|hotel|salon|barber|print|copy|repair|service)\b.{0,100}\b(?:in|near|around|at|within)\b.{0,100}\b(find|search|look|list|locate)\b",
         ),
     ),
     (
@@ -223,6 +279,7 @@ _WORKFLOW_FOLLOW_UP_PATTERNS: tuple[str, ...] = (
     r"^(?:please\s+)?(?:go\s+ahead|continue|finish\s+it)[.!]?$",
     r"^(?:please\s+)?create\s+the\b.*\bevent\b[.!]?$",
     r"\bclipboard\b.*\bdo\s+it\b",
+    r"^(?:i\s+want\s+you\s+to\s+)?(?:perform|do|choose|use|take)?\s*(?:the\s+)?(?:first|second|third|fourth|fifth|last)\s+option[.!]?$",
 )
 
 

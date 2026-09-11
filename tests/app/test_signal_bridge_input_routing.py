@@ -32,6 +32,7 @@ def _fake_signal_manager():
         "ticket_dictation_hotkey_released",
         "voice_set_is_listening",
         "hands_free_mode_changed",
+        "hands_free_command_requested",
         "playback_speed_changed",
         "speech_volume_changed",
         "vad_threshold_changed",
@@ -96,6 +97,37 @@ class _Host(SignalBridgeMixin):
         return {}
 
 
+def test_hands_free_command_is_forwarded_once_with_restore_policy(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    host = _Host()
+
+    host._bridge_signals_to_agent()
+    fake_signal_manager.hands_free_command_requested.emit(False, True)
+
+    assert host.sent_commands == [
+        (
+            "set_hands_free",
+            {"enabled": False, "clear_pending_restore": True},
+        )
+    ]
+
+
+def test_agent_hands_free_state_event_does_not_echo_command(monkeypatch):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    host = _Host()
+
+    host._bridge_signals_to_agent()
+    fake_signal_manager.hands_free_mode_changed.emit(False)
+
+    assert host.sent_commands == []
+
+
 def test_send_text_input_forwards_chat_id_from_integration_metadata(monkeypatch):
     import distr.app.signals as signals_module
 
@@ -128,6 +160,7 @@ def test_send_text_input_forwards_chat_id_from_integration_metadata(monkeypatch)
             "uploaded_image_path": None,
             "speak": False,
             "telegram_input_type": "voice",
+            "external_surface": "telegram",
             "chat_id": 42,
         },
     )
@@ -229,6 +262,47 @@ def test_exact_pending_remote_request_relabels_web_api_turn(monkeypatch):
     assert params["speak"] is True
     assert params["chat_id"] == 89
     assert params["is_telegram"] is True
+
+
+def test_explicit_remote_origin_bypasses_local_realtime_without_pending_heuristic(
+    monkeypatch,
+):
+    import distr.app.signals as signals_module
+
+    fake_signal_manager = _fake_signal_manager()
+    monkeypatch.setattr(signals_module, "signal_manager", fake_signal_manager)
+    monkeypatch.setattr(
+        "distr.core.notification_routing.record_surface_activity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _DummyBus(),
+    )
+    host = _Host()
+    host.telegram_manager = SimpleNamespace(_pending_remote_agent_response=None)
+    host._bridge_signals_to_agent()
+
+    fake_signal_manager.web_send_to_agent_requested.emit(
+        89,
+        "remote audio transcript",
+        True,
+        None,
+        None,
+        {
+            "origin_surface": "remote",
+            "origin_request_id": "remote-api-1",
+            "input_type": "voice",
+        },
+    )
+
+    command, params = host.sent_commands[-1]
+    assert command == "process_text_input"
+    assert params["is_telegram"] is True
+    assert params["speak"] is False
+    assert params["external_surface"] == "remote"
+    assert params["external_request_id"] == "remote-api-1"
+    assert params["telegram_input_type"] == "voice"
 
 
 def test_web_send_preserves_durable_intake_identity(monkeypatch):

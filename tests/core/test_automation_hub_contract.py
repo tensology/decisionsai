@@ -1,3 +1,4 @@
+from tests.development_assets import development_template, development_assets
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -43,14 +44,100 @@ def test_ticket_board_no_longer_exposes_checkin_agent_controls():
     assert "default_project_id" in board_js
 
 
-def test_automation_hub_page_is_registered_in_navigation():
+def test_scheduled_actions_remain_available_without_a_development_sidebar_entry():
     base = (ROOT / "distr/gui/web/templates/base.html").read_text(encoding="utf-8")
     server = (ROOT / "distr/gui/web/server.py").read_text(encoding="utf-8")
+    studio = development_template()
 
-    assert 'href="/automations/"' in base
-    assert "Automations" in base
+    assert 'href="/automations/"' not in base
+    assert 'id="sidebar-automations-toggle"' not in studio
+    assert 'id="sidebar-automation-add"' not in studio
+    assert 'id="scheduled-workspace"' in studio
+    assert 'id="scheduled-prompt-form"' in studio
+    assert 'id="scheduled-row-menu"' in studio
     assert '"/automations/static/js"' in server
     assert "create_automation_routes" in server
+
+
+def test_scheduled_task_rows_expose_a_scoped_overflow_menu():
+    javascript = development_assets(".js")
+    html = development_template()
+
+    assert "data-scheduled-menu" in javascript
+    assert "openScheduledRowMenu" in javascript
+    assert "data-scheduled-menu-action=\"run\"" in html
+    assert "data-scheduled-menu-action=\"edit\"" in html
+    assert "data-scheduled-menu-action=\"toggle\"" in html
+    assert "data-scheduled-menu-action=\"delete\"" in html
+
+
+def test_scheduled_task_search_exposes_guarded_bulk_delete():
+    javascript = development_assets(".js")
+    html = development_template()
+
+    assert 'id="scheduled-search-input"' in html
+    assert 'id="scheduled-delete-all"' in html
+    assert "Delete all automations" in html
+    assert "deleteAllScheduledAutomations" in javascript
+    assert "title: 'Delete all automations'" in javascript
+    assert "confirmLabel: 'Delete all'" in javascript
+    assert "This cannot be undone." in javascript
+    assert "api('/automations?confirm=true', { method: 'DELETE' })" in " ".join(javascript.split())
+
+
+def test_development_sidebar_exposes_minimal_placeholder_destinations():
+    studio = development_template()
+    javascript = development_assets(".js")
+
+    for name in ("plan", "terminals", "reports"):
+        assert f'id="sidebar-{name}-toggle"' in studio
+        assert f"/development/{name}/" in javascript
+    assert 'id="plan-workspace"' in studio
+    assert 'id="terminals-home-workspace"' in studio
+    assert 'id="reports-workspace"' in studio
+
+
+def test_automation_instruction_draft_has_a_safe_natural_language_fallback():
+    from distr.gui.web.routes.automations import _fallback_automation_draft
+
+    draft = _fallback_automation_draft("Run the focused visual tests every weekday at 08:00")
+
+    assert draft["name"] == "Run the focused visual tests"
+    assert draft["instruction"] == "Run the focused visual tests every weekday at 08:00"
+    assert draft["schedule"]["kind"] == "weekly"
+    assert draft["schedule"]["days"] == "1,2,3,4,5"
+    assert draft["schedule"]["time"] == "08:00"
+    assert draft["link_current_thread"] is False
+
+    ticket_draft = _fallback_automation_draft("Run ticket 42 daily at 08:30")
+    assert ticket_draft["schedule"]["time"] == "08:30"
+
+
+def test_automation_instruction_draft_endpoint_returns_an_executable_draft(monkeypatch):
+    from distr.gui.web.routes import automations as automation_routes
+
+    monkeypatch.setattr(
+        automation_routes,
+        "_draft_automation",
+        lambda instruction, current_thread_title=None: {
+            "name": "Morning verification",
+            "instruction": instruction,
+            "schedule": {"kind": "daily", "time": "08:00"},
+            "link_current_thread": current_thread_title == "Current task",
+            "drafted_by": "ai",
+        },
+    )
+    app = FastAPI()
+    app.include_router(automation_routes.create_routes(), prefix="/api")
+
+    response = TestClient(app).post(
+        "/api/automations/draft",
+        json={"instruction": "Run the visual checks daily at 08:00", "current_thread_title": "Current task"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Morning verification"
+    assert response.json()["link_current_thread"] is True
 
 
 def test_automation_hub_is_plain_crud_scheduler_surface():
@@ -155,10 +242,35 @@ def test_automation_hub_is_plain_crud_scheduler_surface():
         assert needle not in js
 
 
+def test_delete_all_automations_route_uses_bulk_store_operation(monkeypatch):
+    import distr.gui.web.routes.automations as automations_routes
+
+    monkeypatch.setattr(
+        automations_routes,
+        "delete_all_automations",
+        lambda: {"deleted": 4, "automations": 3, "legacy_workflows": 1},
+    )
+    app = FastAPI()
+    app.include_router(automations_routes.create_routes(), prefix="/api")
+
+    client = TestClient(app)
+    rejected = client.delete("/api/automations")
+    response = client.delete("/api/automations?confirm=true")
+
+    assert rejected.status_code == 400
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "deleted": 4,
+        "automations": 3,
+        "legacy_workflows": 1,
+    }
+
+
 def test_automations_api_create_list_and_run_smoke(monkeypatch):
     import json
 
-    from distr.core.db import get_session
+    from distr.core.db import Chat, get_session
     from distr.core.db.automation import Automation, AutomationRun
     from distr.gui.web.routes.automations import create_routes
 
@@ -171,6 +283,10 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
     monkeypatch.setattr(
         "distr.core.automation_subagent.start_automation_subagent",
         lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.development_harness.dispatch_development_prompt",
+        lambda chat_id, prompt, **kwargs: {"id": "api-smoke-run", "status": "running"},
     )
 
     create_resp = client.post(
@@ -188,6 +304,8 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
     assert automation["status"] == "active"
     assert automation["instruction"] == "Create a planning note."
     assert automation["next_run_at"]
+    assert automation["thread_chat_id"]
+    automation_thread_id = int(automation["thread_chat_id"])
     record_id = _automation_record_id(automation)
     assert str(automation["id"]).startswith("auto_")
 
@@ -197,6 +315,7 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
         assert row.schedule_enabled is True
         assert row.schedule_preset == "hourly"
         assert row.instruction == "Create a planning note."
+        assert session.get(Chat, automation_thread_id) is not None
 
         run = AutomationRun(
             automation_id=record_id,
@@ -228,6 +347,63 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
 
     with get_session() as session:
         assert session.query(Automation).filter(Automation.id == record_id).first() is None
+        assert session.get(Chat, automation_thread_id) is None
+
+
+def test_automation_update_merges_source_and_routing_config():
+    from distr.gui.web.routes.automations import create_routes
+
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    client = TestClient(app)
+    created = client.post(
+        "/api/automations",
+        json={
+            "name": "Config merge",
+            "instruction": "Triage messages.",
+            "schedule": {"kind": "daily", "time": "09:00"},
+            "action_config": {"model_provider": "openai", "model": "gpt-old"},
+        },
+    ).json()["automation"]
+
+    response = client.put(
+        f"/api/automations/{created['id']}",
+        json={
+            "action_config": {"model_provider": "anthropic", "model": "claude-test"},
+            "source_config": {"source": "gmail", "trigger": "incoming_message"},
+        },
+    )
+
+    assert response.status_code == 200
+    config = response.json()["automation"]["action_config"]
+    assert config["model_provider"] == "anthropic"
+    assert config["model"] == "claude-test"
+    assert config["source_config"] == {"source": "gmail", "trigger": "incoming_message"}
+    assert config["development_chat_id"] == created["thread_chat_id"]
+
+
+def test_automation_create_rolls_back_if_thread_preparation_fails(monkeypatch):
+    from distr.core.automation.store import list_automations
+    from distr.gui.web.routes.automations import create_routes
+
+    before = {item["id"] for item in list_automations()}
+    monkeypatch.setattr(
+        "distr.core.automation_orchestrator.ensure_automation_thread",
+        lambda automation: (_ for _ in ()).throw(ValueError("Thread preparation failed")),
+    )
+    app = FastAPI()
+    app.include_router(create_routes(), prefix="/api")
+    response = TestClient(app).post(
+        "/api/automations",
+        json={
+            "name": "Must not survive",
+            "instruction": "Do not leave this active.",
+            "schedule": {"kind": "daily", "time": "09:00"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert {item["id"] for item in list_automations()} == before
 
 
 def test_automations_api_accepts_interval_seconds_schedule():
@@ -318,11 +494,12 @@ def test_automations_api_rejects_invalid_schedule_time():
     assert "Schedule time out of range" in resp.text
 
 
-def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
+def test_run_now_dispatches_instruction_to_independent_thread(monkeypatch):
     import distr.gui.web.routes.automations as automations_routes
 
     emitted_events = []
     started = []
+    harness_dispatches = []
 
     def fail_if_workflow_agent_path_is_used(*args, **kwargs):
         raise AssertionError("automation instructions must dispatch to the live chat orchestrator")
@@ -336,6 +513,11 @@ def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
     monkeypatch.setattr(
         "distr.core.automation_subagent.start_automation_subagent",
         capture_start,
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.development_harness.dispatch_development_prompt",
+        lambda chat_id, prompt, **kwargs: harness_dispatches.append((chat_id, prompt, kwargs))
+        or {"id": "dev-run-1", "status": "running"},
     )
     monkeypatch.setattr(
         automations_routes,
@@ -368,14 +550,113 @@ def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
     run = run_resp.json()["run"]
     assert run["status"] == "running"
     assert run["workflow_run_id"]
-    assert run["summary"] == "Automation subagent started."
-    assert started
-    assert started[0]["chat_id"] == 77
-    assert started[0]["automation"]["instruction"]
+    assert run["summary"] == "Development automation dispatched to its linked thread."
+    assert harness_dispatches
+    assert int(harness_dispatches[0][0]) > 0
+    assert harness_dispatches[0][0] != 77
+    assert "sexy beautiful dude" in harness_dispatches[0][1]
+    assert started == []
     assert [event["event_type"] for event in emitted_events] == ["run_started", "worker_dispatched"]
 
 
-def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monkeypatch):
+def test_linked_development_automation_dispatches_to_harness_not_chat_agent(monkeypatch):
+    import json
+
+    import distr.gui.web.routes.automations as automations_routes
+    from distr.core.db import Chat, get_session
+    from distr.core.db.automation import AutomationRun
+
+    with get_session() as session:
+        chat = Chat(
+            title="Development automation target",
+            project_id=None,
+            params=json.dumps({"development": {"workflow_id": 444, "ticket_id": None}}),
+        )
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    dispatched = []
+    harness_dispatches = []
+    messages = []
+    monkeypatch.setattr(
+        "distr.core.workflow.work_dispatch.dispatch_work_item",
+        lambda *, workflow_id, **kwargs: dispatched.append((workflow_id, kwargs)) or {"run_id": 991, "status": "running", "chat_id": kwargs.get("chat_id")},
+    )
+    monkeypatch.setattr(
+        "distr.core.chat.ChatService.add_user_message",
+        lambda target_chat_id, message: messages.append((target_chat_id, message)),
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_subagent.start_automation_subagent",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("Development automation must not use the chat subagent")),
+    )
+    monkeypatch.setattr(automations_routes, "_emit_automation_event", lambda **kwargs: 1)
+
+    app = FastAPI()
+    app.include_router(automations_routes.create_routes(), prefix="/api")
+    client = TestClient(app)
+    create_resp = client.post(
+        "/api/automations",
+        json={
+            "name": "Nightly Development Verification",
+            "instruction": "Run the Development verification suite and repair regressions.",
+            "schedule": {"kind": "daily", "time": "23:00"},
+            "action_config": {
+                "development_chat_id": chat_id,
+                "development_workflow_id": 444,
+                "mode": "development_harness",
+            },
+        },
+    )
+    assert create_resp.status_code == 200
+    created_automation = create_resp.json()["automation"]
+    automation_id = created_automation["id"]
+    owned_chat_id = created_automation["thread_chat_id"]
+    assert owned_chat_id != chat_id
+
+    run_resp = client.post(f"/api/automations/{automation_id}/run")
+
+    assert run_resp.status_code == 200
+    run = run_resp.json()["run"]
+    assert run["workflow_run_id"] == 991
+    assert messages == [(owned_chat_id, "Run the Development verification suite and repair regressions.")]
+    assert dispatched == [
+        (
+            444,
+            {
+                "context": "Run the Development verification suite and repair regressions.",
+                "chat_id": owned_chat_id,
+                "project_id": None,
+                "ticket_id": None,
+                "source_type": "automation",
+                "source_ref": automation_id,
+                    "run_metadata": {
+                        "project_id": None,
+                        "automation_id": automation_id,
+                        "automation": True,
+                        "routing_assessment": {
+                            "complexity": "medium",
+                            "operational_state": "neutral",
+                            "route": {},
+                            "source": "automation_import_configuration",
+                            "adaptive_model_routing": True,
+                        },
+                    },
+                "dispatch_async": True,
+                "_session_provider": get_session,
+            },
+        )
+    ]
+    with get_session() as session:
+        recorded = session.query(AutomationRun).order_by(AutomationRun.id.desc()).first()
+        assert recorded is not None
+        data = json.loads(recorded.run_data)
+        assert data["execution_mode"] == "development_harness"
+        assert data["development_run_id"] == 991
+
+
+def test_scheduled_automation_dispatches_to_independent_thread_not_workflow_agent(monkeypatch):
     import json
     from datetime import datetime, timedelta
 
@@ -385,15 +666,21 @@ def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monk
     from distr.core.db.automation import Automation, AutomationRun
 
     dispatched = []
+    harness_dispatches = []
 
     def fail_if_workflow_agent_path_is_used(*args, **kwargs):
-        raise AssertionError("scheduled automations must dispatch to the live chat orchestrator")
+        raise AssertionError("scheduled automations must use their owned Development thread")
 
     monkeypatch.setattr("distr.core.workflow.service.start_workflow_run", fail_if_workflow_agent_path_is_used)
     monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 88)
     monkeypatch.setattr(
         "distr.core.automation_subagent.start_automation_subagent",
         lambda **kwargs: dispatched.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "distr.core.workflow.development_harness.dispatch_development_prompt",
+        lambda chat_id, prompt, **kwargs: harness_dispatches.append((chat_id, prompt, kwargs))
+        or {"id": "scheduled-dev-run", "status": "running"},
     )
 
     automation = create_automation(
@@ -416,16 +703,28 @@ def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monk
     due_automation = get_automation(automation["id"])
     assert due_automation is not None
     assert run_scheduled_automation(due_automation) is True
-    assert dispatched
-    assert dispatched[0]["chat_id"] == 88
-    assert "Tell me my daily plan" in dispatched[0]["automation"]["instruction"]
+    assert harness_dispatches
+    assert int(harness_dispatches[0][0]) > 0
+    assert harness_dispatches[0][0] != 88
+    assert "Tell me my daily plan" in harness_dispatches[0][1]
+    assert harness_dispatches[0][2]["routing_assessment"] == {
+        "complexity": "medium",
+        "operational_state": "neutral",
+        "route": {},
+        "source": "automation_import_configuration",
+        "adaptive_model_routing": True,
+    }
+    assert dispatched == []
 
     with get_session() as session:
         runs = session.query(AutomationRun).filter(AutomationRun.automation_id == record_id).all()
-        assert len(runs) == 1
-        assert runs[0].status == "running"
-        data = json.loads(runs[0].run_data)
-        assert data["execution_mode"] == "automation_subagent_instruction"
+        assert len(runs) == 2
+        attempts = [run for run in runs if run.status == "dispatch_accepted"]
+        executions = [run for run in runs if run.status == "running"]
+        assert len(attempts) == len(executions) == 1
+        assert json.loads(attempts[0].run_data)["retry_policy"] == "manual_review"
+        data = json.loads(executions[0].run_data)
+        assert data["execution_mode"] == "development_harness"
         assert data["phase"] == "scheduled_automation"
         row = session.query(Automation).filter(Automation.id == record_id).first()
         assert row is not None
@@ -437,7 +736,7 @@ def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monk
     assert not dispatched
 
 
-def test_automation_dispatch_records_chat_action_card(monkeypatch):
+def test_automation_dispatch_does_not_use_current_chat(monkeypatch):
     import json
 
     from distr.core.db import Chat, get_session
@@ -458,6 +757,12 @@ def test_automation_dispatch_records_chat_action_card(monkeypatch):
         "distr.core.automation_subagent.start_automation_subagent",
         lambda **kwargs: dispatched.append(kwargs),
     )
+    development_dispatches = []
+    monkeypatch.setattr(
+        "distr.core.workflow.development_harness.dispatch_development_prompt",
+        lambda target_chat_id, prompt, **kwargs: development_dispatches.append((target_chat_id, prompt))
+        or {"id": "inbox-sweep-run", "status": "running"},
+    )
 
     app = FastAPI()
     app.include_router(create_routes(), prefix="/api")
@@ -476,3 +781,9 @@ def test_automation_dispatch_records_chat_action_card(monkeypatch):
     run_resp = client.post(f"/api/automations/{automation_id}/run")
     assert run_resp.status_code == 200
     assert run_resp.json()["run"]["status"] == "running"
+    assert development_dispatches
+    assert development_dispatches[0][0] != chat_id
+    assert dispatched == []
+
+    with get_session() as session:
+        assert session.query(Chat).filter(Chat.parent_id == chat_id).count() == 0

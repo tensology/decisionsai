@@ -2585,3 +2585,80 @@ def _migrate_legacy_hermes_schema_to_orchestrator(engine) -> None:
                         logger.debug("Could not add %s to settings: %s", col, e)
     except Exception as e:
         logger.debug("OpenAI/ElevenLabs TTS model settings migration: %s", e)
+
+    # Conversation-first workflow studio task metadata.
+    _chat_studio_columns = [
+        ("project_id", "INTEGER DEFAULT NULL"),
+        ("route_mode", "VARCHAR DEFAULT 'auto'"),
+        ("execution_profile", "VARCHAR DEFAULT 'code'"),
+        ("autonomy_level", "VARCHAR DEFAULT 'full'"),
+    ]
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(chats)"))}
+            for col, col_def in _chat_studio_columns:
+                if col in existing:
+                    continue
+                conn.execute(text(f"ALTER TABLE chats ADD COLUMN {col} {col_def}"))
+                logger.info("Added chats.%s for workflow studio", col)
+            conn.commit()
+    except Exception as e:
+        logger.warning("Workflow studio chat metadata migration failed: %s", e)
+
+    # A workflow template can execute in several Development threads at once.
+    # Persist the owning thread so steering cannot cross those boundaries.
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(auto_workflow_runs)"))}
+            if "chat_id" not in existing:
+                conn.execute(text("ALTER TABLE auto_workflow_runs ADD COLUMN chat_id INTEGER DEFAULT NULL"))
+                logger.info("Added auto_workflow_runs.chat_id for thread-scoped steering")
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_auto_workflow_runs_chat_status "
+                "ON auto_workflow_runs (chat_id, status)"
+            ))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Workflow run chat identity migration failed: %s", e)
+
+    # Thread-owned Development time. Tickets only project this value.
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(development_work_items)"))}
+            for col, col_def in [
+                ("time_accumulated_seconds", "INTEGER NOT NULL DEFAULT 0"),
+                ("time_started_at", "DATETIME DEFAULT NULL"),
+                ("time_last_activity_at", "DATETIME DEFAULT NULL"),
+                ("time_paused", "BOOLEAN NOT NULL DEFAULT 1"),
+            ]:
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE development_work_items ADD COLUMN {col} {col_def}"))
+                    logger.info("Added development_work_items.%s", col)
+            # Keep the oldest ticket as the durable owner if legacy data linked
+            # several tickets to one thread. The other tickets remain intact and
+            # can be deliberately relinked through Development.
+            conn.execute(text(
+                "UPDATE kanban_tickets SET source_chat_id = NULL "
+                "WHERE source_chat_id IS NOT NULL AND id NOT IN ("
+                "SELECT MIN(id) FROM kanban_tickets WHERE source_chat_id IS NOT NULL GROUP BY source_chat_id"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_kanban_tickets_source_chat "
+                "ON kanban_tickets (source_chat_id) WHERE source_chat_id IS NOT NULL"
+            ))
+            # Remove only references whose root row definitively no longer
+            # exists. Richer projection backfills run through the Development
+            # integrity service after module initialization.
+            conn.execute(text(
+                "DELETE FROM development_work_items WHERE chat_id NOT IN ("
+                "SELECT id FROM chats WHERE parent_id IS NULL)"
+            ))
+            conn.execute(text(
+                "UPDATE kanban_tickets SET source_chat_id = NULL "
+                "WHERE source_chat_id IS NOT NULL AND source_chat_id NOT IN ("
+                "SELECT id FROM chats WHERE parent_id IS NULL)"
+            ))
+            conn.commit()
+    except Exception as e:
+        logger.warning("Development thread time migration failed: %s", e)

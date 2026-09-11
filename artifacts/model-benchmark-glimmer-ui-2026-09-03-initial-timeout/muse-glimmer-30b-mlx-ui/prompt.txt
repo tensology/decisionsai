@@ -1,0 +1,21 @@
+Build and polish the existing Northstar Run Control product UI.
+
+This is a Glimmer-only UI benchmark. Before editing, read these projected instructions completely: `.pi/skills/ponytail/SKILL.md`, `.pi/skills/impeccable/SKILL.md`, `.pi/skills/browser-qa/SKILL.md`, and `.pi/skills/frontend-design-direction/SKILL.md`. Follow their applicable product UI, code quality, accessibility, responsive, and verification guidance. Use RTK for shell commands when available.
+
+Design direction:
+- Operate-mode developer workspace for frequent use, not a marketing page.
+- Calm, dense, decisive dark interface with one restrained amber accent.
+- Moderate visual variance, low motion, high information density.
+- Product-specific hierarchy for projects, workflow runs, checkpoints, and intervention.
+- Avoid generic purple AI gradients, glass effects, excessive rounded cards, decorative charts, emoji icons, and remote assets.
+
+Requirements:
+1. Preserve all supplied behaviors: status filters, search, board/list toggle, run selection, inspector, cancel confirmation, clear filters, and collapsible navigation.
+2. Make every state legible: active, waiting, failed, selected, empty, hover, focus, disabled, dialog, and toast.
+3. Create a coherent token system in CSS and use semantic HTML. Meet WCAG AA contrast, 44px mobile targets, keyboard focus visibility, and reduced-motion handling.
+4. Make it excellent at 1440px, 768px, and 375px with no horizontal overflow. On mobile, project navigation must remain reachable instead of disappearing permanently.
+5. Keep it dependency-free. Do not add files, remote fonts, remote images, or build steps.
+6. Modify only index.html, styles.css, and app.js. Do not modify AGENTS.md, package.json, tests, projected skills, or any other file.
+7. Run `python -m unittest discover -s tests -v` and report the result.
+
+Do not merely describe a design. Implement it fully in the three allowed files.

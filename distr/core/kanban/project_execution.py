@@ -128,6 +128,7 @@ def append_execution_event(
     status: str | None = None,
     message: str = "",
     payload: dict[str, Any] | None = None,
+    update_session_status: bool = True,
 ) -> None:
     if not session_id:
         return
@@ -138,7 +139,7 @@ def append_execution_event(
         row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
         if not row:
             return
-        if row and status:
+        if row and status and update_session_status:
             row.status = status
             row.updated_at = utc_now_naive()
         session.add(ProjectExecutionEvent(
@@ -252,6 +253,36 @@ def complete_execution_session(
                 )
         except Exception:
             pass
+
+
+def cancel_execution_session(session_id: int | None, *, reason: str = "Stopped by the user.") -> None:
+    """Close a direct execution session without recording a provider failure."""
+    if not session_id:
+        return
+    ensure_project_execution_tables()
+    safe_reason = str(_redact_persisted_execution_value(reason or "Stopped by the user."))
+    with get_session() as session:
+        row = session.query(ProjectExecutionSession).filter(ProjectExecutionSession.id == int(session_id)).first()
+        if not row:
+            return
+        row.status = "cancelled"
+        row.error = safe_reason
+        row.completed_at = utc_now_naive()
+        row.updated_at = utc_now_naive()
+        session.add(ProjectExecutionEvent(
+            session_id=row.id,
+            event_type="session_cancelled",
+            status="cancelled",
+            message=safe_reason,
+            payload=_json_dumps({}),
+        ))
+        session.commit()
+    try:
+        from distr.gui.web.workflow_events import increment_workflow_updated
+
+        increment_workflow_updated()
+    except Exception:
+        pass
 
 
 def list_execution_sessions_for_ticket(ticket_id: int, limit: int = 20) -> list[dict[str, Any]]:

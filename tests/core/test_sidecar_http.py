@@ -51,3 +51,21 @@ def test_call_sidecar_tool_connection_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Sidecar not running"):
         sh.call_sidecar_tool("run_python", {}, timeout=5)
+
+
+def test_macos_desktop_tool_prefers_decisions_process(monkeypatch):
+    monkeypatch.setattr(sh.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        sh,
+        "_run_in_decisions_process",
+        lambda tool, params: {"success": True, "via": "decisions"},
+    )
+    monkeypatch.setattr(
+        sh.requests,
+        "post",
+        lambda *args, **kwargs: pytest.fail("Sidecar should not be called"),
+    )
+
+    result = sh.call_sidecar_tool("window_action", {"action": "minimize"})
+
+    assert result == {"success": True, "via": "decisions"}

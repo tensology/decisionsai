@@ -128,10 +128,24 @@ class DeveloperSkillContext:
 
 
 @dataclass(frozen=True)
+class DeveloperPlanContext:
+    id: int
+    board_key: str
+    board_name: str
+    project_id: int | None = None
+    root_path: str = ""
+    status: str = "draft"
+    item_count: int = 0
+    artifact_types: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class DeveloperWorkContext:
     runtime: DeveloperRuntimeContext
     active_project: DeveloperProjectContext | None = None
     active_board: DeveloperBoardContext | None = None
+    active_thread: dict[str, Any] = field(default_factory=dict)
+    active_plan: DeveloperPlanContext | None = None
     active_tickets: list[DeveloperTicketContext] = field(default_factory=list)
     active_workflows: list[DeveloperWorkflowContext] = field(default_factory=list)
     active_executions: list[DeveloperExecutionContext] = field(default_factory=list)
@@ -163,6 +177,28 @@ class DeveloperWorkContext:
             if project.description:
                 lines.append(f"  description: {_one_line(project.description, 180)}")
 
+        if self.active_thread:
+            thread = self.active_thread
+            thread_bits = [f"chat={thread.get('chat_id')}"]
+            if thread.get("title"):
+                thread_bits.append(f"title={_one_line(thread['title'], 120)}")
+            if thread.get("ticket_id"):
+                thread_bits.append(f"ticket={thread['ticket_id']}")
+            if thread.get("source_type"):
+                thread_bits.append(f"source={thread['source_type']}")
+            lines.append("- active_thread: " + ", ".join(thread_bits))
+
+        if self.active_plan:
+            plan = self.active_plan
+            lines.append(
+                f"- active_plan: #{plan.id} {plan.board_name} "
+                f"(board={plan.board_key}, status={plan.status}, items={plan.item_count})"
+            )
+            if plan.root_path:
+                lines.append(f"  plan_root: {plan.root_path}")
+            if plan.artifact_types:
+                lines.append(f"  plan_artifacts: {', '.join(plan.artifact_types[:12])}")
+
         if self.active_board:
             board = self.active_board
             lanes = ", ".join(
@@ -179,6 +215,17 @@ class DeveloperWorkContext:
                     f"workflow={board.default_workflow_id or 'none'}, "
                     f"send_to_cli={board.send_to_cli}"
                 )
+
+        # Board notes are user-authored operating context. Keep them near the
+        # primary project/board identity so the max_chars guard does not trim
+        # them behind lower-priority diagnostic sections.
+        board_notes_block = ""
+        if self.board_notes:
+            from distr.core.kanban.board_notes import format_board_notes_for_prompt
+
+            board_notes_block = format_board_notes_for_prompt(self.board_notes, max_notes=10, max_content_chars=320)
+            if board_notes_block:
+                lines.append(board_notes_block)
 
         if self.active_tickets:
             lines.append("- active_tickets:")
@@ -241,13 +288,6 @@ class DeveloperWorkContext:
             if pickup_brief:
                 lines.append(pickup_brief[:1200])
 
-        if self.board_notes:
-            from distr.core.kanban.board_notes import format_board_notes_for_prompt
-
-            notes_block = format_board_notes_for_prompt(self.board_notes, max_notes=10, max_content_chars=320)
-            if notes_block:
-                lines.append(notes_block)
-
         if self.recommended_skills:
             lines.append("- recommended_skills:")
             for skill in self.recommended_skills:
@@ -280,6 +320,14 @@ class DeveloperWorkContext:
         text = "\n".join(lines)
         if len(text) <= max_chars:
             return text
+        if board_notes_block:
+            # Preserve user-authored operating notes when the context budget
+            # is tight. Diagnostic indexes are lower priority than the note
+            # that explains the current board focus.
+            prefix = text.split(board_notes_block, 1)[0].rstrip()
+            available = max_chars - len(board_notes_block) - 2
+            if available > 0:
+                return prefix[:available].rstrip() + "\n\n" + board_notes_block
         return text[: max_chars - 1].rstrip() + "…"
 
 
@@ -294,11 +342,15 @@ class DeveloperContextAssembler:
     ) -> DeveloperWorkContext:
         settings = settings or {}
         warnings: list[str] = []
-        current_chat_id = _coerce_int(
-            chat_id
-            or settings.get("agent_current_chat_id")
-            or settings.get("last_chat_id")
-        )
+        if chat_id is not None:
+            current_chat_id = _coerce_int(chat_id)
+        else:
+            try:
+                from distr.core.chat import ChatService
+
+                current_chat_id = ChatService.get_current_chat_id()
+            except Exception:
+                current_chat_id = None
         runtime = DeveloperRuntimeContext(
             cwd=os.getcwd(),
             current_chat_id=current_chat_id,
@@ -307,7 +359,23 @@ class DeveloperContextAssembler:
         )
 
         active_project = _safe_call("active project", warnings, self._fetch_active_project)
+        active_thread = _safe_call(
+            "active thread scope", warnings, self._fetch_active_thread_scope, current_chat_id
+        ) or {}
+        scoped_project = _safe_call(
+            "scoped project", warnings, self._fetch_project_for_scope, active_thread
+        )
+        if scoped_project is not None:
+            active_project = scoped_project
         active_board = _safe_call("active board", warnings, self._fetch_active_board, active_project)
+        scoped_board = _safe_call(
+            "scoped board", warnings, self._fetch_board_for_scope, active_thread, active_project
+        )
+        if scoped_board is not None:
+            active_board = scoped_board
+        active_plan = _safe_call(
+            "active plan", warnings, self._fetch_active_plan, active_board, active_project
+        )
         active_tickets = _safe_call("active tickets", warnings, self._fetch_active_tickets, active_board, current_chat_id) or []
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
@@ -348,6 +416,8 @@ class DeveloperContextAssembler:
             runtime=runtime,
             active_project=active_project,
             active_board=active_board,
+            active_thread=active_thread,
+            active_plan=active_plan,
             active_tickets=active_tickets,
             active_workflows=active_workflows,
             active_executions=active_executions,
@@ -359,6 +429,136 @@ class DeveloperContextAssembler:
             ecosystem=ecosystem,
             warnings=warnings,
         )
+
+    def _fetch_active_thread_scope(self, chat_id: int | None) -> dict[str, Any]:
+        """Return durable scope for the conversation currently controlling the agent."""
+        if chat_id is None:
+            return {}
+        from distr.core.db import Chat, get_session
+        from distr.core.workflow.development_threads import development_thread_record
+
+        with get_session() as session:
+            chat = session.get(Chat, int(chat_id))
+            if chat is None:
+                return {}
+            metadata = development_thread_record(session, chat)
+            params = _json_obj(getattr(chat, "params", None))
+            scope = params.get("orchestrator_scope") if isinstance(params.get("orchestrator_scope"), dict) else {}
+            result = {
+                "chat_id": int(chat.id),
+                "title": chat.title or "",
+                **{key: value for key, value in metadata.items() if value not in (None, "")},
+                **{key: value for key, value in scope.items() if value not in (None, "")},
+            }
+            return result
+
+    def _fetch_project_for_scope(self, scope: dict[str, Any]) -> DeveloperProjectContext | None:
+        project_id = _coerce_int(scope.get("project_id")) if scope else None
+        if not project_id:
+            return None
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+
+        with get_session() as session:
+            project = session.get(Project, project_id)
+            return self._project_context(project)
+
+    def _project_context(self, project: Any) -> DeveloperProjectContext | None:
+        if project is None:
+            return None
+        return DeveloperProjectContext(
+            id=int(project.id),
+            name=project.name or "",
+            description=project.description or "",
+            folder_location=project.folder_location or "",
+            provider=project.provider or "",
+            board_id=project.board_id or "",
+            board_name=project.board_name or "",
+            kanban_board_id=project.kanban_board_id,
+            startup_instructions=project.startup_instructions or "",
+            context_items=[
+                {"id": item.id, "title": item.title, "content_preview": _one_line(item.content or "", 500)}
+                for item in list(project.context_items or [])[:8]
+            ],
+            files=[
+                {"id": file.id, "filename": file.filename, "file_path": file.file_path, "description": file.description or ""}
+                for file in list(project.files or [])[:12]
+            ],
+        )
+
+    def _fetch_board_for_scope(
+        self,
+        scope: dict[str, Any],
+        active_project: DeveloperProjectContext | None = None,
+    ) -> DeveloperBoardContext | None:
+        board_key = str(scope.get("board_key") or "").strip() if scope else ""
+        ticket_id = _coerce_int(scope.get("ticket_id")) if scope else None
+        if not board_key and not ticket_id:
+            return None
+        from distr.core.db import get_session
+        from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+        with get_session() as session:
+            board = None
+            if board_key.lower().startswith("decisions:"):
+                board = session.get(KanbanBoard, _coerce_int(board_key.split(":", 1)[1]))
+            if board is None and ticket_id:
+                ticket = session.get(KanbanTicket, ticket_id)
+                lane = session.get(KanbanLane, ticket.lane_id) if ticket and ticket.lane_id else None
+                board = session.get(KanbanBoard, lane.board_id) if lane else None
+            if board is None:
+                return None
+            # Reuse the canonical board serializer so scoped and default paths agree.
+            return self._board_context(session, board)
+
+    def _board_context(self, session: Any, board: Any) -> DeveloperBoardContext:
+        from distr.core.db.kanban import KanbanTicket
+
+        settings = {}
+        try:
+            from distr.core.utils import load_settings_from_db
+            settings = load_settings_from_db()
+        except Exception:
+            pass
+        source_lane = getattr(board, "agent_source_lane", None) or settings.get("kanban_agent_source_lane") or ""
+        done_lane = getattr(board, "agent_done_lane", None) or settings.get("kanban_agent_done_lane") or ""
+        lanes = []
+        for lane in board.lanes or []:
+            count = session.query(KanbanTicket).filter(KanbanTicket.lane_id == lane.id).count()
+            lanes.append({"id": lane.id, "name": lane.name, "position": lane.position, "ticket_count": count})
+        return DeveloperBoardContext(
+            id=int(board.id), name=board.name or "", source=board.source or "database",
+            external_board_id=board.external_board_id or "", external_url=board.external_url or "",
+            default_project_id=board.default_project_id, default_workflow_id=board.default_workflow_id,
+            default_action_id=board.default_action_id, send_to_cli=bool(board.send_to_cli),
+            source_lane=source_lane, done_lane=done_lane, lanes=lanes,
+        )
+
+    def _fetch_active_plan(
+        self,
+        active_board: DeveloperBoardContext | None,
+        active_project: DeveloperProjectContext | None,
+    ) -> DeveloperPlanContext | None:
+        if not active_board:
+            return None
+        from distr.core.db import get_session
+        from distr.core.db.workflow import PlanItem, PlanWorkspace
+
+        board_key = f"decisions:{active_board.id}" if active_board.source in {"database", "local", "decisions"} else active_board.external_board_id
+        with get_session() as session:
+            workspace = session.query(PlanWorkspace).filter(PlanWorkspace.board_key == board_key).first()
+            if workspace is None and active_project:
+                workspace = session.query(PlanWorkspace).filter(PlanWorkspace.project_id == active_project.id).order_by(PlanWorkspace.modified_at.desc()).first()
+            if workspace is None:
+                return None
+            items = session.query(PlanItem).filter(PlanItem.workspace_id == workspace.id).order_by(PlanItem.sort_order, PlanItem.id).all()
+            return DeveloperPlanContext(
+                id=int(workspace.id), board_key=workspace.board_key or board_key,
+                board_name=workspace.board_name or active_board.name,
+                project_id=workspace.project_id, root_path=workspace.root_path or "",
+                status=workspace.status or "draft", item_count=len(items),
+                artifact_types=[item.item_type for item in items if item.item_type],
+            )
 
     def _fetch_active_project(self) -> DeveloperProjectContext | None:
         from distr.core.db import get_session

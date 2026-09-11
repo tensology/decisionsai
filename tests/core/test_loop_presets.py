@@ -335,7 +335,7 @@ def test_consolidation_leaves_one_development_workflow_and_preserves_history(
         settings = json.loads(canonical.run_settings or "{}")
         assert settings["memory_enabled"] is True
         assert settings["capture_failures_and_lessons"] is True
-        assert settings["canonical_workflow_version"] == 12
+        assert settings["canonical_workflow_version"] == 13
         history = db.query(AutoWorkflow).filter(
             AutoWorkflow.id == result["historical_workflow_id"]
         ).one()
@@ -360,6 +360,41 @@ def test_consolidation_leaves_one_development_workflow_and_preserves_history(
 
     visible = list_workflows()
     assert [row["name"] for row in visible] == ["Development"]
+
+
+def test_canonical_resolution_upgrades_only_development_and_preserves_history(db_factory):
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.developer_workflow import get_or_create_development_workflow
+
+    with db_factory() as db:
+        development = AutoWorkflow(
+            name="Development",
+            status="active",
+            workflow_type="manual",
+            run_settings='{"canonical_workflow_version": 1}',
+        )
+        unrelated = AutoWorkflow(name="Release audit", status="active", workflow_type="review")
+        db.add_all([development, unrelated])
+        db.flush()
+        db.add(AutoWorkflowStep(workflow_id=development.id, position=0, name="Old step"))
+        db.add(AutoWorkflowRun(workflow_id=development.id, status="completed"))
+        db.commit()
+        development_id = int(development.id)
+        unrelated_id = int(unrelated.id)
+
+    assert get_or_create_development_workflow() == development_id
+
+    with db_factory() as db:
+        current = db.get(AutoWorkflow, development_id)
+        assert len(current.steps) == 7
+        assert json.loads(current.run_settings)["canonical_workflow_version"] == 13
+        assert db.get(AutoWorkflow, unrelated_id).status == "active"
+        history = db.query(AutoWorkflow).filter(
+            AutoWorkflow.workflow_type == "audit",
+            AutoWorkflow.name.like("Development history before v%"),
+        ).one()
+        assert len(history.steps) == 1
+        assert len(history.runs) == 1
 
 
 def test_apply_loop_preset_from_bundle(db_factory):

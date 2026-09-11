@@ -53,6 +53,11 @@ class ComputerUseTool(BaseTool):
             chat_id = self._chat_manager.get_current_chat() if self._chat_manager else None
             if chat_id is not None:
                 config["_chat_id"] = int(chat_id)
+                from distr.core.chat_turns import latest_active_turn_id
+
+                turn_id = latest_active_turn_id(int(chat_id))
+                if turn_id is not None:
+                    config["_turn_id"] = int(turn_id)
         except Exception:
             pass
         result = StepDispatcher()._run_computer_use(

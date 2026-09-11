@@ -94,6 +94,42 @@ def test_resolve_remote_delivery_context_consumes_fifo_queue():
     assert manager._pending_remote_agent_response["request_id"] == "agent-2"
 
 
+def test_resolve_remote_delivery_context_matches_exact_request_id():
+    manager = DummyManager()
+    now = time.time()
+    manager._pending_remote_agent_responses = [
+        {"request_id": "agent-1", "created_at": now, "mode": "command"},
+        {"request_id": "agent-2", "created_at": now, "mode": "command"},
+    ]
+    manager._pending_remote_agent_response = manager._pending_remote_agent_responses[-1]
+
+    ctx = resolve_remote_delivery_context(
+        manager,
+        {"origin_surface": "remote", "origin_request_id": "agent-2"},
+        consume_pending=True,
+    )
+
+    assert ctx is not None
+    assert ctx["request_id"] == "agent-2"
+    assert [item["request_id"] for item in manager._pending_remote_agent_responses] == [
+        "agent-1"
+    ]
+
+
+def test_remote_response_does_not_fall_back_to_unrelated_pending_request():
+    manager = DummyManager()
+    manager._pending_remote_agent_responses = [
+        {"request_id": "other", "created_at": time.time(), "mode": "command"}
+    ]
+    manager._pending_remote_agent_response = manager._pending_remote_agent_responses[-1]
+
+    assert resolve_remote_delivery_context(
+        manager,
+        {"origin_surface": "remote", "origin_request_id": "missing"},
+        consume_pending=True,
+    ) is None
+
+
 def test_resolve_remote_delivery_context_drops_stale_command_routes():
     manager = DummyManager()
     manager._pending_remote_agent_responses = [
@@ -159,6 +195,32 @@ def test_deliver_remote_tts_sends_text_before_audio(tmp_path):
     assert first["audio_streamed"] is True
     assert any(msg.get("type") == "remote_agent_audio_start" for msg in manager.sent)
     cleanup.assert_called()
+
+
+def test_deliver_remote_tts_keeps_text_when_audio_generation_fails():
+    manager = DummyManager()
+
+    ok = deliver_remote_tts(
+        manager,
+        "The text response must survive.",
+        build_synthetic_remote_context({"mode": "proactive"}),
+        generate_tts=lambda _text: None,
+        convert_wav_to_ogg=lambda path: path,
+        cleanup_files=lambda *_args: None,
+        send_text_first=True,
+    )
+
+    assert ok is True
+    responses = [
+        message["data"]
+        for message in manager.sent
+        if message.get("type") == "remote_agent_response"
+    ]
+    assert responses[0]["text"] == "The text response must survive."
+    assert responses[0]["audio_pending"] is True
+    assert responses[-1]["text"] == "The text response must survive."
+    assert responses[-1]["audio_pending"] is False
+    assert responses[-1]["audio_streamed"] is False
 
 
 def test_deliver_remote_tts_presses_enter_only_when_requested(tmp_path):

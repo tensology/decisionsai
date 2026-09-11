@@ -98,3 +98,32 @@ def test_external_board_catalog_uses_cached_remote_snapshot():
     assert payload["cache_ready"] is True
     assert payload["trello"][0]["id"] == "board-1"
     assert call_count["value"] == 1
+
+
+def test_confirmed_external_move_updates_cached_board_snapshot():
+    from distr.gui.web.routes import kanban
+
+    key = kanban._external_board_detail_cache_key("jira", "35")
+    with kanban._BOARD_DETAIL_LOCK:
+        kanban._BOARD_DETAIL_CACHE[key] = {
+            "ready": True,
+            "t": 1.0,
+            "body": {
+                "lanes": [
+                    {"id": "Backlog", "name": "Backlog", "tickets": [{"id": "DEV-9", "title": "Cached ticket"}]},
+                    {"id": "QA", "name": "QA", "tickets": []},
+                ]
+            },
+        }
+
+    try:
+        updated = kanban._move_external_board_detail_cache_ticket("jira", "35", "DEV-9", "QA", 0)
+
+        assert updated is True
+        with kanban._BOARD_DETAIL_LOCK:
+            body = kanban._BOARD_DETAIL_CACHE[key]["body"]
+            assert body["lanes"][0]["tickets"] == []
+            assert body["lanes"][1]["tickets"][0]["id"] == "DEV-9"
+            assert kanban._BOARD_DETAIL_CACHE[key]["t"] > 1.0
+    finally:
+        kanban._invalidate_external_board_detail_cache("jira", "35")

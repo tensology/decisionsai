@@ -7,6 +7,8 @@ a concise summary of the last user command and its output from the pi RPC
 session for that project.
 """
 import logging
+import json
+from dataclasses import asdict
 from typing import Any, Optional, List
 
 from langchain.tools import BaseTool
@@ -16,10 +18,20 @@ logger = logging.getLogger(__name__)
 
 
 class TerminalOverviewInput(BaseModel):
+    action: str = Field(
+        default="status",
+        description="Explicit action: list, status, read, save, start, or stop.",
+    )
+    project_id: Optional[int] = Field(default=None, description="Exact project id.")
     project_name: Optional[str] = Field(
         default=None,
         description="Project name to get terminal overview for. Uses the active project if not specified."
     )
+    startup_instructions: Optional[str] = Field(
+        default=None,
+        description="For save/start: one terminal command per line.",
+    )
+    lines: int = Field(default=100, ge=1, le=500)
 
 
 class TerminalOverviewTool(BaseTool):
@@ -55,17 +67,50 @@ If no project is specified, uses the currently active project.
             "what's running", "what happened", "terminal say",
         ]
 
-    def _run(self, project_name: Optional[str] = None, **kwargs) -> str:
-        from distr.core.pi_rpc import get_rpc_session
+    def _run(
+        self,
+        action: str = "status",
+        project_id: Optional[int] = None,
+        project_name: Optional[str] = None,
+        startup_instructions: Optional[str] = None,
+        lines: int = 100,
+        **kwargs,
+    ) -> str:
         from distr.core.db import get_session
         from distr.core.db.projects import Project
+        from distr.core.project_startup_terminals import (
+            parse_startup_command_lines,
+            start_project_startup_terminals,
+            stop_project_startup_terminals,
+        )
+        from distr.core.terminal import get_startup_session, get_startup_sessions_for_project
+
+        normalized_action = str(action or "status").strip().lower()
+        if normalized_action == "list":
+            with get_session() as session:
+                projects = session.query(Project).order_by(Project.position, Project.name).all()
+                payload = []
+                for project in projects:
+                    sessions = get_startup_sessions_for_project(int(project.id), purpose="startup")
+                    commands = parse_startup_command_lines(project.startup_instructions or "")
+                    payload.append({
+                        "project_id": int(project.id),
+                        "project_name": project.name,
+                        "commands": commands,
+                        "configured_count": len(commands),
+                        "running_count": len(sessions),
+                        "running": bool(sessions),
+                        "terminals": sessions,
+                    })
+            return json.dumps({"surface": "development", "projects": payload}, ensure_ascii=False, default=str)
 
         # Resolve project ID
-        project_id = None
         project_display_name = "project"
 
         with get_session() as session:
-            if project_name:
+            if project_id is not None:
+                project = session.get(Project, int(project_id))
+            elif project_name:
                 project = session.query(Project).filter(
                     Project.name.ilike(f"%{project_name}%")
                 ).first()
@@ -75,62 +120,72 @@ If no project is specified, uses the currently active project.
             if project:
                 project_id = project.id
                 project_display_name = project.name
+                configured_instructions = project.startup_instructions or ""
 
         if not project_id:
             if project_name:
                 return f"No project found matching '{project_name}'. Available projects can be listed with the project tools."
             return "No active project. Switch to a project first."
 
-        # Get the RPC session
-        rpc = get_rpc_session(project_id)
-        if not rpc:
-            return f"No terminal session for {project_display_name}. The terminal hasn't been opened yet."
+        if normalized_action == "save":
+            if startup_instructions is None:
+                return "Error: startup_instructions is required for save."
+            with get_session() as session:
+                project = session.get(Project, int(project_id))
+                project.startup_instructions = startup_instructions
+                session.commit()
+            return json.dumps({
+                "surface": "development",
+                "action": "saved",
+                "project_id": int(project_id),
+                "project_name": project_display_name,
+                "commands": parse_startup_command_lines(startup_instructions),
+            }, ensure_ascii=False)
 
-        if not rpc.is_alive:
-            return f"Terminal session for {project_display_name} is not running. Open the terminal tab to start it."
+        if normalized_action == "start":
+            result = start_project_startup_terminals(
+                int(project_id),
+                announce=False,
+                startup_instructions=startup_instructions,
+            )
+            return json.dumps({"surface": "development", **asdict(result)}, ensure_ascii=False, default=str)
+        if normalized_action == "stop":
+            result = stop_project_startup_terminals(int(project_id), announce=False)
+            return json.dumps({"surface": "development", **asdict(result)}, ensure_ascii=False, default=str)
+        if normalized_action not in {"status", "read"}:
+            return "Error: action must be list, status, read, save, start, or stop."
 
-        # Extract user commands, assistant responses, and tool activity
-        messages = rpc.get_messages()
-        if not messages:
-            return f"No terminal session for {project_display_name}. The CLI hasn't been used yet."
+        sessions = get_startup_sessions_for_project(int(project_id), purpose="startup")
+        payload = {
+            "surface": "development",
+            "action": normalized_action,
+            "project_id": int(project_id),
+            "project_name": project_display_name,
+            "commands": parse_startup_command_lines(configured_instructions),
+            "running_count": len(sessions),
+            "running": bool(sessions),
+            "terminals": sessions,
+        }
+        if normalized_action == "read":
+            from distr.core.chat_turns import redact_text
 
-        user_cmds = []
-        assistant_resps = []
-        tool_activity = []
-        for msg in messages:
-            role = msg.get("role", "")
-            content = (msg.get("content", "") or "").strip()
-            if role == "user" and content:
-                user_cmds.append(content)
-            elif role == "assistant" and content:
-                assistant_resps.append(content)
-            elif role == "tool_result":
-                tool_name = msg.get("tool_name", "") or "tool"
-                tool_result = (msg.get("tool_result", "") or "").strip()
-                is_error = msg.get("is_error", False)
-                status_marker = "\u274c" if is_error else "\u2705"
-                preview = tool_result[:150] + "..." if len(tool_result) > 150 else tool_result
-                tool_activity.append(f"{status_marker} {tool_name}: {preview}")
+            payload["output"] = [
+                {
+                    "terminal_id": item.get("process_id"),
+                    "command": item.get("shell_command") or "",
+                    "output": (
+                        redact_text(
+                            get_startup_session(str(item.get("process_id"))).get_buffer(lines=max(1, min(int(lines), 500))),
+                            limit=12000,
+                            preserve_paths=True,
+                        )
+                        if get_startup_session(str(item.get("process_id")))
+                        else ""
+                    ),
+                }
+                for item in sessions
+            ]
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
-        if not user_cmds and not assistant_resps and not tool_activity:
-            return f"Terminal for {project_display_name} has activity but no readable output yet."
-
-        # Build summary — include last user command, last response, AND recent tool activity
-        parts = [f"**{project_display_name} CLI:**"]
-        if user_cmds:
-            last_cmd = user_cmds[-1]
-            cmd_preview = last_cmd[:200] + "..." if len(last_cmd) > 200 else last_cmd
-            parts.append(f"Last command: {cmd_preview}")
-        if assistant_resps:
-            last_resp = assistant_resps[-1]
-            resp_preview = last_resp[:600] + "..." if len(last_resp) > 600 else last_resp
-            parts.append(f"Last response: {resp_preview}")
-        if tool_activity:
-            recent_tools = tool_activity[-5:]
-            parts.append(f"Recent tools: {'; '.join(recent_tools)}")
-        parts.append(f"({len(user_cmds)} command(s), {len(tool_activity)} tool call(s))")
-
-        return "\n".join(parts)
-
-    async def _arun(self, project_name: Optional[str] = None, **kwargs) -> str:
-        return self._run(project_name=project_name, **kwargs)
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)

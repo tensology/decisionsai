@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Development{% endblock %}
+
+{% block head_styles %}
+{{ super() }}
+<link rel="stylesheet" href="/static/development/styles.css?v=20260906-1">
+<link rel="stylesheet" href="/static/vendor/xterm/xterm.min.css">
+{% endblock %}
+
+{% block content %}
+    <nav class="development-mobile-navigation" aria-label="Development navigation">
+        <button class="icon-button" id="sidebar-open" aria-label="Open development boards" aria-controls="studio-sidebar" aria-expanded="false">☰</button>
+        <span>Development</span>
+    </nav>
+    <div class="studio-shell inspector-closed" id="studio-shell">
+        {% include 'development/sidebar/navigation.html' %}
+        {% include 'development/sidebar/board-menu.html' %}
+        {% include 'development/boards/ticket-menu.html' %}
+        {% include 'development/sidebar/thread-menu.html' %}
+        {% include 'development/automations/row-menu.html' %}
+
+        <main class="studio-main">
+            <header class="task-header" id="development-task-header">
+                <div class="task-breadcrumb">
+                    <span id="header-project">Development</span>
+                    <i>/</i>
+                    <strong id="header-task">No thread selected</strong>
+                </div>
+                <div class="task-state" id="task-state"><span></span><b>Ready</b></div>
+                <button class="header-button danger hidden" id="stop-run-button">Stop</button>
+                <button class="icon-button thread-more-button" id="thread-more-button" aria-label="Thread menu" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                <div class="board-context-menu thread-header-menu hidden" id="thread-header-menu" role="menu"><button type="button" id="thread-menu-details" role="menuitem">Activity</button><button type="button" id="thread-menu-clear-context" role="menuitem">Clear Context</button><button type="button" id="thread-menu-edit-time" role="menuitem">Edit Time</button></div>
+            </header>
+
+            <section class="conversation" id="conversation" aria-label="Chat">
+                <div class="conversation-inner" id="conversation-inner">
+                    <div class="studio-empty" id="studio-empty" aria-hidden="true"></div>
+                    <div id="message-list" class="message-list hidden"></div>
+                </div>
+            </section>
+
+            {% include 'development/incoming/workspace.html' %}
+
+            {% include 'development/planning/workspace.html' %}
+
+            {% include 'development/terminals/home.html' %}
+
+            {% include 'development/reports/workspace.html' %}
+
+            {% include 'development/threads/composer.html' %}
+
+            {% include 'development/automations/workspace.html' %}
+
+            {% include 'development/workflows/workspace.html' %}
+
+            {% include 'development/boards/workspace.html' %}
+
+            {% include 'development/terminals/workspace.html' %}
+
+        </main>
+
+        {% include 'development/threads/inspector.html' %}
+    </div>
+
+    <div class="drawer-backdrop hidden" id="drawer-backdrop"></div>
+    <div class="studio-toast hidden" id="studio-toast" role="status"></div>
+
+    {% include 'development/threads/rename-dialog.html' %}
+
+    {% include 'development/incoming/link-dialog.html' %}
+
+    {% include 'development/threads/dialog.html' %}
+
+    {% include 'development/boards/ticket-dialog.html' %}
+
+    {% include 'development/threads/model-dialog.html' %}
+
+    {% include 'development/threads/mode-dialog.html' %}
+
+    {% include 'development/threads/attach-dialog.html' %}
+
+    {% include 'development/automations/dialog.html' %}
+
+    {% include 'development/automations/import-dialog.html' %}
+
+    {% include 'development/sidebar/board-dialog.html' %}
+
+    {% include 'development/sidebar/delete-dialog.html' %}
+
+    {% include 'development/threads/time-dialog.html' %}
+
+    {% include 'development/workflows/step-dialog.html' %}
+
+    {% include 'development/threads/artifact-dialog.html' %}
+
+{% endblock %}
+
+{% block body_scripts %}
+{{ super() }}
+<script src="/static/vendor/xterm/xterm.js"></script>
+<script type="module" src="/static/development/app.js?v=20260906-1"></script>
+{% endblock %}

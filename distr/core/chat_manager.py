@@ -36,6 +36,24 @@ _active_work_intake_uid: ContextVar[str] = ContextVar(
     "active_work_intake_uid",
     default="",
 )
+_active_chat_turn: ContextVar[tuple[int, int] | None] = ContextVar(
+    "active_chat_turn",
+    default=None,
+)
+
+
+def bind_active_chat_turn(chat_id: int, turn_id: int | None) -> None:
+    """Bind response persistence to the turn that originated this context."""
+    _active_chat_turn.set(
+        (int(chat_id), int(turn_id)) if turn_id is not None else None
+    )
+
+
+def current_bound_chat_turn(chat_id: int) -> Optional[int]:
+    bound = _active_chat_turn.get()
+    if bound and int(bound[0]) == int(chat_id):
+        return int(bound[1])
+    return None
 
 
 def activate_work_intake_context(intake_uid: str) -> Token:
@@ -174,9 +192,15 @@ class ChatManagerCore:
                         self.current_provider,
                     )
 
-                if settings.last_chat_id:
-                    chat = session.get(Chat, settings.last_chat_id)
-                    if chat:
+                selected_chat_id = (
+                    getattr(settings, "agent_current_chat_id", None)
+                    or settings.last_chat_id
+                )
+                if selected_chat_id:
+                    chat = session.get(Chat, selected_chat_id)
+                    from distr.core.workflow.development_threads import is_development_thread
+
+                    if chat and not is_development_thread(session, chat):
                         self._current_chat_id = chat.id
                         self._apply_chat_runtime_metadata(chat)
                         logger.info(
@@ -184,6 +208,15 @@ class ChatManagerCore:
                             chat.id,
                         )
                     else:
+                        if chat is not None:
+                            logger.warning(
+                                "ChatManagerCore: ignored Development thread %s in Chat settings",
+                                chat.id,
+                            )
+                        settings.agent_current_chat_id = None
+                        if settings.last_chat_id == selected_chat_id:
+                            settings.last_chat_id = None
+                        session.commit()
                         logger.info(
                             "ChatManagerCore: Last saved chat not found in database"
                         )
@@ -441,6 +474,18 @@ class ChatManagerCore:
                         self._apply_chat_runtime_metadata(chat)
             return
 
+        if chat_id:
+            with get_session() as session:
+                candidate = session.get(Chat, chat_id)
+                if candidate is None:
+                    raise LookupError("Chat not found.")
+                from distr.core.workflow.development_threads import is_development_thread
+
+                if is_development_thread(session, candidate):
+                    raise ValueError(
+                        "Development tasks cannot become the current Chat conversation."
+                    )
+
         try:
             self._updating_chat = True
             self._current_chat_id = chat_id
@@ -454,6 +499,12 @@ class ChatManagerCore:
             with get_session() as session:
                 chat = session.get(Chat, chat_id)
                 if chat:
+                    from distr.core.workflow.development_threads import is_development_thread
+
+                    if is_development_thread(session, chat):
+                        raise ValueError(
+                            "Development tasks cannot become the current Chat conversation."
+                        )
                     self._apply_chat_runtime_metadata(chat)
                 settings = session.query(Settings).first()
                 if settings:
@@ -640,7 +691,7 @@ class ChatManagerCore:
 
     def add_user_message(
         self, chat_id: int, message: str, *, source_platform: Optional[str] = None
-    ) -> None:
+    ) -> Optional[int]:
         cleaned_text = self.clean_text(message)
         session = get_session()
         chat = None
@@ -655,7 +706,7 @@ class ChatManagerCore:
             )
             new_title = self.generate_title(cleaned_text, chat_id=new_chat_id)
             self.update_chat_title(new_chat_id, new_title)
-            return
+            return int(new_chat_id) if new_chat_id is not None else None
 
         session = get_session()
         try:
@@ -671,7 +722,7 @@ class ChatManagerCore:
             root_id = root_row[0] if root_row else chat_id
             root = session.get(Chat, root_id)
             if not root:
-                return
+                return None
 
             # Dedup check
             tail_query = text("""
@@ -690,7 +741,7 @@ class ChatManagerCore:
                     tail_response or ""
                 ).strip():
                     logger.info("ChatManagerCore: skipping duplicate user message")
-                    return
+                    return int(tail_row[0])
 
             prior_turn_id = _load_chat_params(root.params).get("active_turn_chat_row_id")
             if prior_turn_id:
@@ -747,6 +798,7 @@ class ChatManagerCore:
                     content=cleaned_text,
                     source_platform=source_platform,
                 )
+                persisted_row_id = int(root.id)
             else:
                 params_obj: dict[str, Any] = {}
                 if source_platform:
@@ -778,6 +830,7 @@ class ChatManagerCore:
                     content=cleaned_text,
                     source_platform=source_platform,
                 )
+                persisted_row_id = int(new_chat.id)
 
             self.emit("chat_updated", root_id)
 
@@ -787,8 +840,10 @@ class ChatManagerCore:
                 chat.is_new = False
                 session.commit()
                 self.emit("chat_updated", root_id)
+            return persisted_row_id
         except Exception as e:
             logger.error("Error adding user message: %s", e)
+            return None
         finally:
             session.close()
 
@@ -799,7 +854,9 @@ class ChatManagerCore:
         is_hidden: bool = False,
         *,
         is_final: bool = True,
-    ) -> None:
+        turn_id: Optional[int] = None,
+    ) -> Optional[int]:
+        persisted_row_id: Optional[int] = None
         if chat_id not in self.chat_histories:
             self.get_chat_history(chat_id)
         if (
@@ -821,7 +878,9 @@ class ChatManagerCore:
                 root_id = _thread_root_id(session, int(chat_id))
                 root = session.get(Chat, root_id)
                 params = _load_chat_params(getattr(root, "params", None))
-                active_row_id = params.get("active_turn_chat_row_id")
+                active_row_id = turn_id or current_bound_chat_turn(int(root_id))
+                if active_row_id is None:
+                    active_row_id = params.get("active_turn_chat_row_id")
                 if active_row_id:
                     try:
                         active_target = session.get(Chat, int(active_row_id))
@@ -833,10 +892,15 @@ class ChatManagerCore:
                     target = max(chat.children, key=lambda x: x.created_date)
             if target:
                 active_turn_id = int(target.id) if target.id is not None else None
+                persisted_row_id = active_turn_id
                 target.response = text_content
                 target.is_hidden = is_hidden
                 target.modified_date = datetime.now(timezone.utc)
-                if root and is_final:
+                if (
+                    root
+                    and is_final
+                    and str(params.get("active_turn_chat_row_id") or "") == str(active_turn_id or "")
+                ):
                     _clear_active_turn_chat_row_id(root)
                 session.commit()
                 if is_final and not is_hidden and active_turn_id is not None:
@@ -884,6 +948,7 @@ class ChatManagerCore:
                 )
             except Exception:
                 logger.debug("Could not correlate final chat response to work intake", exc_info=True)
+        return persisted_row_id
 
     # ---- model/provider ----
 

@@ -94,3 +94,24 @@ def test_document_convert_without_explicit_path_defers_to_llm(monkeypatch, tmp_p
         result = detect_fast_action(text)
         assert result.action_type == ActionType.UNKNOWN, text
         assert result.tool_name == "", text
+
+
+def test_new_chat_fast_action_requires_explicit_new_or_fresh_intent() -> None:
+    conversational_cases = [
+        "start a conversation with me",
+        "start a conversation about my product roadmap",
+        "begin a conversation with me about pricing",
+    ]
+    for text in conversational_cases:
+        result = detect_fast_action(text)
+        assert result.action_type != ActionType.NEW_CHAT, text
+
+    explicit_new_chat_cases = [
+        "new chat",
+        "start a new chat",
+        "begin a fresh conversation",
+        "start over",
+    ]
+    for text in explicit_new_chat_cases:
+        result = detect_fast_action(text)
+        assert result.action_type == ActionType.NEW_CHAT, text

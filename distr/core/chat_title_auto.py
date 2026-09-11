@@ -220,6 +220,22 @@ def maybe_refresh_chat_title(
 ) -> Optional[str]:
     """Update the chat title when enough new turns have accumulated."""
     settings = settings or load_settings_from_db()
+    try:
+        params = json.loads(getattr(root_chat, "params", None) or "{}")
+    except (TypeError, ValueError):
+        params = {}
+    development = params.get("development") if isinstance(params.get("development"), dict) else {}
+    ticket_id = development.get("ticket_id")
+    if ticket_id is not None:
+        from distr.core.db.kanban import KanbanTicket
+        from distr.core.workflow.development_threads import synchronize_linked_ticket_title
+
+        ticket = session.get(KanbanTicket, int(ticket_id))
+        if ticket is not None:
+            previous_title = root_chat.title
+            canonical_title = synchronize_linked_ticket_title(session, ticket)
+            session.commit()
+            return canonical_title if canonical_title != previous_title else None
     additional_context = _chat_additional_context(root_chat.additional_context)
     title_auto = _title_auto_meta(additional_context)
     if title_auto.get("manual"):

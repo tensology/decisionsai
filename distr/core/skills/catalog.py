@@ -21,6 +21,10 @@ _COMPETITION_SKILL_DIRS = [competition_ponytail_skills_dir(), competition_fallow
 _ECC_VENDOR_METADATA_FILE = _ECC_VENDOR_DIR / ".decisions-vendor.json"
 _REGISTRY_FILE = _SKILLS_DIR / "skills_registry.json"
 
+
+def _capabilities_registry_file() -> Path:
+    return Path.home() / ".decisions" / "harness" / "capabilities-skills-registry.json"
+
 # Ticket text keywords -> bundled skill ids (google/skills + core workflow skills).
 _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
     (["gemini", "vertex ai", "agent platform", "gen ai", "google genai"], ["gemini-api"]),
@@ -42,7 +46,8 @@ _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
     (["operational excellence", "runbook", "incident response"], ["google-cloud-waf-operational-excellence"]),
     (["performance optimization", "latency", "cloud performance"], ["google-cloud-waf-performance-optimization"]),
     (["sustainability", "carbon", "green cloud"], ["google-cloud-waf-sustainability"]),
-    (["frontend", "react", "vue", "css", "tailwind", "playwright"], ["webapp-testing", "frontend-design", "decisions-design-references"]),
+    (["frontend", "react", "vue", "css", "tailwind", "playwright"], ["webapp-testing", "frontend-design", "decisions-design-references", "impeccable"]),
+    (["computer use", "native app", "desktop automation", "cross-app"], ["decisions-computer-use"]),
     (["architecture", "sequence diagram", "flowchart", "mermaid", "system design", "data model"], ["decisions-mermaid-diagrams"]),
     (["landing page", "dashboard", "ui design", "mockup", "aceternity", "mobbin", "refero", "godly"], ["decisions-ui-ideation", "decisions-design-references", "frontend-design-direction"]),
     (["debug", "bug", "failing test", "regression"], ["systematic-debugging", "qa-tester"]),
@@ -152,6 +157,39 @@ def _registry_scan():
     ).scan()
 
 
+def _external_capability_rows(existing_ids: set[str]) -> list[dict[str, Any]]:
+    path = _capabilities_registry_file()
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Capabilities skills registry unreadable", exc_info=True)
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in payload if isinstance(payload, list) else []:
+        if not isinstance(item, dict) or str(item.get("source") or "").lower() != "external":
+            continue
+        skill_id = _canonical_id(str(item.get("id") or ""))
+        skill_dir = Path(str(item.get("path") or "")).expanduser()
+        skill_file = _skill_file(skill_dir)
+        if not skill_id or skill_id in existing_ids or not skill_file:
+            continue
+        rows.append(
+            {
+                "id": skill_id,
+                "name": skill_id,
+                "description": _body_excerpt(skill_file),
+                "path": str(skill_dir),
+                "source": "external",
+                "editable": False,
+                "tags": ["external", "capabilities"],
+            }
+        )
+        existing_ids.add(skill_id)
+    return rows
+
+
 def _vendor_payload(entry: Any, metadata: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": "ecc",
@@ -246,6 +284,7 @@ def load_registry() -> tuple[dict[str, Any], ...]:
             existing_ids.add(_canonical_id(skill_id))
 
     scan = _registry_scan()
+    rows.extend(_external_capability_rows(existing_ids))
     metadata = _load_ecc_vendor_metadata()
     _attach_vendor_conflicts(rows, scan, metadata)
     rows.extend(_vendor_registry_rows(scan, existing_ids, metadata))

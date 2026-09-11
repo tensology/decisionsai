@@ -25,7 +25,28 @@ from ._shared import (
 )
 
 # In-memory store for OAuth state tokens
-_oauth_states: Dict[str, float] = {}
+_oauth_states: Dict[str, dict[str, Any]] = {}
+
+
+def _safe_google_return_to(value: Any) -> str:
+    """Keep OAuth returns inside DecisionsAI and on a relevant screen."""
+    raw = str(value or "").strip()
+    if not raw.startswith("/") or raw.startswith("//"):
+        return "/settings?subtab=connect&provider=google#thirdparty"
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc or not parsed.path.startswith(("/settings", "/development")):
+        return "/settings?subtab=connect&provider=google#thirdparty"
+    return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+
+
+def _google_return_with_status(return_to: Any, status: str) -> str:
+    """Append the OAuth outcome without losing the destination fragment."""
+    from urllib.parse import parse_qsl, urlencode
+
+    parsed = urlsplit(_safe_google_return_to(return_to))
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["google"] = status
+    return urlunsplit(("", "", parsed.path, urlencode(query), parsed.fragment))
 
 
 def _relay_headers() -> dict:
@@ -408,6 +429,7 @@ def register_routes(router, templates):
             "google_connected": False,
             "telegram_connected": False,
             "whatsapp_connected": False,
+            "mobile_connected": False,
             "discord_bot_configured": False,
             "slack_bot_configured": False,
             "slack_signing_configured": False,
@@ -428,17 +450,32 @@ def register_routes(router, templates):
             isinstance(acc, dict) and acc.get("provider") == "google" and acc.get("access_token")
             for acc in connected_accounts
         )
+        google_error = ""
         # Google also needs the OAuth client secret file for token refresh
         if google_connected:
             from distr.gui.web.oauth import load_google_oauth_config
             if not load_google_oauth_config():
                 google_connected = False
+                google_error = "Google OAuth configuration is missing."
+        if google_connected:
+            try:
+                from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+                google_connected, google_error = GoogleWorkspaceConnector().connection_health()
+            except Exception:
+                logger.warning("Google connection health check failed", exc_info=True)
+                google_connected = False
+                google_error = "Google authentication could not be verified. Reconnect the account."
         whatsapp_connected = any(
             isinstance(acc, dict) and acc.get("provider") == "whatsapp" and acc.get("status") == "connected"
             for acc in connected_accounts
         )
         telegram_connected = any(
             isinstance(acc, dict) and acc.get("provider") == "telegram" and (acc.get("app_user_id") or acc.get("user_id"))
+            for acc in connected_accounts
+        )
+        mobile_connected = any(
+            isinstance(acc, dict) and acc.get("provider") == "mobile" and acc.get("app_user_id") and acc.get("paired")
             for acc in connected_accounts
         )
         jira_accounts_private = [
@@ -478,8 +515,10 @@ def register_routes(router, templates):
 
         return JSONResponse({
             "google_connected": google_connected,
+            "google_error": google_error,
             "whatsapp_connected": whatsapp_connected,
             "telegram_connected": telegram_connected,
+            "mobile_connected": mobile_connected,
             "discord_bot_configured": discord_bot_configured,
             "slack_bot_configured": slack_bot_configured,
             "slack_signing_configured": slack_signing_configured,
@@ -842,7 +881,11 @@ def register_routes(router, templates):
             if not client_id:
                 return JSONResponse({"url": None, "error": "Client ID not found in OAuth config."})
             state = str(uuid.uuid4())
-            _oauth_states[state] = __import__("time").time()
+            return_to = _safe_google_return_to(request.query_params.get("return_to"))
+            _oauth_states[state] = {
+                "created_at": __import__("time").time(),
+                "return_to": return_to,
+            }
             scopes = [
                 "https://www.googleapis.com/auth/gmail.readonly",
                 "https://www.googleapis.com/auth/gmail.send",
@@ -866,7 +909,7 @@ def register_routes(router, templates):
             }
             auth_uri = web_config.get("auth_uri", "https://accounts.google.com/o/oauth2/auth")
             url = f"{auth_uri}?{urlencode(params)}"
-            return JSONResponse({"url": url, "state": state})
+            return JSONResponse({"url": url, "state": state, "return_to": return_to})
         except Exception as e:
             logger.error(f"Google OAuth URL: {e}", exc_info=True)
             return JSONResponse({"url": None, "error": str(e)})
@@ -875,31 +918,32 @@ def register_routes(router, templates):
     async def google_oauth_callback(request: Request):
         """Exchange code for tokens and save to DB; redirect to settings with success."""
         import requests as req
-        from datetime import datetime
+        from datetime import datetime, timezone
         from fastapi.responses import RedirectResponse
         code = request.query_params.get("code")
         state = request.query_params.get("state")
         error = request.query_params.get("error")
+        state_data = _oauth_states.pop(str(state or ""), None)
+        return_to = (state_data or {}).get("return_to")
         if error:
-            return RedirectResponse(url="/settings?google=error#advanced", status_code=302)
+            return RedirectResponse(url=_google_return_with_status(return_to, "error"), status_code=302)
         if not code or not state:
-            return RedirectResponse(url="/settings#advanced", status_code=302)
-        if state not in _oauth_states:
-            return RedirectResponse(url="/settings#advanced", status_code=302)
-        del _oauth_states[state]
+            return RedirectResponse(url=_google_return_with_status(return_to, "error"), status_code=302)
+        if not state_data:
+            return RedirectResponse(url=_google_return_with_status(None, "error"), status_code=302)
         try:
             from distr.gui.web.oauth import load_google_oauth_config
             from distr.core.settings import load_settings_from_db, save_settings_to_db
             oauth_config = load_google_oauth_config()
             if not oauth_config:
-                return RedirectResponse(url="/settings#advanced", status_code=302)
+                return RedirectResponse(url=_google_return_with_status(return_to, "error"), status_code=302)
             web_config = oauth_config.get("web", {})
             client_id = web_config.get("client_id")
             client_secret = web_config.get("client_secret")
             base = str(request.base_url).rstrip("/")
             redirect_uri = base + "/api/advanced/google/callback"
             token_data = {"code": code, "client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri, "grant_type": "authorization_code"}
-            token_response = req.post("https://oauth2.googleapis.com/token", data=token_data)
+            token_response = req.post("https://oauth2.googleapis.com/token", data=token_data, timeout=15)
             token_response.raise_for_status()
             tokens = token_response.json()
             settings = load_settings_from_db()
@@ -909,25 +953,26 @@ def register_routes(router, templates):
                 google_account = {"provider": "google"}
                 connected_accounts.append(google_account)
             google_account["access_token"] = tokens.get("access_token")
-            google_account["refresh_token"] = tokens.get("refresh_token")
+            if tokens.get("refresh_token"):
+                google_account["refresh_token"] = tokens.get("refresh_token")
             google_account["token_type"] = tokens.get("token_type", "Bearer")
             google_account["expires_in"] = tokens.get("expires_in")
             google_account["scope"] = tokens.get("scope")
-            google_account["connected_at"] = datetime.utcnow().isoformat()
+            google_account["connected_at"] = datetime.now(timezone.utc).isoformat()
             settings["connected_accounts"] = connected_accounts
             save_settings_to_db(settings)
             # Reload Google Workspace service with new credentials
             try:
-                from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceService
-                gws = GoogleWorkspaceService()
+                from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+                gws = GoogleWorkspaceConnector()
                 gws._load_credentials()
                 logger.info("Google Workspace service reloaded with new credentials")
             except Exception as reload_err:
                 logger.debug(f"Could not reload Google Workspace service: {reload_err}")
-            return RedirectResponse(url="/settings?google=connected#advanced", status_code=302)
+            return RedirectResponse(url=_google_return_with_status(return_to, "connected"), status_code=302)
         except Exception as e:
             logger.error(f"Google callback: {e}", exc_info=True)
-            return RedirectResponse(url="/settings?google=error#advanced", status_code=302)
+            return RedirectResponse(url=_google_return_with_status(return_to, "error"), status_code=302)
 
     @router.get("/advanced/trello/auth-url")
     async def get_trello_auth_url(request: Request):
@@ -1139,6 +1184,157 @@ def register_routes(router, templates):
             return JSONResponse({"success": True})
         except Exception as e:
             logger.error(f"Telegram disconnect: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    def _desktop_app_user_id(connected_accounts):
+        import uuid
+        for provider in ("telegram", "mobile"):
+            for acc in connected_accounts:
+                if isinstance(acc, dict) and acc.get("provider") == provider:
+                    uid = str(acc.get("app_user_id") or "").strip()
+                    if uid:
+                        return uid
+        return f"session_{uuid.uuid4().hex[:16]}"
+
+    def _upsert_mobile_account(connected_accounts, app_user_id, *, paired=False, device_name=""):
+        existing = next((a for a in connected_accounts if isinstance(a, dict) and a.get("provider") == "mobile"), None)
+        if existing:
+            existing["app_user_id"] = app_user_id
+            if paired:
+                existing["paired"] = True
+            if device_name:
+                existing["device_name"] = device_name
+            return
+        row = {"provider": "mobile", "app_user_id": app_user_id, "paired": bool(paired)}
+        if device_name:
+            row["device_name"] = device_name
+        connected_accounts.append(row)
+
+    def _ensure_desktop_relay_ws(app_user_id):
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            mgr = getattr(app, "telegram_manager", None) if app else None
+            if mgr and not mgr.is_connected():
+                mgr.connect(app_user_id=app_user_id)
+        except Exception as exc:
+            logger.debug("Mobile pair: could not start desktop relay WS: %s", exc)
+
+    @router.post("/advanced/mobile/request")
+    async def mobile_link_request():
+        """Create a Mobile App pairing QR (proxy to decisionsai.net)."""
+        try:
+            import requests as req
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+            settings = load_settings_from_db()
+            connected_accounts = parse_connected_accounts(settings)
+            app_user_id = _desktop_app_user_id(connected_accounts)
+            _upsert_mobile_account(connected_accounts, app_user_id)
+            settings["connected_accounts"] = connected_accounts
+            save_settings_to_db(settings)
+            _ensure_desktop_relay_ws(app_user_id)
+
+            headers = {"Content-Type": "application/json"}
+            relay_token = relay_internal_token()
+            if relay_token:
+                headers["X-Relay-Internal-Token"] = relay_token
+            last_error = None
+            for server_base in _telegram_relay_candidates():
+                api_url = f"{server_base}/api/mobile/pair/request"
+                try:
+                    response = req.post(api_url, headers=headers, json={"app_user_id": app_user_id}, timeout=10)
+                    if response.status_code != 200:
+                        last_error = f"HTTP {response.status_code}"
+                        continue
+                    data = response.json()
+                    return JSONResponse({
+                        "qr_code": data.get("qr_code"),
+                        "token": data.get("token"),
+                        "link": data.get("link"),
+                        "app_user_id": data.get("app_user_id") or app_user_id,
+                    })
+                except Exception as relay_error:
+                    last_error = str(relay_error)
+                    continue
+            return JSONResponse({"qr_code": None, "token": None, "link": None, "app_user_id": app_user_id, "error": last_error or "Relay unavailable"})
+        except Exception as e:
+            logger.error(f"Mobile pair request: {e}", exc_info=True)
+            return JSONResponse({"qr_code": None, "token": None, "link": None, "app_user_id": None, "error": str(e)})
+
+    @router.post("/advanced/mobile/status")
+    async def mobile_link_status(body: dict):
+        try:
+            import requests as req
+            token = (body.get("token") or "").strip()
+            if not token:
+                return JSONResponse({"status": "error"})
+            for server_base in _telegram_relay_candidates():
+                api_url = f"{server_base}/api/mobile/pair/status"
+                try:
+                    response = req.get(api_url, params={"token": token}, timeout=5)
+                    if response.status_code != 200:
+                        continue
+                    return JSONResponse(response.json())
+                except Exception:
+                    continue
+            return JSONResponse({"status": "error"})
+        except Exception:
+            return JSONResponse({"status": "error"})
+
+    @router.post("/advanced/mobile/save")
+    async def mobile_save(body: dict):
+        try:
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+            app_user_id = (body.get("app_user_id") or "").strip()
+            device_name = (body.get("device_name") or "").strip()
+            if not app_user_id:
+                return JSONResponse({"success": False, "error": "app_user_id required"})
+            settings = load_settings_from_db()
+            connected_accounts = parse_connected_accounts(settings)
+            _upsert_mobile_account(connected_accounts, app_user_id, paired=True, device_name=device_name)
+            settings["connected_accounts"] = connected_accounts
+            save_settings_to_db(settings)
+            _ensure_desktop_relay_ws(app_user_id)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error(f"Mobile save: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)})
+
+    @router.post("/advanced/mobile/disconnect")
+    async def mobile_disconnect():
+        try:
+            import requests as req
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+
+            settings = load_settings_from_db()
+            connected_accounts = parse_connected_accounts(settings)
+            mobile = next((a for a in connected_accounts if isinstance(a, dict) and a.get("provider") == "mobile"), None)
+            app_user_id = str((mobile or {}).get("app_user_id") or "").strip()
+            headers = {"Content-Type": "application/json"}
+            relay_token = relay_internal_token()
+            if relay_token:
+                headers["X-Relay-Internal-Token"] = relay_token
+            if app_user_id:
+                for server_base in _telegram_relay_candidates():
+                    try:
+                        req.post(
+                            f"{server_base}/api/mobile/link/disconnect",
+                            headers=headers,
+                            json={"app_user_id": app_user_id},
+                            timeout=5,
+                        )
+                        break
+                    except Exception:
+                        continue
+            settings["connected_accounts"] = [
+                a for a in connected_accounts
+                if not (isinstance(a, dict) and a.get("provider") == "mobile")
+            ]
+            save_settings_to_db(settings)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error(f"Mobile disconnect: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     @router.get("/advanced/macos-permissions")

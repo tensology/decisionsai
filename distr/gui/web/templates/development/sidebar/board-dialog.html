@@ -1,0 +1,12 @@
+<dialog class="studio-dialog" id="board-link-dialog">
+        <form method="dialog" id="board-link-form">
+            <header><div><span>Board project</span><h2 id="board-link-title">Edit board</h2></div><button type="button" class="icon-button" data-dialog-close aria-label="Close board settings">×</button></header>
+            <input id="board-edit-id" type="hidden">
+            <label>Board name<input id="board-edit-name" type="text" autocomplete="off" required></label>
+            <label>Project folder<div class="folder-input-row"><input id="board-edit-folder" type="text" autocomplete="off" placeholder="Choose the repository folder"><button type="button" class="secondary-button" id="board-folder-browse">Browse...</button></div></label>
+            <label>Terminal commands<textarea id="board-edit-terminals" rows="5" placeholder="One command per line"></textarea></label>
+            <label>Default workflow<select id="board-link-workflow"><option value="">No default workflow</option></select></label>
+            <fieldset class="dialog-fieldset"><legend>Incoming WhatsApp</legend><p class="context-help">Link a person or group to this board. New messages remain incoming until you create a snapshot ticket, unless automatic snapshots are enabled.</p><div id="board-whatsapp-links" class="channel-link-list"></div><div class="dialog-row"><label>Chat JID<input id="board-whatsapp-jid" type="text" autocomplete="off" placeholder="2782...@s.whatsapp.net or ...@g.us"></label><label>Name<input id="board-whatsapp-name" type="text" autocomplete="off" placeholder="Client or group"></label></div><label class="check-control"><input id="board-whatsapp-auto" type="checkbox"><span><strong>Create snapshot tickets automatically</strong><small>Use only for a channel that should always become tracked work.</small></span></label><button type="button" class="secondary-button" id="board-whatsapp-add">Add WhatsApp link</button></fieldset>
+            <menu><button type="button" class="danger-text-button hidden" id="delete-board-button">Delete board</button><span class="menu-spacer"></span><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button">Save board</button></menu>
+        </form>
+    </dialog>

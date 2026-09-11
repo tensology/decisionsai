@@ -155,6 +155,7 @@ class GeneralSettings(BaseModel):
     welcome_greet_me: bool = False
     telegram_send_online_notice: bool = False
     load_on_startup: bool = True
+    default_project_editor: str = Field(default="codex", pattern="^(codex|cursor)$")
     listening_state: str = "remember"
     voice_provider: str = "kokoro"
     kokoro_voice: str = "af_heart"

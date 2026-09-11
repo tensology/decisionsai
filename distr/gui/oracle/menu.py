@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import quote
@@ -71,7 +72,7 @@ def truncate_menu_title(title: str, max_len: int = 48) -> str:
 
 
 def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
-    """Return the most recently modified root chats for the context menu."""
+    """Return ordinary Chat conversations, never Development work threads."""
     with get_session() as session:
         chats = (
             session.query(Chat)
@@ -81,13 +82,65 @@ def get_recent_chats_for_menu(limit: int = 5) -> list[tuple[int, str]]:
                 Chat.is_hidden.is_(False),
             )
             .order_by(Chat.created_date.desc(), Chat.id.desc())
-            .limit(limit)
+            .limit(max(20, int(limit) * 8))
             .all()
         )
-        return [
-            (chat.id, truncate_menu_title(chat.title or "New Chat"))
-            for chat in chats
-        ]
+        rows: list[tuple[int, str]] = []
+        for chat in chats:
+            try:
+                params = json.loads(chat.params or "{}")
+            except (TypeError, ValueError):
+                params = {}
+            if isinstance(params.get("development"), dict):
+                continue
+            rows.append((chat.id, truncate_menu_title(chat.title or "New Chat")))
+            if len(rows) >= int(limit):
+                break
+        return rows
+
+
+def _get_development_threads_for_menu(
+    *,
+    pinned: bool,
+    limit: int,
+) -> list[tuple[int, str]]:
+    """Return durable Development roots split by their pinned state."""
+    with get_session() as session:
+        chats = (
+            session.query(Chat)
+            .filter(
+                Chat.parent_id.is_(None),
+                Chat.is_archived.is_(False),
+                Chat.is_hidden.is_(False),
+            )
+            .order_by(Chat.modified_date.desc(), Chat.id.desc())
+            .yield_per(max(20, int(limit) * 4))
+        )
+        rows: list[tuple[int, str]] = []
+        for chat in chats:
+            try:
+                params = json.loads(chat.params or "{}")
+            except (TypeError, ValueError):
+                params = {}
+            development = params.get("development")
+            if not isinstance(development, dict):
+                continue
+            if bool(development.get("pinned")) is not pinned:
+                continue
+            rows.append((int(chat.id), truncate_menu_title(chat.title or "Development thread")))
+            if len(rows) >= int(limit):
+                break
+        return rows
+
+
+def get_recent_development_threads_for_menu(limit: int = 5) -> list[tuple[int, str]]:
+    """Return recent unpinned Development threads for the tray menu."""
+    return _get_development_threads_for_menu(pinned=False, limit=limit)
+
+
+def get_pinned_development_threads_for_menu(limit: int = 15) -> list[tuple[int, str]]:
+    """Return pinned Development threads for the final tray-menu section."""
+    return _get_development_threads_for_menu(pinned=True, limit=limit)
 
 
 def resolve_action_play_name(
@@ -134,6 +187,85 @@ def get_projects_for_menu() -> list[tuple[int, str, bool, bool]]:
                     truncate_menu_title(project.name or "Untitled", max_len=40),
                     has_startup,
                     terminals_running,
+                )
+            )
+        return rows
+
+
+def toggle_project_terminals_via_web(project_id: int) -> Optional[dict[str, Any]]:
+    """Toggle a project's terminals through the same API used by the web UI."""
+    from distr.core.web_runtime import (
+        STARTUP_TERMINAL_HTTP_TIMEOUT_SEC,
+        internal_api_headers,
+        resolve_local_web_base_url,
+    )
+
+    base_url = resolve_local_web_base_url()
+    if not base_url:
+        return None
+    status_url = f"{base_url}/api/projects/terminal-status?project_ids={int(project_id)}"
+    try:
+        status_request = urllib.request.Request(
+            status_url,
+            headers=internal_api_headers(content_type=""),
+            method="GET",
+        )
+        with urllib.request.urlopen(status_request, timeout=5.0) as response:
+            status_payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+        status = (status_payload.get("projects") or {}).get(str(int(project_id))) or {}
+        action = "stop" if int(status.get("startup_count") or 0) > 0 else "start"
+        action_request = urllib.request.Request(
+            f"{base_url}/api/projects/{int(project_id)}/startup-terminals/{action}",
+            data=b"{}",
+            headers=internal_api_headers(),
+            method="POST",
+        )
+        with urllib.request.urlopen(
+            action_request,
+            timeout=STARTUP_TERMINAL_HTTP_TIMEOUT_SEC,
+        ) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+    except Exception as exc:
+        logger.warning("Could not toggle project %s terminals through web API: %s", project_id, exc)
+        return None
+
+
+def get_development_boards_for_menu(
+    limit: int = 20,
+) -> list[tuple[str, str, str, str, Optional[int], bool, bool]]:
+    """Return boards with the terminal state of their linked project."""
+    with get_session() as session:
+        boards = (
+            session.query(KanbanBoard)
+            .filter(KanbanBoard.archived.is_(False))
+            .order_by(KanbanBoard.position.asc(), KanbanBoard.name.asc(), KanbanBoard.id.asc())
+            .limit(limit)
+            .all()
+        )
+        rows: list[tuple[str, str, str, str, Optional[int], bool, bool]] = []
+        for board in boards:
+            source = (board.source or "database").strip().lower()
+            if source in {"jira", "trello"}:
+                board_key = (board.external_board_id or "").strip()
+                if not board_key:
+                    continue
+            else:
+                source = "database"
+                board_key = str(int(board.id))
+            project_id = int(board.default_project_id) if board.default_project_id else None
+            project = session.get(Project, project_id) if project_id else None
+            has_startup = bool(
+                project and parse_startup_command_lines(project.startup_instructions or "")
+            )
+            rows.append(
+                (
+                    source,
+                    board_key,
+                    format_board_menu_label(board.name or "Untitled board", source),
+                    (board.external_url or "").strip(),
+                    project_id,
+                    has_startup,
+                    bool(project_id and project_startup_terminals_running(project_id)),
                 )
             )
         return rows
@@ -302,6 +434,13 @@ def format_board_menu_label(name: str, source: Optional[str] = None) -> str:
     return truncate_menu_title(name or "Untitled board", max_len=34)
 
 
+def development_board_key(source: str, board_key: str) -> str:
+    """Return the board identity understood by the Development workspace."""
+    provider = (source or "database").strip().lower()
+    provider = "decisions" if provider == "database" else provider
+    return f"{provider}:{str(board_key or '').strip()}"
+
+
 def organize_board_menu_sections(
     boards: list[tuple[str, str, str, str]],
 ) -> list[tuple[Optional[str], list[tuple[str, str, str, str]]]]:
@@ -418,14 +557,54 @@ class MenuTrayMixin:
 
         self.chat_submenu.aboutToShow.connect(self._rebuild_recent_chat_menu_items)
 
-        self.projects_submenu = QtWidgets.QMenu("Projects", self.menu)
-        self.projects_menu_action = self.menu.addMenu(self.projects_submenu)
-        self.manage_projects_action = QAction("Manage Projects", self.projects_submenu)
-        self.manage_projects_action.triggered.connect(lambda: self._open_web_url("/projects/"))
+        self.development_submenu = QtWidgets.QMenu("Development", self.menu)
+        self.development_menu_action = self.menu.addMenu(self.development_submenu)
+        # Compatibility alias used by the EULA visibility map.
+        self.step_runner_action = self.development_menu_action
+        self.open_development_action = QAction("Manage Development", self.development_submenu)
+        self.open_development_action.triggered.connect(lambda: self._open_web_url("/development/"))
+        self.development_submenu.addAction(self.open_development_action)
+        self.development_submenu.addSeparator()
+
+        self.projects_submenu = QtWidgets.QMenu("Boards", self.development_submenu)
+        self.projects_menu_action = self.development_submenu.addMenu(self.projects_submenu)
+        self.manage_projects_action = QAction("Manage Boards", self.projects_submenu)
+        self.manage_projects_action.triggered.connect(
+            lambda: self._open_web_url("/development/")
+        )
         self.projects_submenu.addAction(self.manage_projects_action)
         self._projects_list_separator = self.projects_submenu.addSeparator()
         self._project_menu_actions: list[QAction] = []
         self.projects_submenu.aboutToShow.connect(self._rebuild_project_menu_items)
+
+        self.terminals_submenu = QtWidgets.QMenu("Terminals", self.development_submenu)
+        self.terminals_menu_action = self.development_submenu.addMenu(self.terminals_submenu)
+        self.manage_terminals_action = QAction("Manage Terminals", self.terminals_submenu)
+        self.manage_terminals_action.triggered.connect(
+            lambda: self._open_web_url("/development/terminals/")
+        )
+        self.terminals_submenu.addAction(self.manage_terminals_action)
+        self._terminals_list_separator = self.terminals_submenu.addSeparator()
+        self._terminal_menu_actions: list[QAction] = []
+        self.terminals_submenu.aboutToShow.connect(self._rebuild_terminal_menu_items)
+
+        self.incoming_submenu = QtWidgets.QMenu("Incoming", self.development_submenu)
+        self.incoming_menu_action = self.development_submenu.addMenu(self.incoming_submenu)
+        self.manage_incoming_action = QAction("Manage Incoming", self.incoming_submenu)
+        self.manage_incoming_action.triggered.connect(
+            lambda: self._open_web_url("/development/incoming/")
+        )
+        self.incoming_submenu.addAction(self.manage_incoming_action)
+        self.sync_incoming_whatsapp_action = QAction("Sync WhatsApp", self.incoming_submenu)
+        self.sync_incoming_whatsapp_action.triggered.connect(
+            self._sync_whatsapp_messages_from_menu
+        )
+        self.incoming_submenu.addAction(self.sync_incoming_whatsapp_action)
+        self.incoming_submenu.aboutToShow.connect(self._rebuild_kanban_menu_items)
+        self.development_submenu.removeAction(self.incoming_menu_action)
+        self.incoming_menu_action = self.development_submenu.insertMenu(
+            self.projects_menu_action, self.incoming_submenu
+        )
 
         self.actions_submenu = QtWidgets.QMenu("Actions", self.menu)
         self.actions_menu_action = self.menu.addMenu(self.actions_submenu)
@@ -458,38 +637,64 @@ class MenuTrayMixin:
         self._snippet_menu_actions: list[QAction] = []
         self.snippets_submenu.aboutToShow.connect(self._rebuild_snippet_menu_items)
 
-        self.automations_submenu = QtWidgets.QMenu("Automations", self.menu)
-        self.automations_menu_action = self.menu.addMenu(self.automations_submenu)
+        self.automations_submenu = QtWidgets.QMenu("Automations", self.development_submenu)
+        self.automations_menu_action = self.development_submenu.addMenu(
+            self.automations_submenu
+        )
         self.manage_automations_action = QAction("Manage Automations", self.automations_submenu)
         self.manage_automations_action.triggered.connect(
-            lambda: self._open_web_url("/automations/")
+            lambda: self._open_web_url("/development/automations/")
         )
         self.automations_submenu.addAction(self.manage_automations_action)
         self._automations_list_separator = self.automations_submenu.addSeparator()
         self._automation_menu_actions: list[QAction] = []
         self.automations_submenu.aboutToShow.connect(self._rebuild_automation_menu_items)
-
-        self.kanban_submenu = QtWidgets.QMenu("Ticket Boards", self.menu)
-        self.kanban_menu_action = self.menu.addMenu(self.kanban_submenu)
-        self.manage_kanban_action = QAction("Manage Ticket Boards", self.kanban_submenu)
-        self.manage_kanban_action.triggered.connect(lambda: self._open_web_url("/tickets/"))
-        self.kanban_submenu.addAction(self.manage_kanban_action)
-        self._kanban_whatsapp_separator = self.kanban_submenu.addSeparator()
-        self.kanban_manage_messages_action = QAction("Manage Messages", self.kanban_submenu)
-        self.kanban_manage_messages_action.triggered.connect(
-            lambda: self._open_web_url("/tickets/?tab=messages")
+        self.development_submenu.removeAction(self.automations_menu_action)
+        self.automations_menu_action = self.development_submenu.insertMenu(
+            self.projects_menu_action, self.automations_submenu
         )
-        self.kanban_submenu.addAction(self.kanban_manage_messages_action)
-        self.kanban_sync_messages_action = QAction("Sync Messages", self.kanban_submenu)
-        self.kanban_sync_messages_action.triggered.connect(self._sync_whatsapp_messages_from_menu)
-        self.kanban_submenu.addAction(self.kanban_sync_messages_action)
-        self._kanban_list_separator = self.kanban_submenu.addSeparator()
-        self._kanban_board_menu_actions: list[QAction] = []
-        self.kanban_submenu.aboutToShow.connect(self._rebuild_kanban_menu_items)
 
-        self.step_runner_action = QAction("Workflows/Loops", self.menu)
-        self.step_runner_action.triggered.connect(lambda: self._open_web_url("/workflows/"))
-        self.menu.addAction(self.step_runner_action)
+        # Compatibility aliases retained for settings and older EULA wiring.
+        self.kanban_submenu = self.incoming_submenu
+        self.kanban_menu_action = self.incoming_menu_action
+        self.manage_kanban_action = self.incoming_menu_action
+        self.kanban_manage_messages_action = self.manage_incoming_action
+        self.kanban_sync_messages_action = self.sync_incoming_whatsapp_action
+        self._kanban_board_menu_actions: list[QAction] = []
+
+        self.manage_workflows_action = QAction("Workflows", self.development_submenu)
+        self.manage_workflows_action.triggered.connect(
+            lambda: self._open_web_url("/development/workflows/")
+        )
+        self.development_submenu.insertAction(
+            self.projects_menu_action, self.manage_workflows_action
+        )
+
+        self.development_submenu.addSeparator()
+        self.pinned_development_submenu = QtWidgets.QMenu(
+            "Pinned Threads", self.development_submenu
+        )
+        self.pinned_development_menu_action = self.development_submenu.addMenu(
+            self.pinned_development_submenu
+        )
+        self.pinned_development_menu_action.setVisible(False)
+        self._pinned_development_thread_actions: list[QAction] = []
+        self.pinned_development_submenu.aboutToShow.connect(
+            self._rebuild_pinned_development_menu_items
+        )
+        self.development_submenu.addSeparator()
+        self.new_development_action = QAction("New Thread", self.development_submenu)
+        self.new_development_action.triggered.connect(lambda: self._open_web_url("/development/new/"))
+        self.development_submenu.addAction(self.new_development_action)
+        self._recent_development_separator = self.development_submenu.addSeparator()
+        self._recent_development_separator.setVisible(False)
+        self._development_thread_actions: list[QAction] = []
+        self.development_submenu.aboutToShow.connect(
+            self._refresh_development_menu_visibility
+        )
+        self.development_submenu.aboutToShow.connect(
+            self._rebuild_development_menu_items
+        )
 
         self.menu.addSeparator()
 
@@ -699,6 +904,12 @@ class MenuTrayMixin:
             self.monk_mode_action.blockSignals(True)
             self.monk_mode_action.setChecked(bool(fresh_settings.get("monk_mode_enabled", False)))
             self.monk_mode_action.blockSignals(False)
+        try:
+            self.sync_incoming_whatsapp_action.setVisible(
+                is_whatsapp_enabled_in_settings()
+            )
+        except Exception as exc:
+            logger.error("Failed to refresh WhatsApp tray visibility: %s", exc)
 
         # Update skin submenu labels from active skin name
         self._update_skin_submenu_items()
@@ -722,6 +933,8 @@ class MenuTrayMixin:
             self.step_runner_action,
             self.projects_menu_action,
             self.manage_projects_action,
+            self.terminals_menu_action,
+            self.manage_terminals_action,
             self.skin_menu_action,
             self.manage_skins_action,
             self.toggle_visibility_skin_action,
@@ -833,7 +1046,6 @@ class MenuTrayMixin:
                 self.snippets_menu_action: "open_snippets",
                 self.step_runner_action: "open_workflows",
                 self.automations_menu_action: "open_automations",
-                self.kanban_menu_action: "open_ticket_board",
                 self.preferences_menu_action: "open_preferences",
             }
             for action, combo_name in submenu_shortcuts.items():
@@ -899,7 +1111,7 @@ class MenuTrayMixin:
             self._recent_chat_actions.append(action)
 
     def _rebuild_project_menu_items(self) -> None:
-        """Refresh all projects with a tick when startup terminals are running."""
+        """Build direct Development board links without nested action menus."""
         if not getattr(self, "projects_submenu", None):
             return
 
@@ -909,32 +1121,103 @@ class MenuTrayMixin:
         self._project_menu_actions.clear()
 
         try:
-            projects = get_projects_for_menu()
+            boards = get_development_boards_for_menu()
         except Exception as e:
-            logger.error("Failed to load projects for menu: %s", e)
-            projects = []
-
-        self._projects_list_separator.setVisible(bool(projects))
+            logger.error("Failed to load Development boards for menu: %s", e)
+            boards = []
 
         eula_accepted = bool((getattr(self, "settings", None) or {}).get("accepted_eula", False))
+        if not boards:
+            empty = QAction("No boards", self.projects_submenu)
+            empty.setEnabled(False)
+            self.projects_submenu.addAction(empty)
+            self._project_menu_actions.append(empty)
+            return
 
-        for project_id, title, _has_startup, terminals_running in projects:
-            item = QAction(title, self.projects_submenu)
-            item.setCheckable(True)
-            item.setChecked(terminals_running)
-            item.setEnabled(eula_accepted)
-            item.triggered.connect(
-                lambda checked=False, pid=project_id: self._handle_project_from_menu(pid)
+        for source, board_key, title, _external_url, _project_id, _has_startup, _running in boards:
+            board_identity = development_board_key(source, board_key)
+            board_action = QAction(title, self.projects_submenu)
+            board_action.setEnabled(eula_accepted)
+            board_action.triggered.connect(
+                lambda checked=False, key=board_identity: self._open_development_board_from_menu(
+                    key, view="kanban"
+                )
             )
-            self.projects_submenu.addAction(item)
-            self._project_menu_actions.append(item)
+            self.projects_submenu.addAction(board_action)
+            self._project_menu_actions.append(board_action)
+
+    def _rebuild_terminal_menu_items(self) -> None:
+        """Build checkable project terminal toggles from current process state."""
+        if not getattr(self, "terminals_submenu", None):
+            return
+
+        for action in self._terminal_menu_actions:
+            self.terminals_submenu.removeAction(action)
+            action.deleteLater()
+        self._terminal_menu_actions.clear()
+
+        try:
+            projects = get_projects_for_menu()
+        except Exception as e:
+            logger.error("Failed to load project terminals for menu: %s", e)
+            projects = []
+
+        eula_accepted = bool((getattr(self, "settings", None) or {}).get("accepted_eula", False))
+        if not projects:
+            empty = QAction("No terminal projects", self.terminals_submenu)
+            empty.setEnabled(False)
+            self.terminals_submenu.addAction(empty)
+            self._terminal_menu_actions.append(empty)
+            return
+
+        for project_id, title, has_startup, running in projects:
+            terminal_action = QAction(title, self.terminals_submenu)
+            terminal_action.setCheckable(True)
+            terminal_action.setChecked(bool(running))
+            terminal_action.setEnabled(eula_accepted and has_startup)
+            terminal_action.setToolTip(
+                "Stop terminals" if running else "Start terminals"
+            )
+            if not has_startup:
+                terminal_action.setToolTip("Add terminal commands in Manage Terminals first")
+            terminal_action.triggered.connect(
+                lambda checked=False, pid=project_id: self._handle_project_from_menu(int(pid))
+            )
+            self.terminals_submenu.addAction(terminal_action)
+            self._terminal_menu_actions.append(terminal_action)
+
+    def _open_development_board_from_menu(
+        self,
+        board_key: str,
+        *,
+        view: str = "",
+        edit: bool = False,
+    ) -> None:
+        if not self._check_eula_accepted():
+            return
+        provider, _, identity = str(board_key).partition(":")
+        url = f"/development/boards/{quote(provider, safe='')}/{quote(identity, safe='')}/"
+        if view:
+            url += f"{quote(view, safe='')}/"
+        if edit:
+            url += "settings/"
+        self._open_web_url(url)
 
     def _handle_project_from_menu(self, project_id: int) -> None:
-        """Start/stop startup terminals or open the project in the web UI."""
+        """Toggle the terminal commands for a board's linked project."""
         if not self._check_eula_accepted():
             return
 
         try:
+            web_result = toggle_project_terminals_via_web(project_id)
+            if web_result is not None:
+                logger.info(
+                    "Oracle menu: project %s terminal API action=%s success=%s",
+                    project_id,
+                    web_result.get("action"),
+                    web_result.get("success"),
+                )
+                return
             if project_startup_terminals_running(project_id):
                 result = stop_project_startup_terminals(project_id, announce=True)
                 logger.info(
@@ -951,19 +1234,17 @@ class MenuTrayMixin:
                     return
                 commands = parse_startup_command_lines(project.startup_instructions or "")
 
-            if commands:
-                result = start_project_startup_terminals(project_id, announce=True)
-                logger.info(
-                    "Oracle menu: project %s startup result action=%s started=%s failed=%s",
-                    project_id,
-                    result.action,
-                    result.started,
-                    result.failed,
-                )
-                self._open_web_url(f"/projects/?project_id={project_id}&tab=startup")
+            if not commands:
+                logger.info("Oracle menu: project %s has no terminal commands", project_id)
                 return
-
-            self._open_web_url(f"/projects/?project_id={project_id}")
+            result = start_project_startup_terminals(project_id, announce=True)
+            logger.info(
+                "Oracle menu: project %s startup result action=%s started=%s failed=%s",
+                project_id,
+                result.action,
+                result.started,
+                result.failed,
+            )
         except Exception as e:
             logger.error(
                 "Oracle menu: failed to handle project %s: %s",
@@ -1346,6 +1627,62 @@ class MenuTrayMixin:
             self.automations_submenu.addAction(item)
             self._automation_menu_actions.append(item)
 
+    def _rebuild_development_menu_items(self) -> None:
+        if not getattr(self, "development_submenu", None):
+            return
+        for action in self._development_thread_actions:
+            self.development_submenu.removeAction(action)
+            action.deleteLater()
+        self._development_thread_actions.clear()
+        try:
+            threads = get_recent_development_threads_for_menu()
+        except Exception as exc:
+            logger.error("Failed to load Development threads for menu: %s", exc)
+            threads = []
+        threads = threads[:5]
+        self._recent_development_separator.setVisible(bool(threads))
+        for chat_id, title in threads:
+            item = QAction(title, self.development_submenu)
+            item.triggered.connect(
+                lambda checked=False, cid=chat_id: self._open_web_url(f"/development/threads/{int(cid)}/")
+            )
+            self.development_submenu.addAction(item)
+            self._development_thread_actions.append(item)
+
+    def _rebuild_pinned_development_menu_items(self) -> None:
+        if not getattr(self, "pinned_development_submenu", None):
+            return
+        for action in self._pinned_development_thread_actions:
+            self.pinned_development_submenu.removeAction(action)
+            action.deleteLater()
+        self._pinned_development_thread_actions.clear()
+        try:
+            threads = get_pinned_development_threads_for_menu()
+        except Exception as exc:
+            logger.error("Failed to load pinned Development threads for menu: %s", exc)
+            threads = []
+        self.pinned_development_menu_action.setVisible(bool(threads))
+        if not threads:
+            return
+        for chat_id, title in threads:
+            item = QAction(title, self.pinned_development_submenu)
+            item.triggered.connect(
+                lambda checked=False, cid=chat_id: self._open_web_url(
+                    f"/development/threads/{int(cid)}/"
+                )
+            )
+            self.pinned_development_submenu.addAction(item)
+            self._pinned_development_thread_actions.append(item)
+
+    def _refresh_development_menu_visibility(self) -> None:
+        """Hide Pinned Threads before the Development submenu is painted."""
+        try:
+            has_pinned_threads = bool(get_pinned_development_threads_for_menu(limit=1))
+        except Exception as exc:
+            logger.error("Failed to refresh pinned Development tray visibility: %s", exc)
+            has_pinned_threads = False
+        self.pinned_development_menu_action.setVisible(has_pinned_threads)
+
     def _parse_automation_workflow_id(self, automation_id: str) -> Optional[int]:
         raw = str(automation_id or "").strip()
         if raw.startswith("wf_"):
@@ -1395,48 +1732,9 @@ class MenuTrayMixin:
             return
 
         whatsapp_enabled = is_whatsapp_enabled_in_settings()
-        self._kanban_whatsapp_separator.setVisible(whatsapp_enabled)
-        self.kanban_manage_messages_action.setVisible(whatsapp_enabled)
+        self.kanban_menu_action.setVisible(True)
+        self.kanban_manage_messages_action.setVisible(True)
         self.kanban_sync_messages_action.setVisible(whatsapp_enabled)
-
-        for action in self._kanban_board_menu_actions:
-            self.kanban_submenu.removeAction(action)
-            action.deleteLater()
-        self._kanban_board_menu_actions.clear()
-
-        try:
-            boards = get_project_linked_boards_for_menu()
-        except Exception as e:
-            logger.error("Failed to load ticket boards for menu: %s", e)
-            boards = []
-
-        self._kanban_list_separator.setVisible(bool(boards))
-        eula_accepted = bool((getattr(self, "settings", None) or {}).get("accepted_eula", False))
-
-        sections = organize_board_menu_sections(boards)
-        for section_index, (section_header, section_boards) in enumerate(sections):
-            if section_header:
-                if section_index > 0:
-                    separator = self.kanban_submenu.addSeparator()
-                    self._kanban_board_menu_actions.append(separator)
-                header = QAction(section_header, self.kanban_submenu)
-                header.setEnabled(False)
-                header_font = header.font()
-                header_font.setBold(True)
-                header.setFont(header_font)
-                self.kanban_submenu.addAction(header)
-                self._kanban_board_menu_actions.append(header)
-
-            for source, board_key, title, external_url in section_boards:
-                item = QAction(title, self.kanban_submenu)
-                item.setEnabled(eula_accepted)
-                item.triggered.connect(
-                    lambda checked=False, src=source, key=board_key, url=external_url: (
-                        self._open_kanban_board_from_menu(src, key, url)
-                    )
-                )
-                self.kanban_submenu.addAction(item)
-                self._kanban_board_menu_actions.append(item)
 
     def _sync_whatsapp_messages_from_menu(self) -> None:
         """Pull WhatsApp relay messages and speak how many new ones arrived."""
@@ -1468,17 +1766,10 @@ class MenuTrayMixin:
         key = (board_key or "").strip()
         if not key:
             return
-        if src in ("jira", "trello"):
-            url = (
-                f"/tickets/?source={quote(src)}"
-                f"&board_id={quote(key, safe='')}"
-                "&view=list"
-            )
-            if (external_url or "").strip():
-                url += f"&board_url={quote(external_url.strip(), safe='')}"
-            self._open_web_url(url)
-            return
-        self._open_web_url(f"/tickets/?board_id={quote(key, safe='')}&view=list")
+        provider = src if src in ("jira", "trello") else "decisions"
+        self._open_web_url(
+            f"/development/boards/{quote(provider, safe='')}/{quote(key, safe='')}/kanban/?view=list"
+        )
 
     def toggle_visibility(self):
         skin_name = self._get_skin_display_name()

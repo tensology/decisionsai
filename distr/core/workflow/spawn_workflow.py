@@ -115,6 +115,8 @@ def spawn_workflow_for_ticket(
                         out["success"] = False
                     else:
                         out["run_id"] = run_result.get("run_id")
+                        out["chat_id"] = run_result.get("chat_id")
+                        out["development_url"] = run_result.get("development_url")
                 return out
 
     # Existing-first selection is mandatory. A missing ticket link is not a
@@ -174,6 +176,8 @@ def spawn_workflow_for_ticket(
                 result["error"] = run_result["error"]
             else:
                 result["run_id"] = run_result.get("run_id")
+                result["chat_id"] = run_result.get("chat_id")
+                result["development_url"] = run_result.get("development_url")
         return result
 
     slug = (preset_slug or "").strip() or infer_preset_slug_for_ticket(
@@ -265,6 +269,8 @@ def spawn_workflow_for_ticket(
             result["error"] = run_result["error"]
         else:
             result["run_id"] = run_result.get("run_id")
+            result["chat_id"] = run_result.get("chat_id")
+            result["development_url"] = run_result.get("development_url")
 
     return result
 
@@ -278,7 +284,7 @@ def _start_ticket_run(
     run_metadata: dict[str, Any] | None,
     dispatch_async: bool,
 ) -> dict[str, Any]:
-    from distr.core.workflow.service import start_workflow_run
+    from distr.core.workflow.work_dispatch import dispatch_work_item
 
     context = ""
     meta = dict(run_metadata or {})
@@ -299,11 +305,21 @@ def _start_ticket_run(
     except Exception:
         logger.debug("spawn_workflow: ticket brief failed", exc_info=True)
 
-    return start_workflow_run(
-        workflow_id,
+    with get_session() as db:
+        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+        title = ticket.title if ticket else f"Ticket #{ticket_id}"
+        project_id = ticket.linked_project_id if ticket else None
+    result = dispatch_work_item(
+        workflow_id=int(workflow_id),
         context=context,
         board_id=board_id,
-        ticket_id=ticket_id,
+        ticket_id=int(ticket_id),
+        title=title or f"Ticket #{ticket_id}",
+        project_id=int(project_id) if project_id else None,
+        source_type="spawn_workflow_for_ticket",
+        source_ref=f"ticket:{int(ticket_id)}",
         run_metadata=meta,
         dispatch_async=dispatch_async,
+        _session_provider=get_session,
     )
+    return result

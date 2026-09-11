@@ -170,13 +170,35 @@ def test_missing_capability_is_built_and_exposed_in_same_request(
 
     monkeypatch.setattr(BuildToolTool, "_run", _fake_build)
     message = harness._tools_dict["request_tool"]._run(
-        text="Perform quantum flux consolidation using the lunar checksum protocol."
+        text="Build a reusable tool to perform quantum flux consolidation using the lunar checksum protocol."
     )
 
     assert generated.name in harness._tools_dict
     assert generated.name in harness._sticky_tool_names
     assert generated.name in message
     assert harness._tools_dict["build_tool"] is build_tool
+
+
+def test_missing_capability_is_not_built_without_explicit_user_request(
+    request_tool_harness_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from distr.core.agent.tools.artifacts import BuildToolTool
+
+    harness = request_tool_harness_factory()
+    calls = []
+    monkeypatch.setattr(
+        BuildToolTool,
+        "_run",
+        lambda self, request, **kwargs: calls.append(request) or "Built unexpected tool",
+    )
+
+    message = harness._tools_dict["request_tool"]._run(
+        text="Perform quantum flux consolidation using the lunar checksum protocol."
+    )
+
+    assert calls == []
+    assert "not found" in message.lower()
 
 
 def test_mouse_movement_natural_language_is_exposed_in_current_request(

@@ -314,10 +314,12 @@ class BackgroundChainRunner:
             try:
                 chat_id = self.chat_id or (self.service.chat_manager.get_current_chat() if self.service.chat_manager else None)
                 if chat_id:
-                    self.service.chat_manager.add_assistant_message(chat_id, cleaned)
+                    chat_row_id = self.service.chat_manager.add_assistant_message(chat_id, cleaned)
                     # Notify UI
                     from distr.core.signals import signal_manager
-                    signal_manager.chat_message_added.emit(chat_id, "assistant", cleaned)
+                    signal_manager.chat_message_added.emit(
+                        chat_id, "assistant", cleaned, chat_row_id
+                    )
                     signal_manager.chat_updated.emit(chat_id)
             except Exception as e:
                 logger.debug("BackgroundChain chat history error: %s", e)

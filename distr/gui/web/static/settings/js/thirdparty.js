@@ -190,6 +190,12 @@ const CONNECT_PROVIDERS = [
         iconPath: '/assets/img/providers/connect/whatsapp.svg'
     },
     {
+        id: 'mobile',
+        name: 'Mobile App',
+        blurb: 'Scan with the DecisionsAI iPhone app to keep a remote link. The link lasts until the phone is idle for 14 days.',
+        iconPath: '/assets/img/providers/connect/mobile.svg'
+    },
+    {
         id: 'jira',
         name: 'Jira',
         blurb: 'Manage Jira accounts for ticket sync, board routing, and project-linked workflow actions.',
@@ -244,6 +250,8 @@ let thirdPartyTrelloEditingName = null;
 let thirdPartyTelegramSession = null;
 let thirdPartyTelegramPollInterval = null;
 let thirdPartyWhatsAppPollInterval = null;
+let thirdPartyMobileSession = null;
+let thirdPartyMobilePollInterval = null;
 
 function getThirdPartyProvider(providerId) {
     return PROVIDERS.find(function (provider) { return provider.id === providerId; }) || null;
@@ -344,6 +352,7 @@ function thirdPartyConnectIsConnected(providerId) {
     if (providerId === 'google') return !!status.google_connected;
     if (providerId === 'telegram') return !!status.telegram_connected;
     if (providerId === 'whatsapp') return !!status.whatsapp_connected;
+    if (providerId === 'mobile') return !!status.mobile_connected;
     if (providerId === 'jira') return !!status.jira_has_valid;
     if (providerId === 'trello') return !!status.trello_has_valid;
     if (providerId === 'discord') return !!status.discord_bot_configured;
@@ -354,10 +363,12 @@ function thirdPartyConnectIsConnected(providerId) {
 }
 
 function thirdPartyConnectStatusText(providerId) {
+    const status = thirdPartyConnectStatusCache || {};
     const labels = {
         google: 'Google',
         telegram: 'Telegram',
         whatsapp: 'WhatsApp',
+        mobile: 'Mobile App',
         jira: 'Jira',
         trello: 'Trello',
         discord: 'Discord',
@@ -366,6 +377,7 @@ function thirdPartyConnectStatusText(providerId) {
         monday: 'Monday'
     };
     const label = labels[providerId] || 'Provider';
+    if (providerId === 'google' && status.google_error) return 'Google needs to be reconnected.';
     return thirdPartyConnectIsConnected(providerId)
         ? label + ' is connected.'
         : label + ' is not connected.';
@@ -417,6 +429,13 @@ function resetThirdPartyWhatsAppPolling() {
     if (thirdPartyWhatsAppPollInterval) {
         clearInterval(thirdPartyWhatsAppPollInterval);
         thirdPartyWhatsAppPollInterval = null;
+    }
+}
+
+function resetThirdPartyMobilePolling() {
+    if (thirdPartyMobilePollInterval) {
+        clearInterval(thirdPartyMobilePollInterval);
+        thirdPartyMobilePollInterval = null;
     }
 }
 
@@ -757,11 +776,13 @@ function applyThirdPartyConnectDeepLink() {
 function thirdPartyConnectDetailMarkup(provider) {
     if (!provider) return '';
     if (provider.id === 'google') {
+        var googleError = String((thirdPartyConnectStatusCache || {}).google_error || '').trim();
         return '' +
             '<div class="space-y-6 px-1">' +
                 thirdPartyConnectInfoHtml('Use Google OAuth to connect your Google Workspace account for Gmail, Calendar, Drive, Docs, and Sheets access.') +
                 '<div class="rounded-xl border border-[#565869] bg-[#0d1117] p-5 space-y-4">' +
                     '<p class="text-sm ' + (thirdPartyConnectIsConnected('google') ? 'text-green-300' : 'text-gray-400') + '">Status: ' + escapeThirdPartyHtml(thirdPartyConnectStatusText('google')) + '</p>' +
+                    (googleError ? '<p class="text-xs text-amber-300">' + escapeThirdPartyHtml(googleError) + '</p>' : '') +
                     '<div class="flex flex-wrap gap-3">' +
                         '<button type="button" id="thirdparty_connect_google_action" class="' + thirdPartyConnectActionButtonClasses() + '">' + (thirdPartyConnectIsConnected('google') ? 'Reconnect' : 'Connect') + '</button>' +
                         (thirdPartyConnectIsConnected('google') ? '<button type="button" id="thirdparty_connect_google_disconnect" class="' + thirdPartyConnectActionButtonClasses('danger') + '">Disconnect</button>' : '') +
@@ -795,6 +816,20 @@ function thirdPartyConnectDetailMarkup(provider) {
                     '<div class="flex flex-wrap justify-center gap-3">' +
                         '<button type="button" id="thirdparty_whatsapp_action" class="' + thirdPartyConnectActionButtonClasses() + '">Refresh</button>' +
                         '<button type="button" id="thirdparty_whatsapp_disconnect" class="' + thirdPartyConnectActionButtonClasses('danger') + (thirdPartyConnectIsConnected('whatsapp') ? '' : ' hidden') + '">Disconnect</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+    }
+    if (provider.id === 'mobile') {
+        return '' +
+            '<div class="space-y-6 px-1">' +
+                thirdPartyConnectInfoHtml('Open the DecisionsAI iPhone app and scan this QR. The link stays until the phone is idle for 14 days.') +
+                '<div class="rounded-xl border border-[#565869] bg-[#0d1117] p-5 space-y-4">' +
+                    '<p id="thirdparty_mobile_status" class="text-sm text-gray-400 text-center">' + escapeThirdPartyHtml(thirdPartyConnectIsConnected('mobile') ? 'Mobile App is connected.' : 'Mobile App is not connected yet.') + '</p>' +
+                    '<div id="thirdparty_mobile_qr_container" class="flex justify-center bg-white rounded-lg p-4 min-h-[220px] items-center"><p class="text-[#565869]">Choose Connect to request a QR code.</p></div>' +
+                    '<div class="flex flex-wrap justify-center gap-3">' +
+                        '<button type="button" id="thirdparty_mobile_action" class="' + thirdPartyConnectActionButtonClasses() + '">' + (thirdPartyConnectIsConnected('mobile') ? 'Refresh QR' : 'Connect') + '</button>' +
+                        (thirdPartyConnectIsConnected('mobile') ? '<button type="button" id="thirdparty_mobile_disconnect" class="' + thirdPartyConnectActionButtonClasses('danger') + '">Disconnect</button>' : '') +
                     '</div>' +
                 '</div>' +
             '</div>';
@@ -891,6 +926,13 @@ function bindThirdPartyConnectDetail(provider) {
         const disconnectBtn = document.getElementById('thirdparty_telegram_disconnect');
         if (actionBtn) actionBtn.addEventListener('click', function () { startThirdPartyTelegramConnect(); });
         if (disconnectBtn) disconnectBtn.addEventListener('click', function () { window.disconnectTelegramDirect(); });
+        return;
+    }
+    if (provider.id === 'mobile') {
+        const actionBtn = document.getElementById('thirdparty_mobile_action');
+        const disconnectBtn = document.getElementById('thirdparty_mobile_disconnect');
+        if (actionBtn) actionBtn.addEventListener('click', function () { startThirdPartyMobileConnect(); });
+        if (disconnectBtn) disconnectBtn.addEventListener('click', disconnectThirdPartyMobile);
         return;
     }
     if (provider.id === 'whatsapp') {
@@ -1022,6 +1064,93 @@ function startThirdPartyTelegramConnect() {
             statusEl.className = 'text-sm text-red-400 text-center';
         }
     });
+}
+
+function startThirdPartyMobileConnect() {
+    const qrContainer = document.getElementById('thirdparty_mobile_qr_container');
+    const statusEl = document.getElementById('thirdparty_mobile_status');
+    if (qrContainer) qrContainer.innerHTML = '<p class="text-[#565869]">Loading QR…</p>';
+    if (statusEl) {
+        statusEl.textContent = 'Requesting QR code…';
+        statusEl.className = 'text-sm text-[#9ca3af] text-center';
+    }
+    resetThirdPartyMobilePolling();
+    fetch(settingsBase + '/api/advanced/mobile/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+    }).then(function (response) { return response.json(); }).then(function (data) {
+        if (data.error) {
+            if (statusEl) {
+                statusEl.textContent = data.error;
+                statusEl.className = 'text-sm text-red-400 text-center';
+            }
+            return;
+        }
+        thirdPartyMobileSession = { token: data.token, appUserId: data.app_user_id };
+        if (data.qr_code && qrContainer) {
+            const img = document.createElement('img');
+            img.alt = 'Mobile App QR';
+            img.className = 'max-w-[220px] max-h-[220px]';
+            img.src = data.qr_code.indexOf('data:image') === 0 ? data.qr_code : ('data:image/png;base64,' + data.qr_code);
+            qrContainer.innerHTML = '';
+            qrContainer.appendChild(img);
+        }
+        if (statusEl) {
+            statusEl.textContent = 'Scan with the DecisionsAI iPhone app.';
+            statusEl.className = 'text-sm text-green-400 text-center';
+        }
+        thirdPartyMobilePollInterval = setInterval(function () {
+            if (!thirdPartyMobileSession || !thirdPartyMobileSession.token) return;
+            fetch(settingsBase + '/api/advanced/mobile/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: thirdPartyMobileSession.token })
+            }).then(function (response) { return response.json(); }).then(function (status) {
+                if (status.status !== 'connected') return;
+                resetThirdPartyMobilePolling();
+                const conn = status.connection || {};
+                return fetch(settingsBase + '/api/advanced/mobile/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        app_user_id: thirdPartyMobileSession.appUserId,
+                        device_name: conn.device_name || ''
+                    })
+                }).then(function () {
+                    if (statusEl) {
+                        statusEl.textContent = 'Mobile App connected.';
+                        statusEl.className = 'text-sm text-green-400 text-center';
+                    }
+                    if (qrContainer) qrContainer.innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
+                    loadThirdPartyConnectStatus();
+                    if (typeof window.showNotification === 'function') window.showNotification('Mobile App connected', 'success');
+                });
+            }).catch(function () {});
+        }, 2000);
+    }).catch(function () {
+        if (statusEl) {
+            statusEl.textContent = 'Failed to request Mobile App QR code.';
+            statusEl.className = 'text-sm text-red-400 text-center';
+        }
+    });
+}
+
+function disconnectThirdPartyMobile() {
+    resetThirdPartyMobilePolling();
+    fetch(settingsBase + '/api/advanced/mobile/disconnect', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (data.success) {
+                if (typeof window.showNotification === 'function') window.showNotification('Mobile App disconnected', 'success');
+                loadThirdPartyConnectStatus();
+            } else if (typeof window.showNotification === 'function') {
+                window.showNotification(data.error || 'Disconnect failed', 'error');
+            }
+        })
+        .catch(function () {
+            if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+        });
 }
 
 function loadThirdPartyWhatsAppInline() {

@@ -24,6 +24,13 @@ class Automation(Base):
     instruction = Column(Text, default="")
     action_config = Column(Text, default="{}")  # JSON
 
+    # Canonical ownership. JSON mirrors remain for backwards compatibility,
+    # but these columns are the source of truth for board placement and runs.
+    board_id = Column(Integer, nullable=True, index=True)
+    project_id = Column(Integer, nullable=True, index=True)
+    thread_chat_id = Column(Integer, nullable=True, index=True)
+    linked_workflow_id = Column(Integer, nullable=True, index=True)
+
     schedule_enabled = Column(Boolean, default=False)
     schedule_preset = Column(String, nullable=True)
     schedule_time = Column(String, nullable=True)

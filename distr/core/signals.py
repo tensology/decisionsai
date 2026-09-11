@@ -35,6 +35,7 @@ class SignalManager(QObject):
     enable_hands_free = pyqtSignal()
     disable_hands_free = pyqtSignal()
     hands_free_mode_changed = pyqtSignal(bool)
+    hands_free_command_requested = pyqtSignal(bool, bool)
 
     # Push-to-talk signals (GUI -> Agent requests)
     push_to_talk_start = pyqtSignal()
@@ -90,7 +91,7 @@ class SignalManager(QObject):
     chat_stream_token = pyqtSignal(str)
     chat_stream_finished = pyqtSignal(int)
     chat_stream_error = pyqtSignal(str)
-    chat_message_added = pyqtSignal(int, str, str)  # chat_id, role, content
+    chat_message_added = pyqtSignal(int, str, str, object)  # chat_id, role, content, persisted row id
     typing_indicator_changed = pyqtSignal(bool)
     # chat_id, status_text, done, clear_live_preview, discard_live_preview
     transcription_progress = pyqtSignal(int, str, bool, bool, bool)

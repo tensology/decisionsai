@@ -140,9 +140,10 @@ class TestDefaultListExcludesAudit:
 
         session = factory()
         visible = AutoWorkflow(name="Real workflow", status="active", workflow_type="manual")
+        thread_plan = AutoWorkflow(name="One thread prompt", status="active", workflow_type="manual", chat_id=91)
         project_cli = AutoWorkflow(name="[Project: App] run tests", status="completed", workflow_type="project_cli")
         pi_agent = AutoWorkflow(name="[Project: App] fix ticket", status="completed", workflow_type="pi_agent")
-        session.add_all([visible, project_cli, pi_agent])
+        session.add_all([visible, thread_plan, project_cli, pi_agent])
         session.commit()
         visible_id = visible.id
         project_cli_id = project_cli.id

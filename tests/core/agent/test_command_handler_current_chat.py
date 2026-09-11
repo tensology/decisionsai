@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from distr.core.agent import command_handler
 
 
@@ -50,6 +52,70 @@ def test_duplicate_ptt_stop_does_not_authorize_a_transcript(monkeypatch):
     command_handler._cmd_push_to_talk_stop(session, {})
 
     llm.set_ptt_active.assert_called_once_with(False, expect_transcript=False)
+
+
+def test_short_ptt_release_waits_for_audio_warmup_before_flushing(monkeypatch):
+    scheduled = []
+    loop = MagicMock()
+    loop.is_running.return_value = True
+    loop.call_later.side_effect = lambda delay, callback, *args: scheduled.append((delay, callback, args))
+    clock = iter((100.0, 100.1))
+    monkeypatch.setattr(command_handler.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(command_handler, "_schedule_audio_input_idle_pause", MagicMock())
+
+    stt = MagicMock()
+    llm = MagicMock()
+    session = SimpleNamespace(
+        is_dictating=False,
+        ptt_active=False,
+        stt_service=stt,
+        llm_service=llm,
+        tts_service=None,
+        transport=None,
+        runner=SimpleNamespace(_loop=loop),
+        _main_loop=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_push_to_talk_start(session, {})
+    command_handler._cmd_push_to_talk_stop(session, {})
+
+    assert session.ptt_active is True
+    assert stt.set_ptt_active.call_count == 1
+    release = scheduled[-1]
+    assert release[0] == pytest.approx(0.15)
+    release[1](*release[2])
+    assert session.ptt_active is False
+    assert stt.set_ptt_active.call_args_list[-1].args == (False,)
+    assert stt.set_ptt_active.call_args_list[-1].kwargs == {}
+    assert llm.set_ptt_active.call_args_list[-1].kwargs == {"expect_transcript": True}
+
+
+def test_hands_free_mode_does_not_use_ptt_release_debounce(monkeypatch):
+    monkeypatch.setattr(command_handler, "_schedule_audio_input_idle_pause", MagicMock())
+    monkeypatch.setattr(command_handler.time, "monotonic", lambda: 100.1)
+    loop = MagicMock()
+    loop.is_running.return_value = True
+    loop.call_later = MagicMock()
+    stt = MagicMock()
+    session = SimpleNamespace(
+        is_dictating=False,
+        is_hands_free=True,
+        ptt_active=True,
+        _ptt_started_at=100.0,
+        stt_service=stt,
+        llm_service=None,
+        tts_service=None,
+        transport=None,
+        runner=SimpleNamespace(_loop=loop),
+        _main_loop=None,
+        logger=MagicMock(),
+    )
+
+    command_handler._cmd_push_to_talk_stop(session, {})
+
+    assert session.ptt_active is False
+    loop.call_later.assert_not_called()
 
 
 def test_agent_ptt_authorization_does_not_depend_on_stale_dictation_state(monkeypatch):

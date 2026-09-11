@@ -1,0 +1,14 @@
+<section class="development-workspace workflow-workspace hidden" id="workflow-workspace" aria-label="Workflows">
+                <div class="workflow-home" id="workflow-home">
+                    <form class="development-prompt workflow-create-prompt" id="workflow-prompt-form">
+                        <input id="workflow-prompt-input" type="text" autocomplete="off" placeholder="Describe the workflow, its checks, and what should happen when a step fails" aria-label="Describe a workflow">
+                        <button type="submit" id="workflow-prompt-submit">Create</button>
+                    </form>
+                    <div class="development-toolbar workflow-toolbar">
+                        <label class="development-search"><span aria-hidden="true">⌕</span><input id="workflow-search-input" type="search" placeholder="Search workflows and steps" aria-label="Search workflows"></label>
+                        <button type="button" class="development-create-focus" id="workflow-create-focus">+ New workflow</button>
+                    </div>
+                    <div class="workflow-project-groups" id="workflow-list" aria-live="polite"></div>
+                </div>
+                <div class="workflow-editor hidden" id="workflow-detail" aria-label="Workflow editor"></div>
+            </section>

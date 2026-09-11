@@ -1,5 +1,6 @@
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from urllib.parse import parse_qs, urlparse
 
 from distr.gui.web.routes.settings import advanced
 
@@ -79,6 +80,71 @@ def test_google_disconnect_removes_only_google_tokens_and_preserves_oauth_config
     assert response.json() == {"success": True}
     assert saved["connected_accounts"] == [accounts[1]]
     assert oauth_config.is_file()
+
+
+def test_google_connection_status_requires_healthy_refresh(monkeypatch):
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {"connected_accounts": [{"provider": "google", "access_token": "expired"}]},
+    )
+    monkeypatch.setattr("distr.gui.web.oauth.load_google_oauth_config", lambda: {"web": {"client_id": "client"}})
+    monkeypatch.setattr(
+        "distr.core.agent.services.integrations.google_workspace.GoogleWorkspaceConnector.connection_health",
+        lambda self: (False, "Google authentication expired. Reconnect the account."),
+    )
+
+    router = APIRouter()
+    advanced.register_routes(router, None)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+
+    payload = TestClient(app).get("/api/advanced/connection-status").json()
+
+    assert payload["google_connected"] is False
+    assert payload["google_error"] == "Google authentication expired. Reconnect the account."
+
+
+def test_google_oauth_returns_to_launching_page_and_preserves_refresh_token(monkeypatch):
+    accounts = [{"provider": "google", "access_token": "old-access", "refresh_token": "keep-refresh"}]
+    saved = {}
+    monkeypatch.setattr(
+        "distr.gui.web.oauth.load_google_oauth_config",
+        lambda: {"web": {"client_id": "client-id", "client_secret": "client-secret"}},
+    )
+    monkeypatch.setattr("distr.core.settings.load_settings_from_db", lambda: {"connected_accounts": accounts})
+    monkeypatch.setattr("distr.core.settings.save_settings_to_db", lambda payload: saved.update(payload))
+
+    class TokenResponse:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"access_token": "new-access", "expires_in": 3600, "token_type": "Bearer"}
+
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: TokenResponse())
+    router = APIRouter()
+    advanced.register_routes(router, None)
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    client = TestClient(app)
+
+    oauth = client.get(
+        "/api/advanced/google/oauth-url",
+        params={"return_to": "/development/incoming/"},
+    ).json()
+    state = parse_qs(urlparse(oauth["url"]).query)["state"][0]
+    callback = client.get(
+        "/api/advanced/google/callback",
+        params={"code": "google-code", "state": state},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 302
+    assert callback.headers["location"] == "/development/incoming/?google=connected"
+    assert saved["connected_accounts"][0]["access_token"] == "new-access"
+    assert saved["connected_accounts"][0]["refresh_token"] == "keep-refresh"
 
 
 def test_whatsapp_connect_starts_pairing_through_relay(monkeypatch):

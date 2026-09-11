@@ -287,6 +287,32 @@ def _workflow_run_cancelled(run_id: Optional[int]) -> bool:
         return False
 
 
+def _computer_use_cancelled(
+    *,
+    run_id: Optional[int],
+    chat_id: Optional[int],
+    turn_id: Optional[int],
+) -> bool:
+    """Return whether the owning workflow run or chat turn was cancelled.
+
+    Direct Chat computer-use calls do not have a workflow run id.  They must
+    therefore retain the chat turn id that authorized the desktop operation;
+    once that turn is no longer active, no further sidecar call is allowed.
+    """
+    if _workflow_run_cancelled(run_id):
+        return True
+    if not chat_id or not turn_id:
+        return False
+    try:
+        from distr.core.chat_turns import latest_active_turn_id
+
+        active_turn_id = latest_active_turn_id(int(chat_id))
+        return active_turn_id != int(turn_id)
+    except Exception:
+        logger.debug("Could not refresh computer-use turn cancellation state", exc_info=True)
+        return False
+
+
 def _paid_fallback_requires_approval(
     route: dict[str, Any], fallback: dict[str, Any], config: dict[str, Any]
 ) -> bool:
@@ -2002,6 +2028,12 @@ class StepExecutorMixin:
                         # already stopped the run.
                         if _workflow_run_cancelled(run_id):
                             return handle.result
+                        # A pinned local route must terminate as a local failure.
+                        # Do not turn a report/finalization problem into a hosted
+                        # recommendation after the worker has already completed
+                        # its project work.
+                        if config_local.get("allow_provider_failover", True) is False:
+                            return handle.result
                         free_retry_candidates = route.get("free_model_retry_candidates")
                         free_retry_candidates = (
                             list(free_retry_candidates)
@@ -2014,7 +2046,15 @@ class StepExecutorMixin:
                         # directly to paid Codex. Hosted selection is ranked by
                         # capability/capacity because it is not constrained by
                         # this machine's RAM.
-                        if not free_retry_candidates:
+                        # A locked local workflow must remain local after a
+                        # worker failure. Do not discover hosted alternatives
+                        # here when failover is explicitly disabled: doing so
+                        # produces a misleading OpenRouter recommendation and
+                        # leaks a cloud route into the audit trail.
+                        if (
+                            not free_retry_candidates
+                            and config_local.get("allow_provider_failover", True) is not False
+                        ):
                             try:
                                 from distr.core.project_cli_backends.policy_manager import (
                                     _apply_recent_model_health,
@@ -2712,6 +2752,8 @@ class StepExecutorMixin:
         timeout_seconds = step_data.get("timeout_seconds", 300)
         prompt = self._build_agent_prompt(step_data, run_id)
         run_ctx = self._get_run_context(step_id, run_id)
+        step_config = step_data.get("config") if isinstance(step_data.get("config"), dict) else {}
+        fresh_agent_context = str(step_config.get("agent_context_mode") or "").strip().lower() == "fresh"
 
         # Detect computer-use intent from instruction or explicit flag
         raw_instruction = (step_data.get("instruction") or "").strip()
@@ -2721,7 +2763,8 @@ class StepExecutorMixin:
         )
 
         if (
-            run_ctx is not None
+            not fresh_agent_context
+            and run_ctx is not None
             and run_ctx.workflow_agent is not None
             and run_ctx.event_loop is not None
         ):
@@ -2798,9 +2841,10 @@ class StepExecutorMixin:
         # load_tools + optional cache warmup); prefer start_workflow_run() for async
         # dispatch and a persistent agent loop when available.
         logger.info(
-            "_run_agent: no RunContext for step %s (run_id=%s) — using threaded WorkflowAgent fallback.",
+            "_run_agent: using fresh threaded WorkflowAgent for step %s (run_id=%s, explicitly_fresh=%s).",
             step_id,
             run_id,
+            fresh_agent_context,
         )
         # Must run in a background thread since we may be inside an existing
         # event loop (e.g. FastAPI uvicorn loop). We can't call
@@ -3400,6 +3444,14 @@ class StepExecutorMixin:
             except Exception:
                 step_config = {}
         guardrail_text = str(step_config.get("guardrail") or "").strip()
+        from distr.core.work_intake.execution_policy import infer_step_role
+        from distr.core.workflow.execution_mode import workflow_step_skills
+
+        inferred_step_role = infer_step_role({**step_data, "config": step_config})
+        active_step_skills = workflow_step_skills(
+            inferred_step_role,
+            list(step_config.get("skills") or []),
+        )
 
         if bool(step_config.get("disable_tools")):
             tool_free_guardrail = (
@@ -3522,6 +3574,7 @@ class StepExecutorMixin:
             else (workflow_description or "Complete the requested workflow.")
         )
         constraints = [
+            "Enabled workflow skills: " + ", ".join(active_step_skills) + ". Read and apply them when relevant. Use decisions-headroom for bulky supporting context, never for instructions or acceptance criteria.",
             context_rules,
             loop_context_summary,
             "Stay on the linked ticket and current workflow step. Use project-local rules before generic assumptions. "
@@ -3819,11 +3872,25 @@ class StepExecutorMixin:
 
         iteration_log: List[Dict[str, Any]] = []
         consecutive_stuck = 0
+        repeated_action_result_count = 0
+        previous_action_result_fingerprint = ""
         chat_id = config.get("_chat_id")
+        turn_id = config.get("_turn_id")
+        execution_id = f"run:{run_id}" if run_id is not None else f"chat:{chat_id}/turn:{turn_id}"
 
-        logger.info("ComputerUse[%s]: starting — goal=%r max_iter=%d", run_id, goal[:80], max_iter)
+        logger.info("ComputerUse[%s]: starting — goal=%r max_iter=%d", execution_id, goal[:80], max_iter)
 
         for i in range(max_iter):
+            if _computer_use_cancelled(run_id=run_id, chat_id=chat_id, turn_id=turn_id):
+                return {
+                    "output": self._cu_format_summary(
+                        goal,
+                        iteration_log,
+                        "Cancelled before the next computer-use action.",
+                    ),
+                    "passed": False,
+                }
+
             # ── 1. Capture + resize screenshot ──────────────────────────────
             screenshot_b64 = self._cu_capture_screenshot(resize_w)
             if not screenshot_b64:
@@ -3834,7 +3901,17 @@ class StepExecutorMixin:
 
             action_type = action.get("type", "unknown")
             logger.info("ComputerUse[%s]: iter %d action=%s desc=%r",
-                        run_id, i + 1, action_type, action.get("description", "")[:60])
+                        execution_id, i + 1, action_type, action.get("description", "")[:60])
+
+            if _computer_use_cancelled(run_id=run_id, chat_id=chat_id, turn_id=turn_id):
+                return {
+                    "output": self._cu_format_summary(
+                        goal,
+                        iteration_log,
+                        "Cancelled before executing the next computer-use action.",
+                    ),
+                    "passed": False,
+                }
 
             action_event_id = None
             if chat_id:
@@ -3910,6 +3987,43 @@ class StepExecutorMixin:
                     summary=exec_result[:1200],
                     detail=exec_result,
                 )
+
+            cosmetic_action_fields = {
+                "description",
+                "reason",
+                "summary",
+                "thought",
+                "rationale",
+                "explanation",
+            }
+            executable_action = {
+                key: value
+                for key, value in action.items()
+                if key not in cosmetic_action_fields
+            }
+            action_result_fingerprint = json.dumps(
+                {"action": executable_action, "result": exec_result},
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            if action_result_fingerprint == previous_action_result_fingerprint:
+                repeated_action_result_count += 1
+            else:
+                previous_action_result_fingerprint = action_result_fingerprint
+                repeated_action_result_count = 1
+            if repeated_action_result_count >= stuck_threshold:
+                return {
+                    "output": self._cu_format_summary(
+                        goal,
+                        iteration_log,
+                        (
+                            "Stopped after the same action and result repeated "
+                            f"{repeated_action_result_count} times without progress."
+                        ),
+                    ),
+                    "passed": False,
+                }
 
             import time as _time
             _time.sleep(0.4)  # Let the UI settle before next screenshot

@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 import json
 from typing import Any
 
+from distr.core.workflow.execution_mode import workflow_step_skills
+
 
 PLAN_VERSION = 1
 
@@ -314,7 +316,7 @@ def build_run_coordination_plan(
             "role": role,
             "depends_on": [prior_step_id] if prior_step_id else [],
             "tools": _list(config.get("tools")),
-            "skills": _list(config.get("skills")),
+            "skills": workflow_step_skills(role, _list(config.get("skills"))),
             "required_context": _list(config.get("required_context")),
             "expected_outputs": _list(config.get("expected_outputs")),
             "required_evidence_capabilities": (

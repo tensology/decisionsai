@@ -249,6 +249,43 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 )
                 return (False, msg, False)
 
+            try:
+                from distr.core.agent.tool_intents import forced_tool_names_for_text
+
+                forced_names = forced_tool_names_for_text(
+                    f"{latest_user_text} {qnorm}".strip()
+                )
+            except Exception:
+                forced_names = []
+            for forced_name in forced_names:
+                if forced_name in {"request_tool", "build_tool"}:
+                    continue
+                forced_tool = self._tools_dict.get(forced_name) or _tool_cache.get(forced_name)
+                if forced_tool is None:
+                    continue
+                injected = forced_tool.name not in self._tools_dict
+                if injected:
+                    self._tools.append(forced_tool)
+                    self._tools_dict[forced_tool.name] = forced_tool
+                sticky_names = set(getattr(self, "_sticky_tool_names", set()))
+                newly_exposed = forced_tool.name not in sticky_names
+                sticky_names.add(forced_tool.name)
+                self._sticky_tool_names = sticky_names
+                exposure = "is now exposed" if newly_exposed else "is already exposed"
+                msg = (
+                    f"The existing '{forced_tool.name}' tool {exposure} for this request. "
+                    "Use it directly and do not build a replacement capability."
+                )
+                log_request_tool_event(
+                    query=qnorm,
+                    success=True,
+                    injected_tool_name=forced_tool.name,
+                    model_name=_mn,
+                    injection_performed=newly_exposed,
+                    message=msg,
+                )
+                return (True, msg, newly_exposed)
+
             # Deterministic provider-aware mail routing. Explicit Tensology or
             # Mailshot requests must never be swallowed by the legacy Gmail
             # catch-all merely because they also contain "mail" or "inbox".
@@ -626,7 +663,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # it to the current request, and let the next tool round call it.
             # Existing tools always win because this path runs only after the
             # native fuzzy matcher fails its confidence threshold.
-            if build_tool is not None and len(qnorm) >= 8:
+            build_request_text = latest_user_text or qnorm
+            try:
+                from distr.core.agent.tool_intents import forced_tool_names_for_text
+
+                build_authorized = "build_tool" in forced_tool_names_for_text(
+                    build_request_text
+                )
+            except Exception:
+                build_authorized = False
+            if build_tool is not None and len(qnorm) >= 8 and build_authorized:
                 build_result = str(build_tool._run(request=qnorm))
                 if not build_result.lower().startswith("error"):
                     injected_name = str(getattr(self, "_last_built_tool_name", "") or "build_tool")
@@ -694,7 +740,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             active_workflow_names = set(
                 getattr(self, "_active_workflow_tool_names", set())
             )
-            if len(forced_names) >= 2:
+            if forced_names:
                 active_workflow_names = set(forced_names)
                 self._active_workflow_tool_names = active_workflow_names
             elif active_workflow_names and is_workflow_follow_up(last_user_message):
@@ -903,7 +949,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         """
         if skip:
             if getattr(self, "chat_manager", None):
-                return self.chat_manager.get_current_chat()
+                current_chat_id = self.chat_manager.get_current_chat()
+                if current_chat_id:
+                    from distr.core.chat_manager import bind_active_chat_turn
+                    from distr.core.chat_turns import resolve_active_chat_turn_row_id
+
+                    bind_active_chat_turn(
+                        int(current_chat_id),
+                        resolve_active_chat_turn_row_id(int(current_chat_id)),
+                    )
+                return current_chat_id
             return None
         if not getattr(self, "chat_manager", None) or not (text or "").strip():
             return None
@@ -916,11 +971,16 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if getattr(self, "_is_telegram_request", False)
             else None
         )
-        self.chat_manager.add_user_message(
+        chat_row_id = self.chat_manager.add_user_message(
             current_chat_id, text.strip(), source_platform=src
         )
+        from distr.core.chat_manager import bind_active_chat_turn
+
+        bind_active_chat_turn(int(current_chat_id), chat_row_id)
         try:
-            signal_manager.chat_message_added.emit(int(current_chat_id), "user", text.strip())
+            signal_manager.chat_message_added.emit(
+                int(current_chat_id), "user", text.strip(), chat_row_id
+            )
             # Drop the web “live speech-to-text” preview row; the real user bubble follows via message_added.
             self._notify_transcription_progress(int(current_chat_id), "", True, True)
         except Exception:
@@ -1167,17 +1227,49 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     #  Interruption cleanup                                               #
     # ------------------------------------------------------------------ #
 
+    def _mark_chat_stream_started(self, chat_id) -> None:
+        """Mark one logical chat stream active for idempotent termination."""
+        self._active_chat_stream_id = int(chat_id) if chat_id else None
+        self._chat_stream_terminal_emitted = False
+
+    def _emit_chat_stream_finished(self, response_text="", *, status="completed") -> bool:
+        """Emit at most one terminal event for the current logical stream."""
+        chat_id = getattr(self, "_active_chat_stream_id", None)
+        if not chat_id or getattr(self, "_chat_stream_terminal_emitted", False):
+            return False
+        self._chat_stream_terminal_emitted = True
+        self._active_chat_stream_id = None
+        payload = {"chat_id": chat_id, "response_text": response_text or ""}
+        if status != "completed":
+            payload["status"] = status
+        if self.event_queue:
+            self.event_queue.put(("chat_stream_finished", payload), block=False)
+        else:
+            signal_manager.chat_stream_finished.emit(chat_id)
+        return True
+
     def _emit_interruption_cleanup(self):
-        """Emit signals to restore chat window UI after interruption."""
+        """Restore the UI once when an active generation is interrupted."""
         try:
             current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             if not current_chat_id:
                 return
+            generation_task = getattr(self, "_generation_task", None)
+            generation_active = bool(generation_task and not generation_task.done())
+            stream_active = bool(getattr(self, "_active_chat_stream_id", None))
+            if not generation_active and not stream_active:
+                return
+            interruption_key = generation_task or getattr(self, "_active_chat_stream_id", None)
+            if getattr(self, "_interruption_cleanup_key", None) is interruption_key:
+                return
+            if not stream_active:
+                self._mark_chat_stream_started(current_chat_id)
+            if not self._emit_chat_stream_finished("", status="cancelled"):
+                return
+            self._interruption_cleanup_key = interruption_key
             if self.event_queue:
-                self.event_queue.put(('chat_stream_finished', {'chat_id': current_chat_id, 'response_text': ''}), block=False)
                 self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             else:
-                signal_manager.chat_stream_finished.emit(current_chat_id)
                 signal_manager.typing_indicator_changed.emit(False)
         except Exception as e:
             logger.warning("Error in _emit_interruption_cleanup: %s", e)
@@ -1604,31 +1696,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     # ------------------------------------------------------------------ #
 
     def _apply_context_window(self) -> None:
-        """Truncate _messages to system prompt + last _MAX_CONTEXT_TURNS * 2.
+        """Keep canonical history intact; providers select a request copy.
 
-        Keeps the system message intact. For all non-system messages, only the
-        most recent `_MAX_CONTEXT_TURNS` conversational turns (user + assistant
-        pairs) are retained. Older turns are dropped to prevent context-window
-        overruns and degraded LLM coherence in long sessions.
-
-        Run after any mutation to self._messages that adds non-system content.
+        Context limits belong at the provider request boundary, where model
+        capacity and complete tool exchanges are known. Destructively slicing
+        this list caused repeated requests to progressively forget history.
         """
-        if not self._messages:
-            return
-        # Separate system message(s) from conversation
-        system_msgs = [m for m in self._messages if m.get("role") == "system"]
-        conv_msgs = [m for m in self._messages if m.get("role") != "system"]
-        max_conv = self._MAX_CONTEXT_TURNS * 2  # user + assistant per turn
-        if len(conv_msgs) > max_conv:
-            trimmed = conv_msgs[-max_conv:]
-            self._messages = system_msgs + trimmed
-            logger.info(
-                "%s: context window trimmed from %d to %d messages (%d turns)",
-                self._get_provider_name(),
-                len(conv_msgs),
-                len(trimmed),
-                self._MAX_CONTEXT_TURNS,
-            )                                                 #
+        return
     # ------------------------------------------------------------------ #
 
     def _activate_requested_chat_for_turn(self, requested_chat_id: int | None) -> None:
@@ -1652,10 +1726,15 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     async def process_chat_input(self, text: str, is_telegram: bool = False,
                                   uploaded_image_path: str = None, speaker_enabled=None,
                                   telegram_input_type: str = None,
+                                  external_surface: str | None = None,
+                                  external_request_id: str | None = None,
                                   skip_user_persist: bool = False,
                                   requested_chat_id: int | None = None):
         """Process text input from chat window. Unified for all providers."""
         self._cancelled = False
+        self._active_chat_stream_id = None
+        self._chat_stream_terminal_emitted = False
+        self._interruption_cleanup_key = None
         if hasattr(self, '_generation_requested_at'):
             self._generation_requested_at = time.monotonic()
         await asyncio.sleep(0.05)
@@ -1670,6 +1749,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         self._is_telegram_request = is_telegram
         self._uploaded_image_path = uploaded_image_path
         self._telegram_input_type = telegram_input_type if telegram_input_type in ("text", "voice") else None
+        self._external_surface = str(external_surface or '').strip().lower() or None
+        self._external_request_id = str(external_request_id or '').strip() or None
 
         if not is_telegram:
             self._arm_desktop_tts()
@@ -1678,6 +1759,10 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             threading.current_thread().telegram_request = True
             if self._telegram_input_type:
                 threading.current_thread().telegram_input_type = self._telegram_input_type
+            if self._external_surface:
+                threading.current_thread().external_surface = self._external_surface
+            if self._external_request_id:
+                threading.current_thread().external_request_id = self._external_request_id
 
         # Verify chat provider matches this service
         provider_name = self._get_provider_name()
@@ -1782,7 +1867,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     async def process_frame(self, frame, direction):
         """Process incoming frames — common routing for all providers."""
         from distr.core.agent.libs import (
-            StartFrame, CancelFrame, InterruptionFrame, TranscriptionFrame,
+            StartFrame, CancelFrame, ErrorFrame, InterruptionFrame, TranscriptionFrame,
             UserStartedSpeakingFrame, TextFrame,
             LLMFullResponseStartFrame, LLMFullResponseEndFrame,
         )
@@ -1840,13 +1925,37 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             await self.push_frame(frame, direction)
             return
 
+        if isinstance(frame, ErrorFrame) and getattr(self, '_voice_capture_pending', False):
+            self._voice_capture_pending = False
+            cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+            if cid:
+                self._notify_transcription_progress(
+                    int(cid),
+                    "I couldn't transcribe that. Please try again.",
+                    done=True,
+                )
+            logger.warning("LLM: PTT transcription failed; cleared pending voice capture")
+            await self.push_frame(frame, direction)
+            return
+
         if isinstance(frame, TranscriptionFrame):
             self._cancelled = False
             text = frame.text.strip()
             if not text:
+                capture_was_pending = bool(getattr(self, '_voice_capture_pending', False))
                 if hasattr(self, '_voice_capture_pending'):
                     self._voice_capture_pending = False
-                logger.info("LLM: Received empty TranscriptionFrame — ignoring")
+                if capture_was_pending:
+                    cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                    if cid:
+                        self._notify_transcription_progress(
+                            int(cid),
+                            "I couldn't hear that. Please try again.",
+                            done=True,
+                        )
+                    logger.warning("LLM: PTT capture completed without speech")
+                else:
+                    logger.info("LLM: Received empty TranscriptionFrame — ignoring")
                 return
 
             text_lower = text.lower().strip()
@@ -1975,6 +2084,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
                 # Signal the UI that the agent is working
                 if self.event_queue and current_chat_id:
+                    self._mark_chat_stream_started(current_chat_id)
                     self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
                     self.event_queue.put(('chat_stream_started', {'chat_id': current_chat_id}), block=False)
 
@@ -2031,6 +2141,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     ):
                         cleaned = clean_text_for_tts(display_result)
                         if cleaned:
+                            timing = getattr(self, "_audio_timing", None)
+                            if timing is not None and "llm_first_token" not in timing.stages:
+                                timing.mark("llm_first_token")
                             await self.push_frame(TextFrame(text=cleaned))
                 except Exception as e:
                     logger.error("Error running fast tool %s: %s", tool.name, e, exc_info=True)
@@ -2046,7 +2159,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     # Signal the UI that the agent is done
                     if self.event_queue and current_chat_id:
                         self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
-                        self.event_queue.put(('chat_stream_finished', {'chat_id': current_chat_id, 'response_text': ''}), block=False)
+                        self._emit_chat_stream_finished(display_result or "")
                     if getattr(self, '_is_telegram_request', False):
                         self._cleanup_telegram_flags()
                 return
@@ -2076,6 +2189,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
             if hasattr(self, '_generation_requested_at'):
                 self._generation_requested_at = time.monotonic()
+            self._active_chat_stream_id = None
+            self._chat_stream_terminal_emitted = False
+            self._interruption_cleanup_key = None
             self._generation_task = asyncio.create_task(self._generate_response())
             return
 

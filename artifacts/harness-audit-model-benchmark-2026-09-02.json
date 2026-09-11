@@ -1,0 +1,63 @@
+{
+  "audit": "DecisionsAI harness and model benchmark readiness",
+  "date": "2026-09-02",
+  "surface_map": {
+    "skills_registry_rows": 120,
+    "skills_registry_missing_resolved_paths": 0,
+    "codex_projected_commands": 25,
+    "pi_projected_skill_files": 23,
+    "broken_projection_symlinks": 0,
+    "rtk_version": "0.42.3",
+    "rtk_token_savings_percent": 87.6,
+    "yt_dlp_version": "2026.08.19",
+    "codex_cli_version": "0.152.1",
+    "pi_version": "0.80.2",
+    "muse_model": "muse-glimmer:30b-mlx"
+  },
+  "confirmed_findings": [
+    {
+      "id": "codex-ide-opener",
+      "classification": "update",
+      "confidence": "high",
+      "effort": "small",
+      "evidence": "CodexIdeBackend.check_availability and open_ide_project both resolve the shared _ide_open_command, which only searches cursor and code.",
+      "benchmark": "pytest -q tests/core/test_ide_handoff_backend.py"
+    },
+    {
+      "id": "youtube-search-parser",
+      "classification": "update",
+      "confidence": "high",
+      "effort": "small",
+      "evidence": "Live search for two results returned one synthetic playlist row instead of video entries because --dump-single-json output was parsed line-by-line as individual videos.",
+      "benchmark": "pytest -q tests/core/test_yt_dlp_pack.py"
+    }
+  ],
+  "needs_scoping": [
+    {
+      "id": "duplicate-ticket-loop-workflows",
+      "evidence": "Workflow IDs 376, 389, and 398 share the Ticket loop name and the same pre_chain.",
+      "reason": "Workflow ownership and intended duplication cannot be inferred safely."
+    },
+    {
+      "id": "large-runtime-state",
+      "evidence": "Eight runtime files exceed 10 MB, including 88 MB and 65 MB JSON files.",
+      "reason": "Indexes and recovery backups may be user-owned or required for recovery, so no cleanup is authorized by this audit."
+    }
+  ],
+  "rejected_findings": [
+    {
+      "id": "registry-paths-missing",
+      "reason": "Rejected after resolving registry paths relative to skills/. All 120 entries have a SKILL.md."
+    }
+  ],
+  "smoke_results": {
+    "harness_tests": "202 passed",
+    "youtube_metadata": "pass",
+    "youtube_search": "miss",
+    "rtk": "pass",
+    "codex_backend": "ready",
+    "pi_backend": "ready",
+    "cursor_cli": "auth_required",
+    "cline": "optional_missing"
+  }
+}

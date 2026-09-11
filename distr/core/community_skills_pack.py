@@ -86,11 +86,11 @@ def merge_community_pre_chain(skill_ids: list[str], *, project_folder: str = "")
         prepend.append("last30days")
     if any(t in blob for t in ("marketing", "cro", "seo-audit", "copywriting", "launch")):
         prepend.extend(["product-marketing", "decisions-marketing-skills"])
-    if any(t in blob for t in ("design", "aesthetic", "dashboard", "minimal", "ui")):
+    if any(t in blob for t in ("design-aesthetic", "aesthetic-pack", "minimal-style", "design-taste")):
         prepend.append("decisions-design-aesthetics")
     if any(
         t in blob
-        for t in ("design", "landing", "portfolio", "redesign", "frontend", "anti-slop")
+        for t in ("design-taste", "anti-slop", "anti-template")
     ):
         prepend.append("design-taste-frontend")
     merged: list[str] = []

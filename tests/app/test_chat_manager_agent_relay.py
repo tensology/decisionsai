@@ -23,6 +23,7 @@ def test_chat_manager_current_chat_changed_wired_to_signal_manager():
     agent_relay = None
 
     with patch("distr.app.signals.signal_manager") as mock_sm:
+        app._chat_id_exists = lambda chat_id: int(chat_id) == 72
         mock_sm.current_chat_changed.disconnect = MagicMock()
 
         def capture_agent_relay(slot):

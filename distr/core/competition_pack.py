@@ -333,19 +333,9 @@ def push_ponytail_cursor_rule_to_project(*, project_folder: str, backend_id: str
     return str(dest)
 
 
-def project_has_js_ts_surface(folder: str) -> bool:
-    root = Path(folder or "").expanduser()
-    if not root.is_dir():
-        return False
-    markers = ("package.json", "tsconfig.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb")
-    return any((root / name).is_file() for name in markers)
-
-
 def default_competition_pre_chain(*, project_folder: str = "") -> list[str]:
-    chain = ["ponytail"]
-    if project_has_js_ts_surface(project_folder):
-        chain.append("fallow")
-    return chain
+    _ = project_folder
+    return ["ponytail"]
 
 
 def merge_competition_pre_chain(skill_ids: list[str], *, project_folder: str = "") -> list[str]:

@@ -46,6 +46,7 @@ from .libs import (
 )
 from distr.core.agent.transport import HotSwappableLocalAudioTransport
 from distr.core.audio.echo_canceller import ReferenceBuffer, NLMSEchoCanceller
+from distr.core.audio.timing import AudioTiming
 from .services import WhisperSTTService
 try:
     from .services import VoskSTTService
@@ -80,7 +81,7 @@ from distr.core.agent.constants import (
     KOKORO_VOICES, KOKORO_VOICE_BY_DISPLAY_NAME,
     VAD_DEFAULT_THRESHOLD, VAD_CONFIDENCE_MIN, VAD_CONFIDENCE_MAX, VAD_START_SECS,
     DEFAULT_OPENAI_WHISPER_MODEL, DEFAULT_ASSEMBLYAI_MODEL,
-    DEFAULT_VOSK_MODEL_DIR, WELCOME_DELAY_SECS, COMMAND_POLL_TIMEOUT,
+    DEFAULT_VOSK_MODEL_DIR, COMMAND_POLL_TIMEOUT,
 )
 
 
@@ -111,6 +112,9 @@ class AgentSession:
         'audio': {
             'input_sample_rate': 16000,
             'output_sample_rate': 44100,  # Stable playback rate; transport resamples TTS to this
+            # Optional calibration for speaker/driver/acoustic delay. Keep zero
+            # as the safe default until a device-specific measurement exists.
+            'aec_reference_delay_ms': 0.0,
             'input_device': None,  # None = system default
             'output_device': None  # None = system default
         },
@@ -333,6 +337,14 @@ class AgentSession:
                 effective_chat_id = getattr(settings_row, 'agent_current_chat_id', None) if settings_row else None
             
             last_cid = getattr(settings_row, 'last_chat_id', None) if settings_row else None
+            from distr.core.workflow.development_threads import resolve_conversational_chat_id
+
+            effective_chat_id = resolve_conversational_chat_id(
+                session,
+                effective_chat_id,
+                last_cid,
+            )
+            last_cid = effective_chat_id
             self.logger.debug(f"🔧 _load_config: effective_chat_id={effective_chat_id} (from_signal={self._agent_current_chat_id_from_signal is not None}), last_chat_id={last_cid}")
             # Store for _create_services so chat_manager gets initial current chat (PTT and first input use same chat as web).
             self._initial_chat_id = effective_chat_id or last_cid
@@ -410,6 +422,36 @@ class AgentSession:
             )
             config['llm']['s2s_model'] = s2s_intent_model
             config['llm']['s2s_active'] = True
+            # Realtime owns its voice provider. Repair legacy/corrupted chat
+            # rows before chained TTS services are constructed so Marin cannot
+            # be resolved through ElevenLabs and silently change identity.
+            from distr.core.openai_s2s import apply_s2s_voice_defaults
+
+            _s2s_provider, realtime_voice_provider, realtime_voice_model = apply_s2s_voice_defaults(
+                model_name=s2s_intent_model,
+                voice_provider=chat_voice_provider,
+                voice_model=chat_voice_model,
+            )
+            voice_changed = (
+                chat_voice_provider,
+                chat_voice_model,
+            ) != (realtime_voice_provider, realtime_voice_model)
+            chat_voice_provider = realtime_voice_provider
+            chat_voice_model = realtime_voice_model
+            if voice_changed and self._initial_chat_id:
+                try:
+                    with get_session() as voice_session:
+                        voice_chat = voice_session.get(Chat, self._initial_chat_id)
+                        if voice_chat:
+                            voice_chat.voice_provider = chat_voice_provider
+                            voice_chat.voice_model = chat_voice_model
+                            voice_session.commit()
+                except Exception:
+                    self.logger.warning(
+                        "Could not persist Realtime voice defaults for chat %s",
+                        self._initial_chat_id,
+                        exc_info=True,
+                    )
         else:
             model_name = chat_or_global_model
             config['llm']['s2s_active'] = False
@@ -791,7 +833,7 @@ class AgentSession:
 
         self._create_s2s_service()
 
-    def _create_s2s_service(self):
+    def _create_s2s_service(self, voice_override: str | None = None):
         """Create/update the Realtime S2S bridge (always in pipeline; enabled when S2S intent)."""
         from distr.core.agent.services.s2s.openai_realtime import OpenAIRealtimeS2SBridge
         from distr.core.openai_s2s import coerce_realtime_voice
@@ -801,8 +843,12 @@ class AgentSession:
         s2s_model = llm_cfg.get("s2s_model") or "gpt-realtime-2.1"
         api_key = (self.settings or {}).get("openai_key", "") or ""
         tts_cfg = (self.config or {}).get("tts") or {}
+        stt_cfg = (self.config or {}).get("stt") or {}
         voice = coerce_realtime_voice(
-            tts_cfg.get("voice_name") or tts_cfg.get("voice_id") or ""
+            voice_override
+            or tts_cfg.get("voice_name")
+            or tts_cfg.get("voice_id")
+            or ""
         )
         instructions = ""
         try:
@@ -816,10 +862,15 @@ class AgentSession:
                 model=s2s_model,
                 voice=voice,
                 instructions=instructions,
+                transcription_model=stt_cfg.get("model") or "gpt-4o-mini-transcribe",
                 enabled=s2s_active,
                 event_queue=self.event_queue,
+                chat_manager=self.chat_manager,
+                llm_service=getattr(self, "llm_service", None),
             )
         else:
+            self.s2s_service.chat_manager = self.chat_manager
+            self.s2s_service.llm_service = getattr(self, "llm_service", None)
             self.s2s_service.set_s2s_enabled(
                 s2s_active,
                 model=s2s_model,
@@ -889,7 +940,12 @@ class AgentSession:
                 lambda show: self.event_queue.put(('typing_indicator_changed', {'show': show}))
             )
             signal_manager.chat_message_added.connect(
-                lambda chat_id, role, content: self.event_queue.put(('chat_message_added', {'chat_id': chat_id, 'role': role, 'content': content}))
+                lambda chat_id, role, content, chat_row_id: self.event_queue.put(('chat_message_added', {
+                    'chat_id': chat_id,
+                    'role': role,
+                    'content': content,
+                    'chat_row_id': chat_row_id,
+                }))
             )
             signal_manager.transcription_progress.connect(
                 lambda chat_id, status_text, done, clear_live_preview=False, discard_live_preview=False: self.event_queue.put(
@@ -993,7 +1049,13 @@ class AgentSession:
             command_queue=self.command_queue,
             confirmation_results_dict=self.confirmation_results_dict,
             is_hands_free=self.is_hands_free,
-            voice_enabled=self.settings.get('voice_enabled', self.settings.get('chat_voice_enabled', True)),
+            # `chat_voice_enabled` is the persisted setting used by the web chat.
+            # Prefer it over the legacy `voice_enabled` alias when both keys are
+            # present, otherwise a stale legacy False can mute all chat TTS.
+            voice_enabled=self.settings.get(
+                'chat_voice_enabled',
+                self.settings.get('voice_enabled', True),
+            ),
             tts_service=getattr(self, 'tts_service', None),
         )
         return self.llm_service
@@ -1120,7 +1182,9 @@ class AgentSession:
 
         # Sync Realtime S2S bridge enable/model with chat intent
         try:
-            self._create_s2s_service()
+            self._create_s2s_service(
+                voice_override=vm if self.config['llm'].get('s2s_active') else None
+            )
             if self.s2s_service is not None and self.transport is not None:
                 self.s2s_service.set_audio_out(self.transport.output())
         except Exception as e:
@@ -1154,13 +1218,40 @@ class AgentSession:
         factory_settings = dict(self.settings)
         factory_settings['_event_queue'] = self.event_queue
         factory_settings['_on_quota_exceeded'] = self._do_elevenlabs_quota_fallback
-        self.tts_service = service_factory.create_tts_service(
-            self.config['tts'],
-            settings=factory_settings,
-            stt_service=self.stt_service,
-            is_hands_free=self.is_hands_free,
-            models_dir=models_dir,
-        )
+        try:
+            self.tts_service = service_factory.create_tts_service(
+                self.config['tts'],
+                settings=factory_settings,
+                stt_service=self.stt_service,
+                is_hands_free=self.is_hands_free,
+                models_dir=models_dir,
+            )
+        except Exception as exc:
+            # Online voice discovery must not take down the entire native
+            # agent when DNS, the provider, or a remote API is unavailable.
+            # Keep the requested provider in settings/config so a later
+            # hot-swap can retry it, but start the microphone/VAD pipeline
+            # with the offline voice immediately.
+            if (self.config.get('tts') or {}).get('engine') != 'elevenlabs':
+                raise
+            fallback_voice = (self.settings or {}).get('kokoro_voice', '') or DEFAULT_KOKORO_VOICE
+            fallback_config = {
+                'engine': 'kokoro',
+                'voice_id': fallback_voice,
+                'voice_name': fallback_voice,
+            }
+            self.logger.warning(
+                "ElevenLabs TTS unavailable during startup; using Kokoro fallback "
+                "for this session (configured provider will remain unchanged): %s",
+                exc,
+            )
+            self.tts_service = service_factory.create_tts_service(
+                fallback_config,
+                settings=factory_settings,
+                stt_service=self.stt_service,
+                is_hands_free=self.is_hands_free,
+                models_dir=models_dir,
+            )
         return self.tts_service
 
     def _hot_swap_tts_service(self, voice_provider: str, voice_model: str):
@@ -1204,16 +1295,20 @@ class AgentSession:
         target_engine = hot_swap_cfg.get('engine')
         target_voice_name = hot_swap_cfg.get('voice_name')
         target_voice_id = hot_swap_cfg.get('voice_id')
+        target_model_id = hot_swap_cfg.get('model_id')
+        current_model_id = self.config['tts'].get('model_id')
         config_already_matches = (
             current_engine == target_engine
             and current_voice_name == target_voice_name
             and current_voice_id == target_voice_id
+            and current_model_id == target_model_id
         )
         live_service_already_matches = self._tts_service_matches_target(
             old_service,
             target_engine=target_engine,
             target_voice_name=target_voice_name,
             target_voice_id=target_voice_id,
+            target_model_id=target_model_id,
         )
         self._unmute_output_after_tts_swap()
         if old_service is not None and (config_already_matches or live_service_already_matches):
@@ -1223,6 +1318,8 @@ class AgentSession:
                     self.config['tts']['voice_name'] = target_voice_name
                 if target_voice_id is not None:
                     self.config['tts']['voice_id'] = target_voice_id
+                if target_model_id is not None:
+                    self.config['tts']['model_id'] = target_model_id
                 if 'api_key' in hot_swap_cfg:
                     self.config['tts']['api_key'] = hot_swap_cfg['api_key']
                 if 'device' in hot_swap_cfg:
@@ -1245,6 +1342,8 @@ class AgentSession:
             self.config['tts']['voice_name'] = hot_swap_cfg['voice_name']
         if 'voice_id' in hot_swap_cfg:
             self.config['tts']['voice_id'] = hot_swap_cfg['voice_id']
+        if 'model_id' in hot_swap_cfg:
+            self.config['tts']['model_id'] = hot_swap_cfg['model_id']
         if 'api_key' in hot_swap_cfg:
             self.config['tts']['api_key'] = hot_swap_cfg['api_key']
         if 'device' in hot_swap_cfg:
@@ -1373,7 +1472,15 @@ class AgentSession:
         transport_out._force_silence = False
         transport_out._pipeline_cut = False
 
-    def _tts_service_matches_target(self, service, *, target_engine, target_voice_name, target_voice_id) -> bool:
+    def _tts_service_matches_target(
+        self,
+        service,
+        *,
+        target_engine,
+        target_voice_name,
+        target_voice_id,
+        target_model_id=None,
+    ) -> bool:
         if service is None or not target_engine:
             return False
 
@@ -1382,6 +1489,11 @@ class AgentSession:
         engine = str(target_engine or "").lower()
         if engine not in service_module and engine not in service_class:
             return False
+
+        if target_model_id is not None:
+            live_model_id = getattr(service, "model_id", None)
+            if str(live_model_id or "").strip() != str(target_model_id).strip():
+                return False
 
         live_voice_values = {
             str(value).strip()
@@ -1565,9 +1677,14 @@ class AgentSession:
         )
         aec_filter = NLMSEchoCanceller(
             reference_buffer=aec_ref_buf,
-            filter_length=800,    # 50ms impulse response @ 16kHz
-            mu=0.5,
+            # The laptop speaker path has a long room/driver tail. The
+            # shorter, faster filter was leaving correlated residual peaks
+            # large enough to wake VAD, so use the physically measured stable
+            # setting from the MacBook loopback sweep.
+            filter_length=1600,   # 100ms impulse response @ 16kHz
+            mu=0.05,
             output_sample_rate=audio_config['output_sample_rate'],
+            reference_delay_ms=audio_config.get('aec_reference_delay_ms', 0.0),
         )
         
         self.transport = HotSwappableLocalAudioTransport(
@@ -1588,14 +1705,24 @@ class AgentSession:
         
         # Give the STT service access to the AEC reference buffer so it can
         # gate VAD interruptions during TTS playback (echo suppression).
+        audio_timing = AudioTiming()
         if self.stt_service is not None:
             self.stt_service._aec_ref_buf = aec_ref_buf
+            self.stt_service._aec_filter = aec_filter
+            self.stt_service._audio_output_transport = self.transport.output()
+            self.stt_service._tts_service = self.tts_service
+            self.stt_service._audio_timing = audio_timing
             # Provide a callback so the echo gate can cancel the welcome task
             # on barge-in without needing a direct session reference.
             def _cancel_welcome():
                 if self._welcome_task and not self._welcome_task.done():
                     self._welcome_task.cancel()
             self.stt_service._cancel_welcome_callback = _cancel_welcome
+        self.transport._audio_timing = audio_timing
+        if self.llm_service is not None:
+            self.llm_service._audio_timing = audio_timing
+        if self.tts_service is not None:
+            self.tts_service._audio_timing = audio_timing
         
         # Initialize base VAD confidence in transport for ducking logic
         if self.config['vad']['enabled']:
@@ -1642,6 +1769,11 @@ class AgentSession:
             self.pipeline,
             idle_timeout_secs=None,
         )
+        pipeline_ready_event = getattr(self, "_pipeline_ready_event", None)
+        if pipeline_ready_event is not None:
+            @self.task.event_handler("on_pipeline_started")
+            async def _mark_pipeline_ready(_task, _frame):
+                pipeline_ready_event.set()
         
         # Create runner (will use current running event loop)
         self.runner = PipelineRunner()
@@ -1655,6 +1787,7 @@ class AgentSession:
             # even during _create_pipeline() (e.g. while whisper is loading).
             self._main_loop = asyncio.get_running_loop()
             self.running = True
+            self._pipeline_ready_event = asyncio.Event()
 
             # Create pipeline (no loop needed - will use current running loop)
             self._create_pipeline()
@@ -1721,13 +1854,21 @@ class AgentSession:
                     self.logger.info("Welcome/Greet Me is disabled in settings - skipping welcome message")
                     return
                 
-                # Wait for pipeline to initialize (give it time to process StartFrame).
-                # Short delay (1.5s) so welcome plays soon on fresh load or after load-in-agent reload.
+                # Wait for StartFrame to reach the end of the pipeline. A fixed
+                # delay races slow provider startup and sends TTS frames before
+                # the service is ready.
                 try:
-                    await asyncio.sleep(WELCOME_DELAY_SECS)
+                    await asyncio.wait_for(
+                        self._pipeline_ready_event.wait(), timeout=20.0
+                    )
                 except asyncio.CancelledError:
                     self.logger.debug("Welcome message task cancelled during initialization wait")
                     raise  # Re-raise to properly handle cancellation
+                except asyncio.TimeoutError:
+                    self.logger.warning(
+                        "Welcome message skipped because pipeline did not become ready"
+                    )
+                    return
                 
                 # Send welcome message directly to TTS, bypassing the pipeline frame queue.
                 # Pushing frames from the LLM via push_frame() from a concurrent asyncio task

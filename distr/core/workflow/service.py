@@ -10,9 +10,16 @@ from typing import List, Dict, Any, Optional
 
 from sqlalchemy import or_
 
-from distr.core.db import get_session
+from distr.core.db import Chat, get_session
 from distr.core.db.time import utc_now_naive
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
+from distr.core.db.workflow import (
+    AutoWorkflow,
+    AutoWorkflowStep,
+    AutoWorkflowVariable,
+    AutoWorkflowRun,
+    AutoWorkflowStepResult,
+    DevelopmentWorkItem,
+)
 from distr.core.db.kanban import (
     KanbanBoard,
     KanbanTicket,
@@ -185,6 +192,11 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
     project = db.query(Project).filter(Project.id == project_id_int).first() if project_id_int is not None else None
 
     source_type = run_data.get("source_type")
+    coordination_plan = run_data.get("coordination_plan") if isinstance(run_data.get("coordination_plan"), dict) else {}
+    risk_profile = run_data.get("risk_profile") if isinstance(run_data.get("risk_profile"), dict) else {}
+    budget = run_data.get("budget") if isinstance(run_data.get("budget"), dict) else {}
+    drift_metrics = run_data.get("drift_metrics") if isinstance(run_data.get("drift_metrics"), dict) else {}
+    latest_handoff = run_data.get("latest_backend_handoff") if isinstance(run_data.get("latest_backend_handoff"), dict) else {}
     return {
         "board_id": board_id,
         "board_name": run_data.get("board_name") or (board.name if board else None),
@@ -212,7 +224,17 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "pending_harness_steers": (run_data.get("pending_harness_steers") or [])[-5:],
         "last_harness_steer": run_data.get("last_harness_steer") or {},
         "last_codex_bridge_state": run_data.get("last_codex_bridge_state") or {},
-        "latest_backend_handoff": run_data.get("latest_backend_handoff") or {},
+        "latest_backend_handoff": latest_handoff,
+        "coordination_plan": coordination_plan,
+        "risk_profile": risk_profile,
+        "budget": budget,
+        "drift_metrics": drift_metrics,
+        "step_routes": run_data.get("step_routes") or {},
+        "step_role_routes": run_data.get("step_role_routes") or {},
+        "runtime_snapshot": run_data.get("runtime_snapshot") or {},
+        "git_status_before": run_data.get("git_status_before") or latest_handoff.get("git_status_before") or [],
+        "git_status_current": run_data.get("git_status_current") or latest_handoff.get("git_status_current") or [],
+        "git_status_after": run_data.get("git_status_after") or latest_handoff.get("git_status_after") or [],
         "human_intervention_state": run_data.get("human_intervention_state") or "none",
         "worker_question": run_data.get("worker_question") or "",
         "waiting_prompt": run_data.get("waiting_prompt") or "",
@@ -534,7 +556,10 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
         if workflow_type:
             q = q.filter(AutoWorkflow.workflow_type == workflow_type)
         else:
-            q = q.filter(AutoWorkflow.workflow_type.in_(sorted(USER_VISIBLE_WORKFLOW_TYPES)))
+            q = q.filter(
+                AutoWorkflow.workflow_type.in_(sorted(USER_VISIBLE_WORKFLOW_TYPES)),
+                AutoWorkflow.chat_id.is_(None),
+            )
         if search and search.strip():
             q = q.filter(AutoWorkflow.name.ilike(f"%{search.strip()}%"))
         fetch_limit = max(int(limit or 50) * 4, int(limit or 50) + 20)
@@ -553,13 +578,27 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
         return [
             {
                 "id": w.id, "name": w.name,
+                "chat_id": w.chat_id,
                 "workflow_type": w.workflow_type or "manual",
                 "description": (w.description or "")[:200],
+                "status": w.status or "draft",
+                "workflow_input": w.workflow_input or "",
                 "schedule_enabled": w.schedule_enabled,
                 "schedule_preset": w.schedule_preset,
                 "schedule_time": w.schedule_time,
                 "next_run_at": w.next_run_at.isoformat() if w.next_run_at else None,
                 "step_count": len(w.steps),
+                "steps": [
+                    {
+                        "id": step.id,
+                        "position": step.position,
+                        "name": step.name,
+                        "action_type": step.action_type,
+                        "status": step.status or "pending",
+                        "linked_project_id": step.linked_project_id,
+                    }
+                    for step in sorted(w.steps, key=lambda item: (item.position or 0, item.id or 0))
+                ],
                 "created_date": w.created_date.isoformat() if w.created_date else None,
                 "modified_date": w.modified_date.isoformat() if w.modified_date else None,
             }
@@ -585,7 +624,7 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
             return False
         for k, v in kwargs.items():
             if k in allowed:
-                if k in {"pre_chain", "post_chain"} and isinstance(v, (list, dict)):
+                if k in {"pre_chain", "post_chain", "run_settings"} and isinstance(v, (list, dict)):
                     setattr(wf, k, json.dumps(v))
                 else:
                     setattr(wf, k, v)
@@ -741,6 +780,35 @@ def _unlink_workflow_tickets(db, workflow_ids: List[int]) -> int:
     return int(updated or 0)
 
 
+def _unlink_workflow_consumers(db, workflow_ids: List[int]) -> None:
+    """Detach deleted independent definitions without deleting their consumers."""
+    import json
+
+    from distr.core.db.automation import Automation
+    from distr.core.db.kanban import KanbanBoard
+    from distr.core.db.workflow import DevelopmentWorkItem
+
+    ids = [int(workflow_id) for workflow_id in workflow_ids if workflow_id is not None]
+    if not ids:
+        return
+    db.query(KanbanBoard).filter(KanbanBoard.default_workflow_id.in_(ids)).update(
+        {KanbanBoard.default_workflow_id: None}, synchronize_session=False
+    )
+    db.query(DevelopmentWorkItem).filter(DevelopmentWorkItem.workflow_id.in_(ids)).update(
+        {DevelopmentWorkItem.workflow_id: None}, synchronize_session=False
+    )
+    automations = db.query(Automation).filter(Automation.linked_workflow_id.in_(ids)).all()
+    for automation in automations:
+        automation.linked_workflow_id = None
+        try:
+            config = json.loads(automation.action_config or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            config = {}
+        if isinstance(config, dict):
+            config.pop("development_workflow_id", None)
+            automation.action_config = json.dumps(config, ensure_ascii=False, default=str)
+
+
 def clear_ticket_workflow_links(
     *,
     workflow_id: Optional[int] = None,
@@ -852,6 +920,7 @@ def delete_workflow(workflow_id: int) -> bool:
             OrchestratorEvent.workflow_id == workflow_id
         ).delete(synchronize_session=False)
         _unlink_workflow_tickets(db, [workflow_id])
+        _unlink_workflow_consumers(db, [workflow_id])
         step_ids = [
             row[0]
             for row in db.query(AutoWorkflowStep.id)
@@ -909,6 +978,7 @@ def purge_all_workflows(*, include_audit: bool = False) -> int:
         wf_ids = [wf.id for wf in workflows]
         if wf_ids:
             _unlink_workflow_tickets(db, wf_ids)
+            _unlink_workflow_consumers(db, wf_ids)
             step_ids = [
                 row[0]
                 for row in db.query(AutoWorkflowStep.id)
@@ -1327,16 +1397,28 @@ def apply_run_provider_model_selection(
         db.commit()
 
     try:
-        from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+        from distr.core.kanban.ticket_workflow_engagement import (
+            build_operator_waiting_message,
+            notify_ticket_workflow_progress,
+        )
+
+        safe_question = build_operator_waiting_message(
+            workflow_name=str(data.get("workflow_name") or "Workflow"),
+            ticket_title=str(data.get("ticket_title") or ""),
+            step_name=str(data.get("step_name") or "the current phase"),
+            waiting_kind="provider_preflight",
+        )
 
         notify_ticket_workflow_progress(
             run_id=run_id,
             step_id=int(step_id) if step_id else None,
-            body=question,
-            voice_body=question,
+            body=safe_question,
+            voice_body=None,
             state_fingerprint=f"provider-model-failed:{run_id}:{candidate_index}:{readiness.http_status}",
             priority="high",
             requires_response=True,
+            audible=False,
+            allow_voice=False,
         )
     except Exception:
         logger.warning("Could not notify provider model readiness failure", exc_info=True)
@@ -1764,7 +1846,7 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
 
 
 def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[Dict[str, Any]]:
-    """Return currently active workflow runs enriched with board/ticket/step context."""
+    """Return one projection of workflow and direct Development executions."""
     with get_session() as db:
         query = (
             db.query(AutoWorkflowRun)
@@ -1773,7 +1855,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
         )
         if workflow_id is not None:
             query = query.filter(AutoWorkflowRun.workflow_id == workflow_id)
-        rows = query.limit(limit).all()
+        rows = query.all()
 
         workflow_ids = {r.workflow_id for r in rows if r.workflow_id is not None}
         step_ids = {r.current_step_id for r in rows if r.current_step_id is not None}
@@ -1790,9 +1872,15 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             step_by_id = {step.id: step for step in step_rows}
 
         ticket_title_by_id = {}
+        ticket_board_by_id = {}
         if ticket_ids:
-            ticket_rows = db.query(KanbanTicket.id, KanbanTicket.title).filter(KanbanTicket.id.in_(ticket_ids)).all()
-            ticket_title_by_id = {tid: title for tid, title in ticket_rows}
+            ticket_rows = db.query(KanbanTicket).filter(KanbanTicket.id.in_(ticket_ids)).all()
+            ticket_title_by_id = {ticket.id: ticket.title for ticket in ticket_rows}
+            ticket_board_by_id = {
+                ticket.id: int(ticket.lane.board_id)
+                for ticket in ticket_rows
+                if ticket.lane is not None and ticket.lane.board_id is not None
+            }
 
         run_ids = {int(r.id) for r in rows if r.id is not None}
         recent_steps_by_run: Dict[int, List[str]] = {}
@@ -1884,7 +1972,9 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 activity_state = "stale"
             results.append({
                 "id": r.id,
+                "execution_kind": "workflow",
                 "workflow_id": r.workflow_id,
+                "chat_id": r.chat_id,
                 "workflow_name": workflow_name_by_id.get(r.workflow_id),
                 "status": r.status,
                 "started_at": started_at_iso,
@@ -1908,8 +1998,82 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "activity_state": activity_state,
                 "latest_context_telemetry": run_data.get("latest_context_telemetry") or {},
                 "blueprint": _run_blueprint_snapshot(run_data),
+                "open_url": f"/development/threads/{int(r.chat_id)}/" if r.chat_id else f"/development/workflows/?run={int(r.id)}",
+                "related_ticket_url": (
+                    f"/development/boards/decisions/{ticket_board_by_id[int(r.ticket_id)]}/kanban/?ticket_id={int(r.ticket_id)}"
+                    if r.ticket_id and int(r.ticket_id) in ticket_board_by_id
+                    else None
+                ),
+                "cancellation_target": {
+                    "kind": "workflow",
+                    "url": f"/api/workflows/{int(r.workflow_id)}/cancel-run/{int(r.id)}",
+                },
             })
-        return results
+
+        workflow_chat_ids = {int(r.chat_id) for r in rows if r.chat_id is not None}
+        direct_query = db.query(DevelopmentWorkItem, Chat).join(Chat, Chat.id == DevelopmentWorkItem.chat_id)
+        if workflow_id is not None:
+            direct_query = direct_query.filter(DevelopmentWorkItem.workflow_id == workflow_id)
+        direct_rows = direct_query.order_by(Chat.modified_date.desc()).all()
+        active_direct_statuses = {"initializing", "queued", "running", "waiting", "paused"}
+        for work_item, chat in direct_rows:
+            if int(chat.id) in workflow_chat_ids:
+                continue
+            params = _safe_json_loads(chat.params)
+            development = params.get("development") if isinstance(params, dict) else {}
+            execution = development.get("execution") if isinstance(development, dict) else {}
+            execution = execution if isinstance(execution, dict) else {}
+            status = str(execution.get("status") or "").strip().lower()
+            if status not in active_direct_statuses:
+                continue
+
+            ticket = db.get(KanbanTicket, work_item.local_ticket_id) if work_item.local_ticket_id else None
+            board = ticket.lane.board if ticket and ticket.lane and ticket.lane.board else None
+            if board is None and str(work_item.board_provider or "") == "decisions":
+                try:
+                    board = db.get(KanbanBoard, int(work_item.board_key or 0))
+                except (TypeError, ValueError):
+                    board = None
+            project_id = work_item.project_id or chat.project_id or (ticket.linked_project_id if ticket else None)
+            project = db.get(Project, int(project_id)) if project_id else None
+            started_at = execution.get("started_at") or (chat.modified_date.isoformat() if chat.modified_date else None)
+            results.append({
+                "id": f"development:{int(chat.id)}:{execution.get('job_id') or execution.get('execution_session_id') or 'active'}",
+                "execution_kind": "development",
+                "workflow_id": work_item.workflow_id,
+                "workflow_name": None,
+                "chat_id": int(chat.id),
+                "status": status,
+                "started_at": started_at,
+                "current_step_id": None,
+                "current_step_name": execution.get("activity_status") or execution.get("phase") or status,
+                "board_id": int(board.id) if board else None,
+                "board_name": board.name if board else work_item.board_key,
+                "board_source": board.source if board else work_item.board_provider,
+                "ticket_id": int(ticket.id) if ticket else work_item.local_ticket_id,
+                "ticket_title": (ticket.title if ticket else None) or work_item.ticket_title or chat.title,
+                "project_id": int(project_id) if project_id else None,
+                "project_name": project.name if project else None,
+                "source_type": work_item.source_type,
+                "source_label": work_item.source_type,
+                "activity_state": "waiting_for_user" if status == "waiting" else status,
+                "waiting_kind": execution.get("waiting_kind") or ("response" if status == "waiting" else ""),
+                "waiting_prompt": execution.get("waiting_prompt") or execution.get("summary") or "",
+                "last_activity": {},
+                "last_heartbeat": {},
+                "open_url": f"/development/threads/{int(chat.id)}/",
+                "related_ticket_url": (
+                    f"/development/boards/decisions/{int(board.id)}/kanban/?ticket_id={int(ticket.id)}"
+                    if ticket and board
+                    else None
+                ),
+                "cancellation_target": {
+                    "kind": "development",
+                    "url": f"/api/workflows/studio/tasks/{int(chat.id)}/execution/stop",
+                },
+            })
+        results.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+        return results[:limit]
 
 
 def _run_blueprint_snapshot(run_data: dict) -> dict:

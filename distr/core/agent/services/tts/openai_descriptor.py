@@ -16,7 +16,7 @@ from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescrip
 from distr.core.agent.services.tts.openai_tts_config import (
     DEFAULT_OPENAI_TTS_MODEL,
     openai_tts_supports_instructions,
-    resolve_openai_tts_model,
+    resolve_openai_tts_model_for_voice,
     voices_for_openai_tts_model,
 )
 
@@ -25,6 +25,19 @@ logger = logging.getLogger(__name__)
 # --- OpenAI defaults (moved from constants.py) ---
 DEFAULT_OPENAI_VOICE = "alloy"
 DEFAULT_OPENAI_AGENT = "Alloy"
+OPENAI_TTS_FALLBACK_VOICE = "coral"
+
+
+def _is_voice_compatibility_error(exc: Exception) -> bool:
+    """Return whether OpenAI rejected the selected voice for this endpoint/model."""
+    message = str(exc).lower()
+    mentions_voice_rejection = "voice" in message and any(
+        marker in message
+        for marker in ("enum", "input should be", "invalid", "unsupported")
+    )
+    return mentions_voice_rejection and any(
+        marker in message for marker in ("400", "bad request")
+    )
 
 
 class OpenAIDescriptor(TTSProviderDescriptor):
@@ -106,7 +119,9 @@ class OpenAIDescriptor(TTSProviderDescriptor):
 
         lo, hi = self.speed_bounds
         playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-        model = resolve_openai_tts_model(settings.get("openai_tts_model"))
+        model = resolve_openai_tts_model_for_voice(
+            settings.get("openai_tts_model"), voice_id
+        )
         instructions = (settings.get("openai_tts_instructions") or "").strip()
         if not openai_tts_supports_instructions(model):
             instructions = ""
@@ -144,18 +159,39 @@ class OpenAIDescriptor(TTSProviderDescriptor):
             raise ValueError("OpenAI API key not configured")
 
         client = OpenAI(api_key=api_key)
-        model = resolve_openai_tts_model(settings.get("openai_tts_model"))
-        create_kwargs = {
-            "model": model,
-            "voice": voice,
-            "input": text,
-            "speed": speed,
-        }
-        instructions = (settings.get("openai_tts_instructions") or "").strip()
-        if instructions and openai_tts_supports_instructions(model):
-            create_kwargs["instructions"] = instructions
+        model = resolve_openai_tts_model_for_voice(
+            settings.get("openai_tts_model"), voice
+        )
 
-        response = client.audio.speech.create(**create_kwargs)
+        def _create_speech(selected_voice: str):
+            create_kwargs = {
+                "model": model,
+                "voice": selected_voice,
+                "input": text,
+                "speed": speed,
+            }
+            instructions = (settings.get("openai_tts_instructions") or "").strip()
+            if instructions and openai_tts_supports_instructions(model):
+                create_kwargs["instructions"] = instructions
+            return client.audio.speech.create(**create_kwargs)
+
+        output_voice = voice
+        try:
+            response = _create_speech(output_voice)
+        except Exception as exc:
+            if (
+                output_voice.lower() == OPENAI_TTS_FALLBACK_VOICE
+                or not _is_voice_compatibility_error(exc)
+            ):
+                raise
+            logger.warning(
+                "OpenAI rejected TTS voice %s for model %s; retrying once with %s",
+                output_voice,
+                model,
+                OPENAI_TTS_FALLBACK_VOICE,
+            )
+            output_voice = OPENAI_TTS_FALLBACK_VOICE
+            response = _create_speech(output_voice)
         # OpenAI returns MP3 by default; write to temp then convert to WAV
         tmp_mp3 = out_file + ".tmp.mp3"
         response.stream_to_file(tmp_mp3)
@@ -169,7 +205,12 @@ class OpenAIDescriptor(TTSProviderDescriptor):
             if os.path.exists(tmp_mp3):
                 os.remove(tmp_mp3)
 
-        logger.info("Wrote OpenAI sample to %s (model=%s)", out_file, model)
+        logger.info(
+            "Wrote OpenAI sample to %s (model=%s, voice=%s)",
+            out_file,
+            model,
+            output_voice,
+        )
 
     # ------------------------------------------------------------------
     # Voice / display-name resolution

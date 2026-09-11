@@ -97,3 +97,42 @@ def test_send_to_agent_emits_and_echoes_intake_identity(monkeypatch) -> None:
             },
         )
     ]
+
+
+def test_send_to_agent_preserves_explicit_remote_origin(monkeypatch) -> None:
+    factory = _make_factory()
+    with factory() as session:
+        chat = Chat(title="Remote", provider="Ollama", model_name="test-model")
+        session.add(chat)
+        session.commit()
+        chat_id = chat.id
+
+    monkeypatch.setattr(chat_routes, "get_session", lambda: _session_ctx(factory))
+    signal = _Signal()
+    import distr.core.signals as signals_module
+
+    monkeypatch.setattr(
+        signals_module,
+        "signal_manager",
+        SimpleNamespace(web_send_to_agent_requested=signal),
+    )
+
+    app = FastAPI()
+    app.include_router(chat_routes.create_routes(Path(__file__).parent), prefix="/api")
+    response = TestClient(app).post(
+        f"/api/chats/{chat_id}/send-to-agent",
+        json={
+            "message": "Remote voice transcript",
+            "speak": True,
+            "origin_surface": "remote",
+            "origin_request_id": "remote-api-1",
+            "input_type": "voice",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert signal.calls[-1][-1] == {
+        "origin_surface": "remote",
+        "origin_request_id": "remote-api-1",
+        "input_type": "voice",
+    }

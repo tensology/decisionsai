@@ -159,6 +159,8 @@ class TelegramMixin:
             'analyzed_image_path': analyzed_image_path,
             'explicit_artifact_intent': explicit_artifact_intent,
             'input_type': getattr(self, '_telegram_input_type', None) or getattr(threading.current_thread(), 'telegram_input_type', None),
+            'origin_surface': getattr(self, '_external_surface', None) or getattr(threading.current_thread(), 'external_surface', None),
+            'origin_request_id': getattr(self, '_external_request_id', None) or getattr(threading.current_thread(), 'external_request_id', None),
         }), block=False)
         logger.info("%s: Emitted send_to_telegram from LLM (bypassed TTS pipeline)",
                     getattr(self, 'SERVICE_NAME', self.__class__.__name__))
@@ -186,6 +188,10 @@ class TelegramMixin:
                 t.telegram_request = False
             if getattr(t, 'telegram_input_type', None):
                 t.telegram_input_type = None
+            if getattr(t, 'external_surface', None):
+                t.external_surface = None
+            if getattr(t, 'external_request_id', None):
+                t.external_request_id = None
             if getattr(t, 'telegram_analyzed_image', None):
                 t.telegram_analyzed_image = None
             if getattr(t, 'telegram_send_raw_screenshot', None):
@@ -197,6 +203,8 @@ class TelegramMixin:
         self._is_telegram_request = False
         self._uploaded_image_path = None
         self._telegram_input_type = None
+        self._external_surface = None
+        self._external_request_id = None
         self._disarm_desktop_tts()
 
     def _extract_action_required_path(self):

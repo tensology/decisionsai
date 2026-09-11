@@ -1,0 +1,11 @@
+@import './shell.css';
+@import './shared/components.css';
+@import './threads/styles.css';
+@import './sidebar/styles.css';
+@import './boards/styles.css';
+@import './planning/styles.css';
+@import './incoming/styles.css';
+@import './automations/styles.css';
+@import './workflows/styles.css';
+@import './terminals/styles.css';
+@import './reports/styles.css';

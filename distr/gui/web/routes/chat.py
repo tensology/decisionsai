@@ -68,6 +68,7 @@ from distr.core.chat_title_auto import (
     maybe_refresh_chat_title as _maybe_refresh_chat_title,
     _title_auto_meta,
 )
+from distr.core.workflow.development_threads import is_development_thread
 from distr.gui.web.security import (
     is_allowed_local_origin,
     websocket_has_valid_internal_token,
@@ -75,6 +76,14 @@ from distr.gui.web.security import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _reject_development_lifecycle(session, chat: Chat) -> None:
+    if is_development_thread(session, chat):
+        raise HTTPException(
+            status_code=409,
+            detail="Development tasks must use the Development lifecycle API.",
+        )
 
 _usage_status_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
 _usage_status_lock = threading.Lock()
@@ -240,6 +249,27 @@ def _api_timestamp(ts: Any) -> Optional[str]:
         naive = _timestamp_as_naive_utc(ts)
         return f"{naive.isoformat()}Z" if naive is not None else None
     return str(ts)
+
+
+def _duration_seconds_between(started_at: Any, completed_at: Any) -> int:
+    """Return a stable non-negative duration for DB or ISO timestamps."""
+    def parse(value: Any) -> Optional[datetime]:
+        if isinstance(value, datetime):
+            return _timestamp_as_naive_utc(value)
+        text = _api_timestamp(value)
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return _timestamp_as_naive_utc(parsed)
+
+    started = parse(started_at)
+    completed = parse(completed_at)
+    if not started or not completed:
+        return 0
+    return max(0, int((completed - started).total_seconds()))
 
 
 def _parse_message_timestamp(message: Dict[str, Any]) -> Optional[datetime]:
@@ -480,20 +510,32 @@ def _append_row_messages(messages: List[Dict[str, Any]], row: Any) -> None:
         if marker.get("type") in {"compact", "fork"}:
             return
     if row.input:
-        messages.append(
-            {
-                "role": "user",
-                "content": row.input,
-                "timestamp": _api_timestamp(row.created_date),
-                "chat_row_id": row.id,
-            }
-        )
+        message = {
+            "role": "user",
+            "content": row.input,
+            "timestamp": _api_timestamp(row.created_date),
+            "chat_row_id": row.id,
+        }
+        try:
+            params = json.loads(getattr(row, "params", None) or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            params = {}
+        turn_metadata = params.get("development_turn") if isinstance(params, dict) else {}
+        skill_ids = turn_metadata.get("skill_ids") if isinstance(turn_metadata, dict) else []
+        if isinstance(skill_ids, list):
+            message["skills"] = [str(skill_id) for skill_id in skill_ids if str(skill_id).strip()][:12]
+        messages.append(message)
     if row.response:
+        started_at = getattr(row, "created_date", None)
+        completed_at = getattr(row, "modified_date", None)
+        duration_seconds = _duration_seconds_between(started_at, completed_at)
         messages.append(
             {
                 "role": "assistant",
                 "content": row.response,
                 "timestamp": _api_timestamp(row.modified_date),
+                "turn_started_at": _api_timestamp(started_at),
+                "turn_duration_seconds": duration_seconds,
                 "chat_row_id": row.id,
             }
         )
@@ -651,6 +693,25 @@ def _merge_thread_rows_with_tool_and_workflow_events(
     return messages
 
 
+def _restore_development_execution_response(
+    messages: List[Dict[str, Any]], development: Dict[str, Any]
+) -> None:
+    """Display a preserved agent result when an old Initiative notice replaced it."""
+    execution = development.get("execution") if isinstance(development, dict) else {}
+    summary = str((execution or {}).get("summary") or "").strip()
+    if not summary:
+        return
+    for message in reversed(messages):
+        content = str(message.get("content") or "")
+        if (
+            message.get("role") == "assistant"
+            and "pending approval" in content.lower()
+            and "automation_recommendation" in content.lower()
+        ):
+            message["content"] = summary
+            return
+
+
 class SendMessageRequest(ChatRequestModel):
     """Request to send a message"""
 
@@ -675,6 +736,9 @@ class SendMessageRequest(ChatRequestModel):
     intake_source_message_id: Optional[str] = None
     intake_requested_outcome: Optional[str] = None
     intake_metadata: Optional[Dict[str, Any]] = None
+    origin_surface: Optional[str] = None
+    origin_request_id: Optional[str] = None
+    input_type: Optional[str] = None
 
 
 class SteerTurnRequest(ChatRequestModel):
@@ -692,6 +756,10 @@ class CreateChatRequest(ChatRequestModel):
     voice_provider: Optional[str] = None
     voice_model: Optional[str] = None
     starting_question: Optional[str] = None
+    project_id: Optional[int] = None
+    route_mode: str = "auto"
+    execution_profile: str = "code"
+    autonomy_level: str = "full"
     speak: Optional[bool] = (
         None  # If True, agent speaks the reply (TTS). Used when starting_question is set.
     )
@@ -705,6 +773,10 @@ class UpdateChatRequest(ChatRequestModel):
     model_name: Optional[str] = None
     voice_provider: Optional[str] = None
     voice_model: Optional[str] = None
+    project_id: Optional[int] = None
+    route_mode: Optional[str] = None
+    execution_profile: Optional[str] = None
+    autonomy_level: Optional[str] = None
 
 
 class CompactChatRequest(ChatRequestModel):
@@ -877,24 +949,28 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         return JSONResponse({"ok": True, "delivered": delivered})
 
     @router.get("/chats")
-    async def get_chats():
-        """Get all chat conversations (root chats only)"""
+    async def get_chats(include_archived: bool = False, surface: str = "chat"):
+        """Get root conversations for exactly one owning surface."""
         try:
+            normalized_surface = str(surface or "chat").strip().lower()
+            if normalized_surface not in {"chat", "development"}:
+                raise HTTPException(status_code=422, detail="surface must be chat or development")
             with get_session() as session:
                 # Get root chats (parent_id is None) that are not archived or hidden
-                chats = (
-                    session.query(Chat)
-                    .filter(
-                        Chat.parent_id == None,
-                        Chat.is_archived == False,
-                        Chat.is_hidden == False,
-                    )
-                    .order_by(Chat.modified_date.desc(), Chat.id.desc())
-                    .all()
-                )
+                query = session.query(Chat).filter(Chat.parent_id == None, Chat.is_hidden == False)
+                if not include_archived:
+                    query = query.filter(Chat.is_archived == False)
+                chats = query.order_by(Chat.modified_date.desc(), Chat.id.desc()).all()
 
                 result = []
                 for chat in chats:
+                    owned_by_development = is_development_thread(session, chat)
+                    if owned_by_development != (normalized_surface == "development"):
+                        continue
+                    from distr.core.workflow.development_threads import development_thread_record
+
+                    development = development_thread_record(session, chat) if owned_by_development else {}
+                    model_route = development.get("model_route") if isinstance(development.get("model_route"), dict) else {}
                     result.append(
                         {
                             "id": chat.id,
@@ -907,6 +983,26 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                             else None,
                             "model_name": chat.model_name,
                             "provider": chat.provider,
+                            "project_id": chat.project_id,
+                            "route_mode": chat.route_mode or "auto",
+                            "execution_profile": chat.execution_profile or "code",
+                            "autonomy_level": chat.autonomy_level or "full",
+                            "development": bool(development),
+                            "development_workflow_id": development.get("workflow_id"),
+                            "development_source_type": development.get("source_type"),
+                            "development_ticket_id": development.get("ticket_id"),
+                            "development_board_key": development.get("board_key"),
+                            "development_board_provider": development.get("board_provider"),
+                            "development_board_ticket_key": development.get("board_ticket_key"),
+                            "development_board_ticket_title": development.get("board_ticket_title"),
+                            "development_board_ticket_lane": development.get("board_ticket_lane"),
+                            "development_execution": development.get("execution") or {},
+                            "pinned": bool(development.get("pinned")),
+                            "permission_profile": development.get("permission_profile") or {},
+                            "remote_continuation": bool(development.get("remote_continuation")),
+                            "reasoning_effort": model_route.get("reasoning_effort") or "medium",
+                            "service_tier": model_route.get("service_tier") or "standard",
+                            "archived": bool(chat.is_archived),
                         }
                     )
                 settings = load_settings_from_db()
@@ -1015,9 +1111,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             return JSONResponse({"voice": None, "llm": None}, status_code=200)
 
     @router.get("/chats/{chat_id}")
-    async def get_chat(chat_id: int):
+    async def get_chat(chat_id: int, surface: str = "chat"):
         """Get a specific chat with all its messages"""
         try:
+            normalized_surface = str(surface or "chat").strip().lower()
+            if normalized_surface not in {"chat", "development"}:
+                raise HTTPException(status_code=422, detail="surface must be chat or development")
             with get_session() as session:
                 from distr.core.chat import _thread_root_chat_id
 
@@ -1025,6 +1124,14 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root_chat = session.get(Chat, root_id)
                 if not root_chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                owned_by_development = is_development_thread(session, root_chat)
+                if owned_by_development != (normalized_surface == "development"):
+                    detail = (
+                        "This thread belongs to Development, not Chat."
+                        if owned_by_development
+                        else "This thread belongs to Chat, not Development."
+                    )
+                    raise HTTPException(status_code=409, detail=detail)
 
                 # Get all messages in this conversation thread
                 # Using recursive CTE to get all descendants
@@ -1049,6 +1156,22 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 from distr.core.chat_turns import get_turns
 
                 turn_state = get_turns(int(root_chat.id))
+                turns_by_row = {
+                    int(item.get("turn_id")): item
+                    for item in (turn_state.get("turns") or [])
+                    if item.get("turn_id") is not None
+                }
+                for message in messages:
+                    if message.get("role") != "assistant" or message.get("chat_row_id") is None:
+                        continue
+                    turn = turns_by_row.get(int(message["chat_row_id"]))
+                    if not turn or not turn.get("started_at"):
+                        continue
+                    message["turn_started_at"] = turn["started_at"]
+                    if turn.get("completed_at"):
+                        message["turn_duration_seconds"] = _duration_seconds_between(
+                            turn["started_at"], turn["completed_at"]
+                        )
                 durable_turn_ids = {
                     int(item.get("turn_id"))
                     for item in (turn_state.get("turns") or [])
@@ -1070,6 +1193,12 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         )
                         and not (message.get("role") == "workflow" and has_durable_workflow)
                     ]
+
+                from distr.core.workflow.development_threads import development_thread_record
+
+                development = development_thread_record(session, root_chat) if owned_by_development else {}
+                if development:
+                    _restore_development_execution_response(messages, development)
 
                 settings = load_settings_from_db()
                 # Use chat row first; fall back to settings so UI always has a value
@@ -1125,6 +1254,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 )
                 additional_context = _chat_additional_context(root_chat.additional_context)
                 compact_checkpoint = additional_context.get("compact_checkpoint")
+                model_route = development.get("model_route") if isinstance(development.get("model_route"), dict) else {}
                 return JSONResponse(
                     {
                         "id": root_chat.id,
@@ -1132,6 +1262,22 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         "messages": messages,
                         "provider": provider,
                         "model_name": model_name,
+                        "project_id": root_chat.project_id,
+                        "route_mode": root_chat.route_mode or "auto",
+                        "execution_profile": root_chat.execution_profile or "code",
+                        "autonomy_level": root_chat.autonomy_level or "full",
+                        "development": development,
+                        "development_board_key": development.get("board_key"),
+                        "development_board_provider": development.get("board_provider"),
+                        "development_board_ticket_key": development.get("board_ticket_key"),
+                        "development_board_ticket_title": development.get("board_ticket_title"),
+                        "development_board_ticket_lane": development.get("board_ticket_lane"),
+                        "pinned": bool(development.get("pinned")),
+                        "permission_profile": development.get("permission_profile") or {},
+                        "remote_continuation": bool(development.get("remote_continuation")),
+                        "reasoning_effort": model_route.get("reasoning_effort") or "medium",
+                        "service_tier": model_route.get("service_tier") or "standard",
+                        "archived": bool(root_chat.is_archived),
                         "voice_provider": voice_provider,
                         # Keep runtime/raw voice ID for agent swapping, and provide a
                         # display label separately for the UI.
@@ -1183,6 +1329,16 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             from distr.core.openai_s2s import apply_s2s_voice_defaults, is_openai_s2s_model
 
             provider = _normalize_provider(raw_provider)
+
+            route_mode = (request_data.route_mode or "auto").strip().lower()
+            if route_mode not in {"auto", "manual"}:
+                raise HTTPException(status_code=422, detail="route_mode must be auto or manual")
+            if request_data.project_id is not None:
+                from distr.core.db.projects import Project
+
+                with get_session() as session:
+                    if session.get(Project, int(request_data.project_id)) is None:
+                        raise HTTPException(status_code=422, detail="Selected project does not exist")
 
             # S2S: force OpenAI provider + Realtime voice on the chat row
             s2s_prov, voice_provider, _s2s_voice = apply_s2s_voice_defaults(
@@ -1238,6 +1394,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 tts_voice=voice_model,
                 title=title,
                 starting_question=starting_question,
+                project_id=request_data.project_id,
+                route_mode=route_mode,
+                execution_profile=request_data.execution_profile,
+                autonomy_level=request_data.autonomy_level,
             )
 
             with get_session() as session:
@@ -1253,6 +1413,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "model_name": chat.model_name,
                     "voice_provider": chat.voice_provider,
                     "voice_model": chat.voice_model,
+                    "project_id": chat.project_id,
+                    "route_mode": chat.route_mode or "auto",
+                    "execution_profile": chat.execution_profile or "code",
+                    "autonomy_level": chat.autonomy_level or "full",
                 }
 
             # ── Persist chat selections to global settings so the next "new chat" ──
@@ -1361,6 +1525,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                _reject_development_lifecycle(session, chat)
                 previous_settings = {
                     "provider": chat.provider,
                     "model_name": chat.model_name,
@@ -1397,6 +1562,21 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     chat.voice_model = (request_data.voice_model or "").strip() or None
                     updated = True
                     settings_fields_touched = True
+                if "project_id" in request_data.model_fields_set:
+                    chat.project_id = request_data.project_id
+                    updated = True
+                if request_data.route_mode is not None:
+                    route_mode = request_data.route_mode.strip().lower()
+                    if route_mode not in {"auto", "manual"}:
+                        raise HTTPException(status_code=422, detail="route_mode must be auto or manual")
+                    chat.route_mode = route_mode
+                    updated = True
+                if request_data.execution_profile is not None:
+                    chat.execution_profile = request_data.execution_profile.strip().lower() or "code"
+                    updated = True
+                if request_data.autonomy_level is not None:
+                    chat.autonomy_level = request_data.autonomy_level.strip().lower() or "full"
+                    updated = True
 
                 # S2S: coerce provider + Realtime voice on the chat row
                 from distr.core.openai_s2s import apply_s2s_voice_defaults, is_openai_s2s_model
@@ -1425,6 +1605,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "model_name": chat.model_name,
                     "voice_provider": chat.voice_provider,
                     "voice_model": chat.voice_model,
+                    "project_id": chat.project_id,
+                    "route_mode": chat.route_mode or "auto",
+                    "execution_profile": chat.execution_profile or "code",
+                    "autonomy_level": chat.autonomy_level or "full",
                 }
 
             # ── Persist to global settings so next new chat defaults to these choices ──
@@ -1511,6 +1695,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root_chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                _reject_development_lifecycle(session, root_chat)
                 rows = _thread_rows_for_compaction(session, chat_id)
                 messages = _messages_from_rows(rows)
                 settings = load_settings_from_db()
@@ -1548,6 +1733,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root_chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root_chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                _reject_development_lifecycle(session, root_chat)
                 rows = _thread_rows_for_compaction(session, chat_id)
                 messages = _messages_from_rows(rows)
                 provider = (
@@ -1599,6 +1785,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                _reject_development_lifecycle(session, root)
                 rows = _thread_rows_for_compaction(session, chat_id)
                 messages = _messages_from_rows(rows)
                 provider = (
@@ -1742,6 +1929,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     model_name=source.model_name,
                     voice_provider=source.voice_provider,
                     voice_model=source.voice_model,
+                    project_id=source.project_id,
+                    route_mode=source.route_mode,
+                    execution_profile=source.execution_profile,
+                    autonomy_level=source.autonomy_level,
+                    params=source.params,
                     created_date=datetime.utcnow(),
                     modified_date=datetime.utcnow(),
                 )
@@ -1786,6 +1978,17 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     ensure_ascii=False,
                     default=str,
                 )
+                try:
+                    fork_params = json.loads(fork.params or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    fork_params = {}
+                if isinstance(fork_params.get("development"), dict):
+                    fork_params["development"] = {
+                        **fork_params["development"],
+                        "forked_from_chat_id": int(chat_id),
+                        "pinned": False,
+                    }
+                    fork.params = json.dumps(fork_params, ensure_ascii=False, default=str)
                 session.commit()
 
             record_chat_audit_event(
@@ -1831,12 +2034,21 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
     @router.delete("/chats/{chat_id}")
     async def delete_chat(chat_id: int):
-        """Delete a chat (cascades to all children)"""
+        """Delete a chat and every thread-owned Development relationship."""
         try:
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not chat:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                _reject_development_lifecycle(session, chat)
+                from distr.core.chat import cleanup_chat_dependencies
+
+                cleanup_chat_dependencies(
+                    session,
+                    chat_id,
+                    delete_owned_ticket=True,
+                    delete_owned_workflows=True,
+                )
                 session.delete(chat)
                 session.commit()
                 from distr.core.chat import remove_chat_transcript_audit_events
@@ -1857,6 +2069,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                if is_development_thread(session, root):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Development tasks cannot be loaded into the Chat agent.",
+                    )
             # Persist last_chat_id and agent_current_chat_id so: (1) agent picks up this chat's voice on reload,
             # (2) web sidebar can show which chat is "In agent" (loadChats returns agent_current_chat_id).
             try:
@@ -1906,6 +2123,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 root = session.query(Chat).filter(Chat.id == chat_id).first()
                 if not root:
                     raise HTTPException(status_code=404, detail="Chat not found")
+                if is_development_thread(session, root):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Development tasks cannot receive Chat agent messages.",
+                    )
                 provider = (
                     getattr(request_data, "provider", None) or ""
                 ).strip() or None
@@ -2006,9 +2228,15 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         intake_context["requested_outcome"] = request_data.intake_requested_outcome
                     if isinstance(request_data.intake_metadata, dict):
                         intake_context["metadata"] = request_data.intake_metadata
-                    signal_options = (
-                        {"work_intake": intake_context} if intake_context else None
-                    )
+                    signal_options: Dict[str, Any] = {}
+                    if intake_context:
+                        signal_options["work_intake"] = intake_context
+                    if request_data.origin_surface:
+                        signal_options["origin_surface"] = request_data.origin_surface
+                    if request_data.origin_request_id:
+                        signal_options["origin_request_id"] = request_data.origin_request_id
+                    if request_data.input_type:
+                        signal_options["input_type"] = request_data.input_type
 
                     signal_manager.web_send_to_agent_requested.emit(
                         chat_id,
@@ -2016,7 +2244,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         speak,
                         provider,
                         model_name,
-                        signal_options,
+                        signal_options or None,
                     )
                 logger.info(
                     "Send-to-agent: emitted web_send_to_agent_requested for chat_id=%s",
@@ -2043,6 +2271,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
         guidance = (request_data.message or "").strip()
         if not guidance:
             raise HTTPException(status_code=400, detail="Steering guidance is required")
+        with get_session() as session:
+            chat = session.query(Chat).filter(Chat.id == chat_id).first()
+            if not chat:
+                raise HTTPException(status_code=404, detail="Chat not found")
+            _reject_development_lifecycle(session, chat)
         from distr.core.chat_turns import get_turns, steer_turn
 
         state = get_turns(chat_id)
@@ -2089,6 +2322,11 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
     @router.post("/chats/{chat_id}/cancel")
     async def cancel_stream(chat_id: int):
         """Tell the desktop agent to interrupt TTS/generation."""
+        with get_session() as session:
+            chat = session.query(Chat).filter(Chat.id == chat_id).first()
+            if not chat:
+                raise HTTPException(status_code=404, detail="Chat not found")
+            _reject_development_lifecycle(session, chat)
         try:
             from distr.core.signals import signal_manager
 

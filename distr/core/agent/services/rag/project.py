@@ -494,6 +494,8 @@ def get_active_project() -> Optional[Dict[str, Any]]:
             "name": project.name,
             "description": project.description,
             "folder_location": project.folder_location,
+            "coding_backend": project.coding_backend or "",
+            "coding_backend_model": project.coding_backend_model or "",
             "startup_instructions": project.startup_instructions,
             "trigger_words": trigger_words,
             "context_items_count": context_count,

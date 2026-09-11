@@ -1,0 +1,28 @@
+{
+  "existing_tests": {
+    "first_group_passed": 49,
+    "second_group_passed": 83,
+    "second_group_failed": 1,
+    "failure": "test_board_project_unification.py::test_projects_navigation_is_replaced_by_the_development_board_surface expects studio.js?v=20260903-2; template has 20260903-7"
+  },
+  "isolated_reproductions": {
+    "backend": 11,
+    "plan_browser": 3,
+    "shell_browser": 1
+  },
+  "shell_failure": {
+    "injection": "GET /tickets/external-boards returns 503; mutations intercepted in separate browser context",
+    "workflow_cards": 0,
+    "displayed_text": [
+      "No ticket boards connected.",
+      "No workflows match this view."
+    ]
+  },
+  "live_workflow_style": {
+    "viewport": 1440,
+    "run_svg_width": 100.828125,
+    "run_svg_height": 100.828125,
+    "run_button_height": 124.828125,
+    "metadata_display": "block"
+  }
+}

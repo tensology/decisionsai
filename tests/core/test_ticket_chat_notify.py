@@ -103,7 +103,44 @@ def test_notify_source_chat_ticket_moved_calls_persist_and_signals(monkeypatch):
 
     assert len(persisted) == 1
     assert persisted[0][0] == chat_root.id
-    assert "advanced to lane \"Done\"" in persisted[0][1]
-    assert str(ticket.id) in persisted[0][1]
+    assert persisted[0][1] == "Ticket moved to Done after workflow completion."
     emit_mock.assert_called()
     upd_mock.assert_called()
+
+
+def test_manual_ticket_move_notice_is_short(monkeypatch):
+    s = _memory_ctx(monkeypatch, "distr.core.db.get_session")
+    board = KanbanBoard(name="B1")
+    s.add(board)
+    s.flush()
+    lane = KanbanLane(board_id=board.id, name="Backlog", position=0)
+    s.add(lane)
+    s.flush()
+    chat_root = Chat(parent_id=None, title="Chat", provider="Ollama", model_name="x")
+    s.add(chat_root)
+    s.flush()
+    ticket = KanbanTicket(lane_id=lane.id, title="Fix it", priority="medium", position=0, source_chat_id=chat_root.id)
+    s.add(ticket)
+    s.commit()
+
+    persisted = []
+    monkeypatch.setattr("distr.core.chat.ChatService.append_assistant_notice", lambda cid, msg, hidden=False: persisted.append((cid, msg)) or True)
+    monkeypatch.setattr(
+        "distr.core.signals.signal_manager",
+        SimpleNamespace(
+            chat_message_added=SimpleNamespace(emit=MagicMock()),
+            chat_updated=SimpleNamespace(emit=MagicMock()),
+        ),
+    )
+
+    from distr.core.kanban.ticket_chat_notify import notify_source_chat_ticket_moved
+
+    notify_source_chat_ticket_moved(
+        ticket.id,
+        board_name="B1",
+        from_lane_name="Backlog",
+        to_lane_name="QA",
+        reason="manual",
+    )
+
+    assert persisted == [(chat_root.id, "Ticket moved: Backlog to QA.")]

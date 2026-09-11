@@ -43,6 +43,7 @@
     var kbBoardWS = null;
     var kbBoardWSReconnectTimer = null;
     var kbBoardRefreshTimer = null;
+    var kbActiveRunSyncGeneration = 0;
     var kbBoardViewMode = "list";
     var waTicketComposeInFlight = false;
     var waSidebarChatListMode = false;
@@ -1413,11 +1414,27 @@
             lanesEl.classList.add("hidden");
             listEl.classList.remove("hidden");
             renderTicketList(lanes, isLocal, boardData);
-            return;
+        } else {
+            listEl.classList.add("hidden");
+            lanesEl.classList.remove("hidden");
+            renderLanes(lanes, isLocal, boardData);
         }
-        listEl.classList.add("hidden");
-        lanesEl.classList.remove("hidden");
-        renderLanes(lanes, isLocal, boardData);
+        if (isLocal) syncVisibleActiveRunBadges();
+    }
+
+    function syncVisibleActiveRunBadges() {
+        var generation = ++kbActiveRunSyncGeneration;
+        var boardId = currentBoard && currentBoard.source === "database" ? Number(currentBoard.id) : null;
+        if (!boardId) return;
+        apiFetch("/api/workflows/active-runs?limit=200").then(function(runs) {
+            if (generation !== kbActiveRunSyncGeneration) return;
+            if (!currentBoard || currentBoard.source !== "database" || Number(currentBoard.id) !== boardId) return;
+            (Array.isArray(runs) ? runs : []).forEach(function(run) {
+                if (!run || !run.ticket_id) return;
+                if (run.board_id && Number(run.board_id) !== boardId) return;
+                setTicketWorkflowStatusOnCard(run.ticket_id, run.status);
+            });
+        }).catch(function() {});
     }
 
     function refreshCurrentBoardRealtime() {
@@ -2895,8 +2912,10 @@
     // ── Workflow run popover ──────────────────────────────────────────
 
     var _runPopover = null;
+    var _runPopoverRequestGeneration = 0;
 
     function _closeRunPopover() {
+        _runPopoverRequestGeneration += 1;
         if (_runPopover) {
             _runPopover.remove();
             _runPopover = null;
@@ -2905,14 +2924,19 @@
 
     // Global click-outside to close popover.
     document.addEventListener("click", function(e) {
-        if (_runPopover && !_runPopover.contains(e.target) && !e.target.closest(".kb-wf-status-badge")) {
+        if ((!_runPopover || !_runPopover.contains(e.target)) && !e.target.closest(".kb-wf-status-badge")) {
             _closeRunPopover();
         }
     }, true);
 
     function showRunPopover(badgeEl, ticketId) {
         _closeRunPopover();
+        var requestGeneration = _runPopoverRequestGeneration;
+        var boardId = currentBoard && currentBoard.source === "database" ? Number(currentBoard.id) : null;
         apiFetch("/api/tickets/tickets/" + ticketId + "/active-run").then(function(data) {
+            if (requestGeneration !== _runPopoverRequestGeneration) return;
+            if (!badgeEl.isConnected) return;
+            if (!currentBoard || currentBoard.source !== "database" || Number(currentBoard.id) !== boardId) return;
             if (!data || !data.active) {
                 showSnackbar("No active run found for this ticket");
                 return;
@@ -2929,27 +2953,30 @@
             var phaseLine = data.phase
                 ? '<div class="text-gray-400">Phase: <span class="text-gray-200">' + esc(data.phase) + "</span></div>"
                 : "";
-            var wfName = data.workflow_name || ("Workflow #" + data.workflow_id);
+            var wfName = data.execution_kind === "development"
+                ? (data.ticket_title || "Development task")
+                : (data.workflow_name || ("Workflow #" + data.workflow_id));
+            var cancelUrl = (data.cancellation_target || {}).url || "";
+            var openUrl = data.open_url || "/development/";
 
             pop.innerHTML =
                 '<div class="flex items-center justify-between gap-2 mb-2">' +
                     '<span class="font-medium text-white truncate">' + esc(wfName) + "</span>" +
                     '<span class="' + statusCls + ' font-medium shrink-0">' + esc(data.status) + "</span>" +
+                    '<details class="relative kb-run-actions"><summary class="list-none cursor-pointer rounded px-2 py-1 hover:bg-white/10" aria-label="Execution actions">•••</summary>' +
+                        '<div class="absolute right-0 z-10 mt-1 min-w-40 rounded border border-white/15 bg-[#111936] p-1 shadow-xl">' +
+                            '<a class="block rounded px-3 py-2 text-gray-200 hover:bg-white/10" href="' + esc(openUrl) + '">Open</a>' +
+                            (data.related_ticket_url ? '<a class="block rounded px-3 py-2 text-gray-200 hover:bg-white/10" href="' + esc(data.related_ticket_url) + '">Related ticket</a>' : '') +
+                            (data.status === "waiting" ? '<a class="block rounded px-3 py-2 text-amber-300 hover:bg-white/10" href="' + esc(openUrl) + '">Continue / Respond</a>' : '') +
+                            '<button class="kb-run-pop-cancel block w-full rounded px-3 py-2 text-left text-red-400 hover:bg-red-500/20" data-cancel-url="' + esc(cancelUrl) + '">Cancel</button>' +
+                        '</div></details>' +
                 "</div>" +
                 stepLine + phaseLine +
-                '<div class="flex items-center gap-2 mt-3">' +
-                    '<button class="kb-run-pop-cancel flex-1 py-1 rounded border border-red-500/60 text-red-400 hover:bg-red-500/20 transition-colors">Stop Run</button>' +
-                    '<a class="kb-run-pop-view flex-1 text-center py-1 rounded border border-white/20 text-gray-300 hover:bg-white/10 transition-colors" href="/workflows/" target="_blank">View →</a>' +
-                "</div>";
+                '<div class="text-gray-500 mt-2">Use the three-dot menu to open, respond, or cancel this execution.</div>';
 
             pop.querySelector(".kb-run-pop-cancel").addEventListener("click", function() {
                 _closeRunPopover();
-                cancelTicketRun(data.run_id, data.workflow_id, ticketId);
-            });
-
-            // Set localStorage so the workflows page auto-selects this workflow.
-            pop.querySelector(".kb-run-pop-view").addEventListener("click", function() {
-                try { localStorage.setItem("wf_last_selected", String(data.workflow_id)); } catch(e) {}
+                cancelTicketRun(cancelUrl, ticketId);
             });
 
             document.body.appendChild(pop);
@@ -2965,11 +2992,12 @@
             pop.style.top = top + "px";
             pop.style.left = left + "px";
         }).catch(function(e) {
+            if (requestGeneration !== _runPopoverRequestGeneration) return;
             showSnackbar("Could not load run info: " + e.message, "error");
         });
     }
 
-    function cancelTicketRun(runId, workflowId, ticketId) {
+    function cancelTicketRun(cancelUrl, ticketId) {
         showKanbanConfirm({
             title: "Stop workflow run?",
             message: "The workflow will be cancelled and can be restarted from the ticket.",
@@ -2977,7 +3005,7 @@
             danger: true,
             onConfirm: function() {
                 hideKanbanConfirm();
-                apiFetch("/api/workflows/" + workflowId + "/cancel-run/" + runId, { method: "POST" })
+                apiFetch(cancelUrl, { method: "POST" })
                     .then(function() {
                         showSnackbar("Workflow run stopped");
                         setTicketWorkflowStatusOnCard(ticketId, "cancelled");
@@ -2991,37 +3019,62 @@
 
     function setTicketWorkflowStatusOnCard(ticketId, workflowStatus) {
         if (!ticketId) return;
-        var card = document.querySelector('.kb-card[data-ticket-id="' + String(ticketId) + '"]');
-        if (!card) return;
+        var cards = document.querySelectorAll(
+            '.kb-card[data-ticket-id="' + String(ticketId) + '"], ' +
+            '.kb-ticket-list-row[data-ticket-id="' + String(ticketId) + '"]'
+        );
+        if (!cards.length) return;
         var status = String(workflowStatus || "").toLowerCase();
-        var badge = card.querySelector(".kb-wf-status-badge");
-        if (!status) {
-            if (badge) badge.remove();
-            return;
-        }
         var isActive = status === "running" || status === "waiting";
         var cls = "bg-gray-500/25 text-gray-200";
         if (isActive) cls = "bg-sky-500/25 text-sky-200 cursor-pointer hover:bg-sky-500/40";
         else if (status === "completed") cls = "bg-green-500/25 text-green-200";
         else if (status === "failed" || status === "cancelled") cls = "bg-red-500/25 text-red-200";
-        if (!badge) {
-            var actionsRow = card.querySelector(".kb-card-actions");
-            if (!actionsRow) return;
-            var wrap = document.createElement("div");
-            wrap.className = "mt-1";
-            var tag = isActive ? "button" : "span";
-            wrap.innerHTML = '<' + tag + ' class="kb-wf-status-badge text-[10px] px-1.5 py-0.5 rounded font-medium"></' + tag + '>';
-            card.insertBefore(wrap, actionsRow);
-            badge = wrap.querySelector(".kb-wf-status-badge");
-            if (isActive) {
+        cards.forEach(function(card) {
+            var badge = card.querySelector(".kb-wf-status-badge");
+            if (!status) {
+                if (badge) badge.remove();
+                return;
+            }
+            if (!badge) {
+                var listBadges = card.querySelector(".kb-ticket-list-badges");
+                if (listBadges) {
+                    var listTag = isActive ? "button" : "span";
+                    var listWrap = document.createElement("span");
+                    listWrap.innerHTML = '<' + listTag + ' class="kb-wf-status-badge text-[10px] px-1.5 py-0.5 rounded font-medium"></' + listTag + '>';
+                    badge = listWrap.firstElementChild;
+                    listBadges.appendChild(badge);
+                }
+            }
+            if (!badge) {
+                var actionsRow = card.querySelector(".kb-card-actions");
+                if (!actionsRow) return;
+                var wrap = document.createElement("div");
+                wrap.className = "mt-1";
+                var tag = isActive ? "button" : "span";
+                wrap.innerHTML = '<' + tag + ' class="kb-wf-status-badge text-[10px] px-1.5 py-0.5 rounded font-medium"></' + tag + '>';
+                card.insertBefore(wrap, actionsRow);
+                badge = wrap.querySelector(".kb-wf-status-badge");
+            }
+            if (badge && isActive && badge.tagName !== "BUTTON") {
+                var activeButton = document.createElement("button");
+                badge.replaceWith(activeButton);
+                badge = activeButton;
+            } else if (badge && !isActive && badge.tagName === "BUTTON") {
+                var inactiveBadge = document.createElement("span");
+                badge.replaceWith(inactiveBadge);
+                badge = inactiveBadge;
+            }
+            if (badge && isActive && badge.tagName === "BUTTON" && badge.dataset.runPopoverBound !== "1") {
+                badge.dataset.runPopoverBound = "1";
                 badge.addEventListener("click", function(e) {
                     e.stopPropagation();
                     showRunPopover(badge, ticketId);
                 });
             }
-        }
-        badge.className = "kb-wf-status-badge " + cls + " text-[10px] px-1.5 py-0.5 rounded font-medium";
-        badge.textContent = status;
+            badge.className = "kb-wf-status-badge " + cls + " text-[10px] px-1.5 py-0.5 rounded font-medium";
+            badge.textContent = status;
+        });
     }
 
     function openSendWorkflowModal(ticket, source) {

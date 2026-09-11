@@ -201,7 +201,7 @@ class ContextAssembler:
     def _fetch_chat_history(self, settings: dict) -> list:
         from distr.core.chat import ChatService
 
-        chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+        chat_id = ChatService.get_current_chat_id()
         if not chat_id:
             return []
 
@@ -458,11 +458,16 @@ class ContextAssembler:
         from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
         from distr.core.db import get_session
 
-        chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
-        if not chat_id:
-            return []
-
         with get_session() as session:
+            from distr.core.workflow.development_threads import resolve_conversational_chat_id
+
+            chat_id = resolve_conversational_chat_id(
+                session,
+                settings.get("agent_current_chat_id"),
+                settings.get("last_chat_id"),
+            )
+            if not chat_id:
+                return []
             # Find audit workflows for this chat
             audit_workflows = (
                 session.query(AutoWorkflow)

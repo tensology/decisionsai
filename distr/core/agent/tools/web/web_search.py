@@ -228,9 +228,12 @@ class WebSearchTool(BaseTool):
         "1. Weather - 'what's the weather in [location]', 'is it raining in [city]' "
         "2. News - 'what's the news', 'latest news about [topic]' "
         "3. People - 'who is [person]', 'tell me about [person]' "
-        "4. Current events - anything that requires up-to-date information from the internet. "
-        "IMPORTANT: Do NOT use this tool for general knowledge, definitions, or lists of common things (e.g. 'list 3 foods'). "
-        "Only search if you cannot answer from your own knowledge."
+        "4. Current events and local listings - businesses, shops, restaurants, services, "
+        "hours, addresses, availability, and anything location-specific. "
+        "Do not answer a location-specific lookup from memory. Search first, and use "
+        "additional focused queries when needed to produce a useful verified list. "
+        "Do not use this tool for stable general knowledge, definitions, or generic lists "
+        "that do not depend on a place or current information."
     )
     args_schema: type[BaseModel] = WebSearchInput
     
@@ -372,4 +375,3 @@ class WebSearchTool(BaseTool):
     async def _arun(self, query: str = "", **kwargs) -> str:
         """Async version - just calls sync version."""
         return self._run(query=query)
-

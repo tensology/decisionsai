@@ -42,6 +42,7 @@ def _serialize_workflow(wf: AutoWorkflow) -> Dict[str, Any]:
     steps = sorted(wf.steps, key=lambda s: s.position)
     return {
         "id": wf.id, "name": wf.name,
+        "chat_id": wf.chat_id,
         "description": wf.description or "",
         "workflow_type": wf.workflow_type or "manual",
         "run_settings": _safe_json_loads(getattr(wf, "run_settings", None)) or {},

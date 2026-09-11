@@ -1,0 +1,6 @@
+<section class="development-workspace reports-workspace hidden" id="reports-workspace" aria-label="Reports">
+    <header><strong>Run history</strong><button type="button" id="reports-refresh" class="secondary-button">Refresh</button></header>
+    <p>Recent workflow, automation and standalone execution records. Linked records may describe stages of the same work.</p>
+    <div class="reports-filters"><label>Source<select id="reports-source"><option value="all">All sources</option><option value="workflow">Workflows</option><option value="automation">Automations</option><option value="execution">Standalone executions</option></select></label><label>Status<select id="reports-status"><option value="all">All statuses</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="running">Running</option><option value="cancelled">Cancelled</option></select></label></div>
+    <div id="reports-results" aria-live="polite"></div>
+</section>

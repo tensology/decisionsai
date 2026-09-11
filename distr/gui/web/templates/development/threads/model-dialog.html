@@ -1,0 +1,22 @@
+<dialog class="studio-dialog model-dialog" id="model-dialog" aria-label="Model and performance">
+        <form method="dialog" id="model-form">
+            <div class="model-menu-shell">
+                <div class="model-menu-main" id="model-menu-main">
+                    <button type="button" class="model-menu-row" data-model-pane="provider"><span>Provider</span><strong id="model-provider-value">Auto</strong><i aria-hidden="true">›</i></button>
+                    <button type="button" class="model-menu-row" data-model-pane="model"><span>Model</span><strong id="model-catalog-value">Automatic</strong><i aria-hidden="true">›</i></button>
+                    <button type="button" class="model-menu-row" id="model-effort-row" data-model-pane="effort"><span>Effort</span><strong id="model-effort-value">Medium</strong><i aria-hidden="true">›</i></button>
+                    <button type="button" class="model-menu-row" id="model-speed-row" data-model-pane="speed"><span>Speed</span><strong id="model-speed-value">Standard</strong><i aria-hidden="true">›</i></button>
+                    <div class="prompt-mode-options" aria-label="Prompt options">
+                        <button type="button" data-prompt-mode="full" title="Work: plan, implement, test, and correct"><span aria-hidden="true">◆</span><small>Work</small></button>
+                        <button type="button" data-prompt-mode="plan" title="Plan: prepare the work without implementing it"><span aria-hidden="true">≡</span><small>Plan</small></button>
+                        <button type="button" data-prompt-mode="goal" title="Goal: keep working across development turns"><span aria-hidden="true">◎</span><small>Goal</small></button>
+                        <button type="button" id="prompt-playwright-toggle" title="Use the browser for this prompt" aria-pressed="false"><span aria-hidden="true">▣</span><small>Playwright</small></button>
+                    </div>
+                </div>
+                <div class="model-submenu hidden" id="model-submenu" aria-live="polite">
+                    <header id="model-submenu-header"><button type="button" id="model-submenu-back" aria-label="Back">‹</button><strong id="model-submenu-title">Models</strong><input class="hidden" id="model-submenu-search" type="search" placeholder="Search models" aria-label="Search models" autocomplete="off"></header>
+                    <div class="model-submenu-list" id="model-submenu-list" role="menu"></div>
+                </div>
+            </div>
+        </form>
+    </dialog>

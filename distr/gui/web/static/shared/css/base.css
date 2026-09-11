@@ -674,6 +674,32 @@ textarea:focus-visible {
     line-height: 1.5;
 }
 
+.decisions-confirm-option {
+    display: flex;
+    min-height: 2.25rem;
+    align-items: center;
+    gap: 0.625rem;
+    margin-top: 0.875rem;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.045);
+    color: #f3f4f6;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.decisions-confirm-option:hover {
+    background: rgba(255, 255, 255, 0.075);
+}
+
+.decisions-confirm-option input {
+    width: 1rem;
+    height: 1rem;
+    flex: 0 0 1rem;
+    accent-color: #f97316;
+}
+
 .decisions-confirm-hotkeys {
     display: flex;
     align-items: center;

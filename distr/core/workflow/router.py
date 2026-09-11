@@ -1931,7 +1931,10 @@ class StepRouter:
                 latest_data = json.loads(run.run_data or "{}") or {}
                 latest_kind = str(latest_data.get("waiting_kind") or "").strip().lower()
                 if latest_kind in interactive_kinds:
-                    from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+                    from distr.core.kanban.ticket_workflow_engagement import (
+                        build_operator_waiting_message,
+                        notify_ticket_workflow_progress,
+                    )
 
                     question = str(
                         latest_data.get("provider_preflight_prompt")
@@ -1939,14 +1942,22 @@ class StepRouter:
                         or result
                         or ""
                     ).strip()
+                    outbound_question = build_operator_waiting_message(
+                        workflow_name=str(latest_data.get("workflow_name") or "Workflow"),
+                        ticket_title=str(latest_data.get("ticket_title") or ""),
+                        step_name=str(latest_data.get("step_name") or "the current phase"),
+                        waiting_kind=latest_kind,
+                    )
                     notify_ticket_workflow_progress(
                         run_id=run_id,
                         step_id=step_id,
-                        body=question,
-                        voice_body=question,
+                        body=outbound_question,
+                        voice_body=None,
                         state_fingerprint=f"workflow-decision:{latest_kind}:{run_id}:{step_id}",
                         priority="high",
                         requires_response=True,
+                        audible=False,
+                        allow_voice=False,
                     )
             except Exception:
                 logger.warning("Could not send workflow decision to Telegram", exc_info=True)

@@ -34,7 +34,10 @@ def test_sequential_ticket_group_starts_one_and_carries_explicit_group(monkeypat
         "distr.core.workflow.ticket_dispatch.hydrate_ticket_run_ref",
         lambda item, _workflow_id: hydrated[item["ticket_id"]],
     )
-    monkeypatch.setattr(dispatcher, "start_workflow_run", lambda workflow_id, **kwargs: calls.append((workflow_id, kwargs)) or {"run_id": 701})
+    monkeypatch.setattr(
+        "distr.core.workflow.work_dispatch.dispatch_work_item",
+        lambda *, workflow_id, **kwargs: calls.append((workflow_id, kwargs)) or {"run_id": 701},
+    )
 
     result = dispatcher.start_workflow_ticket_group(
         12,
@@ -83,13 +86,13 @@ def test_parallel_ticket_group_attempts_each_ticket_and_reports_partial_errors(m
         },
     )
 
-    def start(_workflow_id, **kwargs):
+    def start(*, workflow_id, **kwargs):
         calls.append(kwargs)
         if kwargs["ticket_id"] == 9:
             return {"error": "project concurrency guard"}
         return {"run_id": 800 + kwargs["ticket_id"]}
 
-    monkeypatch.setattr(dispatcher, "start_workflow_run", start)
+    monkeypatch.setattr("distr.core.workflow.work_dispatch.dispatch_work_item", start)
     result = dispatcher.start_workflow_ticket_group(
         2,
         [{"ticket_id": 8}, {"ticket_id": 9}, {"ticket_id": 10}],
@@ -192,7 +195,10 @@ def test_group_auto_advance_uses_next_selected_ticket_not_global_queue(monkeypat
         lambda item, workflow_id: next(row for row in items if row["ticket_id"] == item["ticket_id"]),
     )
     calls = []
-    monkeypatch.setattr(dispatcher, "start_workflow_run", lambda workflow_id, **kwargs: calls.append((workflow_id, kwargs)) or {"run_id": 502})
+    monkeypatch.setattr(
+        "distr.core.workflow.work_dispatch.dispatch_work_item",
+        lambda *, workflow_id, **kwargs: calls.append((workflow_id, kwargs)) or {"run_id": 502},
+    )
     monkeypatch.setattr("distr.gui.web.kanban_events.increment_kanban_updated", lambda **_kwargs: None)
 
     dispatcher._maybe_auto_start_next_queued_ticket(501, 12)

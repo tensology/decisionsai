@@ -27,9 +27,10 @@ class SignalBridgeMixin:
             return False
         try:
             from distr.core.db import Chat, get_session
+            from distr.core.workflow.development_threads import resolve_conversational_chat_id
 
             with get_session() as session:
-                return session.get(Chat, chat_id_int) is not None
+                return resolve_conversational_chat_id(session, chat_id_int) is not None
         except Exception:
             return True
 
@@ -253,7 +254,7 @@ class SignalBridgeMixin:
             signal_manager.ticket_dictation_hotkey_pressed.disconnect()
             signal_manager.ticket_dictation_hotkey_released.disconnect()
             signal_manager.voice_set_is_listening.disconnect()
-            signal_manager.hands_free_mode_changed.disconnect()
+            signal_manager.hands_free_command_requested.disconnect()
             signal_manager.playback_speed_changed.disconnect()
         except (TypeError, RuntimeError):
             pass  # Signals weren't connected, that's fine
@@ -289,9 +290,17 @@ class SignalBridgeMixin:
             lambda enabled: self._send_command_to_agent('set_listening', {'enabled': enabled})
         )
         
-        # Hands-free mode signals
-        signal_manager.hands_free_mode_changed.connect(
-            lambda enabled: self._send_command_to_agent('set_hands_free', {'enabled': enabled})
+        # Hands-free commands are distinct from agent-to-GUI state updates. Keeping
+        # these paths separate prevents a reported state change from echoing back
+        # to the agent and lets an explicit disable carry its restore policy once.
+        signal_manager.hands_free_command_requested.connect(
+            lambda enabled, clear_pending_restore: self._send_command_to_agent(
+                'set_hands_free',
+                {
+                    'enabled': enabled,
+                    'clear_pending_restore': clear_pending_restore,
+                },
+            )
         )
         
         # Playback speed signals
@@ -345,6 +354,10 @@ class SignalBridgeMixin:
                     params['speak'] = bool(speak.get('speak'))
                 if speak.get('input_type'):
                     params['telegram_input_type'] = str(speak.get('input_type'))
+                if speak.get('surface'):
+                    params['external_surface'] = str(speak.get('surface'))
+                if speak.get('request_id'):
+                    params['external_request_id'] = str(speak.get('request_id'))
                 if speak.get('chat_id') is not None:
                     try:
                         params['chat_id'] = int(speak.get('chat_id'))
@@ -382,9 +395,10 @@ class SignalBridgeMixin:
             def _integration_bus_chat_id_validator(chat_id):
                 try:
                     from distr.core.db import Chat, get_session
+                    from distr.core.workflow.development_threads import resolve_conversational_chat_id
 
                     with get_session() as db:
-                        return db.get(Chat, int(chat_id)) is not None
+                        return resolve_conversational_chat_id(db, chat_id) is not None
                 except Exception:
                     logger.debug("Integration message bus chat validation failed", exc_info=True)
                     return False
@@ -404,6 +418,12 @@ class SignalBridgeMixin:
         def on_current_chat_changed(chat_id):
             # Agent-originated current_chat_changed is UI-notification only; do not echo back.
             if self._suppress_current_chat_relay:
+                return
+            if not self._chat_id_exists(chat_id):
+                logger.warning(
+                    "current_chat_changed: rejected non-Chat surface id=%s",
+                    chat_id,
+                )
                 return
             try:
                 settings = load_settings_from_db()
@@ -592,7 +612,7 @@ class SignalBridgeMixin:
                     combined = redact_filesystem_paths_for_conversation(combined)
                     _post_chat_event({"event": "stream_token", "chat_id": cid, "token": combined})
 
-        def on_chat_message_added_web(chat_id, role, content):
+        def on_chat_message_added_web(chat_id, role, content, chat_row_id):
             c = content or ""
             if role == "assistant":
                 from distr.core.agent.services.llm.text_utils import (
@@ -605,6 +625,7 @@ class SignalBridgeMixin:
                 "chat_id": int(chat_id),
                 "role": role,
                 "content": c,
+                "chat_row_id": chat_row_id,
                 "timestamp": int(time.time() * 1000),
             })
         signal_manager.chat_message_added.connect(on_chat_message_added_web)
@@ -734,15 +755,23 @@ class SignalBridgeMixin:
                 ):
                     return
                 speak_bool = coerce_speak_enabled(speak, default=True)
+                origin_surface = str(opts.get('origin_surface') or '').strip().lower()
                 params = {
                     'text': message,
-                    'speak': speak_bool,
+                    'speak': False if origin_surface == 'remote' else speak_bool,
                     'chat_id': chat_id,
                 }
+                if origin_surface == 'remote':
+                    params['is_telegram'] = True
+                    params['external_surface'] = 'remote'
+                    if opts.get('origin_request_id'):
+                        params['external_request_id'] = str(opts['origin_request_id'])
+                    if opts.get('input_type') in ('text', 'voice'):
+                        params['telegram_input_type'] = str(opts['input_type'])
                 if intake_context.get("intake_uid"):
                     params["work_intake_uid"] = str(intake_context["intake_uid"])
                 mgr = getattr(self, 'telegram_manager', None)
-                if speak_bool and mgr is not None:
+                if origin_surface != 'remote' and speak_bool and mgr is not None:
                     from distr.core.integrations.telegram.remote_tts_delivery import (
                         has_live_pending_remote_context,
                     )

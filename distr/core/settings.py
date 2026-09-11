@@ -28,6 +28,7 @@ DEFAULT_SETTINGS = {
     'welcome_greet_me': True,
     'telegram_send_online_notice': False,
     'load_on_startup': True,
+    'default_project_editor': 'codex',
     'always_confirm_file_operations': True,
     'restore_position': True,
     'selected_oracle': 'oracle',

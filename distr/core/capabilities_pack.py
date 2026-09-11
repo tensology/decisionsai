@@ -23,7 +23,7 @@ from distr.core.plugins import ecc_vendor_dir, project_root
 PROJECT_ROOT = project_root()
 ECC_SKILLS = ecc_vendor_dir() / "skills"
 LOCAL_SKILLS = PROJECT_ROOT / "skills"
-STATE_VERSION = 1
+STATE_VERSION = 2
 BROWSER_USE_VERSION = "0.11.13"
 
 # ECC skills for browser QA, Playwright, video, Remotion, and content pipelines.
@@ -50,9 +50,17 @@ BROWSER_CONTENT_ECC_SKILLS: tuple[str, ...] = (
 # Decisions-native skills (repo skills/).
 LOCAL_HARNESS_SKILLS: tuple[str, ...] = (
     "decisions-playwright",
+    "decisions-computer-use",
     "decisions-browser-stack",
     "decisions-harness-stack",
 )
+
+EXTERNAL_SKILL_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "impeccable": (
+        ".agents/skills/impeccable",
+        ".codex/skills/impeccable",
+    ),
+}
 
 
 def _state_path(home: Path) -> Path:
@@ -67,7 +75,8 @@ def _mcp_recommendations_path(home: Path) -> Path:
     return home / ".decisions" / "harness" / "mcp-recommendations.json"
 
 
-def _skill_sources() -> dict[str, Path]:
+def _skill_sources(*, home: Path | None = None) -> dict[str, Path]:
+    base_home = Path(home).expanduser() if home is not None else Path.home()
     sources: dict[str, Path] = {}
     for skill_id in BROWSER_CONTENT_ECC_SKILLS:
         path = ECC_SKILLS / skill_id
@@ -77,15 +86,26 @@ def _skill_sources() -> dict[str, Path]:
         path = LOCAL_SKILLS / skill_id
         if path.is_dir():
             sources[skill_id] = path
+    for skill_id, candidates in EXTERNAL_SKILL_CANDIDATES.items():
+        for candidate in candidates:
+            path = base_home / candidate
+            if (path / "SKILL.md").is_file():
+                sources[skill_id] = path
+                break
     return sources
 
 
-def _fingerprint(detected: dict[str, bool], skill_ids: list[str]) -> str:
+def _fingerprint(detected: dict[str, bool], sources: dict[str, Path]) -> str:
     payload = {
         "state_version": STATE_VERSION,
-        "skill_ids": sorted(skill_ids),
+        "skill_ids": sorted(sources),
         "detected": detected,
         "ecc_mtime": ECC_SKILLS.stat().st_mtime if ECC_SKILLS.is_dir() else 0,
+        "source_mtimes": {
+            skill_id: (path / "SKILL.md").stat().st_mtime
+            for skill_id, path in sources.items()
+            if (path / "SKILL.md").is_file()
+        },
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -111,7 +131,9 @@ Hermes workflows, Codex, Cursor, Claude, and Pi without hunting the ECC tree.
 
 ## Installed skill families
 
+- **UI quality:** impeccable for design, refinement, audits, and polish
 - **Browser / QA:** browser-qa, webapp-testing, e2e-testing, decisions-playwright
+- **Native / cross-app control:** decisions-computer-use when the active runtime exposes computer-use tools
 - **Video / motion:** video-editing, remotion-video-creation, manim-video, videodb
 - **Content:** content-engine, article-writing, brand-voice, crosspost, social-publisher, marketing-campaign
 - **Media APIs:** fal-ai-media (configure MCP — see `{_mcp_recommendations_path(Path.home())}`)
@@ -126,6 +148,7 @@ Registry cache: `{registry_path}`
 ## Runtime tools (Decisions server)
 
 - **Playwright:** `playwright_browser` tool + workflow `playwright` steps. Chromium installed by `bin/setup.py`.
+- **Computer use:** runtime-gated native/browser control. Use `decisions-computer-use`; do not assume the tool exists in every harness.
 - **browser-use:** Python package in Decisions venv when setup runs. Use for agentic browser loops; fall back to Playwright scripts.
 - **RTK:** compresses shell output (git, tests) — install via `scripts/setup_project_clis.sh rtk`.
 - **Remotion:** per-project `npm install` — skills guide composition; no global Remotion required.
@@ -165,6 +188,18 @@ def _mcp_recommendations() -> dict[str, Any]:
             "description": "Decisions Hermes playwright_browser tool + workflow playwright steps",
             "setup": "bin/setup.py installs playwright + chromium in the Decisions venv",
             "skill": "decisions-playwright",
+        },
+        "computer_use": {
+            "description": "Runtime-gated native app and cross-app computer control",
+            "setup": "Use the computer-use/CUA tool exposed by the active harness; no MCP is installed by Decisions",
+            "skill": "decisions-computer-use",
+            "status": "runtime_capability",
+        },
+        "impeccable": {
+            "description": "UI design, refinement, audit, and polish skill set",
+            "setup": "Install at ~/.agents/skills/impeccable or ~/.codex/skills/impeccable; Decisions projects it into detected harnesses",
+            "skill": "impeccable",
+            "status": "external_skill",
         },
         "browser_use": {
             "description": "Agentic browser automation (Python)",
@@ -266,14 +301,22 @@ def _ensure_browser_use_package(*, enabled: bool) -> dict[str, Any]:
 
 
 def default_browser_content_pre_chain() -> list[str]:
-    return ["decisions-harness-stack", "browser-qa", "decisions-playwright"]
+    return ["decisions-harness-stack"]
 
 
 def merge_browser_content_pre_chain(skill_ids: list[str], *, project_folder: str = "") -> list[str]:
     from distr.core.competition_pack import merge_competition_pre_chain
 
     merged = merge_competition_pre_chain(skill_ids, project_folder=project_folder)
-    baseline = default_browser_content_pre_chain()
+    blob = " ".join(merged).lower()
+    routed: list[str] = []
+    if any(token in blob for token in ("ui", "frontend", "design", "css", "visual", "polish")):
+        routed.extend(["impeccable", "decisions-playwright"])
+    elif any(token in blob for token in ("browser", "playwright", "e2e", "webapp")):
+        routed.append("decisions-playwright")
+    if any(token in blob for token in ("computer use", "computer-use", "native app", "cross-app")):
+        routed.append("decisions-computer-use")
+    baseline = [*default_browser_content_pre_chain(), *routed]
     out: list[str] = []
     seen: set[str] = set()
     for skill_id in [*baseline, *merged]:
@@ -291,7 +334,7 @@ def merge_browser_content_pre_chain(skill_ids: list[str], *, project_folder: str
 
 
 def merge_harness_pre_chain(skill_ids: list[str], *, project_folder: str = "") -> list[str]:
-    """Full workflow pre_chain merge: competition → browser → design → agent-reach → community."""
+    """Merge the default infrastructure and intent-routed skills for every workflow."""
     chain = merge_browser_content_pre_chain(skill_ids, project_folder=project_folder)
     from distr.core.community_skills_pack import merge_community_pre_chain
 
@@ -315,9 +358,9 @@ def ensure_capabilities_pack_setup(
 ) -> dict[str, Any]:
     base_home = Path(home).expanduser() if home is not None else Path.home()
     detected = detected_harnesses()
-    sources = _skill_sources()
+    sources = _skill_sources(home=base_home)
     skill_ids = sorted(sources.keys())
-    fingerprint = _fingerprint(detected, skill_ids)
+    fingerprint = _fingerprint(detected, sources)
     registry_path = _registry_cache_path(base_home)
 
     state_path = _state_path(base_home)
@@ -335,12 +378,24 @@ def ensure_capabilities_pack_setup(
             {
                 "id": skill_id,
                 "path": str(path),
-                "source": "ecc_vendor" if skill_id in BROWSER_CONTENT_ECC_SKILLS else "local",
+                "source": (
+                    "ecc_vendor"
+                    if skill_id in BROWSER_CONTENT_ECC_SKILLS
+                    else "external"
+                    if skill_id in EXTERNAL_SKILL_CANDIDATES
+                    else "local"
+                ),
             }
             for skill_id, path in sources.items()
         ]
         _write_json(registry_path, rows)
         _write_json(_mcp_recommendations_path(base_home), _mcp_recommendations())
+        try:
+            from distr.core.skills.catalog import load_registry
+
+            load_registry.cache_clear()
+        except Exception:
+            pass
 
     written = install_skills_to_harnesses(
         home=base_home,
@@ -362,7 +417,8 @@ def ensure_capabilities_pack_setup(
             "globs:\n"
             "alwaysApply: false\n"
             "---\n\n"
-            "For web QA use skills browser-qa, webapp-testing, e2e-testing, or decisions-playwright.\n"
+            "For UI design and polish use impeccable; for web QA use browser-qa, webapp-testing, e2e-testing, or decisions-playwright.\n"
+            "For native or cross-app control use decisions-computer-use only when the runtime exposes computer-use tools.\n"
             "For video/content use video-editing, remotion-video-creation, content-engine, article-writing.\n"
             "For generated media configure fal-ai MCP (see ~/.decisions/harness/mcp-recommendations.json).\n"
         )

@@ -147,6 +147,22 @@ def test_codex_result_handoff_reads_final_agent_message_from_jsonl():
     assert result == "Status: completed\nSummary: final"
 
 
+def test_codex_protocol_stream_buffers_partial_jsonl_and_ignores_transport_noise():
+    backend = CodexBackend()
+
+    first, buffered = backend._protocol_events(
+        'startup warning\n{"type":"item.started","item":{"id":"cmd-1","type":"command_execution",'
+    )
+    second, buffered = backend._protocol_events(
+        '"command":"pytest -q"}}\n{"type":"item.completed","item":{"id":"cmd-1","type":"command_execution","status":"completed"}}\n',
+        buffered,
+    )
+
+    assert first == []
+    assert [event["type"] for event in second] == ["item.started", "item.completed"]
+    assert buffered == ""
+
+
 def test_codex_usage_normalizes_jsonl_without_inventing_cost():
     backend = CodexBackend()
     raw = "\n".join(

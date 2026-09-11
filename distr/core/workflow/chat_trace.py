@@ -107,6 +107,29 @@ def record_chat_workflow_event(
             chat.modified_date = utc_now_naive()
             db.commit()
 
+        # Add only meaningful workflow milestones to the visible development
+        # thread. Routine heartbeats and raw worker chatter stay in the audit
+        # ledger, so the thread remains readable and actionable.
+        visible_milestones = {
+            "started": "The workflow started and is preparing the first phase.",
+            "resumed": "The workflow resumed and dispatched the next phase to the selected worker.",
+            "waiting": "The workflow is waiting for a decision or clarification. Details are in the ticket activity.",
+            "restart_recovery_available": "The workflow was interrupted and is waiting to be resumed from its saved checkpoint.",
+            "run_completed": "The workflow completed. The ticket now contains the recorded result and audit evidence.",
+            "run_failed": "The workflow stopped before completion. The ticket activity contains the verified cause and next action.",
+        }
+        if event_type in visible_milestones:
+            try:
+                from distr.core.chat import ChatService
+
+                ChatService.append_assistant_notice(
+                    resolved_chat_id,
+                    visible_milestones[event_type],
+                    hidden=False,
+                )
+            except Exception:
+                logger.debug("visible workflow milestone projection failed", exc_info=True)
+
         # Project workflow/worker progress into the same durable turn ledger as
         # ordinary chat tools. Legacy workflow cards remain persisted for one
         # compatibility release, but new clients read this unified lifecycle.

@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+import time
 
 from distr.app.events import EventHandlerMixin
 
@@ -85,7 +86,7 @@ def test_stale_correlated_playback_finished_cannot_close_new_player(monkeypatch)
     assert app._tts_player_generation == 4
 
 
-def test_direct_desktop_tts_started_does_not_open_player(monkeypatch):
+def test_direct_desktop_tts_started_opens_player_as_provider_fallback(monkeypatch):
     from distr.app import events
 
     class _FakeTimeout:
@@ -108,6 +109,10 @@ def test_direct_desktop_tts_started_does_not_open_player(monkeypatch):
         def start(self, *_args, **_kwargs):
             pass
 
+        @staticmethod
+        def singleShot(_delay, callback):
+            callback()
+
     app = _App()
     app._event_dedup_cache = {}
     app._tts_active_sessions = 0
@@ -121,9 +126,61 @@ def test_direct_desktop_tts_started_does_not_open_player(monkeypatch):
 
     app._evt_tts_player("tts_started", {"source": "direct_desktop"})
 
-    assert app._tts_active_sessions == 0
-    signals.show_player_window.emit.assert_not_called()
-    signals.player_play.emit.assert_not_called()
+    assert app._tts_active_sessions == 1
+    assert app._tts_current_playback_source == "direct_desktop"
+    signals.show_player_window.emit.assert_called_once()
+    signals.player_play.emit.assert_called_once()
+
+
+def test_transport_start_promotes_provider_fallback_id(monkeypatch):
+    from distr.app import events
+
+    class _FakeTimeout:
+        def connect(self, *_args, **_kwargs):
+            pass
+
+    class _FakeQTimer:
+        def __init__(self, *_args, **_kwargs):
+            self.timeout = _FakeTimeout()
+
+        def setSingleShot(self, *_args, **_kwargs):
+            pass
+
+        def isActive(self):
+            return False
+
+        def stop(self):
+            pass
+
+        def start(self, *_args, **_kwargs):
+            pass
+
+        @staticmethod
+        def singleShot(_delay, callback):
+            callback()
+
+    app = _App()
+    app._event_dedup_cache = {}
+    app._tts_active_sessions = 0
+    app._tts_pending_non_interrupt_closes = 0
+    app._tts_player_generation = 0
+    app.player_window = _Player()
+
+    signals = _SignalManager()
+    monkeypatch.setattr(events, "signal_manager", signals)
+    monkeypatch.setattr(events, "QTimer", _FakeQTimer)
+    app._evt_tts_player("tts_started", {"source": "direct_desktop"})
+    provisional_id = app._tts_current_playback_id
+
+    app._evt_tts_player(
+        "tts_started",
+        {"source": "transport", "playback_id": "transport-1"},
+    )
+
+    assert provisional_id.startswith("provider-")
+    assert app._tts_active_sessions == 1
+    assert app._tts_current_playback_id == "transport-1"
+    assert app._tts_current_playback_source == "transport"
 
 
 def test_zero_duration_stop_with_no_visible_player_does_not_reset_player(monkeypatch):
@@ -163,6 +220,84 @@ def test_zero_duration_stop_with_no_visible_player_does_not_reset_player(monkeyp
     app._evt_tts_player("tts_stopped", {"duration": 0.0})
 
     signals.player_stop.emit.assert_not_called()
+
+
+def test_zero_duration_interrupt_cleanup_is_one_terminal_event(monkeypatch):
+    from distr.app import events
+
+    app = _App()
+    app._event_dedup_cache = {}
+    app._tts_active_sessions = 1
+    app._tts_pending_non_interrupt_closes = 0
+    app._tts_player_generation = 3
+    app._player_safety_timer = _Timer()
+    app._tts_non_interrupt_fallback_timer = _Timer()
+    app.player_window = _Player()
+
+    signals = _SignalManager()
+    monkeypatch.setattr(events, "signal_manager", signals)
+
+    app._evt_tts_player(
+        "tts_stopped", {"duration": 0.0, "interrupted": True}
+    )
+    app._evt_tts_player("tts_stopped", {"duration": 0.0})
+
+    assert app._tts_player_generation == 4
+
+
+def test_interrupt_after_ignored_provider_stop_still_closes_player(monkeypatch):
+    from distr.app import events
+
+    app = _App()
+    app._event_dedup_cache = {}
+    app._tts_active_sessions = 1
+    app._tts_pending_non_interrupt_closes = 0
+    app._tts_player_generation = 3
+    app._player_safety_timer = _Timer()
+    app._tts_non_interrupt_fallback_timer = _Timer()
+    class _VisiblePlayer(_Player):
+        def isVisible(self):
+            return True
+
+    app.player_window = _VisiblePlayer()
+
+    signals = _SignalManager()
+    monkeypatch.setattr(events, "signal_manager", signals)
+
+    app._evt_tts_player("tts_stopped", {"duration": 0.0})
+    assert app._tts_active_sessions == 1
+
+    app._evt_tts_player(
+        "tts_stopped", {"duration": 0.0, "interrupted": True}
+    )
+
+    assert app._tts_active_sessions == 0
+    assert app._tts_player_generation == 4
+    signals.player_stop.emit.assert_called_once()
+
+
+def test_late_tts_start_after_interrupt_cannot_reopen_player(monkeypatch):
+    from distr.app import events
+
+    app = _App()
+    app._event_dedup_cache = {}
+    app._tts_active_sessions = 0
+    app._tts_pending_non_interrupt_closes = 0
+    app._tts_player_generation = 9
+    app._tts_interrupt_barrier_until = time.time() + 1.0
+    app._tts_non_interrupt_fallback_timer = _Timer()
+    app.player_window = _Player()
+    signals = _SignalManager()
+    monkeypatch.setattr(events, "signal_manager", signals)
+
+    app._evt_tts_player(
+        "tts_started", {"source": "transport", "playback_id": "late-response"}
+    )
+
+    assert app._tts_active_sessions == 0
+    assert app._tts_player_generation == 9
+    signals.show_player_window.emit.assert_not_called()
+    signals.player_play.emit.assert_not_called()
 
 
 def test_set_dictating_deduplicates_repeated_state():

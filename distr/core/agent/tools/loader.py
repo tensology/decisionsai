@@ -126,7 +126,7 @@ def _get_tool_definitions(
         # Workflow Builder (AutoWorkflow) tools
         ("ListWorkflowsTool", {}),
         ("GetWorkflowTool", {}),
-        ("RunWorkflowTool", {}),
+        ("RunWorkflowTool", dict(chat_manager=chat_manager)),
         ("CancelWorkflowRunTool", {}),
         ("GetActiveWorkflowRunsTool", {}),
         ("GetProjectStatusTool", {}),
@@ -185,6 +185,7 @@ def _get_tool_definitions(
         ("PiAgentTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
         # Terminal Overview — query project terminal state
         ("TerminalOverviewTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
+        ("DevelopmentControlTool", {}),
         # Document Extractor
         ("DocumentExtractorTool", {}),
         # System Information
@@ -227,6 +228,8 @@ def _get_tool_definitions(
         ("SendFileToTelegramTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
         # Send Voice Note to Telegram
         ("SendVoiceNoteToTelegramTool", dict(event_queue=event_queue)),
+        # WhatsApp read, media, draft, and approval-gated send toolkit
+        ("WhatsAppToolkitTool", {}),
         # PDF Page Extractor
         ("PDFPageExtractorTool", {}),
         # Audio Transcriber
@@ -592,6 +595,7 @@ TOOL_REGISTRY = {
     "UploadDocToGoogleTool":   ("integrations.upload_doc_to_google", "UploadDocToGoogleTool"),
     "SendFileToTelegramTool":  ("integrations.send_file_to_telegram", "SendFileToTelegramTool"),
     "SendVoiceNoteToTelegramTool": ("integrations.send_voice_note_to_telegram", "SendVoiceNoteToTelegramTool"),
+    "WhatsAppToolkitTool": ("integrations.whatsapp_toolkit", "WhatsAppToolkitTool"),
     "GitOperationsTool":       ("integrations.git_operations", "GitOperationsTool"),
     "CreateCursorTicketTool":  ("integrations.create_cursor_ticket", "CreateCursorTicketTool"),
     "KanbanTicketTool":        ("integrations.kanban_ticket", "KanbanTicketTool"),
@@ -601,6 +605,7 @@ TOOL_REGISTRY = {
     "BuildToolTool":           ("artifacts", "BuildToolTool"),
     "RequestToolTool":         ("request_tool", "RequestToolTool"),
     "TerminalOverviewTool":     ("integrations.terminal_overview", "TerminalOverviewTool"),
+    "DevelopmentControlTool":   ("integrations.development_control", "DevelopmentControlTool"),
 }
 
 _BASE_PACKAGE = "distr.core.agent.tools"
@@ -616,6 +621,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "OracleControlTool": "Show, hide, minimize, or restore the Oracle assistant overlay on the desktop.",
     "ModeControlTool": "Switch the assistant between different interaction modes such as voice, chat, or silent.",
     "ShortcutTool": "Execute a keyboard shortcut like Cmd+S, Ctrl+Z, or any multi-key combination in the active app.",
+    "WindowManagementTool": "Minimize, restore, maximize, fullscreen, focus, hide, or close the live frontmost or named window; move it to a named display or macOS Space; switch desktops/Spaces.",
     "TextEditingTool": "Perform text editing operations such as copy, paste, cut, select all, undo, redo, or delete.",
     "CaretMovementTool": "Move the text cursor using arrow keys, page up/down, home, or end in the active editor.",
     "MouseMovementTool": "Move the mouse pointer to a specific position, screen corner, or relative direction on the desktop.",
@@ -631,7 +637,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "ListWindowsTool": "List visible desktop windows with pid, process name, title, and bounds. Use before focusing or snapping a named app such as Terminal.",
     "FocusWindowTool": "Bring a named window to the foreground by pid, process_name, or title. Prefer this over clicking the title bar.",
     "LaunchAppTool": "Launch an application by name (Terminal, TextEdit, Google Chrome) via the sidecar.",
-    "SetWindowBoundsTool": "Move or snap a window with OS APIs: snap left/right/maximize, or set x,y,w,h. Identify the window by pid or process_name.",
+    "SetWindowBoundsTool": "Move or snap a window with OS APIs: snap left/right/center/maximize on any display, or set x,y,w,h. Identify the window by pid or process_name.",
     "FindElementTool": "Find a specific UI element in the accessibility tree by role, title, or description.",
     "MoveToElementTool": "Move the mouse cursor to a specific UI element identified by its accessibility tree ID.",
     "ClickElementTool": "Click a specific UI element identified by its accessibility tree ID.",
@@ -764,6 +770,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "UploadDocToGoogleTool": "Upload a local DOC or DOCX file to Google Drive as a Google Doc.",
     "SendFileToTelegramTool": "Send a file or image to a Telegram user or group chat.",
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
+    "WhatsAppToolkitTool": (
+        "Search and read WhatsApp contacts, messages, screenshots, and cached media; analyze image media; "
+        "save an unsent reply draft; and send only a draft carrying its approval token plus explicit user approval."
+    ),
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
     "CreateCursorTicketTool": "Create a Cursor plugin handoff only when the user explicitly asks for Cursor. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes a DecisionsAI Cursor handoff; ordinary ticket requests use create_ticket.",
     "KanbanTicketTool": (
@@ -779,6 +789,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",
     "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",
+    "DevelopmentControlTool": "Inspect and manage Development threads, workflows, automations, Incoming, and Reports through explicit Development surface identifiers.",
     # meta/
     "BuildToolTool": "Build, validate, freeze, register, and reuse a missing deterministic capability or multi-step action sequence when existing tools cannot complete the request.",
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",

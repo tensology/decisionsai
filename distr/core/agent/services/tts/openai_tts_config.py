@@ -53,6 +53,26 @@ def voices_for_openai_tts_model(model: str | None) -> frozenset[str]:
     return OPENAI_TTS_VOICES_LEGACY
 
 
+def resolve_openai_tts_model_for_voice(
+    model: str | None,
+    voice: str | None,
+) -> str:
+    """Return a Speech API model that accepts the selected voice.
+
+    Realtime-only chat configuration can legitimately persist voices such as
+    Marin. If a chained TTS path is used for a greeting or fallback, the
+    default ``tts-1`` model rejects that voice. Prefer the configured model
+    when valid and otherwise upgrade to the compatible steerable model.
+    """
+    resolved = resolve_openai_tts_model(model)
+    selected_voice = (voice or "").strip().lower()
+    if not selected_voice or selected_voice in voices_for_openai_tts_model(resolved):
+        return resolved
+    if selected_voice in OPENAI_TTS_VOICES_GPT4O_MINI:
+        return "gpt-4o-mini-tts"
+    return resolved
+
+
 def openai_tts_supports_instructions(model: str | None) -> bool:
     return resolve_openai_tts_model(model) in OPENAI_TTS_MODELS_WITH_INSTRUCTIONS
 
@@ -63,6 +83,7 @@ if __name__ == "__main__":
     assert resolve_openai_tts_model("gpt-4o-mini-tts") == "gpt-4o-mini-tts"
     assert "marin" in voices_for_openai_tts_model("gpt-4o-mini-tts")
     assert "marin" not in voices_for_openai_tts_model("tts-1")
+    assert resolve_openai_tts_model_for_voice("tts-1", "marin") == "gpt-4o-mini-tts"
     assert openai_tts_supports_instructions("gpt-4o-mini-tts")
     assert not openai_tts_supports_instructions("tts-1")
     print("openai_tts_config: ok")

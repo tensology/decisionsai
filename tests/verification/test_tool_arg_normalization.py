@@ -1,4 +1,5 @@
 from distr.core.agent.services.llm.base_service import BaseLLMService
+from distr.core.agent.tools.artifacts import ArtifactTool
 from distr.core.agent.tools.integrations.tensology_workspace import TensologyWorkspaceTool
 from distr.core.agent.tools.integrations.google_workspace_tool import GoogleWorkspaceTool
 
@@ -44,6 +45,31 @@ def test_normalize_tool_kwargs_keeps_known_arguments():
     assert args["input_path"] == "a.md"
     assert args["output_format"] == "pdf"
     assert args["extra"] == "y"
+
+
+def test_normalize_tool_kwargs_drops_context_not_declared_by_strict_schema():
+    tool = ArtifactTool({
+        "name": "move_terminal",
+        "description": "Move a terminal deterministically",
+        "input_schema": {
+            "type": "object",
+            "properties": {"screen": {"type": "integer"}},
+            "required": ["screen"],
+        },
+        "steps": [{
+            "id": "move",
+            "name": "Move",
+            "kind": "python",
+            "code": "result = artifact_inputs['screen']",
+        }],
+    })
+
+    args = BaseLLMService._normalize_tool_kwargs(
+        tool,
+        {"screen": 3, "last_user_message": "move the terminal"},
+    )
+
+    assert args == {"screen": 3}
 
 
 def test_normalize_tool_kwargs_validates_pydantic_schema():

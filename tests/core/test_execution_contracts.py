@@ -1145,6 +1145,34 @@ def test_pi_workflow_command_honours_selected_local_provider_and_model():
     assert command[-1] == "Scope the landing page."
 
 
+def test_pi_development_turns_resume_the_same_native_chat_session():
+    first = ProjectTask(
+        project_id=12,
+        project_name="Decisions",
+        folder="/tmp/decisions",
+        instruction="Implement the first change.",
+        chat_id=91,
+        origin="development",
+        execution_session_id=301,
+    )
+    second = ProjectTask(
+        project_id=12,
+        project_name="Decisions",
+        folder="/tmp/decisions",
+        instruction="Now verify it.",
+        chat_id=91,
+        origin="development",
+        execution_session_id=302,
+    )
+
+    first_command = _pi_print_command("pi", first)
+    second_command = _pi_print_command("pi", second)
+    first_session = first_command[first_command.index("--session-id") + 1]
+    second_session = second_command[second_command.index("--session-id") + 1]
+
+    assert first_session == second_session
+
+
 def test_pi_workflow_command_requires_exact_expected_output_labels():
     task = ProjectTask(
         project_id=12,

@@ -8,7 +8,7 @@ from typing import Any, List, Optional, Type
 
 from distr.core.agent.tool_voice_format import voice_then_reference
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -356,14 +356,32 @@ class RunWorkflowInput(BaseModel):
 
 
 class RunWorkflowTool(BaseTool):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    _chat_manager: Any = PrivateAttr(default=None)
+
     name: str = "run_workflow"
     description: str = (
         "Start a workflow run. Executes all steps in sequence using the workflow engine. "
         "Use when user asks 'run the Development workflow', 'start workflow X', "
         "'execute that workflow', 'run it'. When work is already scoped into tickets, "
-        "pass ticket_ids so the engine preserves ticket/project context and the workflow queue policy."
+        "pass ticket_ids so the engine preserves ticket/project context and the workflow queue policy. "
+        "When called inside a Development thread, the workflow orchestrator remains a sub-agent of that same thread."
     )
     args_schema: Type[BaseModel] = RunWorkflowInput
+
+    def __init__(self, chat_manager=None, **kwargs):
+        super().__init__(**kwargs)
+        self._chat_manager = chat_manager
+
+    def _current_chat_id(self) -> Optional[int]:
+        if self._chat_manager is None:
+            return None
+        try:
+            value = self._chat_manager.get_current_chat()
+            return int(value) if value is not None else None
+        except (TypeError, ValueError, AttributeError):
+            return None
 
     def _run(self, workflow_id: Optional[int] = None, workflow_name: Optional[str] = None, context: Optional[str] = None, ticket_ids: Optional[List[int]] = None, append_to_run_id: Optional[int] = None, **kwargs) -> str:
         try:
@@ -406,13 +424,19 @@ class RunWorkflowTool(BaseTool):
                     f"REFERENCE: group_id={result.get('group_id')}; first_run_id={first_run_id}; "
                     f"ticket_ids={','.join(str(ticket_id) for ticket_id in ticket_ids)}"
                 )
-            from distr.core.workflow.service import start_workflow_run
-            result = start_workflow_run(workflow_id, context=context)
+            from distr.core.workflow.work_dispatch import dispatch_work_item
+            result = dispatch_work_item(
+                workflow_id=int(workflow_id),
+                chat_id=self._current_chat_id(),
+                context=context or "",
+                source_type="agent_tool",
+                dispatch_async=True,
+            )
             if "error" in result:
                 return f"Failed to start workflow: {result['error']}"
             run_id = result.get("run_id")
             _remember_workflow_context(workflow_id=workflow_id, run_id=run_id)
-            return f"Workflow run started (run ID {run_id}). Steps are executing in sequence."
+            return f"Workflow run started in Development (run ID {run_id}, thread {result.get('chat_id')}). Steps are executing in sequence."
         except Exception as e:
             logger.error("run_workflow failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
@@ -1122,8 +1146,8 @@ class CreateStepRunnerTool(BaseTool):
     name: str = "create_step_runner"
     description: str = (
         "Create a workflow/step runner automation from a natural language instruction. "
-        "Use when the user says 'create a step runner', 'create an automation', "
-        "'build a workflow', or asks to break a task into executable workflow steps. "
+        "Use when the user says 'create a step runner', 'build a workflow', or asks to break a task into executable workflow steps. "
+        "Do not use this for scheduled or recurring tasks; those belong to development_control. "
         "This is a compatibility alias for generate_workflow."
     )
     args_schema: Type[BaseModel] = CreateStepRunnerInput
@@ -1173,6 +1197,26 @@ class ScheduledActionInput(BaseModel):
         description="Optional safety flags: {'require_app_in_foreground':true,'bring_app_to_front':true}.",
     )
     limit: int = Field(default=20, description="Maximum scheduled actions to list.")
+
+    @field_validator("schedule", "desktop_action", "target_context", "safety", mode="before")
+    @classmethod
+    def _normalize_nested_json_objects(cls, value: Any, info):
+        if value is None or isinstance(value, dict):
+            return value
+        field_name = str(info.field_name or "value")
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, ValueError) as exc:
+                raise ValueError(
+                    f"{field_name} must be a valid JSON object"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{field_name} must be a JSON object")
+            return parsed
+        raise ValueError(
+            f"{field_name} must be a dictionary or JSON object string"
+        )
 
 
 class ScheduledActionTool(BaseTool):

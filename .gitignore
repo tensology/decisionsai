@@ -87,6 +87,8 @@ playground/
 scripts/*
 !scripts/
 !scripts/harness_live_proof.py
+!scripts/benchmark_complex_models.py
+!scripts/benchmark_glimmer_ui.py
 !scripts/run_workflow_ticket_loop_e2e.sh
 !scripts/workflow_ticket_loop_e2e.py
 !scripts/deploy_changelog.sh

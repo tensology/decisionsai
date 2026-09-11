@@ -218,6 +218,7 @@ class WhisperSTTService(BaseSTTService):
                     logger.debug(f"STT: Finished processing FULL PTT transcription ({frame_count} frames)")
             except Exception as e:
                 logger.error(f"STT: Error in run_stt() loop: {e}", exc_info=True)
+                await self._emit_empty_ptt_transcription(direction)
         else:
             logger.error("STT: audio_bytes is empty after extraction!")
     
@@ -347,6 +348,7 @@ class WhisperSTTService(BaseSTTService):
         # --- Audio frames ---
         # Transport emits InputAudioRawFrame; both must be handled for PTT capture
         if isinstance(frame, (AudioRawFrame, InputAudioRawFrame)):
+            self._record_echo_frame_metrics()
             if self._ptt_active:
                 self._ptt_buffer_accumulator.append(frame.audio)
                 if len(self._ptt_buffer_accumulator) == 1:

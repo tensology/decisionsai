@@ -41,7 +41,7 @@ def format_window_list(windows: list[dict]) -> str:
     for w in windows[:40]:
         fg = " [foreground]" if w.get("is_foreground") else ""
         lines.append(
-            f"  pid={w.get('pid')} {w.get('process_name') or '?'} "
+            f"  window_id={w.get('window_id')} pid={w.get('pid')} {w.get('process_name') or '?'} "
             f"title={str(w.get('title') or '')!r} "
             f"bounds=({w.get('left')},{w.get('top')})-({w.get('right')},{w.get('bottom')}){fg}"
         )
@@ -79,7 +79,14 @@ def resolve_window_pid(
         return resolved, {}
 
     if not needle and not title_needle:
-        raise ValueError("provide pid, process_name, app_name, or title")
+        foreground = [w for w in windows if bool(w.get("is_foreground"))]
+        if not foreground:
+            raise ValueError("no live foreground window found")
+        chosen = foreground[0]
+        chosen_pid = _as_int(chosen.get("pid"))
+        if chosen_pid <= 0:
+            raise ValueError("foreground window has no process id")
+        return chosen_pid, chosen
 
     matches: list[dict] = []
     for w in windows:
@@ -183,7 +190,8 @@ class SetWindowBoundsTool(BaseTool):
     description: str = (
         "Move and/or resize a window using OS APIs (not mouse drag). "
         "Identify it with pid, process_name, app_name, or title. "
-        "Either pass snap='left'|'right'|'maximize', or explicit x,y,w,h. "
+        "Either pass snap='left'|'right'|'center'|'maximize', or explicit x,y,w,h. "
+        "Pass screen as a zero-based display index when targeting another monitor. "
         "Example: set_window_bounds(process_name='Terminal', snap='left')"
     )
 
@@ -198,11 +206,12 @@ class SetWindowBoundsTool(BaseTool):
         y: int = 0,
         w: int = 0,
         h: int = 0,
+        screen: int = 0,
         **kwargs,
     ) -> str:
         try:
             resolved, window = resolve_window_pid(pid, process_name, title, app_name)
-            params: dict = {"pid": resolved}
+            params: dict = {"pid": resolved, "screen": _as_int(screen)}
             if snap:
                 params["snap"] = snap.strip().lower()
             else:

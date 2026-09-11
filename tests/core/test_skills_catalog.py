@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from distr.core.skills.catalog import (
     filter_known_skill_ids,
     orchestrator_skill_catalog,
@@ -47,6 +49,34 @@ def test_explicit_ui_change_still_provisions_frontend_skills():
 def test_filter_known_skill_ids_drops_unknown():
     known = filter_known_skill_ids(["gemini-api", "not-a-real-skill", "bigquery-basics"])
     assert known == ["gemini-api", "bigquery-basics"]
+
+
+def test_decisions_browser_control_skills_are_known():
+    known = filter_known_skill_ids(["decisions-playwright", "decisions-computer-use"])
+
+    assert known == ["decisions-playwright", "decisions-computer-use"]
+
+
+def test_external_capability_skill_is_available_to_catalog(tmp_path, monkeypatch):
+    skill_dir = tmp_path / "impeccable"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: impeccable\ndescription: UI quality skill\n---\n# Impeccable\n",
+        encoding="utf-8",
+    )
+    registry = tmp_path / "capabilities-skills-registry.json"
+    registry.write_text(
+        json.dumps([{"id": "impeccable", "path": str(skill_dir), "source": "external"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("distr.core.skills.catalog._capabilities_registry_file", lambda: registry)
+    load_registry.cache_clear()
+
+    try:
+        assert filter_known_skill_ids(["impeccable"]) == ["impeccable"]
+        assert skill_directory_for_id("impeccable") == skill_dir
+    finally:
+        load_registry.cache_clear()
 
 
 def test_is_google_skill():

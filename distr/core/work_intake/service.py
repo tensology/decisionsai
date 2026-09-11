@@ -34,6 +34,10 @@ _TICKET_RE = re.compile(
 )
 _UPDATE_RE = re.compile(r"\b(update|edit|change|append|add to)\b.{0,20}\b(ticket|task)\s*#?(\d+)\b", re.I | re.S)
 _STEER_RE = re.compile(r"\b(continue|resume|stop|cancel|steer|change)\b.{0,30}\b(run|workflow)\s*#?(\d+)\b", re.I | re.S)
+_DEVELOPMENT_THREAD_RE = re.compile(
+    r"^(?:development\s+)?thread\s*#?(\d+)\s*[:,-]\s*(.+)$",
+    re.I | re.S,
+)
 _PROJECT_WORK_RE = re.compile(
     r"^(?:please\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+)?"
     r"(?:make|change|fix|repair|patch|update|add|remove|rename|replace|run|execute|build|implement|"
@@ -198,6 +202,18 @@ class OrchestratorIntakeService:
         steer = _STEER_RE.search(value)
         if steer:
             return WorkIntakeDecision(WorkIntakeAction.STEER_RUN, "Explicit workflow-run control command", diagnostics={"run_id": int(steer.group(3)), "command": steer.group(1).lower()})
+        development_chat_id = (intake.metadata or {}).get("development_chat_id")
+        development_message = value
+        remote_match = _DEVELOPMENT_THREAD_RE.match(value)
+        if remote_match:
+            development_chat_id = int(remote_match.group(1))
+            development_message = remote_match.group(2).strip()
+        if development_chat_id:
+            return WorkIntakeDecision(
+                WorkIntakeAction.WORKFLOW_INTERACTION,
+                "Instruction targets a durable Development thread",
+                diagnostics={"development_chat_id": int(development_chat_id), "message": development_message},
+            )
         update = _UPDATE_RE.search(value)
         if update:
             return WorkIntakeDecision(WorkIntakeAction.UPDATE_TICKET, "Explicit ticket update command", diagnostics={"ticket_id": int(update.group(3))})
@@ -277,10 +293,25 @@ class OrchestratorIntakeService:
                 self._update_ticket(intake, decision)
             elif decision.action == WorkIntakeAction.STEER_RUN:
                 self._steer_run(intake, decision)
+            elif decision.action == WorkIntakeAction.WORKFLOW_INTERACTION:
+                self._development_command(intake, decision)
             else:
                 decision.handled = True
                 decision.status = "needs_info"
             decision.diagnostics["triage_elapsed_ms"] = round((time.monotonic() - started) * 1000, 2)
+            try:
+                from distr.core.automation_orchestrator import dispatch_matching_channel_automations
+
+                automation_runs = dispatch_matching_channel_automations(
+                    source=intake.source.value,
+                    message_text=intake.text,
+                    source_thread_id=intake.source_thread_id,
+                    source_message_id=intake.source_message_id,
+                )
+                if automation_runs:
+                    decision.diagnostics["triggered_automation_count"] = len(automation_runs)
+            except Exception:
+                logger.debug("Channel automation dispatch failed", exc_info=True)
         except Exception as exc:
             logger.exception("Orchestrator request failed uid=%s action=%s", intake.intake_uid, decision.action.value)
             decision.status = "failed"
@@ -708,9 +739,8 @@ class OrchestratorIntakeService:
                 hook_ensure_workspace("projects", int(decision.project_id), force=True, reason="work_intake")
         except Exception:
             logger.debug("Could not refresh intake workspace routers", exc_info=True)
-        from distr.core.workflow.service import start_workflow_run
-
         from distr.core.workflow.ticket_dispatch import build_ticket_run_item
+        from distr.core.workflow.work_dispatch import dispatch_work_item
 
         item = build_ticket_run_item(decision.ticket_id, decision.workflow_id)
         metadata = self._workflow_intake_metadata(
@@ -718,13 +748,18 @@ class OrchestratorIntakeService:
             decision,
             base=dict(item.get("run_metadata") or {}),
         )
-        result = start_workflow_run(
-            decision.workflow_id,
+        result = dispatch_work_item(
+            workflow_id=int(decision.workflow_id),
             context=str(item.get("context") or f"Ticket: {_clean_title(intake.text)}"),
             board_id=item.get("board_id") or decision.board_id,
-            ticket_id=decision.ticket_id,
+            ticket_id=int(decision.ticket_id),
+            title=_clean_title(intake.text) or f"Ticket #{decision.ticket_id}",
+            project_id=int(decision.project_id) if decision.project_id else None,
+            source_type=intake.source.value,
+            source_ref=intake.intake_uid,
             run_metadata=metadata,
             dispatch_async=True,
+            _session_provider=get_session,
         )
         if result.get("error"):
             raise RuntimeError(str(result["error"]))
@@ -808,6 +843,29 @@ class OrchestratorIntakeService:
         decision.handled = True
         decision.status = "workflow_interaction"
         decision.response_text = f"Workflow run #{run_id} accepted: {command}."
+
+    def _development_command(self, intake: WorkIntake, decision: WorkIntakeDecision) -> None:
+        from distr.core.workflow.development_control import dispatch_command, enqueue_command
+
+        chat_id = int(decision.diagnostics["development_chat_id"])
+        message = str(decision.diagnostics.get("message") or intake.text).strip()
+        command = enqueue_command(
+            chat_id,
+            message,
+            source=intake.source.value,
+            source_ref=intake.source_thread_id or intake.source_message_id,
+            metadata={"intake_uid": intake.intake_uid, "source_message_id": intake.source_message_id},
+        )
+        delivery = dispatch_command(int(command["id"]))
+        decision.workflow_id = command.get("workflow_id")
+        decision.workflow_run_id = (delivery.get("command") or {}).get("run_id")
+        decision.handled = True
+        decision.status = "workflow_interaction"
+        decision.response_text = (
+            f"Development thread #{chat_id} accepted the instruction."
+            if delivery.get("dispatched")
+            else f"Development thread #{chat_id} queued the instruction and will apply it when the worker is ready."
+        )
 
     @staticmethod
     def _log_decision(intake: WorkIntake, decision: WorkIntakeDecision) -> None:

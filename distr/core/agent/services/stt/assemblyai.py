@@ -255,6 +255,7 @@ class AssemblyAISTTService(BaseSTTService):
         
         if duration_ms < self._min_audio_duration_ms:
             logger.warning(f"STT: Audio too short ({duration_ms:.0f}ms < {self._min_audio_duration_ms}ms) - skipping")
+            await self._emit_empty_ptt_transcription(direction)
             return
         
         # Pad if needed
@@ -279,15 +280,17 @@ class AssemblyAISTTService(BaseSTTService):
             
             if frame_count == 0:
                 logger.warning("STT: run_stt() did not yield any frames")
+                await self._emit_empty_ptt_transcription(direction)
             else:
                 logger.debug(f"STT: PTT transcription complete ({frame_count} frames)")
         except Exception as e:
             logger.error(f"STT: Error in run_stt(): {e}", exc_info=True)
+            await self._emit_empty_ptt_transcription(direction)
     
     async def _send_interruption(self, direction):
         """Send interruption frame"""
         try:
-            await self.push_frame(InterruptionFrame(), direction)
+            await self._push_marked_interruption(direction)
             logger.debug("STT: InterruptionFrame sent")
         except Exception as e:
             logger.error(f"Error sending InterruptionFrame: {e}")

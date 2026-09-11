@@ -141,6 +141,14 @@ class GoogleWorkspaceConnector:
         if not self.access_token:
             return self._load_credentials()
         return True
+
+    def connection_health(self) -> tuple[bool, str]:
+        """Return whether the saved Google account can currently authenticate."""
+        if not self.is_connected():
+            return False, "Google Workspace is not connected."
+        if not self._ensure_valid_token():
+            return False, str(self.last_error or "Google authentication failed. Reconnect the account.")
+        return True, ""
     
     def _ensure_valid_token(self) -> bool:
         """Ensure access token is valid, refresh if needed"""

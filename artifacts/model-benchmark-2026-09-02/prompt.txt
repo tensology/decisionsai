@@ -1,0 +1,1 @@
+Implement `normalize_tags` in `task.py`. Trim surrounding whitespace, lowercase each tag, ignore blank strings, and remove duplicates while preserving first-seen order. Modify only `task.py`. Run `python -m unittest -v` and report the result concisely.

@@ -9,6 +9,21 @@ _decisions_sidecar_listening() {
     return 1
 }
 
+_decisions_sign_sidecar() {
+    local sidecar_bin="$1"
+    local identity="${DECISIONSAI_CODESIGN_IDENTITY:--}"
+    local identifier="net.decisionsai.sidecar"
+
+    if ! command -v codesign &>/dev/null; then
+        return 0
+    fi
+
+    # A real Apple Development or Developer ID identity gives TCC a stable
+    # designated requirement across builds. Ad-hoc signing is a development
+    # fallback only; rebuilding it changes the cdhash and requires re-approval.
+    codesign --force --identifier "$identifier" --sign "$identity" "$sidecar_bin" &>/dev/null || true
+}
+
 decisions_start_sidecar() {
     local script_dir="$1"
     local sidecar_bin="$script_dir/sidecar/dist/decisionsai-sidecar"
@@ -26,14 +41,14 @@ decisions_start_sidecar() {
             (cd "$script_dir/sidecar" && go mod tidy && go build -ldflags="-s -w" -o dist/decisionsai-sidecar . 2>/dev/null) || \
                 echo "Sidecar build failed — accessibility tree tools unavailable"
             if [ -f "$sidecar_bin" ] && command -v codesign &>/dev/null; then
-                codesign --force --sign - "$sidecar_bin" &>/dev/null || true
+                _decisions_sign_sidecar "$sidecar_bin"
             fi
         fi
     fi
 
     if [ -f "$sidecar_bin" ] && command -v codesign &>/dev/null; then
         if ! codesign -dv "$sidecar_bin" &>/dev/null; then
-            codesign --force --sign - "$sidecar_bin" &>/dev/null || true
+            _decisions_sign_sidecar "$sidecar_bin"
         fi
     fi
 

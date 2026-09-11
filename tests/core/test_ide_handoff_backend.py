@@ -19,6 +19,42 @@ def test_cursor_ide_and_codex_ide_are_distinct_backends():
     assert normalize_backend_id("vscode") == "cursor_ide"
 
 
+def test_codex_ide_opens_codex_app_instead_of_cursor(monkeypatch):
+    from distr.core.project_cli_backends.ide_handoff import open_ide_project
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    with (
+        patch("distr.core.project_cli_backends.ide_handoff.os.path.isdir", return_value=True),
+        patch(
+            "distr.core.project_cli_backends.ide_handoff._ide_open_command",
+            return_value="/Applications/ChatGPT.app/Contents/Resources/codex",
+        ),
+        patch("distr.core.project_cli_backends.ide_handoff.subprocess.Popen") as popen,
+    ):
+        opened = open_ide_project("/tmp/demo-project", backend_id="codex_ide")
+
+    assert opened is True
+    assert popen.call_args.args[0] == [
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "app",
+        "/tmp/demo-project",
+    ]
+
+
+def test_codex_ide_missing_message_does_not_tell_user_to_install_cursor():
+    from distr.core.project_cli_backends.registry import CodexIdeBackend
+
+    with patch(
+        "distr.core.project_cli_backends.ide_handoff._ide_open_command",
+        return_value=None,
+    ):
+        status = CodexIdeBackend().check_availability()
+
+    assert status.ready is False
+    assert "Codex CLI" in status.message
+    assert "Cursor" not in status.message
+
+
 def test_ide_handoff_writes_ticket_packet_and_starts_harness(tmp_path):
     from distr.core.project_cli_backends.base import ProjectTask
     from distr.core.project_cli_backends.registry import CursorIdeBackend

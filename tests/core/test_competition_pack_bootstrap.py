@@ -42,12 +42,13 @@ def test_competition_pack_bootstrap_projects_skills(tmp_path, monkeypatch):
     assert (tmp_path / ".cursor" / "skills" / "decisions-competition-harness" / "SKILL.md").exists()
 
 
-def test_merge_competition_pre_chain_adds_fallow_for_js_projects(tmp_path):
+def test_merge_competition_pre_chain_does_not_force_fallow_for_js_projects(tmp_path):
     from distr.core.competition_pack import merge_competition_pre_chain
 
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     chain = merge_competition_pre_chain(["tdd-workflow"], project_folder=str(tmp_path))
-    assert chain[:2] == ["ponytail", "fallow"]
+    assert chain[0] == "ponytail"
+    assert "fallow" not in chain
     assert "tdd-workflow" in chain
 
 

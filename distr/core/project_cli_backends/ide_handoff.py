@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -140,7 +140,7 @@ def _ticket_title_for_task(task: ProjectTask) -> str:
 
 def work_packet_filename(task: ProjectTask, *, backend_id: str) -> str:
     """Name work packets after the ticket, not the harness backend."""
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     step_part = int(task.step_id or 0)
     ticket_id = getattr(task, "ticket_id", None)
     if ticket_id:
@@ -287,25 +287,28 @@ def write_ide_work_packet(
     return str(path_obj.resolve())
 
 
-def _ide_open_command() -> str | None:
+def _ide_open_command(backend_id: str = "cursor_ide") -> str | None:
     from .registry import _first_executable
 
+    if backend_id == "codex_ide":
+        return _first_executable(["codex"])
     return _first_executable(["cursor", "code"])
 
 
-def open_ide_project(folder: str, packet_path: str = "") -> bool:
-    """Open the project folder in Cursor/VS Code (harness starts separately)."""
+def open_ide_project(folder: str, packet_path: str = "", *, backend_id: str = "cursor_ide") -> bool:
+    """Open the project folder in the IDE selected by the handoff backend."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return False
     folder = (folder or "").strip()
     if not folder or not os.path.isdir(folder):
         return False
-    command = _ide_open_command()
+    command = _ide_open_command(backend_id)
     if not command:
         return False
     try:
+        argv = [command, "app", folder] if backend_id == "codex_ide" else [command, folder]
         subprocess.Popen(
-            [command, folder],
+            argv,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

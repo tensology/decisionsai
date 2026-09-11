@@ -65,3 +65,44 @@ def test_open_page_maps_diagram_viewer(monkeypatch):
 
     assert opened == ["http://127.0.0.1:8765/diagram/"]
     assert "Mermaid diagram viewer" in result
+
+
+def test_open_page_maps_all_primary_product_surfaces(monkeypatch):
+    from distr.core.agent.tools.chat.open_page import OpenPageTool
+
+    opened = []
+    monkeypatch.setattr(
+        "distr.core.agent.tools.chat.open_page.OpenPageTool._resolve_web_base_url",
+        lambda self: "http://127.0.0.1:8765",
+    )
+    monkeypatch.setattr(
+        "distr.core.agent.tools.chat.open_page.webbrowser.open",
+        lambda url: opened.append(url) or True,
+    )
+
+    tool = OpenPageTool()
+    for page in ("chat", "development", "incoming", "automations", "terminals", "reports"):
+        result = tool._run(page=page)
+        assert "Opened URL: http://127.0.0.1:8765/" in result
+
+    assert opened == [
+        "http://127.0.0.1:8765/chat/",
+        "http://127.0.0.1:8765/development/",
+        "http://127.0.0.1:8765/development/incoming/",
+        "http://127.0.0.1:8765/development/automations/",
+        "http://127.0.0.1:8765/development/terminals/",
+        "http://127.0.0.1:8765/development/reports/",
+    ]
+
+
+def test_open_chat_window_is_deterministically_routed_to_internal_page_tool():
+    from distr.core.agent.services.llm.fast_action_detector import detect_fast_action
+
+    for command in (
+        "open the chat window",
+        "Open Chat in Brave",
+        "please launch the DecisionsAI chat web UI in Brave",
+    ):
+        action = detect_fast_action(command)
+        assert action.tool_name == "open_page"
+        assert action.tool_args == {"page": "chat"}

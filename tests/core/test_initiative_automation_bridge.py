@@ -135,3 +135,23 @@ def test_daily_plan_prompt_queues_executable_automation_install(monkeypatch):
     assert len(queued) == 1
     assert queued[0].action_type == "automation_recommendation"
     assert queued[0].payload["preset_id"] == "daily_plan"
+
+
+def test_initiative_notice_never_overwrites_a_development_thread(monkeypatch):
+    from distr.core.initiative.service import InitiativeService
+
+    written = []
+    service = object.__new__(InitiativeService)
+    service.chat_manager = type(
+        "ChatManager",
+        (),
+        {
+            "get_current_chat": lambda self: 137,
+            "add_assistant_message": lambda self, chat_id, message: written.append((chat_id, message)),
+        },
+    )()
+    monkeypatch.setattr("distr.core.initiative.service._is_development_chat", lambda chat_id: True)
+
+    service._log_to_chat("Pending approval: unrelated recommendation", {})
+
+    assert written == []

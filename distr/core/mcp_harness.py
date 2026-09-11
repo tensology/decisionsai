@@ -1,4 +1,4 @@
-"""Unified MCP catalog + non-destructive IDE MCP recalibration on setup/start."""
+"""Unified MCP catalog with lean, target-specific runtime registration."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ import os
 import re
 from pathlib import Path
 import shutil
+import sys
 from typing import Any
 
-STATE_VERSION = 2
+STATE_VERSION = 4
 
 # Legacy Cursor/Codex server names that satisfy the same catalog entry.
 _LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
@@ -44,6 +45,15 @@ def _codex_config_path(home: Path) -> Path:
     return home / ".codex" / "config.toml"
 
 
+def _decisions_mcp_path(home: Path) -> Path:
+    """Return the MCP config consumed by the DecisionsAI agent runtime."""
+    if home.resolve() == Path.home().resolve():
+        from distr.core.mcp.config import default_config_path
+
+        return default_config_path()
+    return home / ".decisions" / "models" / "mcp_config.json"
+
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -73,10 +83,11 @@ def _substitute_env_mapping(values: dict[str, Any]) -> dict[str, Any]:
 
 
 def _base_capabilities_mcps() -> dict[str, Any]:
+    headroom_command = str(Path(sys.executable))
     return {
         "fal_ai_media": {
             "description": "Image, video, and audio generation via fal.ai",
-            "auto_merge": True,
+            "auto_merge": False,
             "requires_env": ["FAL_KEY"],
             "api_key_settings_field": "fal_key",
             "cursor_name": "fal-ai",
@@ -89,7 +100,7 @@ def _base_capabilities_mcps() -> dict[str, Any]:
         },
         "pixazo_media": {
             "description": "Image, video, TTS, and music via Pixazo (80+ models, one API key)",
-            "auto_merge": True,
+            "auto_merge": False,
             "requires_env": ["PIXAZO_API_KEY"],
             "api_key_settings_field": "pixazo_key",
             "api_key_header": "Ocp-Apim-Subscription-Key",
@@ -111,6 +122,20 @@ def _base_capabilities_mcps() -> dict[str, Any]:
             "setup": "bin/setup.py installs playwright + chromium in the Decisions venv",
             "skill": "decisions-playwright",
         },
+        "computer_use": {
+            "description": "Runtime-gated native app and cross-app computer control",
+            "auto_merge": False,
+            "setup": "Use the computer-use/CUA tool exposed by the active harness; Decisions does not install a fake MCP substitute",
+            "skill": "decisions-computer-use",
+            "status": "runtime_capability",
+        },
+        "impeccable": {
+            "description": "UI design, refinement, audit, and polish skill set",
+            "auto_merge": False,
+            "setup": "Install at ~/.agents/skills/impeccable or ~/.codex/skills/impeccable; the capabilities pack projects it into detected harnesses",
+            "skill": "impeccable",
+            "status": "external_skill",
+        },
         "browser_use": {
             "description": "Agentic browser automation (Python)",
             "auto_merge": False,
@@ -119,15 +144,32 @@ def _base_capabilities_mcps() -> dict[str, Any]:
         },
         "context7": {
             "description": "Live library documentation (resolve-library-id, query-docs)",
-            "auto_merge": True,
+            "auto_merge": False,
             "cursor_name": "context7",
             "skill": "docs-lookup",
             "mcp": {
                 "command": "npx",
                 "args": ["-y", "@upstash/context7-mcp@latest"],
             },
-            "setup": "Merged into ~/.cursor/mcp.json and ~/.codex/config.toml on harness recalibrate",
+            "setup": "Catalogued for opt-in setup; not loaded into every Cursor or Codex turn",
             "note": "Prefer over web search for framework/API docs; optional CONTEXT7_API_KEY for higher limits",
+        },
+        "headroom": {
+            "description": "Default local context compression and retrieval for large logs, files, and tool output",
+            "auto_merge": True,
+            "merge_targets": ["decisions"],
+            "cursor_name": "headroom",
+            "skill": "decisions-headroom",
+            "mcp": {
+                "command": headroom_command,
+                "args": ["-m", "distr.core.headroom_mcp"],
+                "env": {
+                    "HEADROOM_MCP_READ": "on",
+                    "HEADROOM_WORKSPACE_DIR": str(Path.home() / ".decisions" / "headroom"),
+                },
+            },
+            "setup": "Bundled by DecisionsAI as headroom-ai[mcp] and registered with DecisionsAI, Cursor, and Codex during harness bootstrap.",
+            "note": "The standalone MCP stores originals locally. Automatic provider traffic proxying remains off, so callbacks and instructions are never compressed implicitly.",
         },
     }
 
@@ -149,11 +191,11 @@ def collect_mcp_catalog() -> dict[str, Any]:
 
     catalog["exa_search"] = {
         "description": "Exa semantic web search (Agent Reach / mcporter)",
-        "auto_merge": True,
+        "auto_merge": False,
         "cursor_name": "exa",
         "skill": "agent-reach",
         "mcp": {"url": "https://mcp.exa.ai/mcp"},
-        "setup": "Merged into Cursor mcp.json and Codex config.toml when recalibrating",
+        "setup": "Catalogued for opt-in setup; not loaded into every Cursor or Codex turn",
     }
 
     catalog["agent_reach_mcporter"] = {
@@ -403,10 +445,13 @@ def _entry_ready_to_merge(entry: dict[str, Any]) -> bool:
     return True
 
 
-def _iter_auto_merge_entries(catalog: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+def _iter_auto_merge_entries(catalog: dict[str, Any], *, agent: str) -> list[tuple[str, dict[str, Any]]]:
     items: list[tuple[str, dict[str, Any]]] = []
     for key, entry in catalog.items():
         if not entry.get("auto_merge"):
+            continue
+        targets = entry.get("merge_targets")
+        if targets and agent not in targets:
             continue
         if not _entry_ready_to_merge(entry):
             continue
@@ -482,7 +527,7 @@ def _merge_cursor_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
 
     pruned = _prune_deprecated_cursor_servers(servers)
     merged_names: list[str] = []
-    for key, entry in _iter_auto_merge_entries(catalog):
+    for key, entry in _iter_auto_merge_entries(catalog, agent="cursor"):
         block = _agent_mcp_block(entry, key, agent="cursor")
         if not block:
             continue
@@ -512,7 +557,7 @@ def _merge_codex_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
     merged_names: list[str] = []
     append_blocks: list[str] = []
 
-    for key, entry in _iter_auto_merge_entries(catalog):
+    for key, entry in _iter_auto_merge_entries(catalog, agent="codex"):
         block = _agent_mcp_block(entry, key, agent="codex")
         if not block:
             continue
@@ -535,12 +580,61 @@ def _merge_codex_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
     return merged_names
 
 
-def _fingerprint(catalog: dict[str, Any], cursor_merged: list[str], codex_merged: list[str]) -> str:
+def _merge_decisions_mcp(home: Path, catalog: dict[str, Any]) -> list[str]:
+    """Add default stdio MCP servers to DecisionsAI's native tool runtime."""
+    from distr.core.mcp.config import (
+        MCPConfigDocument,
+        MCPServerConfig,
+        load_mcp_config,
+        save_mcp_config,
+    )
+
+    path = _decisions_mcp_path(home)
+    document = load_mcp_config(path)
+    servers = list(document.servers)
+    existing = {server.name for server in servers}
+    merged: list[str] = []
+    for key, entry in _iter_auto_merge_entries(catalog, agent="decisions"):
+        if key != "headroom" or key in existing:
+            continue
+        block = _agent_mcp_block(entry, key, agent="decisions")
+        if not block:
+            continue
+        name, config = block
+        command = str(config.get("command") or "").strip()
+        if not command:
+            continue
+        servers.append(
+            MCPServerConfig(
+                name=name,
+                enabled=True,
+                transport="stdio",
+                command=(command, *(str(arg) for arg in config.get("args") or [])),
+                env=frozenset(
+                    (str(env_name), str(env_value))
+                    for env_name, env_value in (config.get("env") or {}).items()
+                ),
+            )
+        )
+        existing.add(name)
+        merged.append(name)
+    if merged:
+        save_mcp_config(MCPConfigDocument(servers=tuple(servers)), path)
+    return merged
+
+
+def _fingerprint(
+    catalog: dict[str, Any],
+    cursor_merged: list[str],
+    codex_merged: list[str],
+    decisions_merged: list[str],
+) -> str:
     raw = json.dumps(
         {
             "catalog_keys": sorted(catalog.keys()),
             "cursor_merged": sorted(cursor_merged),
             "codex_merged": sorted(codex_merged),
+            "decisions_merged": sorted(decisions_merged),
         },
         sort_keys=True,
     )
@@ -552,7 +646,7 @@ def recalibrate_mcp_harness(
     home: Path | None = None,
     run_full: bool = False,
 ) -> dict[str, Any]:
-    """Rewrite MCP catalog and lightly merge auto_merge servers into Cursor and Codex."""
+    """Rewrite the catalog and register only target-scoped default MCP servers."""
     _ = run_full  # reserved; env-gated entries only merge when credentials exist
     try:
         from distr.core.third_party_keys import sync_third_party_env_keys
@@ -566,7 +660,8 @@ def recalibrate_mcp_harness(
 
     cursor_merged = _merge_cursor_mcp(base_home, catalog)
     codex_merged = _merge_codex_mcp(base_home, catalog)
-    fingerprint = _fingerprint(catalog, cursor_merged, codex_merged)
+    decisions_merged = _merge_decisions_mcp(base_home, catalog)
+    fingerprint = _fingerprint(catalog, cursor_merged, codex_merged, decisions_merged)
 
     payload = {
         "state_version": STATE_VERSION,
@@ -575,8 +670,10 @@ def recalibrate_mcp_harness(
         "catalog_path": str(_recommendations_path(base_home)),
         "cursor_mcp_path": str(_cursor_mcp_path(base_home)),
         "codex_config_path": str(_codex_config_path(base_home)),
+        "decisions_mcp_path": str(_decisions_mcp_path(base_home)),
         "cursor_merged": cursor_merged,
         "codex_merged": codex_merged,
+        "decisions_merged": decisions_merged,
         "catalog_count": len(catalog),
     }
     _write_json(_state_path(base_home), payload)

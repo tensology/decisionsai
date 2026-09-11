@@ -95,7 +95,11 @@ class TelegramRemoteControlMixin:
             return
 
         if api_method == "POST" and "/send-to-agent" in api_path:
-            body = api_body if isinstance(api_body, dict) else {}
+            body = dict(api_body) if isinstance(api_body, dict) else {}
+            body["origin_surface"] = "remote"
+            body["origin_request_id"] = str(request_id or "")
+            body["input_type"] = str(body.get("input_type") or "text")
+            api_body = body
             speak_val = body.get("speak")
             speak_on = speak_val not in (False, "false", "False", 0, "0", None)
             if speak_on:
@@ -792,23 +796,31 @@ class TelegramRemoteControlMixin:
                                 }
                             )
                             return
+                        press_enter = bool(command_data.get("press_enter", True))
                         success = self._type_text_quick(
                             text_to_type,
                             take_screenshot=take_screenshot,
                             dictation=bool(command_data.get("dictation")),
-                            press_enter=bool(command_data.get("press_enter", True)),
+                            press_enter=press_enter,
                         )
-                        self._send_websocket_message(
-                            {
-                                "type": "remote_control_response",
-                                "command": "type_text",
-                                "request_id": request_id,
-                                "data": {
-                                    "success": success,
-                                    "text_length": len(text_to_type),
-                                },
-                            }
-                        )
+                        response = {
+                            "type": "remote_control_response",
+                            "command": "type_text",
+                            "request_id": request_id,
+                            "data": {
+                                "success": bool(success),
+                                "text_length": len(text_to_type),
+                                "status": "submitted" if success and press_enter else (
+                                    "typed" if success else "failed"
+                                ),
+                                "typed": bool(success),
+                                "submitted": bool(success and press_enter),
+                                "press_enter": press_enter,
+                            },
+                        }
+                        if not success:
+                            response["error"] = "Keyboard text insertion failed"
+                        self._send_websocket_message(response)
                     else:
                         self._send_websocket_message(
                             {
@@ -1100,13 +1112,12 @@ class TelegramRemoteControlMixin:
                                 source_command="instruction",
                                 mode="command",
                             )
-                            if hasattr(self, "_current_input_type"):
-                                self._current_input_type = "text"
-                            accepted = get_integration_message_bus().deliver_telegram_user_input(
+                            accepted = get_integration_message_bus().deliver_remote_user_input(
                                 text=str(instruction_text),
                                 image_path=None,
-                                telegram_chat_id=self._telegram_thread_id_for_message_bus(),
+                                request_id=request_id,
                                 speak=False,
+                                input_type="text",
                                 allow_queue=False,
                             )
                             if accepted is False:
@@ -1252,27 +1263,65 @@ class TelegramRemoteControlMixin:
                                 mode=mode,
                                 press_enter=press_enter,
                             )
-                            if hasattr(self, "_current_input_type"):
-                                self._current_input_type = "text"
-                            accepted = get_integration_message_bus().deliver_telegram_user_input(
+                            accepted = get_integration_message_bus().deliver_remote_user_input(
                                 text=str(text),
                                 image_path=None,
-                                telegram_chat_id=self._telegram_thread_id_for_message_bus(),
+                                request_id=request_id,
                                 speak=False,
+                                input_type="text",
                                 allow_queue=False,
                             )
                             if accepted is False:
                                 self._discard_remote_agent_response_context(request_id)
                                 raise RuntimeError("Agent input handoff failed")
+                            status = "submitted_to_agent"
+                            typed = False
+                            submitted = True
                         elif mode == "dictate":
-                            self._type_text_quick(
+                            typed_result = self._type_text_quick(
                                 text,
                                 dictation=True,
                                 press_enter=press_enter,
                             )
+                            if typed_result is False:
+                                self._send_websocket_message({
+                                    "type": "remote_control_response",
+                                    "command": "voice_text_input",
+                                    "request_id": request_id,
+                                    "error": "Keyboard text insertion failed",
+                                    "data": {
+                                        "text": text,
+                                        "mode": mode,
+                                        "status": "failed",
+                                        "typed": False,
+                                        "submitted": False,
+                                        "press_enter": press_enter,
+                                    },
+                                })
+                                return
+                            status = "submitted" if press_enter else "typed"
+                            typed = True
+                            submitted = press_enter
+                        else:
+                            self._send_websocket_message({
+                                "type": "remote_control_response",
+                                "command": "voice_text_input",
+                                "request_id": request_id,
+                                "error": f"Unknown voice input mode: {mode}",
+                                "data": {"mode": mode, "status": "failed"},
+                            })
+                            return
                         self._send_websocket_message({
                             "type": "remote_control_response", "command": "voice_text_input",
-                            "request_id": request_id, "data": {"text": text, "mode": mode},
+                            "request_id": request_id,
+                            "data": {
+                                "text": text,
+                                "mode": mode,
+                                "status": status,
+                                "typed": typed,
+                                "submitted": submitted,
+                                "press_enter": press_enter,
+                            },
                         })
 
                 elif command == "voice_transcribe":
@@ -1386,13 +1435,12 @@ class TelegramRemoteControlMixin:
                                                 source_command="voice_transcribe",
                                                 mode=mode,
                                             )
-                                            if hasattr(self, "_current_input_type"):
-                                                self._current_input_type = "text"
-                                            accepted = get_integration_message_bus().deliver_telegram_user_input(
+                                            accepted = get_integration_message_bus().deliver_remote_user_input(
                                                 text=str(transcript),
                                                 image_path=None,
-                                                telegram_chat_id=self._telegram_thread_id_for_message_bus(),
+                                                request_id=request_id,
                                                 speak=False,
+                                                input_type="voice",
                                                 allow_queue=False,
                                             )
                                             if accepted is False:
@@ -1403,13 +1451,27 @@ class TelegramRemoteControlMixin:
                                                     "command": "voice_transcribe",
                                                     "request_id": request_id,
                                                     "error": "Agent input handoff failed",
-                                                    "data": {"text": transcript, "mode": mode},
+                                                    "data": {
+                                                        "text": transcript,
+                                                        "mode": mode,
+                                                        "status": "failed",
+                                                        "submitted": False,
+                                                    },
                                                 })
                                         if handoff_ok:
+                                            submitted = mode == "command"
                                             self._send_websocket_message({
                                                 "type": "remote_control_response", "command": "voice_transcribe",
                                                 "request_id": request_id,
-                                                "data": {"text": transcript, "mode": mode},
+                                                "data": {
+                                                    "text": transcript,
+                                                    "mode": mode,
+                                                    "status": (
+                                                        "submitted_to_agent"
+                                                        if submitted else "transcribed"
+                                                    ),
+                                                    "submitted": submitted,
+                                                },
                                             })
                                     else:
                                         self._send_websocket_message({

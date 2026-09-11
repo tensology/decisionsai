@@ -146,6 +146,12 @@ class KanbanTicket(Base):
 Index('ix_kanban_tickets_lane_id', KanbanTicket.lane_id)
 Index('ix_kanban_tickets_position', KanbanTicket.position)
 Index('ix_kanban_lanes_board_id', KanbanLane.board_id)
+Index(
+    'ux_kanban_tickets_source_chat',
+    KanbanTicket.source_chat_id,
+    unique=True,
+    sqlite_where=KanbanTicket.source_chat_id.is_not(None),
+)
 
 
 class KanbanTicketFile(Base):

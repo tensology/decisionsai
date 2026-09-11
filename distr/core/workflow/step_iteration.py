@@ -117,13 +117,23 @@ def load_step_handoff_meta(step_id: int | None) -> dict[str, Any]:
             tools = normalize_tool_list(cfg.get("tools") or [])
             if not tools:
                 tools = tools_for_action(action_type)
+            from distr.core.work_intake.execution_policy import infer_step_role
+            from distr.core.workflow.execution_mode import workflow_step_skills
+
+            role = infer_step_role({
+                "name": step.name,
+                "description": step.description,
+                "instruction": step.instruction,
+                "step_type": step.step_type,
+                "config": cfg,
+            })
             return {
                 "step_name": (step.name or "").strip(),
                 "action_type": action_type,
                 "validation_prompt": (step.validation_prompt or cfg.get("validation_prompt") or "").strip(),
                 "validation_type": (step.validation_type or cfg.get("validation_type") or "").strip(),
                 "tools": tools,
-                "skills": list(cfg.get("skills") or []),
+                "skills": workflow_step_skills(role, list(cfg.get("skills") or [])),
                 "failure_checklist": list(cfg.get("failure_checklist") or []),
                 "guardrail": str(cfg.get("guardrail") or "").strip(),
             }

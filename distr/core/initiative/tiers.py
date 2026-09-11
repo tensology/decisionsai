@@ -25,7 +25,7 @@ def boundary_minimum_tier(action_type: str, boundaries: dict) -> int:
     at = (action_type or "none").strip().lower()
     if at == "sensitive":
         return PermissionTier.ESCALATE
-    if at in ("ticket_lane_move", "workflow_start", "project_cli_task"):
+    if at in ("ticket_lane_move", "workflow_start", "project_cli_task", "development_thread_control"):
         return PermissionTier.APPROVE
     if at == "external_comms" and boundaries.get("initiative_ask_external_comms"):
         return PermissionTier.ESCALATE
@@ -56,6 +56,8 @@ def configured_tier_for_action(
     if at == "ticket_lane_move":
         return PermissionTier.APPROVE
     if at == "workflow_start":
+        return PermissionTier.APPROVE
+    if at == "development_thread_control":
         return PermissionTier.APPROVE
     if at == "project_cli_task":
         return PermissionTier.APPROVE

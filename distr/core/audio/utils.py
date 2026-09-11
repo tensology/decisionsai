@@ -469,6 +469,12 @@ def get_system_default_device_fingerprint() -> str:
     Used by the periodic device checker to detect Bluetooth handoffs where the
     device list hash is unchanged but the system default route moved.
     """
+    combined_fingerprint, _ = get_system_default_device_fingerprints()
+    return combined_fingerprint
+
+
+def get_system_default_device_fingerprints() -> tuple[str, str]:
+    """Return combined and output-only fingerprints from one fresh route query."""
     import hashlib
     from distr.core.agent.config_loader import (
         resolve_system_default_input_device,
@@ -478,7 +484,11 @@ def get_system_default_device_fingerprint() -> str:
     in_idx, in_name = resolve_system_default_input_device()
     out_idx, out_name = resolve_system_default_output_device()
     payload = f"in:{in_idx}:{in_name}|out:{out_idx}:{out_name}"
-    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+    output_payload = f"out:{out_idx}:{out_name}"
+    return (
+        hashlib.md5(payload.encode("utf-8")).hexdigest(),
+        hashlib.md5(output_payload.encode("utf-8")).hexdigest(),
+    )
 
 
 def find_device_in_list(device_list, device_name):

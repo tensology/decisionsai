@@ -6,7 +6,7 @@ sequence of steps. Each step IS a single action with validation and routing.
 
 Named "Auto" to avoid conflict with the existing Workflow model (template/job card system).
 """
-from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import relationship
 from . import Base
 from .time import utc_now_naive
@@ -168,6 +168,7 @@ class AutoWorkflowRun(Base):
 
     id = Column(Integer, primary_key=True)
     workflow_id = Column(Integer, ForeignKey('auto_workflows.id'), nullable=False)
+    chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
     board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=True)
     ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
     parent_run_id = Column(Integer, ForeignKey('auto_workflow_runs.id'), nullable=True)  # Subagent hierarchy
@@ -182,8 +183,203 @@ class AutoWorkflowRun(Base):
     workflow = relationship("AutoWorkflow", back_populates="runs")
 
 
+Index('ix_auto_workflow_runs_chat_status', AutoWorkflowRun.chat_id, AutoWorkflowRun.status)
+
+
+class StudioArtifact(Base):
+    """A durable visual or structured planning artifact attached to a Studio task."""
+
+    __tablename__ = "studio_artifacts"
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
+    workflow_id = Column(Integer, ForeignKey("auto_workflows.id"), nullable=True)
+    run_id = Column(Integer, ForeignKey("auto_workflow_runs.id"), nullable=True)
+    artifact_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    content = Column(Text, nullable=True)
+    content_format = Column(String, nullable=False, default="markdown")
+    uri = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="planned")
+    sort_order = Column(Integer, nullable=False, default=0)
+    metadata_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
+class DevelopmentPlanRevision(Base):
+    """Immutable per-thread plan snapshot derived from a reusable workflow."""
+
+    __tablename__ = "development_plan_revisions"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "revision", name="uq_development_plan_chat_revision"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
+    workflow_id = Column(Integer, ForeignKey("auto_workflows.id"), nullable=False)
+    revision = Column(Integer, nullable=False)
+    mode = Column(String, nullable=False, default="develop")
+    status = Column(String, nullable=False, default="draft")
+    instruction = Column(Text, nullable=False, default="")
+    snapshot_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    approved_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
+Index(
+    "ix_development_plan_revisions_chat_status",
+    DevelopmentPlanRevision.chat_id,
+    DevelopmentPlanRevision.status,
+)
+
+
+class DevelopmentCommand(Base):
+    """A durable, ordered instruction sent to a Development thread.
+
+    Commands are intentionally separate from chat messages. They can arrive
+    from the browser, Telegram, or another approved control surface and remain
+    visible until the workflow harness acknowledges or cancels them.
+    """
+
+    __tablename__ = "development_commands"
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
+    workflow_id = Column(Integer, ForeignKey("auto_workflows.id"), nullable=True)
+    run_id = Column(Integer, ForeignKey("auto_workflow_runs.id"), nullable=True)
+    source = Column(String, nullable=False, default="web")
+    source_ref = Column(String, nullable=True)
+    command_type = Column(String, nullable=False, default="instruction")
+    content = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="queued")
+    position = Column(Integer, nullable=False, default=0)
+    result_summary = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+    delivered_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+
+
+class DevelopmentWorkItem(Base):
+    """Authoritative board/ticket identity for one Development thread.
+
+    ``Chat.params.development`` remains a compatibility projection while the
+    Development UI and older integrations are migrated. Identity and reuse
+    decisions must use this row instead of inferring ownership from a project
+    or workflow id.
+    """
+
+    __tablename__ = "development_work_items"
+    __table_args__ = (
+        UniqueConstraint("chat_id", name="uq_development_work_items_chat"),
+        UniqueConstraint("identity_key", name="uq_development_work_items_identity"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(Integer, ForeignKey("chats.id"), nullable=False)
+    identity_key = Column(String, nullable=False)
+    source_type = Column(String, nullable=False, default="prompt")
+    board_provider = Column(String, nullable=True)
+    board_key = Column(String, nullable=True)
+    ticket_key = Column(String, nullable=True)
+    local_ticket_id = Column(Integer, ForeignKey("kanban_tickets.id"), nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    workflow_id = Column(Integer, ForeignKey("auto_workflows.id"), nullable=True)
+    ticket_title = Column(Text, nullable=True)
+    ticket_lane = Column(String, nullable=True)
+    time_accumulated_seconds = Column(Integer, nullable=False, default=0)
+    time_started_at = Column(DateTime, nullable=True)
+    time_last_activity_at = Column(DateTime, nullable=True)
+    time_paused = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
+class PlanWorkspace(Base):
+    """One durable planning workspace for a Development board."""
+
+    __tablename__ = "plan_workspaces"
+    __table_args__ = (
+        UniqueConstraint("board_key", name="uq_plan_workspaces_board_key"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    board_key = Column(String, nullable=False)
+    board_provider = Column(String, nullable=False, default="decisions")
+    board_name = Column(String, nullable=False, default="Untitled board")
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+    root_path = Column(Text, nullable=True)
+    status = Column(String, nullable=False, default="draft")
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
+class PlanItem(Base):
+    """A board-scoped source document, diagram, design, or delivery item."""
+
+    __tablename__ = "plan_items"
+
+    id = Column(Integer, primary_key=True)
+    workspace_id = Column(Integer, ForeignKey("plan_workspaces.id"), nullable=False)
+    item_type = Column(String, nullable=False, default="document")
+    title = Column(String, nullable=False, default="Untitled")
+    content = Column(Text, nullable=False, default="")
+    content_format = Column(String, nullable=False, default="markdown")
+    status = Column(String, nullable=False, default="draft")
+    sort_order = Column(Integer, nullable=False, default=0)
+    file_path = Column(Text, nullable=True)
+    content_hash = Column(String, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+    modified_at = Column(DateTime, default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+
+class PlanItemRevision(Base):
+    """Immutable history for a planning item."""
+
+    __tablename__ = "plan_item_revisions"
+    __table_args__ = (
+        UniqueConstraint("item_id", "revision", name="uq_plan_item_revision"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    item_id = Column(Integer, ForeignKey("plan_items.id"), nullable=False)
+    revision = Column(Integer, nullable=False)
+    title = Column(String, nullable=False)
+    content = Column(Text, nullable=False, default="")
+    status = Column(String, nullable=False, default="draft")
+    source = Column(String, nullable=False, default="user")
+    instruction = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now_naive, nullable=False)
+
+
+class PlanFileWrite(Base):
+    """A file projection to finish after its item revision commits."""
+    __tablename__ = "plan_file_writes"
+    item_id = Column(Integer, ForeignKey("plan_items.id", ondelete="CASCADE"), primary_key=True)
+    target_path = Column(Text, nullable=False)
+    previous_hash = Column(String, nullable=True)
+    desired_hash = Column(String, nullable=False)
+
+
 # Indexes for high-frequency query patterns (must appear after class definitions)
 Index('ix_autoworkflowrun_workflow_id', AutoWorkflowRun.workflow_id)
 Index('ix_autoworkflowrun_ticket_id', AutoWorkflowRun.ticket_id)
 Index('ix_autoworkflowrun_board_id', AutoWorkflowRun.board_id)
 Index('ix_autoworkflowrun_status', AutoWorkflowRun.status)
+Index('ix_studio_artifacts_chat_order', StudioArtifact.chat_id, StudioArtifact.sort_order)
+Index('ix_studio_artifacts_workflow', StudioArtifact.workflow_id)
+Index('ix_studio_artifacts_run', StudioArtifact.run_id)
+Index('ix_development_commands_chat_position', DevelopmentCommand.chat_id, DevelopmentCommand.position)
+Index('ix_development_commands_status', DevelopmentCommand.status)
+Index('ix_development_commands_run', DevelopmentCommand.run_id)
+Index('ix_development_work_items_board', DevelopmentWorkItem.board_provider, DevelopmentWorkItem.board_key)
+Index('ix_development_work_items_ticket', DevelopmentWorkItem.local_ticket_id)
+Index('ix_development_work_items_project', DevelopmentWorkItem.project_id)
+Index('ix_plan_workspaces_project', PlanWorkspace.project_id)
+Index('ix_plan_items_workspace_order', PlanItem.workspace_id, PlanItem.sort_order)
+Index('ix_plan_item_revisions_item', PlanItemRevision.item_id, PlanItemRevision.revision)

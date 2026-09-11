@@ -1,0 +1,29 @@
+<div class="composer-layer" id="development-composer-layer">
+                <form class="studio-composer" id="studio-composer">
+                    <div class="composer-scope-strip">
+                        <div class="composer-picker" id="composer-board-picker"><span>Board</span><button type="button" id="composer-board-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-board-label">No board</strong><i>⌄</i></button><div class="composer-picker-menu hidden" id="composer-board-menu" role="listbox" aria-label="Ticket board"></div></div>
+                        <div class="composer-picker" id="composer-ticket-picker"><span>Ticket</span><button type="button" id="composer-ticket-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-ticket-label">No ticket</strong><i>⌄</i></button><div class="composer-picker-menu hidden" id="composer-ticket-menu" role="listbox" aria-label="Board ticket"></div></div>
+                        <div class="composer-picker" id="composer-workflow-picker"><span>Workflow</span><button type="button" id="composer-workflow-button" aria-haspopup="listbox" aria-expanded="false"><strong id="composer-workflow-label">Direct agent</strong><i>⌄</i></button><div class="composer-picker-menu hidden" id="composer-workflow-menu" role="listbox" aria-label="Execution workflow"></div></div>
+                        <div class="composer-skill-badges hidden" id="composer-skill-badges" aria-label="Skills attached to this prompt"></div>
+                        <span class="composer-time-controls">
+                            <span class="run-elapsed" id="run-elapsed" aria-label="Thread time">00:00:00</span>
+                            <button type="button" class="time-toggle-button" id="composer-time-toggle" aria-label="Start time tracking" title="Start time tracking" disabled><span aria-hidden="true">▶</span></button>
+                        </span>
+                    </div>
+                    <div class="composer-context hidden" id="composer-context"></div>
+                    <textarea id="task-prompt" rows="1" placeholder="Describe what you want to build or change" aria-label="Development instruction" disabled></textarea>
+                    <div class="composer-toolbar">
+                        <button type="button" class="tool-button add-button" id="attach-button" aria-label="Add to chat" aria-haspopup="menu" aria-expanded="false"><span aria-hidden="true">+</span></button>
+                        <div class="composer-action-menu hidden" id="composer-action-menu" role="menu" aria-label="Add to development chat">
+                            <button type="button" role="menuitem" data-composer-action="files"><span aria-hidden="true">⌁</span><span><strong>Add files</strong><small>Select one or more files</small></span></button>
+                            <label class="composer-skill-search"><span aria-hidden="true">⌕</span><input id="composer-skill-search" type="search" placeholder="Search skills" aria-label="Search installed skills"></label>
+                            <div class="composer-skill-list" id="composer-skill-list" role="group" aria-label="Installed skills"></div>
+                        </div>
+                        <label class="permission-control" for="composer-permission-select"><span aria-hidden="true">◈</span><select id="composer-permission-select" aria-label="Development permissions"><option value="trusted">Full access</option><option value="standard">Read/write</option><option value="careful">Read only</option></select></label>
+                        <button type="button" class="mode-button hidden" id="mode-button" aria-haspopup="dialog"><span id="mode-label">Plan</span></button>
+                        <button type="button" class="model-button" id="model-button"><span id="model-label">Auto · Medium</span><span aria-hidden="true">⌄</span></button>
+                        <button type="submit" class="send-button" id="send-button" aria-label="Send prompt" disabled>↑</button>
+                    </div>
+                    <div class="composer-drop-overlay hidden" id="composer-drop-overlay" aria-live="polite"><strong>Drop files into this prompt</strong><span>Images and files become visible prompt context</span></div>
+                </form>
+            </div>

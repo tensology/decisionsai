@@ -7312,7 +7312,9 @@
                 var recentStepsHtml = recentStepNames.length
                     ? '<div class="md:col-span-2"><span class="text-gray-500">Recent steps:</span> <span class="text-gray-300">' + esc(recentStepNames.join(" → ")) + '</span></div>'
                     : '';
-                var workflowText = meta.workflowText || ("Workflow #" + r.workflow_id);
+                var workflowText = r.execution_kind === "development"
+                    ? "Direct Development task"
+                    : (meta.workflowText || ("Workflow #" + r.workflow_id));
                 var routeCard = renderRouteCard(r.execution_route || {}, {
                     pendingApproval: r.pending_route_approval && Object.keys(r.pending_route_approval || {}).length,
                     skills: workflowCleanStringList(r.current_step_skills).concat(workflowCleanStringList((r.execution_route || {}).skills)),
@@ -7370,10 +7372,18 @@
                 } else if (activityState === "no_heartbeat") {
                     activityHtml += '<div class="md:col-span-2 text-amber-300">No worker heartbeat has arrived after ' + esc(formatElapsed(r.elapsed_seconds)) + '.</div>';
                 }
-                var actions = '<div class="flex items-center gap-2 ml-auto">' +
-                    (r.status === "waiting" ? '<button type="button" class="wf-active-continue px-2 py-1 rounded border border-amber-500/50 text-amber-300 text-xs hover:bg-amber-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '" data-waiting-kind="' + esc(waitingKind) + '">' + esc(continueLabel) + '</button>' : '') +
-                    '<button type="button" class="wf-active-stop inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '">' + SVG_STOP + '<span>Stop</span></button>' +
-                '</div>';
+                var cancellationTarget = r.cancellation_target || {};
+                var actions = '<details class="relative ml-auto wf-active-menu">' +
+                    '<summary class="list-none cursor-pointer rounded px-2 py-1 text-gray-300 hover:bg-white/10" aria-label="Run actions">•••</summary>' +
+                    '<div class="absolute right-0 z-30 mt-1 min-w-40 rounded border border-white/15 bg-[#111936] p-1 shadow-xl">' +
+                        (r.open_url ? '<a class="block rounded px-3 py-2 text-xs text-gray-200 hover:bg-white/10" href="' + esc(r.open_url) + '">Open</a>' : '') +
+                        (r.related_ticket_url ? '<a class="block rounded px-3 py-2 text-xs text-gray-200 hover:bg-white/10" href="' + esc(r.related_ticket_url) + '">Related ticket</a>' : '') +
+                        (r.status === "waiting" ? (r.execution_kind === "development"
+                            ? '<a class="block rounded px-3 py-2 text-xs text-amber-300 hover:bg-white/10" href="' + esc(r.open_url) + '">Continue / Respond</a>'
+                            : '<button type="button" class="wf-active-continue block w-full rounded px-3 py-2 text-left text-xs text-amber-300 hover:bg-white/10" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '" data-waiting-kind="' + esc(waitingKind) + '">' + esc(continueLabel) + '</button>') : '') +
+                        '<button type="button" class="wf-active-stop block w-full rounded px-3 py-2 text-left text-xs text-red-400 hover:bg-red-500/20" data-cancel-url="' + esc(cancellationTarget.url || '') + '">Cancel</button>' +
+                    '</div>' +
+                '</details>';
                 return '<div class="' + rowCls + '">' +
                     '<div class="flex items-center gap-2 mb-1">' +
                         '<span class="text-xs text-gray-400">Run #' + r.id + '</span>' +
@@ -7427,7 +7437,12 @@
             });
             listEl.querySelectorAll(".wf-active-stop").forEach(function (btn) {
                 btn.addEventListener("click", function () {
-                    cancelWorkflowRun(btn.dataset.workflowId, btn.dataset.runId, btn);
+                    var url = btn.dataset.cancelUrl || "";
+                    if (!url) return;
+                    btn.disabled = true;
+                    api("POST", url.replace(/^\/api/, ""))
+                        .then(function () { snack("Execution cancelled"); loadActiveRuns(); })
+                        .catch(function (e) { btn.disabled = false; snack(e.message || "Failed to cancel", "error"); });
                 });
             });
             bindApprovalDecisionButtons(listEl);

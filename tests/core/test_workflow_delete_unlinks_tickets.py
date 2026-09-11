@@ -6,10 +6,11 @@ from unittest.mock import patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from distr.core.db import Base
+from distr.core.db import Base, Chat
+from distr.core.db.automation import Automation
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.orchestrator import OrchestratorEvent, OrchestratorValidationRecord
-from distr.core.db.workflow import AutoWorkflow
+from distr.core.db.workflow import AutoWorkflow, DevelopmentWorkItem
 from distr.core.workflow.service import delete_workflow
 
 
@@ -106,4 +107,47 @@ def test_delete_workflow_removes_scoped_orchestrator_evidence():
     session = factory()
     assert session.query(OrchestratorEvent).filter_by(workflow_id=workflow_id).count() == 0
     assert session.query(OrchestratorValidationRecord).filter_by(workflow_id=workflow_id).count() == 0
+    session.close()
+
+
+def test_delete_workflow_detaches_board_thread_and_automation_consumers():
+    factory = _make_session_factory()
+    session = factory()
+    workflow = AutoWorkflow(name="Reusable flow", workflow_type="manual")
+    chat = Chat(title="Persistent automation thread")
+    session.add_all([workflow, chat])
+    session.flush()
+    board = KanbanBoard(name="Board", default_workflow_id=workflow.id)
+    automation = Automation(
+        name="Persistent automation",
+        linked_workflow_id=workflow.id,
+        thread_chat_id=chat.id,
+        action_config=f'{{"development_workflow_id": {workflow.id}}}',
+    )
+    work_item = DevelopmentWorkItem(
+        chat_id=chat.id,
+        identity_key="source:automation:auto_test",
+        source_type="automation",
+        workflow_id=workflow.id,
+    )
+    session.add_all([board, automation, work_item])
+    session.commit()
+    workflow_id = int(workflow.id)
+    chat_id = int(chat.id)
+    automation_id = int(automation.id)
+    work_item_id = int(work_item.id)
+    board_id = int(board.id)
+    session.close()
+
+    with _patch_service_session(factory):
+        assert delete_workflow(workflow_id) is True
+
+    session = factory()
+    assert session.get(Chat, chat_id) is not None
+    assert session.get(DevelopmentWorkItem, work_item_id).workflow_id is None
+    stored_automation = session.get(Automation, automation_id)
+    assert stored_automation is not None
+    assert stored_automation.linked_workflow_id is None
+    assert "development_workflow_id" not in stored_automation.action_config
+    assert session.get(KanbanBoard, board_id).default_workflow_id is None
     session.close()

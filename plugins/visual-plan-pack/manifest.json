@@ -1,6 +1,6 @@
 {
   "pack_version": 1,
-  "description": "BuilderIO Agent-Native skills — visual plans, visual recaps, quick status blocks.",
+  "description": "BuilderIO Agent-Native skills — visual plans, visual recaps, agent audits, and quick status blocks.",
   "reference_roots": {
     "builderio_skills": "../reference/builderio-skills/skills"
   },
@@ -24,6 +24,12 @@
       "source": "builderio_skills/quick-recap",
       "overwrite": true,
       "note": "Green/yellow/red status block convention for agent completions."
+    },
+    {
+      "id": "agent-watchdog",
+      "source": "builderio_skills/agent-watchdog",
+      "overwrite": true,
+      "note": "Independent audit of Codex, Cursor, Claude, PR, branch, transcript, and workflow completion claims."
     }
   ],
   "index_only": [

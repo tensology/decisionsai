@@ -98,19 +98,20 @@ def _install_fake_signals(monkeypatch, emit_fn):
 
 
 def _patch_message_bus_deliver(monkeypatch, emits, *, accepted=None):
-    """Remote control routes via ``IntegrationMessageBus.deliver_telegram_user_input``."""
+    """Remote control routes through its own external-input bus contract."""
 
     class _Bus:
-        def deliver_telegram_user_input(
+        def deliver_remote_user_input(
             self,
             *,
             text,
             image_path=None,
-            telegram_chat_id=None,
+            request_id=None,
             speak=None,
+            input_type=None,
             allow_queue=True,
         ):
-            emits.append((text, True, image_path, speak))
+            emits.append((text, True, image_path, speak, request_id, input_type))
             return accepted
 
     monkeypatch.setattr(
@@ -145,7 +146,7 @@ def test_instruction_command_routes_as_telegram_without_desktop_tts(monkeypatch)
     )
 
     assert emits
-    assert emits[-1] == ("open browser", True, None, False)
+    assert emits[-1] == ("open browser", True, None, False, "ins-1", "text")
 
 
 def test_instruction_reports_failure_and_discards_response_route_when_handoff_fails(monkeypatch):
@@ -187,6 +188,51 @@ def test_failed_remote_chat_api_relay_discards_response_route(monkeypatch):
     assert host._pending_remote_agent_responses == []
     assert host._pending_remote_agent_response is None
     assert "local API unavailable" in (host.responses[-1].get("error") or "")
+
+
+def test_remote_chat_api_relay_marks_explicit_remote_origin(monkeypatch):
+    host = _Host()
+    captured = {}
+
+    class _Response:
+        status_code = 200
+        text = ""
+        content = b"{}"
+        headers = {"content-type": "application/json"}
+
+        @staticmethod
+        def json():
+            return {"sent": True}
+
+    def _post(url, **kwargs):
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return _Response()
+
+    monkeypatch.setattr("requests.post", _post)
+    monkeypatch.setattr(
+        "distr.gui.web.server.get_unified_server",
+        lambda: types.SimpleNamespace(
+            is_running=True,
+            get_url=lambda: "http://127.0.0.1:8765",
+        ),
+    )
+
+    host._dispatch_api_relay(
+        {
+            "command": "api_relay",
+            "request_id": "remote-api-42",
+            "data": {
+                "method": "POST",
+                "path": "/api/chats/89/send-to-agent",
+                "body": {"message": "hello", "speak": True},
+            },
+        }
+    )
+
+    assert captured["json"]["origin_surface"] == "remote"
+    assert captured["json"]["origin_request_id"] == "remote-api-42"
+    assert captured["json"]["input_type"] == "text"
 
 
 def test_voice_transcribe_reports_agent_not_available(monkeypatch):
@@ -267,6 +313,46 @@ def test_voice_text_input_can_disable_enter_for_dictation():
             {"dictation": True, "press_enter": False},
         )
     ]
+    assert host.responses[-1]["data"]["status"] == "typed"
+    assert host.responses[-1]["data"]["submitted"] is False
+
+
+def test_type_text_reports_submitted_only_after_successful_enter():
+    host = _Host()
+    host._type_text_quick = lambda text, **kwargs: True
+
+    host._handle_remote_control_command(
+        {
+            "command": "type_text",
+            "request_id": "type-submit-1",
+            "data": {"text": "send this", "dictation": True, "press_enter": True},
+        }
+    )
+
+    assert host.responses[-1]["data"] == {
+        "success": True,
+        "text_length": 9,
+        "status": "submitted",
+        "typed": True,
+        "submitted": True,
+        "press_enter": True,
+    }
+
+
+def test_type_text_returns_error_when_keyboard_insertion_fails():
+    host = _Host()
+    host._type_text_quick = lambda text, **kwargs: False
+
+    host._handle_remote_control_command(
+        {
+            "command": "type_text",
+            "request_id": "type-failed-1",
+            "data": {"text": "lost text", "dictation": True, "press_enter": True},
+        }
+    )
+
+    assert host.responses[-1]["error"] == "Keyboard text insertion failed"
+    assert host.responses[-1]["data"]["status"] == "failed"
 
 
 def test_voice_transcribe_reports_timeout(monkeypatch):
@@ -321,8 +407,17 @@ def test_voice_transcribe_command_mode_routes_to_agent_with_telegram_flag(monkey
     rc_responses = [m for m in host.responses if m.get("command") == "voice_transcribe"]
     assert rc_responses
     assert rc_responses[-1].get("data", {}).get("text") == "hello remote command"
+    assert rc_responses[-1]["data"]["status"] == "submitted_to_agent"
+    assert rc_responses[-1]["data"]["submitted"] is True
     assert emits
-    assert emits[-1] == ("hello remote command", True, None, False)
+    assert emits[-1] == (
+        "hello remote command",
+        True,
+        None,
+        False,
+        "ws-req-1",
+        "voice",
+    )
 
 
 def test_voice_transcribe_ogg_normalizes_to_wav(monkeypatch):

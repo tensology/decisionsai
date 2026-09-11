@@ -22,6 +22,7 @@ VALID_ACTION_TYPES = frozenset(
         "board_triage",
         "ticket_lane_move",
         "workflow_start",
+        "development_thread_control",
         "project_cli_task",
         "automation_recommendation",
         "message_triage",

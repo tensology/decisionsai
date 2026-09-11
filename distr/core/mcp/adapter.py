@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import keyword
 import logging
 import re
 import threading
@@ -93,11 +94,18 @@ def _json_schema_to_model(model_name: str, schema: dict[str, Any] | None) -> typ
 
     field_defs: dict[str, Any] = {}
     idx = 0
+    used_names: set[str] = set()
     for alias, spec in props.items():
         if not isinstance(alias, str):
             continue
-        py_name = f"a_{idx}"
+        candidate = _sanitize_segment(alias)
+        py_name = (
+            candidate
+            if candidate.isidentifier() and not keyword.iskeyword(candidate) and candidate not in used_names
+            else f"a_{idx}"
+        )
         idx += 1
+        used_names.add(py_name)
         ann, fld = _prop_field(alias, spec if isinstance(spec, dict) else {}, alias in req_keys)
         field_defs[py_name] = (ann, fld)
 

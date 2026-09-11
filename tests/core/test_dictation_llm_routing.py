@@ -8,6 +8,11 @@ class _FakeTranscriptionFrame:
         self.text = text
 
 
+class _FakeErrorFrame:
+    def __init__(self, error: str):
+        self.error = error
+
+
 class _EventQueue:
     def __init__(self):
         self.items = []
@@ -37,12 +42,13 @@ class _Harness(LLMSharedMixin):
         self.event_queue = _EventQueue()
         self.chat_manager = _ChatManager()
         self.typed = []
+        self.pushed = []
 
     async def _type_dictation_text(self, text: str):
         self.typed.append(text)
 
     async def push_frame(self, frame, direction):
-        raise AssertionError("dictation transcript should not be pushed downstream")
+        self.pushed.append((frame, direction))
 
 
 def test_dictation_transcript_does_not_touch_agent_ptt_state(monkeypatch):
@@ -112,3 +118,49 @@ def test_completed_ptt_reserves_exactly_one_transcript(monkeypatch):
 
     assert harness._voice_capture_pending is False
     assert harness._last_ptt_transcription_text == "captured speech"
+
+
+def test_empty_completed_ptt_reports_no_speech_and_clears_authorization(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "TranscriptionFrame", _FakeTranscriptionFrame)
+
+    harness = _Harness()
+    harness._is_dictating = False
+    harness._voice_capture_pending = True
+    harness._ptt_active = False
+
+    asyncio.run(harness.process_frame(_FakeTranscriptionFrame(""), None))
+
+    assert harness._voice_capture_pending is False
+    assert ("transcription_progress", {
+        "chat_id": 123,
+        "status_text": "I couldn't hear that. Please try again.",
+        "done": True,
+        "clear_live_preview": False,
+        "discard_live_preview": False,
+    }) in harness.event_queue.items
+
+
+def test_stt_error_completed_ptt_reports_failure_and_clears_authorization(monkeypatch):
+    import distr.core.agent.libs as libs
+
+    monkeypatch.setattr(libs, "ErrorFrame", _FakeErrorFrame)
+
+    harness = _Harness()
+    harness._is_dictating = False
+    harness._voice_capture_pending = True
+    harness._ptt_active = False
+    frame = _FakeErrorFrame("transcription failed")
+
+    asyncio.run(harness.process_frame(frame, None))
+
+    assert harness._voice_capture_pending is False
+    assert ("transcription_progress", {
+        "chat_id": 123,
+        "status_text": "I couldn't transcribe that. Please try again.",
+        "done": True,
+        "clear_live_preview": False,
+        "discard_live_preview": False,
+    }) in harness.event_queue.items
+    assert harness.pushed == [(frame, None)]

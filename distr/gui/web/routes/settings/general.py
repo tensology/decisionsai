@@ -49,6 +49,7 @@ def register_routes(router, templates):
             "welcome_greet_me": settings.get("welcome_greet_me", False),
             "telegram_send_online_notice": settings.get("telegram_send_online_notice", False),
             "load_on_startup": settings.get("load_on_startup", True),
+            "default_project_editor": settings.get("default_project_editor", "codex"),
             "listening_state": settings.get("listening_state", "remember"),
             # Canonical id for UI selects (normalized). DB may store descriptor display name in tts_provider.
             "tts_provider": _voice_provider_id,

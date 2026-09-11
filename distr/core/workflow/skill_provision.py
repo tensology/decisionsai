@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from distr.core.plugins import ecc_vendor_dir, competition_ponytail_skills_dir, competition_fallow_skills_dir, agent_reach_skills_root, community_skills_dir
+from distr.core.plugins import (
+    agent_reach_skills_root,
+    community_skills_dir,
+    competition_fallow_skills_dir,
+    competition_ponytail_skills_dir,
+    ecc_vendor_dir,
+    visual_plan_skills_dir,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
@@ -18,6 +26,7 @@ _ECC_SKILLS_DIR = ecc_vendor_dir() / "skills"
 _COMPETITION_SKILL_DIRS = [competition_ponytail_skills_dir(), competition_fallow_skills_dir()]
 _AGENT_REACH_SKILL_DIRS = [agent_reach_skills_root()]
 _COMMUNITY_SKILL_DIRS = [community_skills_dir()]
+_VISUAL_PLAN_SKILL_DIRS = [visual_plan_skills_dir()]
 
 CLI_TARGETS = {
     "pi": ".pi/skills",
@@ -40,13 +49,37 @@ def _skill_registry():
     return SkillRegistry(
         local_roots=[_SKILLS_DIR],
         vendor_roots=[_ECC_SKILLS_DIR],
-        competition_roots=[*_COMPETITION_SKILL_DIRS, *_AGENT_REACH_SKILL_DIRS, *_COMMUNITY_SKILL_DIRS],
+        competition_roots=[
+            *_COMPETITION_SKILL_DIRS,
+            *_AGENT_REACH_SKILL_DIRS,
+            *_COMMUNITY_SKILL_DIRS,
+            *_VISUAL_PLAN_SKILL_DIRS,
+        ],
     ).scan()
 
 
 def _resolve_skill_dir(skill_id: str) -> Path | None:
     entry = _skill_registry().get(skill_id.strip())
     return entry.path if entry else None
+
+
+def _external_capability_skill_dir(skill_id: str) -> Path | None:
+    registry_path = Path.home() / ".decisions" / "harness" / "capabilities-skills-registry.json"
+    if not registry_path.is_file():
+        return None
+    try:
+        rows = json.loads(registry_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    wanted = re.sub(r"[^a-z0-9]+", "-", str(skill_id or "").strip().lower()).strip("-")
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or str(row.get("source") or "").lower() != "external":
+            continue
+        row_id = re.sub(r"[^a-z0-9]+", "-", str(row.get("id") or "").strip().lower()).strip("-")
+        path = Path(str(row.get("path") or "")).expanduser()
+        if row_id == wanted and (path / "SKILL.md").is_file():
+            return path
+    return None
 
 
 def _backend_skill_target(backend_id: str) -> str:
@@ -69,9 +102,10 @@ def push_skill_to_project(
     """Push one skill to the harness-specific folder. Returns dest path or None."""
     registry = _skill_registry()
     entry = registry.get(skill_id.strip())
-    if not entry:
+    external_skill_dir = None if entry else _external_capability_skill_dir(skill_id)
+    if not entry and not external_skill_dir:
         return None
-    skill_dir = entry.path
+    skill_dir = entry.path if entry else external_skill_dir
     project_path = Path(project_folder).expanduser().resolve()
     if not project_path.is_dir():
         return None
@@ -84,7 +118,9 @@ def push_skill_to_project(
     target = CLI_TARGETS.get(normalized_backend_id, CLI_TARGETS["pi"])
     target_dir = project_path / target
     target_dir.mkdir(parents=True, exist_ok=True)
-    actual_id = entry.canonical_id
+    actual_id = entry.canonical_id if entry else re.sub(
+        r"[^a-z0-9]+", "-", str(skill_id or "").strip().lower()
+    ).strip("-")
     if target == CLI_TARGETS["pi"]:
         dest_skill_dir = target_dir / actual_id
         dest_skill_dir.mkdir(parents=True, exist_ok=True)
@@ -98,7 +134,7 @@ def push_skill_to_project(
                     shutil.rmtree(dest_subdir)
                 shutil.copytree(subdir, dest_subdir)
     else:
-        dest_file = registry.target_path(entry, normalized_backend_id, project_path)
+        dest_file = target_dir / f"{actual_id}.md"
         dest_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_md, dest_file)
         for subdir_name in _SKILL_RESOURCE_DIRS:

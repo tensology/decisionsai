@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 class AgentLifecycleMixin:
     """Manages the agent subprocess lifecycle and command queue."""
 
+    _AGENT_HEALTH_PROBE_TIMEOUT_SECONDS = 45.0
+
     def check_agent_health(self):
         """Check if agent process is alive and reload if dead."""
         if self.agent_process is None:
@@ -52,7 +54,42 @@ class AgentLifecycleMixin:
             )
             self.reload_agent_session(skip_welcome=False)
         else:
-            logger.debug("[HEALTH CHECK] Agent process is healthy")
+            now = time.monotonic()
+            last_ack = getattr(self, '_last_agent_health_ack', None)
+            probe_sent_at = getattr(self, '_agent_health_probe_sent_at', None)
+            if (
+                probe_sent_at is not None
+                and now - probe_sent_at >= self._AGENT_HEALTH_PROBE_TIMEOUT_SECONDS
+            ):
+                logger.error(
+                    "[HEALTH CHECK] Agent process is alive but did not acknowledge a command probe "
+                    "within %.1fs; reloading session",
+                    self._AGENT_HEALTH_PROBE_TIMEOUT_SECONDS,
+                )
+                append_runtime_event(
+                    "agent_process_unresponsive",
+                    source="agent_health_check",
+                    probe_age_seconds=round(now - probe_sent_at, 3),
+                    last_ack_age_seconds=(
+                        round(now - last_ack, 3) if last_ack is not None else None
+                    ),
+                )
+                self._agent_health_probe_sent_at = None
+                self.reload_agent_session(skip_welcome=False)
+                return
+
+            if probe_sent_at is None:
+                self._agent_health_probe_sent_at = now
+                self._send_command_to_agent(
+                    'agent_health_probe',
+                    {'probe_id': f'{time.time_ns()}'},
+                    ensure_alive=False,
+                )
+                logger.debug("[HEALTH CHECK] Sent agent command heartbeat probe")
+            else:
+                logger.debug(
+                    "[HEALTH CHECK] Agent process is healthy; awaiting heartbeat acknowledgement"
+                )
 
     def _check_agent_ready_and_send_pending(self):
         """Check if agent is ready and send any pending commands (non-blocking)."""
@@ -172,6 +209,15 @@ class AgentLifecycleMixin:
                     self.settings.get('agent_current_chat_id')
                     or self.settings.get('last_chat_id')
                 )
+            if effective_chat_id:
+                from distr.core.db import get_session
+                from distr.core.workflow.development_threads import resolve_conversational_chat_id
+
+                with get_session() as db:
+                    effective_chat_id = resolve_conversational_chat_id(
+                        db,
+                        effective_chat_id,
+                    )
             logger.info(f"start_agent_session: effective_chat_id={effective_chat_id}")
 
             self.agent_process = self.mp_context.Process(
@@ -185,6 +231,8 @@ class AgentLifecycleMixin:
 
             try:
                 self.agent_process.start()
+                self._last_agent_health_ack = None
+                self._agent_health_probe_sent_at = None
                 logger.info(f"Agent process started with PID: {self.agent_process.pid}")
                 # Track this PID so it gets killed on restart/crash
                 try:

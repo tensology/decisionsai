@@ -783,10 +783,16 @@ function openIntegrationConnectorsModal() {
     }
 }
 
+function googleOAuthEndpoint() {
+    var query = new URLSearchParams(window.location.search || '');
+    var returnTo = query.get('return_to') || (window.location.pathname + window.location.search + window.location.hash);
+    return settingsBase + '/api/advanced/google/oauth-url?return_to=' + encodeURIComponent(returnTo);
+}
+
 function connectGoogle() {
     // If already connected, go straight to reconnect flow; dedicated disconnect lives on the card.
     var btn = document.getElementById('google_connect_btn');
-    fetch(settingsBase + '/api/advanced/google/oauth-url').then(function (r) { return r.json(); }).then(function (data) {
+    fetch(googleOAuthEndpoint()).then(function (r) { return r.json(); }).then(function (data) {
         if (data.needs_config) {
             openGoogleSetupModal(data.javascript_origin, data.redirect_uri);
             return;
@@ -852,7 +858,7 @@ function handleGoogleConfigFile(file) {
                     setTimeout(function () {
                         document.getElementById('google_setup_modal').classList.add('hidden');
                         // Fetch OAuth URL and redirect directly
-                        fetch(settingsBase + '/api/advanced/google/oauth-url').then(function (r) { return r.json(); }).then(function (d) {
+                        fetch(googleOAuthEndpoint()).then(function (r) { return r.json(); }).then(function (d) {
                             if (d.url) window.location.href = d.url;
                             else if (typeof window.showNotification === 'function') window.showNotification(d.error || 'Could not get OAuth URL', 'error');
                         });

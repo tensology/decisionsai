@@ -1,0 +1,26 @@
+<dialog class="studio-dialog workflow-step-dialog" id="workflow-step-dialog">
+        <form method="dialog" id="workflow-step-form">
+            <header><div><h2 id="workflow-step-dialog-title">Edit step</h2><p>Define what happens, which skills help, and what success produces.</p></div><button type="button" class="icon-button" data-dialog-close aria-label="Close step editor"><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m6 6 8 8M14 6l-8 8"></path></svg></button></header>
+            <input id="workflow-step-workflow-id" type="hidden">
+            <input id="workflow-step-id" type="hidden">
+            <label>Step name<input id="workflow-step-name" type="text" required></label>
+            <label>What should happen?<textarea id="workflow-step-instruction" rows="6" required placeholder="Describe the work this step should complete"></textarea></label>
+            <label>Expected outcome<textarea id="workflow-step-outcome" rows="3" placeholder="What should exist or be true when this step finishes?"></textarea></label>
+            <fieldset class="dialog-fieldset"><legend>Skills</legend><div class="workflow-option-grid" id="workflow-step-skills"></div></fieldset>
+            <details class="workflow-step-advanced"><summary>Advanced step settings</summary><div class="workflow-step-advanced-body">
+                <label>Action<select id="workflow-step-action"><option value="agent_instruction">Agent instruction</option><option value="send_to_project_cli">Project CLI</option><option value="run_command">Terminal command</option><option value="http_request">HTTP request</option></select></label>
+                <div class="dialog-row"><label>Provider<select id="workflow-step-provider"><option value="">Automatic</option></select></label><label>Model<select id="workflow-step-model"><option value="">Automatic</option></select></label></div>
+                <div class="dialog-row"><label>Validation<select id="workflow-step-validation"><option value="none">No validation</option><option value="agent">Agent review</option><option value="command">Command result</option><option value="manual">Manual approval</option></select></label><label>Routing<select id="workflow-step-routing"><option value="sequential">Continue in order</option><option value="conditional">Conditional route</option><option value="agent">Agent decides</option></select></label></div>
+                <label>Validation instruction<textarea id="workflow-step-validation-prompt" rows="3" placeholder="What proves that this step passed?"></textarea></label>
+                <label>Routing instruction<textarea id="workflow-step-routing-prompt" rows="3" placeholder="Explain how the next step should be selected"></textarea></label>
+                <div class="dialog-row"><label>On pass<select id="workflow-step-on-pass"><option value="">Next step</option></select></label><label>On fail<select id="workflow-step-on-fail"><option value="">Stop workflow</option></select></label></div>
+                <div class="dialog-row"><label>Retries<input id="workflow-step-retries" type="number" min="0" max="20" value="0"></label><label>Timeout (seconds)<input id="workflow-step-timeout" type="number" min="0" value="0"></label></div>
+                <label>Project<select id="workflow-step-project"><option value="">Workflow project</option></select></label>
+                <fieldset class="dialog-fieldset"><legend>Tools</legend><div class="workflow-option-grid" id="workflow-step-tools"></div></fieldset>
+                <label class="check-control"><input id="workflow-step-fresh-agent" type="checkbox"><span><strong>Use a fresh agent context</strong><small>Start an independent agent session for this step while passing the workflow handoff and requested goal.</small></span></label>
+                <label class="check-control"><input id="workflow-step-approval" type="checkbox"><span><strong>Require approval</strong><small>Pause before this step executes.</small></span></label>
+                <label class="check-control"><input id="workflow-step-wait" type="checkbox"><span><strong>Wait after completion</strong><small>Pause the workflow after this step so it can be reviewed or steered.</small></span></label>
+            </div></details>
+            <menu><button type="button" data-dialog-close class="secondary-button">Cancel</button><button type="submit" value="default" class="primary-button">Save step</button></menu>
+        </form>
+    </dialog>

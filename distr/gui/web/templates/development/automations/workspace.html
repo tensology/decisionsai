@@ -1,0 +1,26 @@
+<section class="development-workspace hidden" id="scheduled-workspace" aria-label="Scheduled tasks">
+                <div class="scheduled-workspace-inner">
+                    <header class="scheduled-page-header">
+                        <div><h1>Scheduled tasks</h1><p>Run independent agent threads on a reliable schedule.</p></div>
+                        <div class="scheduled-page-actions"><div class="scheduled-import-picker" id="scheduled-import-picker"><button type="button" class="scheduled-import-button" id="scheduled-import-open" aria-haspopup="menu" aria-expanded="false">Import <span aria-hidden="true">⌄</span></button><div class="scheduled-import-menu hidden" id="scheduled-import-menu" role="menu" aria-label="Import schedules"></div></div><button type="button" class="development-create-focus scheduled-view-toggle" id="scheduled-view-toggle" aria-pressed="false"><span id="scheduled-view-toggle-label">Calendar</span></button></div>
+                    </header>
+                    <form class="development-prompt" id="scheduled-prompt-form">
+                        <input id="scheduled-prompt-input" type="text" autocomplete="off" placeholder="For example: run the Player1Sport test suite every weekday at 08:00" aria-label="Describe a scheduled task">
+                        <button type="submit" id="scheduled-prompt-submit">Schedule</button>
+                    </form>
+                    <div class="development-toolbar">
+                        <label class="development-search"><span aria-hidden="true">⌕</span><input id="scheduled-search-input" type="search" placeholder="Search scheduled tasks" aria-label="Search scheduled tasks"></label>
+                        <button type="button" class="scheduled-delete-all" id="scheduled-delete-all" disabled>Delete all automations</button>
+                        <div class="scheduled-filters" role="tablist" aria-label="Scheduled task status"><button type="button" class="active" data-automation-filter="all" role="tab" aria-selected="true">All</button><button type="button" data-automation-filter="active" role="tab" aria-selected="false">Active</button><button type="button" data-automation-filter="paused" role="tab" aria-selected="false">Paused</button><button type="button" data-automation-filter="completed" role="tab" aria-selected="false">Completed</button></div>
+                    </div>
+                    <div class="scheduled-calendar-toolbar hidden" id="scheduled-calendar-toolbar">
+                        <div class="scheduled-calendar-nav"><button type="button" id="scheduled-calendar-previous" aria-label="Previous period">‹</button><button type="button" id="scheduled-calendar-today">Today</button><button type="button" id="scheduled-calendar-next" aria-label="Next period">›</button><strong id="scheduled-calendar-title">Calendar</strong></div>
+                        <div class="scheduled-calendar-modes" role="tablist" aria-label="Calendar view"><button type="button" data-scheduled-calendar-mode="month" class="active" role="tab" aria-selected="true">Month</button><button type="button" data-scheduled-calendar-mode="week" role="tab" aria-selected="false">Week</button><button type="button" data-scheduled-calendar-mode="day" role="tab" aria-selected="false">Day</button></div>
+                    </div>
+                    <div class="scheduled-layout" id="scheduled-layout">
+                        <div class="scheduled-list" id="scheduled-list" aria-live="polite"></div>
+                        <aside class="scheduled-detail hidden" id="scheduled-detail" aria-label="Scheduled task details"></aside>
+                    </div>
+                    <div class="scheduled-calendar hidden" id="scheduled-calendar" aria-live="polite"></div>
+                </div>
+            </section>

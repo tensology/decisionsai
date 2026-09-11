@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -9,13 +10,18 @@ from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base, WhatsAppMessage, WhatsAppPhoneLink
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.projects import Project
 from distr.gui.web.routes.kanban import (
     _build_whatsapp_ticket_draft,
+    _ensure_whatsapp_messages_enriched,
+    _ensure_whatsapp_snapshot_thread,
     _whatsapp_media_items,
     _resolve_board_whatsapp_snapshot,
     _whatsapp_snapshot_group_filter,
     _whatsapp_snapshot_group_for_ticket,
     _validate_whatsapp_ticket_quality,
+    _write_whatsapp_snapshot_files,
+    create_routes,
 )
 
 
@@ -68,6 +74,123 @@ def test_whatsapp_draft_has_client_ready_quality_sections():
     assert "Acceptance criteria:" in draft["description"]
     assert "Questions / ambiguities:" in draft["description"]
     assert quality["passed"] is True
+
+
+def test_snapshot_enrichment_never_transcribes_uncached_audio_inline(tmp_path, monkeypatch):
+    from distr.core.audio import voice_cloning
+
+    voice_note = tmp_path / "slow-note.ogg"
+    voice_note.write_bytes(b"audio-fixture")
+    message = _message(
+        media_type="audio",
+        media_mime_type="audio/ogg",
+        media_filename="slow-note.ogg",
+        media_local_path=str(voice_note),
+    )
+
+    def fail_if_called(_path):
+        raise AssertionError("snapshot creation must not transcribe media inline")
+
+    monkeypatch.setattr(voice_cloning, "transcribe_audio_file", fail_if_called)
+
+    enrichment = _ensure_whatsapp_messages_enriched([message], transcribe_missing=False)
+
+    assert enrichment["counts"]["media"] == 1
+    assert enrichment["counts"]["pending"] == 1
+    assert enrichment["media"][0]["analysis_status"] == "pending"
+
+
+def test_snapshot_route_does_not_block_the_event_loop_or_invent_a_workflow():
+    router = create_routes()
+    route = next(
+        item
+        for item in router.routes
+        if item.path == "/tickets/boards/{board_id}/whatsapp-snapshot-ticket"
+    )
+
+    assert inspect.iscoroutinefunction(route.endpoint) is False
+    assert "plan_workflow" not in inspect.getsource(route.endpoint)
+
+
+def test_snapshot_thread_failure_is_reported_without_rejecting_the_created_ticket():
+    board = SimpleNamespace(id=2, default_workflow_id=None, default_project_id=9)
+    ticket = SimpleNamespace(id=229)
+    lane = SimpleNamespace(name="Backlog")
+
+    def fail_thread_creation(**_kwargs):
+        raise RuntimeError("thread store unavailable")
+
+    result = _ensure_whatsapp_snapshot_thread(
+        board=board,
+        ticket=ticket,
+        lane=lane,
+        title="Fix the school website",
+        description="Snapshot transcript",
+        snapshot_group="board_2_ticket_229",
+        thread_factory=fail_thread_creation,
+    )
+
+    assert result["chat_id"] is None
+    assert result["workflow_id"] is None
+    assert "thread store unavailable" in result["thread_error"]
+
+
+def test_snapshot_thread_is_created_without_starting_an_active_turn():
+    board = SimpleNamespace(id=2, default_workflow_id=None, default_project_id=9)
+    ticket = SimpleNamespace(id=229)
+    lane = SimpleNamespace(name="Backlog")
+    captured = {}
+
+    def create_inert_thread(**kwargs):
+        captured.update(kwargs)
+        return 176
+
+    result = _ensure_whatsapp_snapshot_thread(
+        board=board,
+        ticket=ticket,
+        lane=lane,
+        title="Fix the school website",
+        description="Prepared snapshot prompt",
+        snapshot_group="board_2_ticket_229",
+        thread_factory=create_inert_thread,
+    )
+
+    assert result["chat_id"] == 176
+    assert captured["starting_question"] is None
+
+
+def test_whatsapp_draft_title_uses_a_meaningful_request_not_the_first_url():
+    messages = [
+        _message(text="https://www.example.com/search?q=CHRISTMAS"),
+        _message(
+            id=2,
+            message_id="wa_2",
+            text="Can you please modify the stock capture screen to show QOH and remove the operator cost?",
+            whatsapp_timestamp=1_700_000_100,
+        ),
+    ]
+
+    draft = _build_whatsapp_ticket_draft(messages)
+
+    assert draft["title"] == "Modify the stock capture screen to show QOH and remove the operator cost?"
+    assert "example.com" not in draft["title"]
+
+
+def test_whatsapp_draft_title_summarizes_numbered_improvement_headings():
+    messages = [
+        _message(
+            text=(
+                "Improvement Requests\n"
+                "1. Delivery Cost Reporting\nDelivery costs should be reported accurately.\n"
+                "2. Online Voucher Rounding\nVoucher values must remain accurate to the cent.\n"
+                "3. Credit Voucher Safeguard\nPrevent manual entry errors when issuing vouchers."
+            )
+        )
+    ]
+
+    draft = _build_whatsapp_ticket_draft(messages)
+
+    assert draft["title"] == "Delivery Cost Reporting, Online Voucher Rounding, and Credit Voucher Safeguard"
 
 
 def test_whatsapp_image_ocr_noise_is_not_written_into_ticket_description():
@@ -184,7 +307,7 @@ def test_resolving_reviewed_whatsapp_messages_rejects_changed_batch(tmp_path):
         session.close()
 
 
-def test_board_whatsapp_snapshot_uses_latest_two_visible_unticketed_message_days(tmp_path):
+def test_first_board_whatsapp_snapshot_uses_latest_two_days_of_unticketed_messages(tmp_path):
     import distr.core.db.kanban  # noqa: F401
 
     db_path = tmp_path / "wa_two_visible_days.sqlite3"
@@ -192,8 +315,9 @@ def test_board_whatsapp_snapshot_uses_latest_two_visible_unticketed_message_days
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, expire_on_commit=False)
 
-    def ts(day: str) -> int:
-        return int(datetime.fromisoformat(f"{day}T09:00:00+00:00").timestamp())
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    old_day = now - timedelta(days=6)
+    second_day = now - timedelta(days=1)
 
     session = Session()
     try:
@@ -214,24 +338,24 @@ def test_board_whatsapp_snapshot_uses_latest_two_visible_unticketed_message_days
                 jid="27710000001@s.whatsapp.net",
                 jid_phone="27710000001",
                 text="old visible day",
-                whatsapp_timestamp=ts("2026-06-06"),
-                created_date=datetime(2026, 6, 6, tzinfo=timezone.utc),
+                whatsapp_timestamp=int(old_day.timestamp()),
+                created_date=old_day,
             ),
             WhatsAppMessage(
                 message_id="second_day",
                 jid="27710000001@s.whatsapp.net",
                 jid_phone="27710000001",
                 text="second latest visible day",
-                whatsapp_timestamp=ts("2026-06-08"),
-                created_date=datetime(2026, 6, 8, tzinfo=timezone.utc),
+                whatsapp_timestamp=int(second_day.timestamp()),
+                created_date=second_day,
             ),
             WhatsAppMessage(
                 message_id="latest_day",
                 jid="27710000001@s.whatsapp.net",
                 jid_phone="27710000001",
                 text="latest visible day",
-                whatsapp_timestamp=ts("2026-06-09"),
-                created_date=datetime(2026, 6, 9, tzinfo=timezone.utc),
+                whatsapp_timestamp=int(now.timestamp()),
+                created_date=now,
             ),
         ])
         session.flush()
@@ -239,7 +363,8 @@ def test_board_whatsapp_snapshot_uses_latest_two_visible_unticketed_message_days
         snapshot = _resolve_board_whatsapp_snapshot(session, board.id, link_id=link.id)
 
         assert [m.message_id for m in snapshot["messages"]] == ["second_day", "latest_day"]
-        assert snapshot["intake_stats"]["scope"] == "latest_two_visible_days"
+        assert snapshot["intake_stats"]["scope"] == "latest_week"
+        assert snapshot["intake_stats"]["since_hours"] == 48
     finally:
         session.close()
 
@@ -270,3 +395,34 @@ def test_whatsapp_snapshot_group_uses_ticket_id_and_cleanup_filter_matches_curre
         assert {m.message_id for m in matched} == {"wa_current", "wa_legacy"}
     finally:
         session.close()
+
+
+def test_whatsapp_snapshot_writes_transcript_and_copies_media_into_project_intake(tmp_path):
+    repository = tmp_path / "voice-project"
+    repository.mkdir()
+    voice_note = tmp_path / "voice-note.ogg"
+    voice_note.write_bytes(b"audio-fixture")
+    board = KanbanBoard(id=7, name="Voice Work")
+    project = Project(id=8, name="Voice Work", folder_location=str(repository))
+    ticket = KanbanTicket(id=123, lane_id=1, title="Transcribe customer request")
+    message = WhatsAppMessage(
+        id=77,
+        message_id="wa-77",
+        jid="27710000001@s.whatsapp.net",
+        sender_push_name="Client",
+        text="Please implement the transcribed voice-note request.",
+        whatsapp_timestamp=int(datetime.now(timezone.utc).timestamp()),
+        media_type="audio",
+        media_filename="voice-note.ogg",
+        media_local_path=str(voice_note),
+    )
+
+    files = _write_whatsapp_snapshot_files(board, project, ticket, [message])
+
+    target = repository / ".decisions" / "intake" / "ticket-123"
+    assert (target / "voice-note.ogg").read_bytes() == b"audio-fixture"
+    assert (target / "voice-note.ogg").stat().st_ino == voice_note.stat().st_ino
+    transcript = (target / "transcript.md").read_text(encoding="utf-8")
+    assert "Please implement the transcribed voice-note request." in transcript
+    assert "Attachment: voice-note.ogg" in transcript
+    assert {item["filename"] for item in files} == {"transcript.md", "voice-note.ogg"}

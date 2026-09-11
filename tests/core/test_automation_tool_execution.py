@@ -166,7 +166,7 @@ def test_tool_bound_automation_dispatches_directly(tmp_path, monkeypatch):
 
     result = dispatch_automation_to_current_chat(automation, manual=True, speak=False)
     assert result["status"] == "running"
-    assert emitted == ["Done."]
+    assert emitted == []
 
     with get_session() as session:
         run = (
@@ -292,6 +292,125 @@ def test_scheduled_automation_telegram_delivery_does_not_speak_random_ack(monkey
     )
 
     assert spoken == []
+
+
+def test_automation_delivery_does_not_use_telegram_or_tts_without_telegram_origin(monkeypatch):
+    from distr.core.automation_subagent import _deliver_automation_speech
+
+    queued = []
+    spoken = []
+    monkeypatch.setattr("distr.core.automation_subagent._telegram_connected", lambda: True)
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._put_main_event",
+        lambda event, data: queued.append((event, data)) or True,
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._speak_orchestrator",
+        lambda text: spoken.append(text) or True,
+    )
+
+    channel, detail = _deliver_automation_speech(
+        "A scheduled task completed.",
+        automation_name="Scheduled task",
+        manual=False,
+        origin_surface="scheduler",
+    )
+
+    assert channel == "none"
+    assert detail == "saved in automation run history"
+    assert queued == []
+    assert spoken == []
+
+
+def test_telegram_origin_automation_can_reply_to_telegram_without_tts(monkeypatch):
+    from distr.core.automation_subagent import _deliver_automation_speech
+
+    queued = []
+    spoken = []
+    monkeypatch.setattr("distr.core.automation_subagent._telegram_connected", lambda: True)
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._put_main_event",
+        lambda event, data: queued.append((event, data)) or True,
+    )
+    monkeypatch.setattr(
+        "distr.core.automation_subagent._speak_orchestrator",
+        lambda text: spoken.append(text) or True,
+    )
+
+    channel, _ = _deliver_automation_speech(
+        "The Telegram request completed.",
+        automation_name="Telegram request",
+        manual=False,
+        origin_surface="telegram",
+    )
+
+    assert channel == "telegram"
+    assert queued[0][0] == "send_to_telegram"
+    assert queued[0][1]["origin_surface"] == "telegram"
+    assert spoken == []
+
+
+def test_unlinked_first_class_instruction_uses_its_development_thread(monkeypatch):
+    from distr.core import automation_orchestrator
+
+    dispatched = []
+    monkeypatch.setattr(automation_orchestrator, "ensure_automation_thread", lambda automation: 501)
+    monkeypatch.setattr(
+        "distr.core.workflow.development_control.resume_thread_time",
+        lambda chat_id: {"chat_id": chat_id},
+    )
+    monkeypatch.setattr(
+        automation_orchestrator,
+        "_dispatch_development_automation",
+        lambda automation, **kwargs: dispatched.append((automation, kwargs))
+        or {"status": "running", "chat_id": automation["thread_chat_id"]},
+    )
+    monkeypatch.setattr(
+        automation_orchestrator,
+        "resolve_current_agent_chat_id",
+        lambda settings=None: (_ for _ in ()).throw(AssertionError("current Chat must not be resolved")),
+    )
+
+    result = automation_orchestrator.dispatch_automation_to_current_chat(
+        {
+            "id": "auto_2",
+            "record_id": 2,
+            "name": "Load latest database",
+            "instruction": "Load the latest database.",
+            "action_config": {},
+        },
+        manual=False,
+    )
+
+    assert result == {"status": "running", "chat_id": 501}
+    assert dispatched[0][0]["thread_chat_id"] == 501
+
+
+def test_instruction_automation_without_owned_thread_fails_instead_of_using_chat(monkeypatch):
+    from distr.core import automation_orchestrator
+
+    monkeypatch.setattr(
+        automation_orchestrator,
+        "resolve_current_agent_chat_id",
+        lambda settings=None: (_ for _ in ()).throw(AssertionError("current Chat must not be resolved")),
+    )
+    monkeypatch.setattr(automation_orchestrator, "emit_automation_event", lambda **kwargs: None)
+    monkeypatch.setattr(automation_orchestrator, "_record_dispatch_run", lambda **kwargs: 71)
+
+    result = automation_orchestrator.dispatch_automation_to_current_chat(
+        {
+            "id": "wf_8",
+            "workflow_id": 8,
+            "name": "Legacy instruction",
+            "instruction": "Run a maintenance command.",
+            "action_config": {},
+        },
+        manual=False,
+    )
+
+    assert result["status"] == "failed"
+    assert result["chat_id"] is None
+    assert "independent run thread" in result["summary"]
 
 
 def test_legacy_planner_proactive_tasks_disabled_on_seed(tmp_path, monkeypatch):

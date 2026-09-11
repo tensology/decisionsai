@@ -23,7 +23,12 @@ def harness_skill_bases(home: Path, detected: dict[str, bool]) -> dict[str, Path
     """Return per-harness directories where SKILL.md trees should be copied."""
     bases: dict[str, Path] = {}
     if detected.get("codex"):
+        # Keep the Decisions plugin source populated for plugin packaging and
+        # also project to Codex's canonical user-level skill directory. Local
+        # marketplace plugins are cached at install time, while ~/.codex/skills
+        # is the durable global surface read by every Codex session.
         bases["codex"] = home / "plugins" / CODEX_PLUGIN_NAME / "skills"
+        bases["codex_global"] = home / ".codex" / "skills"
     if detected.get("claude"):
         bases["claude"] = home / ".claude" / "skills"
     if detected.get("pi"):

@@ -177,7 +177,7 @@ def _upsert_whatsapp_extracted_block(existing_caption: str, label: str, extracte
     return f"{block}\n\n{existing}".strip()
 
 
-def _ensure_whatsapp_media_text(message) -> dict:
+def _ensure_whatsapp_media_text(message, *, transcribe_missing: bool = True) -> dict:
     """Ensure cached WhatsApp media has text extraction available for ticket drafting."""
     media_type = (getattr(message, "media_type", None) or "").strip()
     media_mime_type = (getattr(message, "media_mime_type", None) or "").strip()
@@ -192,6 +192,17 @@ def _ensure_whatsapp_media_text(message) -> dict:
     local_path = resolve_whatsapp_media_disk_path(stored_path)
     if not local_path or not os.path.exists(local_path):
         return {"status": "missing_media", "analysis_type": "", "text": "", "error": "Media file not cached"}
+
+    if not transcribe_missing and (
+        _is_whatsapp_voice_type(media_type, media_mime_type)
+        or _is_whatsapp_video_type(media_type, media_mime_type)
+    ):
+        return {
+            "status": "pending",
+            "analysis_type": "transcription",
+            "text": "",
+            "error": "",
+        }
 
     extracted = ""
     label = ""
@@ -239,17 +250,19 @@ def _ensure_whatsapp_media_text(message) -> dict:
     return {"status": "ready", "analysis_type": label.lower(), "text": extracted, "error": ""}
 
 
-def _ensure_whatsapp_messages_enriched(messages) -> dict:
+def _ensure_whatsapp_messages_enriched(messages, *, transcribe_missing: bool = True) -> dict:
     media = []
-    counts = {"media": 0, "analyzed": 0, "missing": 0, "failed": 0, "unsupported": 0}
+    counts = {"media": 0, "analyzed": 0, "pending": 0, "missing": 0, "failed": 0, "unsupported": 0}
     for msg in messages:
         if not getattr(msg, "media_type", None):
             continue
         counts["media"] += 1
-        result = _ensure_whatsapp_media_text(msg)
+        result = _ensure_whatsapp_media_text(msg, transcribe_missing=transcribe_missing)
         status = result.get("status") or ""
         if status == "ready":
             counts["analyzed"] += 1
+        elif status == "pending":
+            counts["pending"] += 1
         elif status == "missing_media":
             counts["missing"] += 1
         elif status == "failed":
@@ -350,6 +363,65 @@ def _whatsapp_ticket_quality_instructions(message_count: int, media_count: int) 
 - Do not invent facts that are not in the messages."""
 
 
+def _whatsapp_snapshot_title(messages, contact: str) -> str:
+    """Choose a concise work request instead of blindly using the first message."""
+    candidates: list[tuple[int, int, str, str]] = []
+    request_terms = re.compile(
+        r"\b(?:can you|could you|please|would like|need(?:s|ed)?|should|must|fix|change|modify|remove|add|delete|check|review|issue|error|broken|not working|doesn.t work|unable)\b",
+        re.IGNORECASE,
+    )
+    acknowledgements = re.compile(
+        r"^(?:ok(?:ay)?|thanks?|thank you|all good|will do|got it|yes|no|its working now|it.s working now)[.! ]*$",
+        re.IGNORECASE,
+    )
+    for index, message in enumerate(messages or []):
+        raw_body = _whatsapp_message_body(message).strip()
+        body = re.sub(r"\s+", " ", raw_body).strip()
+        if not body or body == "[message]" or acknowledgements.match(body):
+            continue
+        if re.fullmatch(r"https?://\S+", body, flags=re.IGNORECASE):
+            continue
+        score = len(request_terms.findall(body)) * 4
+        if "?" in body:
+            score += 2
+        if 25 <= len(body) <= 240:
+            score += 2
+        if getattr(message, "media_type", None):
+            score += 1
+        candidates.append((score, index, body, raw_body))
+
+    if not candidates or max(item[0] for item in candidates) < 4:
+        start = _whatsapp_message_timestamp(messages[0]) if messages else ""
+        end = _whatsapp_message_timestamp(messages[-1]) if messages else ""
+        date_range = f" ({start} to {end})" if start and end and start != end else ""
+        return f"Review WhatsApp work requests from {contact}{date_range}"[:90].rstrip()
+
+    selected = max(candidates, key=lambda item: (item[0], item[1]))
+    body = selected[2]
+    numbered_headings = [
+        re.sub(r"\s+", " ", heading).strip(" .:-")
+        for heading in re.findall(r"(?m)^\s*\d+\.\s+([^\n]{4,80})\s*$", selected[3])
+    ]
+    if len(numbered_headings) >= 2:
+        headings = numbered_headings[:3]
+        body = (
+            f"{headings[0]} and {headings[1]}"
+            if len(headings) == 2
+            else f"{headings[0]}, {headings[1]}, and {headings[2]}"
+        )
+    body = re.sub(r"^@[0-9]+[,:]?\s*", "", body).strip()
+    body = re.sub(r"^(?:hi|hello|morning|afternoon|evening)\s+[^,.!?]+[,.!?]?\s*", "", body, flags=re.IGNORECASE)
+    body = re.sub(
+        r"^(?:can|could) you (?:please )?|^please |^i(?:'d| would) like to |^we(?:'ll| will)? need (?:it )?to ",
+        "",
+        body,
+        flags=re.IGNORECASE,
+    ).strip()
+    if len(body) > 90:
+        body = body[:87].rsplit(" ", 1)[0].rstrip(" ,.;:-") + "..."
+    return (body[:1].upper() + body[1:]) or f"Review WhatsApp work requests from {contact}"
+
+
 def _build_whatsapp_ticket_draft(messages) -> dict:
     count = len(messages)
     first = messages[0] if messages else None
@@ -370,12 +442,7 @@ def _build_whatsapp_ticket_draft(messages) -> dict:
         ),
         "",
     )
-    if first_body:
-        title = f"WhatsApp: {first_body}"
-    else:
-        title = f"WhatsApp request from {contact}"
-    if len(title) > 80:
-        title = title[:77].rstrip() + "..."
+    title = _whatsapp_snapshot_title(messages, contact)
 
     raw_lines = []
     transcript_lines = []
@@ -621,7 +688,7 @@ def _resolve_board_whatsapp_snapshot(
         raise HTTPException(400, "The linked WhatsApp chat has no stored phone or JID")
 
     scope = (scope or "new_since_last_ticket").strip().lower()
-    if scope not in ("new_since_last_ticket", "all_unticketed", "latest_two_visible_days"):
+    if scope not in ("new_since_last_ticket", "all_unticketed", "latest_week"):
         scope = "new_since_last_ticket"
     try:
         since_hours = max(0, min(int(since_hours or 48), 24 * 30))
@@ -652,19 +719,19 @@ def _resolve_board_whatsapp_snapshot(
             if last_ticketed_at:
                 message_query = message_query.filter(WhatsAppMessage.whatsapp_timestamp > last_ticketed_at)
             else:
-                scope = "latest_two_visible_days"
+                scope = "latest_week"
         messages_desc = message_query.order_by(
             WhatsAppMessage.whatsapp_timestamp.desc(),
             WhatsAppMessage.id.desc(),
         ).limit(limit).all()
-        if scope == "latest_two_visible_days":
-            latest_days = set(_latest_visible_whatsapp_message_days(messages_desc, day_count=2))
+        if scope == "latest_week":
+            cutoff = int(datetime.now(timezone.utc).timestamp()) - (since_hours * 3600)
             messages_desc = [
                 message for message in messages_desc
-                if _whatsapp_message_day(message) in latest_days
+                if int(getattr(message, "whatsapp_timestamp", 0) or 0) >= cutoff
             ]
-            intake_stats["scope"] = "latest_two_visible_days"
-            intake_stats["visible_days"] = sorted(latest_days, reverse=True)
+            intake_stats["scope"] = "latest_week"
+            intake_stats["since_hours"] = since_hours
         messages = list(reversed(messages_desc))
 
     if not messages:
@@ -733,6 +800,98 @@ def _resolve_board_whatsapp_snapshot(
         "empty": False,
         "intake_stats": intake_stats,
     }
+
+
+def _whatsapp_snapshot_directory(board: KanbanBoard, project: Optional[Project], ticket_id: int) -> Path:
+    # Intake snapshots are Decisions-owned artifacts. Keep them outside the
+    # linked repository and outside ~/development, even when a project folder
+    # is available for the ticket.
+    root = Path.home() / ".decisions" / "workspaces" / "boards" / str(board.id) / "intake"
+    target = root / f"ticket-{int(ticket_id)}"
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _write_whatsapp_snapshot_files(
+    board: KanbanBoard,
+    project: Optional[Project],
+    ticket: KanbanTicket,
+    messages: list[WhatsAppMessage],
+) -> list[dict[str, str]]:
+    target = _whatsapp_snapshot_directory(board, project, int(ticket.id))
+    lines = [f"# {ticket.title}", "", f"WhatsApp snapshot for {board.name}.", ""]
+    copied: list[dict[str, str]] = []
+    for message in messages:
+        sender = _whatsapp_message_sender(message)
+        timestamp = _whatsapp_message_timestamp(message)
+        content = str(message.text or message.caption or "").strip()
+        lines.extend([f"## {timestamp} - {sender}", "", content or "(attachment)", ""])
+        source = resolve_whatsapp_media_disk_path(message.media_local_path or "")
+        if source and os.path.isfile(source):
+            filename = Path(message.media_filename or source).name
+            destination = target / filename
+            if destination.exists():
+                destination = target / f"{message.id}-{filename}"
+            try:
+                # Snapshot media normally lives on the same local volume.
+                # A hard link is immediate, organised under the ticket, and
+                # remains valid even if the relay cache entry is later removed.
+                os.link(source, destination)
+            except OSError:
+                shutil.copy2(source, destination)
+            copied.append({
+                "filename": destination.name,
+                "path": str(destination),
+                "description": f"WhatsApp {message.media_type or 'attachment'}",
+            })
+            lines.extend([f"Attachment: {destination.name}", ""])
+    transcript = target / "transcript.md"
+    transcript.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    return [{"filename": "transcript.md", "path": str(transcript), "description": "WhatsApp snapshot transcript"}, *copied]
+
+
+def _ensure_whatsapp_snapshot_thread(
+    *,
+    board,
+    ticket,
+    lane,
+    title: str,
+    description: str,
+    snapshot_group: str,
+    thread_factory=None,
+) -> dict:
+    """Create the ticket's thread without turning a thread failure into snapshot failure."""
+    workflow_id = int(getattr(board, "default_workflow_id", 0) or 0) or None
+    if thread_factory is None:
+        from distr.core.workflow.development_threads import ensure_development_thread
+
+        thread_factory = ensure_development_thread
+    try:
+        chat_id = thread_factory(
+            workflow_id=workflow_id,
+            title=title,
+            project_id=getattr(board, "default_project_id", None),
+            ticket_id=int(ticket.id),
+            # A snapshot prepares a draft. It must not create a user turn or
+            # start the Development agent before the user reviews and sends it.
+            starting_question=None,
+            source_type="whatsapp_snapshot",
+            source_ref=snapshot_group,
+            board_key=f"decisions:{int(board.id)}",
+            board_provider="local",
+            board_ticket_key=str(ticket.id),
+            board_ticket_title=title,
+            board_ticket_lane=lane.name,
+        )
+        return {"chat_id": int(chat_id), "workflow_id": workflow_id, "thread_error": ""}
+    except Exception as exc:
+        logger.error(
+            "WhatsApp snapshot ticket %s was created, but its Development thread failed: %s",
+            getattr(ticket, "id", ""),
+            exc,
+            exc_info=True,
+        )
+        return {"chat_id": None, "workflow_id": workflow_id, "thread_error": str(exc)}
 
 
 def _yaml_scalar(s: str) -> str:
@@ -1515,6 +1674,9 @@ def _emit_ticket_channel_intake(
 class BoardCreate(BaseModel):
     name: str
     description: Optional[str] = ""
+    folder_location: Optional[str] = ""
+    startup_instructions: Optional[str] = ""
+    start_time_tracker: bool = True
 
 class BoardUpdate(BaseModel):
     name: Optional[str] = None
@@ -1526,6 +1688,9 @@ class BoardUpdate(BaseModel):
     color: Optional[str] = None
     position: Optional[int] = None
     orchestrator_policy: Optional[dict] = None
+    folder_location: Optional[str] = None
+    startup_instructions: Optional[str] = None
+    start_time_tracker: Optional[bool] = None
 
 
 KANBAN_SIDEBAR_DOCUMENTS_KEY = "kanban_sidebar_documents"
@@ -1720,6 +1885,362 @@ class ExternalBoardMoveTicket(BaseModel):
     position: int = Field(0, ge=0, description="0-based index within the target lane")
 
 
+class TicketThreadDraftRequest(BaseModel):
+    provider: str
+    board_id: str
+    ticket_id: str
+    project_id: Optional[int] = None
+
+
+def _ticket_thread_attachment_root(
+    project_id: Optional[int], provider: str, board_id: str, ticket_id: str
+) -> Path:
+    """Return an organised path accepted by the Development attachment guard."""
+    scope = str(int(project_id)) if project_id else "inbox"
+    safe_parts = [
+        re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "unknown")).strip(".-") or "unknown"
+        for value in (provider, board_id, ticket_id)
+    ]
+    root = Path.home() / ".decisions" / "workspaces" / "projects" / scope / "attachments" / "tickets"
+    destination = root.joinpath(*safe_parts)
+    destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return destination
+
+
+def _thread_draft_attachment_payload(path: Path, name: str = "", mime_type: str = "") -> dict:
+    guessed = mimetypes.guess_type(name or path.name)[0] or "application/octet-stream"
+    return {
+        "name": name or path.name,
+        "path": str(path.resolve()),
+        "mime_type": mime_type or guessed,
+        "size": path.stat().st_size,
+    }
+
+
+def _transcribe_ticket_media(path: Path, mime_type: str) -> tuple[Optional[dict], Optional[str]]:
+    """Create a sibling text attachment for audio or video while retaining the source file."""
+    media_type = str(mime_type or mimetypes.guess_type(path.name)[0] or "").lower()
+    if not (media_type.startswith("audio/") or media_type.startswith("video/")):
+        return None, None
+    try:
+        from distr.core.audio.voice_cloning import transcribe_audio_file
+
+        source_path = str(path)
+        wav_path = ""
+        if media_type.startswith("video/"):
+            ffmpeg_path = shutil.which("ffmpeg")
+            if not ffmpeg_path:
+                return None, f"Could not transcribe {path.name}: ffmpeg is not installed."
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                wav_path = tmp_wav.name
+            subprocess.run(
+                [ffmpeg_path, "-y", "-i", source_path, "-ar", "16000", "-ac", "1", wav_path],
+                capture_output=True,
+                timeout=300,
+                check=True,
+            )
+            source_path = wav_path
+        try:
+            transcript = (transcribe_audio_file(source_path) or "").strip()
+        finally:
+            if wav_path:
+                Path(wav_path).unlink(missing_ok=True)
+        if not transcript:
+            return None, f"No speech was found in {path.name}."
+        transcript_path = path.with_name(f"{path.name}.transcript.txt")
+        transcript_path.write_text(transcript + "\n", encoding="utf-8")
+        return _thread_draft_attachment_payload(transcript_path, mime_type="text/plain"), None
+    except Exception as exc:
+        logger.warning("Ticket media transcription failed for %s: %s", path, exc)
+        return None, f"Could not transcribe {path.name}."
+
+
+def _write_ticket_comments(root: Path, comments: list[dict]) -> Optional[dict]:
+    if not comments:
+        return None
+    blocks = []
+    for index, comment in enumerate(comments, start=1):
+        author = str(comment.get("author") or "Unknown")
+        created = str(comment.get("created_at") or "")
+        body = str(comment.get("body") or "").strip()
+        if not body:
+            continue
+        heading = f"Comment {index} by {author}"
+        if created:
+            heading += f" at {created}"
+        blocks.append(f"{heading}\n{'=' * len(heading)}\n{body}")
+    if not blocks:
+        return None
+    path = root / "ticket-comments.txt"
+    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+    return _thread_draft_attachment_payload(path, mime_type="text/plain")
+
+
+def _ticket_prompt_plain_text(value: Any) -> str:
+    """Turn provider-rendered rich text into the plain text expected in the composer."""
+    text = str(value or "")
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</(?:p|div|li|h[1-6])>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text).replace("\u200b", "")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _download_ticket_attachment(
+    *, root: Path, name: str, url: str, mime_type: str, auth=None, params: Optional[dict] = None
+) -> tuple[Optional[dict], Optional[str]]:
+    import requests as req_lib
+
+    safe_name = _safe_attachment_basename(name or "attachment", set())
+    destination = root / safe_name
+    max_mb = max(1, int(os.environ.get("DECISIONS_STUDIO_ATTACHMENT_MAX_MB", "512")))
+    max_bytes = max_mb * 1024 * 1024
+    try:
+        response = req_lib.get(url, auth=auth, params=params, timeout=120, stream=True)
+        if response.status_code != 200:
+            return None, f"Could not download {name}: HTTP {response.status_code}."
+        declared = int(response.headers.get("content-length") or 0)
+        if declared > max_bytes:
+            return None, f"Could not attach {name}: file exceeds {max_mb} MB."
+        written = 0
+        with destination.open("wb") as output:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > max_bytes:
+                    output.close()
+                    destination.unlink(missing_ok=True)
+                    return None, f"Could not attach {name}: file exceeds {max_mb} MB."
+                output.write(chunk)
+        resolved_mime = mime_type or response.headers.get("content-type", "").split(";", 1)[0]
+        return _thread_draft_attachment_payload(destination, name=name, mime_type=resolved_mime), None
+    except Exception as exc:
+        logger.warning("Ticket attachment download failed for %s: %s", url, exc)
+        destination.unlink(missing_ok=True)
+        return None, f"Could not download {name}."
+
+
+def _prepare_external_ticket_thread_draft(body: TicketThreadDraftRequest) -> dict:
+    import requests as req_lib
+
+    provider = body.provider.lower().strip()
+    root = _ticket_thread_attachment_root(body.project_id, provider, body.board_id, body.ticket_id)
+    attachments: list[dict] = []
+    comments: list[dict] = []
+    warnings: list[str] = []
+    title = ""
+    description = ""
+    accounts = _load_json_connected_accounts()
+
+    if provider == "jira":
+        from requests.auth import HTTPBasicAuth
+
+        for account in accounts:
+            if account.get("provider", "").lower() != "jira" or not account.get("email") or not account.get("api_token"):
+                continue
+            domain = account.get("domain") or ""
+            if not domain:
+                server_url = str(account.get("server_url") or "").strip().rstrip("/")
+                domain = server_url.replace("https://", "").replace("http://", "").split("/")[0] if server_url else ""
+            if not domain:
+                continue
+            base_url = f"https://{domain}" if not domain.startswith("http") else domain
+            auth = HTTPBasicAuth(account["email"], account["api_token"])
+            response = req_lib.get(
+                f"{base_url}/rest/api/3/issue/{body.ticket_id}",
+                params={"fields": "summary,description,attachment,comment"},
+                auth=auth,
+                headers={"Accept": "application/json"},
+                timeout=20,
+            )
+            if response.status_code != 200:
+                continue
+            issue = response.json() if response.content else {}
+            fields = issue.get("fields") if isinstance(issue, dict) else {}
+            fields = fields if isinstance(fields, dict) else {}
+            raw_attachments = fields.get("attachment") or []
+            title = str(fields.get("summary") or body.ticket_id)
+            description = _ticket_prompt_plain_text(_parse_jira_description(fields.get("description") or "", raw_attachments))
+            raw_comments = []
+            comment_start = 0
+            while True:
+                comment_response = req_lib.get(
+                    f"{base_url}/rest/api/3/issue/{body.ticket_id}/comment",
+                    params={"startAt": comment_start, "maxResults": 100},
+                    auth=auth,
+                    headers={"Accept": "application/json"},
+                    timeout=20,
+                )
+                comment_body = comment_response.json() if comment_response.status_code == 200 and comment_response.content else {}
+                batch = comment_body.get("comments") if isinstance(comment_body, dict) else []
+                batch = batch if isinstance(batch, list) else []
+                raw_comments.extend(batch)
+                comment_start += len(batch)
+                if not batch or comment_start >= int(comment_body.get("total") or comment_start):
+                    break
+            comments = [
+                {
+                    "author": ((item.get("author") or {}).get("displayName") or "Unknown"),
+                    "created_at": item.get("created") or "",
+                    "body": _ticket_prompt_plain_text(_parse_jira_description(item.get("body") or "")),
+                }
+                for item in raw_comments if isinstance(item, dict)
+            ]
+            for item in raw_attachments:
+                if not isinstance(item, dict) or not item.get("content"):
+                    continue
+                payload, warning = _download_ticket_attachment(
+                    root=root,
+                    name=str(item.get("filename") or "attachment"),
+                    url=str(item["content"]),
+                    mime_type=str(item.get("mimeType") or ""),
+                    auth=auth,
+                )
+                if payload:
+                    attachments.append(payload)
+                    transcript, transcript_warning = _transcribe_ticket_media(Path(payload["path"]), payload["mime_type"])
+                    if transcript:
+                        attachments.append(transcript)
+                    if transcript_warning:
+                        warnings.append(transcript_warning)
+                if warning:
+                    warnings.append(warning)
+            break
+    elif provider == "trello":
+        for account in accounts:
+            if account.get("provider", "").lower() != "trello" or not account.get("api_key") or not account.get("api_token"):
+                continue
+            params = {"key": account["api_key"], "token": account["api_token"]}
+            card_response = req_lib.get(
+                f"https://api.trello.com/1/cards/{body.ticket_id}",
+                params={**params, "fields": "name,desc,url"},
+                timeout=20,
+            )
+            if card_response.status_code != 200:
+                continue
+            card = card_response.json() if card_response.content else {}
+            title = str(card.get("name") or body.ticket_id)
+            description = str(card.get("desc") or "")
+            attachment_response = req_lib.get(
+                f"https://api.trello.com/1/cards/{body.ticket_id}/attachments",
+                params={**params, "fields": "name,url,mimeType,isUpload"},
+                timeout=20,
+            )
+            raw_attachments = attachment_response.json() if attachment_response.status_code == 200 else []
+            for item in raw_attachments if isinstance(raw_attachments, list) else []:
+                if not isinstance(item, dict) or not item.get("url") or not item.get("isUpload", False):
+                    continue
+                payload, warning = _download_ticket_attachment(
+                    root=root,
+                    name=str(item.get("name") or "attachment"),
+                    url=str(item["url"]),
+                    mime_type=str(item.get("mimeType") or ""),
+                    params=params,
+                )
+                if payload:
+                    attachments.append(payload)
+                    transcript, transcript_warning = _transcribe_ticket_media(Path(payload["path"]), payload["mime_type"])
+                    if transcript:
+                        attachments.append(transcript)
+                    if transcript_warning:
+                        warnings.append(transcript_warning)
+                if warning:
+                    warnings.append(warning)
+            comments_response = req_lib.get(
+                f"https://api.trello.com/1/cards/{body.ticket_id}/actions",
+                params={**params, "filter": "commentCard", "limit": 1000},
+                timeout=20,
+            )
+            raw_comments = comments_response.json() if comments_response.status_code == 200 else []
+            comments = [
+                {
+                    "author": ((item.get("memberCreator") or {}).get("fullName") or "Unknown"),
+                    "created_at": item.get("date") or "",
+                    "body": ((item.get("data") or {}).get("text") or ""),
+                }
+                for item in raw_comments if isinstance(item, dict)
+            ] if isinstance(raw_comments, list) else []
+            break
+    else:
+        raise HTTPException(400, "Provider must be Jira, Trello, or Decisions")
+
+    if not title:
+        raise HTTPException(404, "Could not load the ticket from its provider")
+    comments_payload = _write_ticket_comments(root, comments)
+    if comments_payload:
+        attachments.append(comments_payload)
+    prompt = title.strip()
+    if description.strip() and description.strip() != prompt:
+        prompt = f"{prompt}\n\n{description.strip()}"
+    return {
+        "title": title,
+        "description": description,
+        "prompt": prompt,
+        "attachments": attachments,
+        "comments_count": len(comments),
+        "warnings": warnings,
+    }
+
+
+def _prepare_local_ticket_thread_draft(body: TicketThreadDraftRequest) -> dict:
+    try:
+        board_id = int(body.board_id)
+        ticket_id = int(body.ticket_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "A valid local board and ticket are required")
+    with get_session() as session:
+        ticket = (
+            session.query(KanbanTicket)
+            .join(KanbanLane, KanbanLane.id == KanbanTicket.lane_id)
+            .filter(KanbanTicket.id == ticket_id, KanbanLane.board_id == board_id)
+            .first()
+        )
+        if not ticket:
+            raise HTTPException(404, "Ticket not found")
+        title = ticket.title or f"Ticket {ticket.id}"
+        description = ticket.description or ""
+        file_rows = [
+            (record.filename or Path(record.file_path or "attachment").name, record.file_path or "")
+            for record in ticket.files
+        ]
+
+    root = _ticket_thread_attachment_root(body.project_id, "decisions", body.board_id, body.ticket_id)
+    attachments: list[dict] = []
+    warnings: list[str] = []
+    used_names: set[str] = set()
+    for raw_name, raw_path in file_rows:
+        source = Path(raw_path).expanduser()
+        if not source.is_file():
+            warnings.append(f"Could not find {raw_name} on disk.")
+            continue
+        name = _safe_attachment_basename(raw_name, used_names)
+        destination = root / name
+        try:
+            shutil.copy2(source, destination)
+        except OSError:
+            warnings.append(f"Could not prepare {raw_name}.")
+            continue
+        payload = _thread_draft_attachment_payload(destination, name=raw_name)
+        attachments.append(payload)
+        transcript, transcript_warning = _transcribe_ticket_media(destination, payload["mime_type"])
+        if transcript:
+            attachments.append(transcript)
+        if transcript_warning:
+            warnings.append(transcript_warning)
+    prompt = title.strip()
+    if description.strip() and description.strip() != prompt:
+        prompt = f"{prompt}\n\n{description.strip()}"
+    return {
+        "title": title,
+        "description": description,
+        "prompt": prompt,
+        "attachments": attachments,
+        "comments_count": 0,
+        "warnings": warnings,
+    }
+
+
 # ── External board detail cache (stale-while-revalidate; refresh in daemon threads) ──
 _BOARD_DETAIL_LOCK = threading.Lock()
 _BOARD_DETAIL_CACHE: dict = {}
@@ -1747,6 +2268,54 @@ def _invalidate_external_board_detail_cache(provider: str, board_id: str) -> Non
     with _BOARD_DETAIL_LOCK:
         _BOARD_DETAIL_CACHE.pop(key, None)
         _BOARD_DETAIL_REFRESHING.discard(key)
+
+
+def _move_external_board_detail_cache_ticket(
+    provider: str,
+    board_id: str,
+    ticket_id: str,
+    target_lane_id: str,
+    position: int,
+) -> bool:
+    """Apply a confirmed provider move to the cached board without discarding the snapshot."""
+    key = _external_board_detail_cache_key(provider, board_id)
+    with _BOARD_DETAIL_LOCK:
+        entry = _BOARD_DETAIL_CACHE.get(key)
+        body = entry.get("body") if entry else None
+        lanes = body.get("lanes") if isinstance(body, dict) else None
+        if not isinstance(lanes, list):
+            return False
+        moved = None
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            cards = lane.get("tickets") if isinstance(lane.get("tickets"), list) else lane.get("cards")
+            if not isinstance(cards, list):
+                continue
+            for index, card in enumerate(cards):
+                if isinstance(card, dict) and str(card.get("id") or card.get("key") or "") == str(ticket_id):
+                    moved = cards.pop(index)
+                    break
+            if moved is not None:
+                break
+        target = next(
+            (
+                lane
+                for lane in lanes
+                if isinstance(lane, dict)
+                and any(str(lane.get(field) or "") == str(target_lane_id) for field in ("id", "key", "name"))
+            ),
+            None,
+        )
+        if moved is None or target is None:
+            return False
+        cards = target.get("tickets") if isinstance(target.get("tickets"), list) else target.get("cards")
+        if not isinstance(cards, list):
+            cards = []
+            target["tickets"] = cards
+        cards.insert(max(0, min(int(position), len(cards))), moved)
+        entry["t"] = time.time()
+        return True
 
 
 def _invalidate_external_board_list_cache() -> None:
@@ -2271,7 +2840,7 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                                                                  for cl_item in cl.get("checkItems", [])]
                                         card_data["due"] = cd_data.get("due")
                                         card_data["members"] = [m.get("fullName", m.get("username", "")) for m in cd_data.get("members", [])]
-                                        # Fetch Trello card attachments (images)
+                                        # Keep every uploaded file visible. Image previews are a separate view concern.
                                         try:
                                             att = requests.get(f"https://api.trello.com/1/cards/{c['id']}/attachments",
                                                                params={"key": acct["api_key"], "token": acct["api_token"],
@@ -2285,10 +2854,18 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                                                 if not isinstance(att_list, list):
                                                     att_list = []
                                                 media = []
+                                                attachment_rows = []
                                                 for a in att_list:
                                                     if not isinstance(a, dict):
                                                         continue
-                                                    if a.get("mimeType", "").startswith("image/") or a.get("isUpload", False):
+                                                    attachment_rows.append({
+                                                        "id": a.get("id", ""),
+                                                        "name": a.get("name", "") or "Attachment",
+                                                        "url": a.get("url", ""),
+                                                        "mime_type": a.get("mimeType", "") or "application/octet-stream",
+                                                        "is_upload": bool(a.get("isUpload", False)),
+                                                    })
+                                                    if a.get("mimeType", "").startswith("image/"):
                                                         # Use preview if available (smaller), otherwise full URL
                                                         previews = a.get("previews", [])
                                                         img_url = None
@@ -2305,6 +2882,23 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                                                         media.append({"url": img_url, "name": a.get("name", ""), "type": a.get("mimeType", "")})
                                                 if media:
                                                     card_data["media"] = media
+                                                if attachment_rows:
+                                                    card_data["attachments"] = attachment_rows
+                                        except Exception:
+                                            pass
+                                        try:
+                                            actions = requests.get(
+                                                f"https://api.trello.com/1/cards/{c['id']}/actions",
+                                                params={"key": acct["api_key"], "token": acct["api_token"], "filter": "commentCard", "limit": 100},
+                                                timeout=5,
+                                            )
+                                            action_rows = actions.json() if actions.status_code == 200 else []
+                                            if isinstance(action_rows, list):
+                                                card_data["comments"] = [{
+                                                    "author": ((row.get("memberCreator") or {}).get("fullName") or "Unknown"),
+                                                    "created_at": row.get("date") or "",
+                                                    "body": ((row.get("data") or {}).get("text") or ""),
+                                                } for row in action_rows if isinstance(row, dict)]
                                         except Exception:
                                             pass
                                 except Exception:
@@ -2399,7 +2993,7 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                         headers={"Accept": "application/json"},
                         params={
                             "maxResults": 100,
-                            "fields": "summary,status,description,assignee,reporter,timetracking,labels,subtasks,priority,attachment",
+                            "fields": "summary,status,description,assignee,reporter,timetracking,labels,subtasks,priority,attachment,comment",
                         },
                         timeout=10,
                     )
@@ -2422,12 +3016,26 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                             attachments = fields.get("attachment") or []
                             if not isinstance(attachments, list):
                                 attachments = []
-                            description_text = _parse_jira_description(raw_desc, attachments)
+                            description_text = _ticket_prompt_plain_text(_parse_jira_description(raw_desc, attachments))
                             card = {
                                 "id": issue.get("key", ""), "title": fields.get("summary", ""),
                                 "description": description_text,
                                 "url": f"https://{domain}/browse/{issue.get('key', '')}",
                             }
+                            card["attachments"] = [{
+                                "id": a.get("id", ""),
+                                "name": a.get("filename", "") or "Attachment",
+                                "url": a.get("content", ""),
+                                "preview_url": _jira_proxy_src_attr(a.get("thumbnail") or a.get("content") or "") if (a.get("thumbnail") or a.get("content")) else "",
+                                "mime_type": a.get("mimeType", "") or "application/octet-stream",
+                                "size": int(a.get("size") or 0),
+                            } for a in attachments if isinstance(a, dict)]
+                            raw_comments = (fields.get("comment") or {}).get("comments") or []
+                            card["comments"] = [{
+                                "author": ((comment.get("author") or {}).get("displayName") or "Unknown"),
+                                "created_at": comment.get("created") or "",
+                                "body": _ticket_prompt_plain_text(_parse_jira_description(comment.get("body") or "")),
+                            } for comment in raw_comments if isinstance(comment, dict)]
                             # Enrich with Jira-specific fields
                             assignee = fields.get("assignee")
                             if assignee:
@@ -2588,6 +3196,9 @@ def create_routes():
                     "in_use": getattr(b, 'in_use', False) or False,
                     "default_project_id": b.default_project_id,
                     **_project_context_payload(default_project, "default"),
+                    "folder_location": default_project.folder_location if default_project else "",
+                    "startup_instructions": default_project.startup_instructions if default_project else "",
+                    "start_time_tracker": bool(default_project.start_time_tracker) if default_project else True,
                     "default_workflow_id": b.default_workflow_id,
                 })
             return JSONResponse(result)
@@ -2598,6 +3209,17 @@ def create_routes():
             board = KanbanBoard(name=payload.name, description=payload.description or "", source="database")
             s.add(board)
             s.flush()
+            project = Project(
+                name=payload.name,
+                description=payload.description or "",
+                folder_location=str(payload.folder_location or "").strip() or None,
+                startup_instructions=payload.startup_instructions or "",
+                start_time_tracker=bool(payload.start_time_tracker),
+                kanban_board_id=int(board.id),
+            )
+            s.add(project)
+            s.flush()
+            board.default_project_id = int(project.id)
             ensure_delivery_lanes(s, board.id)
             s.flush()
             try:
@@ -2606,7 +3228,7 @@ def create_routes():
                 bootstrap_board(board.id)
             except Exception:
                 pass
-            return JSONResponse({"success": True, "id": board.id})
+            return JSONResponse({"success": True, "id": board.id, "project_id": project.id})
 
     @router.put("/tickets/boards/{board_id}")
     async def update_board(board_id: int, payload: BoardUpdate):
@@ -2634,11 +3256,32 @@ def create_routes():
             if payload.orchestrator_policy is not None:
                 import json as _json
                 board.orchestrator_policy = _json.dumps(payload.orchestrator_policy or {})
+            project_fields_changed = any(
+                value is not None
+                for value in (payload.folder_location, payload.startup_instructions, payload.start_time_tracker)
+            )
+            project = s.get(Project, int(board.default_project_id)) if board.default_project_id else None
+            if project is None and project_fields_changed:
+                project = Project(name=board.name, kanban_board_id=int(board.id))
+                s.add(project)
+                s.flush()
+                board.default_project_id = int(project.id)
+            if project is not None:
+                if payload.name is not None:
+                    project.name = payload.name
+                if payload.description is not None:
+                    project.description = payload.description
+                if payload.folder_location is not None:
+                    project.folder_location = str(payload.folder_location or "").strip() or None
+                if payload.startup_instructions is not None:
+                    project.startup_instructions = payload.startup_instructions
+                if payload.start_time_tracker is not None:
+                    project.start_time_tracker = bool(payload.start_time_tracker)
+                project.kanban_board_id = int(board.id)
             s.commit()
             
             # Sync Project's kanban_board_id reference if default_project_id changed
             if payload.default_project_id is not None:
-                from distr.core.db.projects import Project
                 if (
                     previous_default_project_id
                     and previous_default_project_id != board.default_project_id
@@ -2669,17 +3312,87 @@ def create_routes():
             return JSONResponse({"success": True})
 
     @router.delete("/tickets/boards/{board_id}")
-    async def delete_board(board_id: int):
+    async def delete_board(board_id: int, delete_repository: bool = False):
+        repository_path = ""
+        linked_files: list[str] = []
         with get_session() as s:
             board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
+            project = s.get(Project, int(board.default_project_id)) if board.default_project_id else None
+            repository_path = str(project.folder_location or "").strip() if project else ""
+            if delete_repository and repository_path:
+                target = Path(repository_path).expanduser().resolve()
+                home = Path.home().resolve()
+                if target == home or target == Path(target.anchor) or len(target.parts) < 4:
+                    raise HTTPException(400, "Refusing to delete a broad repository path")
+            tickets = [ticket for lane in board.lanes for ticket in lane.tickets]
+            chat_ids = {int(ticket.source_chat_id) for ticket in tickets if ticket.source_chat_id}
+            from distr.core.db.automation import Automation
+            from distr.core.db.workflow import DevelopmentWorkItem, PlanItem, PlanItemRevision, PlanWorkspace
+
+            board_source = str(board.source or "database").strip().lower()
+            board_key = (
+                f"{board_source}:{str(board.external_board_id).strip()}"
+                if board_source in {"jira", "trello"} and str(board.external_board_id or "").strip()
+                else f"decisions:{int(board.id)}"
+            )
+            board_thread_ids = {
+                int(row.chat_id)
+                for row in s.query(DevelopmentWorkItem).filter(DevelopmentWorkItem.board_key == board_key).all()
+            }
+            automation_rows = s.query(Automation).filter(Automation.board_id == int(board.id)).all()
+            automation_thread_ids = {int(row.thread_chat_id) for row in automation_rows if row.thread_chat_id}
+            chat_ids.update(board_thread_ids)
+            chat_ids.update(automation_thread_ids)
+            linked_files = [str(file.file_path or "") for ticket in tickets for file in ticket.files if file.file_path]
+            if chat_ids:
+                from distr.core.db import Chat
+                from distr.core.db.workflow import AutoWorkflowRun, DevelopmentCommand, DevelopmentPlanRevision, StudioArtifact
+
+                s.query(AutoWorkflowRun).filter(AutoWorkflowRun.chat_id.in_(chat_ids)).delete(synchronize_session=False)
+                s.query(DevelopmentCommand).filter(DevelopmentCommand.chat_id.in_(chat_ids)).delete(synchronize_session=False)
+                s.query(DevelopmentPlanRevision).filter(DevelopmentPlanRevision.chat_id.in_(chat_ids)).delete(synchronize_session=False)
+                s.query(StudioArtifact).filter(StudioArtifact.chat_id.in_(chat_ids)).delete(synchronize_session=False)
+                s.query(DevelopmentWorkItem).filter(DevelopmentWorkItem.chat_id.in_(chat_ids)).delete(synchronize_session=False)
+                s.query(Chat).filter(Chat.parent_id.in_(chat_ids)).delete(synchronize_session=False)
+                s.query(Chat).filter(Chat.id.in_(chat_ids)).delete(synchronize_session=False)
+            for automation in automation_rows:
+                s.delete(automation)
+            workspaces = s.query(PlanWorkspace).filter(PlanWorkspace.board_key == board_key).all()
+            for workspace in workspaces:
+                item_ids = [int(item.id) for item in s.query(PlanItem).filter(PlanItem.workspace_id == workspace.id).all()]
+                if item_ids:
+                    s.query(PlanItemRevision).filter(PlanItemRevision.item_id.in_(item_ids)).delete(synchronize_session=False)
+                    s.query(PlanItem).filter(PlanItem.id.in_(item_ids)).delete(synchronize_session=False)
+                s.delete(workspace)
             s.delete(board)
+            if project is not None:
+                s.delete(project)
             s.commit()
+        managed_roots = [
+            Path(DB_DIR).expanduser().resolve(),
+            (Path.home() / ".decisions" / "work").resolve(),
+        ]
+        if repository_path:
+            managed_roots.append((Path(repository_path).expanduser().resolve() / ".decisions" / "intake").resolve())
+        for raw_path in linked_files:
+            candidate = Path(raw_path).expanduser().resolve()
+            if any(root == candidate or root in candidate.parents for root in managed_roots):
+                try:
+                    candidate.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not remove linked board file %s", candidate)
+        repository_deleted = False
+        if delete_repository and repository_path:
+            target = Path(repository_path).expanduser().resolve()
+            if target.is_dir():
+                shutil.rmtree(target)
+                repository_deleted = True
         from distr.core.workspace_memory.lifecycle import hook_remove_workspace
 
         hook_remove_workspace("boards", board_id)
-        return JSONResponse({"success": True})
+        return JSONResponse({"success": True, "repository_path": repository_path, "repository_deleted": repository_deleted})
 
     @router.post("/tickets/boards/{board_id}/archive")
     async def archive_board(board_id: int):
@@ -2787,6 +3500,7 @@ def create_routes():
                         "complexity": normalize_ticket_complexity(t.complexity),
                         "time_estimate": t.time_estimate or "",
                         "time_spent": t.time_spent or "",
+                        "context_notes": t.context_notes or "",
                         "external_source": t.external_source, "external_id": t.external_id,
                         "external_url": t.external_url,
                         "linked_workflow_id": t.linked_workflow_id,
@@ -2964,6 +3678,10 @@ def create_routes():
             _apply_ticket_source_fields(ticket, payload)
             s.add(ticket)
             s.flush()
+            if ticket.source_chat_id:
+                from distr.core.workflow.development_threads import synchronize_linked_ticket_title
+
+                synchronize_linked_ticket_title(s, ticket)
             _emit_ticket_channel_intake(ticket, board=board)
             try:
                 from distr.core.workspace_memory.lifecycle import hook_ensure_workspace
@@ -3451,7 +4169,11 @@ def create_routes():
                                 source_label="database",
                                 linked_workflow_id=payload.linked_workflow_id,
                                 linked_project_id=payload.linked_project_id or t.linked_project_id or (board.default_project_id if board else None),
-                                source_chat_id=t.source_chat_id,
+                                # A chat can only be the source of one canonical
+                                # ticket. Queue copies must remain unbound so a
+                                # workflow relink cannot violate the unique
+                                # source_chat_id constraint.
+                                source_chat_id=None,
                             )
                             s.add(queue_copy)
                             s.flush()
@@ -3499,6 +4221,10 @@ def create_routes():
             if "context_notes" in fields_set:
                 t.context_notes = payload.context_notes or ""
             _apply_ticket_source_fields(t, payload)
+            if payload.title is not None and t.source_chat_id:
+                from distr.core.workflow.development_threads import synchronize_linked_ticket_title
+
+                synchronize_linked_ticket_title(s, t)
             # For local tickets linked to external providers, keep external card/issue in sync immediately on save.
             if payload.title is not None or payload.description is not None or payload.time_estimate is not None or payload.time_spent is not None:
                 _sync_local_ticket_to_external(
@@ -3580,11 +4306,13 @@ def create_routes():
         return JSONResponse({"success": True})
 
     @router.delete("/tickets/tickets/{ticket_id}")
-    async def delete_ticket(ticket_id: int):
+    async def delete_ticket(ticket_id: int, delete_thread: bool = False):
+        deleted_thread_id: Optional[int] = None
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
+            linked_chat_id = int(t.source_chat_id) if t.source_chat_id is not None else None
 
             # Clear snapshot_group for ALL messages linked to this ticket
             grouped = s.query(WhatsAppMessage).filter(_whatsapp_snapshot_group_filter(ticket_id)).all()
@@ -3604,13 +4332,14 @@ def create_routes():
             # Preserve historical runs/sessions while severing the reusable
             # integer ticket id. SQLite may assign this id to a future ticket;
             # leaving ledger rows attached leaks old execution history into it.
+            from distr.core.db import Chat
             from distr.core.db.kanban import KanbanTicketAuditEntry, ProjectExecutionSession
             from distr.core.db.orchestrator import (
                 OrchestratorCorrectionAttempt,
                 OrchestratorEvent,
                 OrchestratorValidationRecord,
             )
-            from distr.core.db.workflow import AutoWorkflowRun
+            from distr.core.db.workflow import AutoWorkflowRun, DevelopmentWorkItem
 
             s.query(ProjectExecutionSession).filter(
                 ProjectExecutionSession.ticket_id == ticket_id
@@ -3634,12 +4363,53 @@ def create_routes():
                 KanbanTicketAuditEntry.ticket_id == ticket_id
             ).delete(synchronize_session=False)
 
+            if linked_chat_id and delete_thread:
+                from distr.core.chat import cleanup_chat_dependencies
+
+                linked_chat = s.get(Chat, linked_chat_id)
+                if linked_chat is not None and linked_chat.parent_id is None:
+                    cleanup_chat_dependencies(
+                        s,
+                        linked_chat_id,
+                        delete_owned_ticket=False,
+                        delete_owned_workflows=True,
+                    )
+                    s.delete(linked_chat)
+                    deleted_thread_id = linked_chat_id
+            elif linked_chat_id:
+                work_item = (
+                    s.query(DevelopmentWorkItem)
+                    .filter(DevelopmentWorkItem.chat_id == linked_chat_id)
+                    .first()
+                )
+                if work_item is not None:
+                    work_item.identity_key = f"chat:{linked_chat_id}"
+                    work_item.local_ticket_id = None
+                    work_item.ticket_key = None
+                    work_item.ticket_lane = None
+                linked_chat = s.get(Chat, linked_chat_id)
+                if linked_chat is not None:
+                    try:
+                        params = json.loads(linked_chat.params or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        params = {}
+                    development = params.get("development") if isinstance(params.get("development"), dict) else {}
+                    development["ticket_id"] = None
+                    for key in ("board_ticket_key", "board_ticket_title", "board_ticket_lane"):
+                        development.pop(key, None)
+                    params["development"] = development
+                    linked_chat.params = json.dumps(params, ensure_ascii=False)
+
             s.delete(t)
             s.commit()
         from distr.core.workspace_memory.lifecycle import hook_remove_workspace
 
         hook_remove_workspace("tickets", ticket_id)
-        return JSONResponse({"success": True})
+        if deleted_thread_id is not None:
+            from distr.core.chat import remove_chat_transcript_audit_events
+
+            remove_chat_transcript_audit_events(deleted_thread_id)
+        return JSONResponse({"success": True, "deleted_thread_id": deleted_thread_id})
 
     # ── Ticket Files ──
 
@@ -4029,7 +4799,7 @@ def create_routes():
                 workflow_id = ticket.linked_workflow_id or board.default_workflow_id
                 if workflow_id:
                     try:
-                        from distr.core.workflow.service import start_workflow_run
+                        from distr.core.workflow.work_dispatch import dispatch_work_item
 
                         context = f"Ticket: {ticket.title}"
                         if ticket.description:
@@ -4044,12 +4814,17 @@ def create_routes():
                             "project_name": None,
                             "phase": "planning",
                         }
-                        run_result = start_workflow_run(
-                            workflow_id,
+                        run_result = dispatch_work_item(
+                            workflow_id=int(workflow_id),
                             context=context,
                             board_id=board.id,
                             ticket_id=ticket.id,
+                            title=ticket.title or f"Ticket #{ticket.id}",
+                            project_id=int(ticket.linked_project_id) if ticket.linked_project_id else None,
+                            source_type="ticket_copy_send_to_workflow",
+                            source_ref=f"ticket:{int(ticket.id)}",
                             run_metadata=run_metadata,
+                            _session_provider=get_session,
                         )
                         if "error" in run_result:
                             result["workflow_started"] = False
@@ -4367,8 +5142,10 @@ def create_routes():
                 )
                 if pr.status_code != 200:
                     raise HTTPException(pr.status_code, f"Trello move failed: {pr.text[:500]}")
-                _invalidate_external_board_detail_cache(provider, board_id)
-                return JSONResponse({"success": True})
+                cache_updated = _move_external_board_detail_cache_ticket(provider, board_id, ticket_id, target_lane, payload.position)
+                if not cache_updated:
+                    _schedule_external_board_detail_refresh(provider, board_id, _external_board_detail_cache_key(provider, board_id))
+                return JSONResponse({"success": True, "cache_updated": cache_updated})
             raise HTTPException(
                 404,
                 "No Trello account could access this card. Check that the correct Trello account is connected.",
@@ -4491,8 +5268,10 @@ def create_routes():
                 if pr.status_code not in (200, 204):
                     move_fail_http = (pr.status_code, f"Jira transition failed: {pr.text[:500]}")
                     continue
-                _invalidate_external_board_detail_cache(provider, board_id)
-                return JSONResponse({"success": True})
+                cache_updated = _move_external_board_detail_cache_ticket(provider, board_id, ticket_id, target_lane, payload.position)
+                if not cache_updated:
+                    _schedule_external_board_detail_refresh(provider, board_id, _external_board_detail_cache_key(provider, board_id))
+                return JSONResponse({"success": True, "cache_updated": cache_updated})
             except HTTPException:
                 raise
             except Exception:
@@ -4896,6 +5675,18 @@ def create_routes():
         loading = {"name": "", "url": "", "lanes": [], "can_create_ticket": True, "cache_ready": False}
         return JSONResponse(_merge_external_board_local_config(provider, board_id, loading))
 
+    @router.post("/tickets/thread-draft")
+    async def prepare_ticket_thread_draft(body: TicketThreadDraftRequest):
+        """Prepare a reviewable Development draft from a ticket without starting the agent."""
+        provider = body.provider.lower().strip()
+        if provider == "decisions":
+            payload = await asyncio.to_thread(_prepare_local_ticket_thread_draft, body)
+        elif provider in ("jira", "trello"):
+            payload = await asyncio.to_thread(_prepare_external_ticket_thread_draft, body)
+        else:
+            raise HTTPException(400, "Provider must be Jira, Trello, or Decisions")
+        return JSONResponse(payload)
+
     class EngageOrchestratorRequest(BaseModel):
         chat_id: int
         ticket: dict
@@ -5234,7 +6025,7 @@ source: kanban_ticket_{t.id}
     @router.post("/tickets/tickets/{ticket_id}/send-to-workflow")
     async def send_ticket_to_workflow(ticket_id: int, payload: SendToWorkflowRequest):
         """Start the selected/default workflow for a ticket."""
-        from distr.core.workflow.service import start_workflow_run
+        from distr.core.workflow.work_dispatch import dispatch_work_item
 
         with get_session() as s:
             t = orm_get_by_id(s, KanbanTicket, ticket_id)
@@ -5303,18 +6094,28 @@ source: kanban_ticket_{t.id}
             if workflow_brief:
                 run_metadata["ticket_workflow_brief"] = workflow_brief
 
-        # ponytail: start_workflow_run opens its own session — nested SQLite tx = "database is locked"
+            ticket_title_value = t.title or f"Ticket #{t.id}"
+            source_chat_id_value = int(t.source_chat_id) if t.source_chat_id else None
+
+        # The dispatch gateway opens its own sessions. Keep it outside the route
+        # transaction to avoid nested SQLite locks and event-loop stalls.
         # Workflow-agent cold start can import a large optional tool set. Run it
         # outside the FastAPI event loop so the UI and progress endpoints do not
         # freeze while the ticket is being handed off.
         run_result = await asyncio.to_thread(
-            start_workflow_run,
-            workflow_id,
+            dispatch_work_item,
+            workflow_id=int(workflow_id),
+            chat_id=source_chat_id_value,
             context=context,
             board_id=board_id_value,
-            ticket_id=ticket_id,
+            ticket_id=int(ticket_id),
+            title=ticket_title_value,
+            project_id=int(project_id_value) if project_id_value else None,
+            source_type="ticket_send_to_workflow",
+            source_ref=f"ticket:{int(ticket_id)}",
             run_metadata=run_metadata,
             dispatch_async=True,
+            _session_provider=get_session,
         )
         if "error" in run_result:
             raise HTTPException(400, run_result["error"])
@@ -5326,45 +6127,19 @@ source: kanban_ticket_{t.id}
             "message": f"Ticket #{ticket_id} sent to workflow.",
             "workflow_id": workflow_id,
             "run_id": run_result.get("run_id"),
+            "chat_id": int(run_result["chat_id"]),
+            "development_url": run_result["development_url"],
         })
 
     @router.get("/tickets/tickets/{ticket_id}/active-run")
     async def get_ticket_active_run(ticket_id: int):
-        """Return the active workflow run for a ticket, or {active: false} if none."""
-        from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep, AutoWorkflow as _WF
-        with get_session() as s:
-            run = (
-                s.query(AutoWorkflowRun)
-                .filter(
-                    AutoWorkflowRun.ticket_id == ticket_id,
-                    AutoWorkflowRun.status.in_(["running", "waiting"]),
-                )
-                .order_by(AutoWorkflowRun.started_at.desc())
-                .first()
-            )
-            if not run:
-                return JSONResponse({"active": False})
-            step_name = None
-            if run.current_step_id:
-                step = s.query(AutoWorkflowStep).filter(
-                    AutoWorkflowStep.id == run.current_step_id).first()
-                if step:
-                    step_name = step.name
-            wf = s.query(_WF).filter(_WF.id == run.workflow_id).first()
-            run_data = {}
-            try:
-                run_data = json.loads(run.run_data or "{}")
-            except Exception:
-                pass
-            return JSONResponse({
-                "active": True,
-                "run_id": run.id,
-                "workflow_id": run.workflow_id,
-                "workflow_name": wf.name if wf else None,
-                "status": run.status,
-                "current_step_name": step_name,
-                "phase": run_data.get("phase"),
-            })
+        """Return the unified active execution for a ticket."""
+        from distr.core.workflow.service import get_active_runs
+
+        row = next((item for item in get_active_runs(limit=200) if item.get("ticket_id") == ticket_id), None)
+        if row is None:
+            return JSONResponse({"active": False})
+        return JSONResponse({"active": True, "run_id": row.get("id"), **row})
 
     def _resolve_ticket_cli_context(s, ticket_id: int, *, include_instruction: bool = True):
         t = orm_get_by_id(s, KanbanTicket,ticket_id)
@@ -5677,17 +6452,30 @@ source: kanban_ticket_{t.id}
             } for l in links])
 
     @router.post("/tickets/boards/{board_id}/whatsapp-snapshot-ticket")
-    async def create_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
+    def create_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
         """Create a board ticket from the unticketed messages in its linked WhatsApp chat."""
         link_id = payload.get("link_id")
         message_ids = payload.get("message_ids") if isinstance(payload.get("message_ids"), list) else None
+        scope = payload.get("scope") or "new_since_last_ticket"
         try:
             limit = max(1, min(int(payload.get("limit") or 500), 500))
         except Exception:
             limit = 500
+        try:
+            since_hours = max(0, min(int(payload.get("since_hours") or 48), 24 * 30))
+        except Exception:
+            since_hours = 48
 
         with get_session() as s:
-            snapshot = _resolve_board_whatsapp_snapshot(s, board_id, link_id=link_id, limit=limit, message_ids=message_ids)
+            snapshot = _resolve_board_whatsapp_snapshot(
+                s,
+                board_id,
+                link_id=link_id,
+                limit=limit,
+                message_ids=message_ids,
+                scope=scope,
+                since_hours=since_hours,
+            )
             board = snapshot["board"]
             link = snapshot["link"]
             messages = snapshot["messages"]
@@ -5703,7 +6491,10 @@ source: kanban_ticket_{t.id}
                     if requested_lane:
                         lane = requested_lane
 
-            enrichment = _ensure_whatsapp_messages_enriched(messages)
+            # Snapshot creation must remain deterministic and responsive. Use
+            # cached transcriptions when present, but never make the browser
+            # wait for ffmpeg, remote STT, or a local Whisper model.
+            enrichment = _ensure_whatsapp_messages_enriched(messages, transcribe_missing=False)
             draft = _build_whatsapp_ticket_draft(messages)
             media_count = len([m for m in messages if getattr(m, "media_type", None)])
             title = (payload.get("title") or draft.get("title") or "WhatsApp request").strip()
@@ -5755,23 +6546,22 @@ source: kanban_ticket_{t.id}
             s.flush()
 
             snapshot_group = _whatsapp_snapshot_group_for_ticket(board.id, ticket.id)
-            attached_count = 0
+            project = s.get(Project, int(board.default_project_id)) if board.default_project_id else None
+            snapshot_files = _write_whatsapp_snapshot_files(board, project, ticket, messages)
+            for snapshot_file in snapshot_files:
+                s.add(KanbanTicketFile(
+                    ticket_id=ticket.id,
+                    filename=snapshot_file["filename"],
+                    file_path=snapshot_file["path"],
+                    description=snapshot_file["description"],
+                ))
+            attached_count = len(snapshot_files)
             source_message_ids = []
             for msg in messages:
                 source_message_ids.append(int(msg.id))
                 msg.processed = True
                 msg.processed_date = datetime.utcnow()
                 msg.snapshot_group = snapshot_group
-                wa_disk = resolve_whatsapp_media_disk_path(msg.media_local_path or "")
-                if wa_disk and os.path.exists(wa_disk):
-                    safe_name = os.path.basename(wa_disk)
-                    s.add(KanbanTicketFile(
-                        ticket_id=ticket.id,
-                        filename=msg.media_filename or safe_name,
-                        file_path=wa_disk,
-                        description=f"WhatsApp {msg.media_type}: {safe_name}" if msg.media_type else safe_name,
-                    ))
-                    attached_count += 1
             s.add(KanbanTicketAuditEntry(
                 ticket_id=ticket.id,
                 execution_lane="whatsapp",
@@ -5803,6 +6593,15 @@ source: kanban_ticket_{t.id}
             # Commit the ticket and message batch before the lifecycle service
             # opens its own short transaction.
             s.commit()
+            thread_result = _ensure_whatsapp_snapshot_thread(
+                board=board,
+                ticket=ticket,
+                lane=lane,
+                title=title,
+                description=description,
+                snapshot_group=snapshot_group,
+            )
+            chat_id = thread_result["chat_id"]
             try:
                 from distr.core.kanban.whatsapp_work_lifecycle import record_ticket_created
 
@@ -5827,11 +6626,24 @@ source: kanban_ticket_{t.id}
                 "message_ids": source_message_ids,
                 "file_count": attached_count,
                 "contact_name": source_contact,
+                "chat_id": chat_id,
+                "development_url": f"/development/threads/{int(chat_id)}/" if chat_id else None,
+                "thread_pending": chat_id is None,
+                "thread_error": thread_result["thread_error"],
+                "prepared_prompt": description,
+                "attachments": [
+                    _thread_draft_attachment_payload(
+                        Path(item["path"]),
+                        name=str(item.get("filename") or ""),
+                    )
+                    for item in snapshot_files
+                    if Path(item["path"]).is_file()
+                ],
                 "quality": quality,
             })
 
     @router.post("/tickets/boards/{board_id}/whatsapp-snapshot-preview")
-    async def preview_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
+    def preview_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
         """Preview the unticketed WhatsApp messages that would become a board ticket."""
         link_id = payload.get("link_id")
         message_ids = payload.get("message_ids") if isinstance(payload.get("message_ids"), list) else None
@@ -5882,7 +6694,7 @@ source: kanban_ticket_{t.id}
                     "quality": {"passed": False, "score": 0, "issues": [], "warnings": []},
                     "intake_stats": intake_stats,
                 })
-            enrichment = _ensure_whatsapp_messages_enriched(messages)
+            enrichment = _ensure_whatsapp_messages_enriched(messages, transcribe_missing=False)
             draft = _build_whatsapp_ticket_draft(messages)
             quality = _validate_whatsapp_ticket_quality(
                 draft.get("title") or "WhatsApp request",

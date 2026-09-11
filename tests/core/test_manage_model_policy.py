@@ -17,6 +17,7 @@ from distr.core.project_cli_backends.policy_manager import (
     _counts_as_model_health_failure,
     apply_model_policy_plan,
     build_model_policy_plan,
+    refresh_global_auto_model_policy,
     refresh_auto_model_policy_for_workflow,
 )
 
@@ -55,6 +56,7 @@ def test_auto_health_does_not_blame_model_for_cancelled_work(error):
 def test_auto_health_counts_only_route_readiness_failures():
     assert _counts_as_model_health_failure("429 Rate limit exceeded") is True
     assert _counts_as_model_health_failure("Provider unavailable: HTTP 503") is True
+    assert _counts_as_model_health_failure("Credit balance is too low") is True
     assert _counts_as_model_health_failure(
         "404 The free period of this model ended. Please use kilo-auto/free."
     ) is True
@@ -74,6 +76,57 @@ def test_openrouter_rate_limit_cooldown_prefers_available_local_route():
 
     assert [route["model"] for route in available] == ["ornith:35b"]
     assert available[0]["provider_health"] == "healthy"
+
+
+def test_launch_auto_policy_selects_sota_free_route_and_cross_provider_fallback(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(
+        "distr.core.settings.load_settings_from_db",
+        lambda: {"openrouter_key": "secret"},
+    )
+    monkeypatch.setattr(
+        "distr.core.settings.save_settings_to_db",
+        lambda updates: saved.update(updates),
+    )
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.policy_manager._ranked_free_routes",
+        lambda _settings, complexity="high": [
+            {
+                "backend": "pi",
+                "model_provider": "openrouter",
+                "model": "leader/sota:free",
+                "free": True,
+                "score": 100,
+            },
+            {
+                "backend": "pi",
+                "model_provider": "openrouter",
+                "model": "runner-up:free",
+                "free": True,
+                "score": 90,
+            },
+            {
+                "backend": "pi",
+                "model_provider": "ollama",
+                "model": "local-coder:30b",
+                "free": True,
+                "local": True,
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.provider_preflight.probe_openrouter_model_readiness",
+        lambda **_kwargs: type("Ready", (), {"ready": True})(),
+    )
+
+    result = refresh_global_auto_model_policy()
+
+    assert result["primary"]["model"] == "leader/sota:free"
+    assert result["fallback"]["model_provider"] == "ollama"
+    for level in ("low", "medium", "high"):
+        assert saved[f"project_cli_{level}_model"] == "leader/sota:free"
+        assert saved[f"project_cli_{level}_model_provider"] == "openrouter"
+        assert saved[f"project_cli_{level}_fallback_model"] == "local-coder:30b"
 
 
 @pytest.fixture()

@@ -88,6 +88,7 @@ ROUTING_CASES = [
     ("search the web for python tutorials", "web_search"),
     ("look up the weather", "web_search"),
     ("google how to make pasta", "web_search"),
+    ("find print shops near Cavendish Square in Claremont", "web_search"),
 
     # ── Media ──
     ("play the next track", "media_control"),

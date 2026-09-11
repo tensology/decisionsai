@@ -135,7 +135,21 @@ def load_board_notes(board_id: int | None = None) -> list[dict[str, Any]]:
     if board_id is not None:
         path = _active_md_path(int(board_id))
         if path.is_file():
-            return _notes_from_active_md(path.read_text(encoding="utf-8", errors="replace"))
+            scoped = _notes_from_active_md(path.read_text(encoding="utf-8", errors="replace"))
+            # Keep legacy global notes visible during migration. A populated
+            # board companion must not hide user-authored notes that have not
+            # yet been moved into the board-scoped store.
+            legacy = _load_legacy_global_notes()
+            seen = {
+                (str(note.get("id")), str(note.get("title")), str(note.get("content")))
+                for note in scoped
+            }
+            # Keep conflicting legacy values visible instead of silently
+            # dropping a note with the same id during the migration window.
+            return scoped + [
+                note for note in legacy
+                if (str(note.get("id")), str(note.get("title")), str(note.get("content"))) not in seen
+            ]
         legacy = _load_legacy_global_notes()
         if legacy:
             _save_board_notes_to_companion(int(board_id), legacy)

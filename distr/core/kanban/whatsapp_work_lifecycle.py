@@ -16,6 +16,33 @@ from distr.core.db import engine, get_session
 logger = logging.getLogger(__name__)
 
 
+def _audit_ticket_event(
+    *, ticket_id: int, run_id: int | None, status: str, summary: str, details: str = "",
+) -> None:
+    """Mirror channel lifecycle transitions into the Decisions ticket audit trail."""
+    try:
+        from distr.core.kanban.ticket_audit import append_ticket_audit_entry
+
+        with get_session() as db:
+            append_ticket_audit_entry(
+                db,
+                ticket_id=int(ticket_id),
+                run_id=int(run_id) if run_id is not None else None,
+                step_id=None,
+                step_result_id=None,
+                execution_lane="workflow",
+                status=status,
+                final_verdict=None,
+                summary=summary,
+                details=details,
+            )
+            db.commit()
+    except Exception:
+        # Channel telemetry must never prevent the underlying ticket workflow
+        # from completing.
+        logger.debug("Could not append WhatsApp lifecycle audit event", exc_info=True)
+
+
 def ensure_tables() -> None:
     with engine.begin() as conn:
         conn.execute(text("""
@@ -64,7 +91,8 @@ def record_ticket_created(
 ) -> dict[str, Any]:
     ensure_tables()
     now = time.time()
-    payload = json.dumps([int(value) for value in message_ids if value])
+    normalized_message_ids = [int(value) for value in message_ids if value]
+    payload = json.dumps(normalized_message_ids)
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO whatsapp_work_lifecycles(
@@ -86,6 +114,13 @@ def record_ticket_created(
         row = conn.execute(text(
             "SELECT * FROM whatsapp_work_lifecycles WHERE ticket_id=:ticket_id"
         ), {"ticket_id": int(ticket_id)}).mappings().first()
+    _audit_ticket_event(
+        ticket_id=ticket_id,
+        run_id=None,
+        status="source_ingested",
+        summary="WhatsApp messages were ingested and linked to this ticket.",
+        details=f"source_jid={source_jid or 'unknown'}; message_count={len(normalized_message_ids)}",
+    )
     return dict(row or {})
 
 
@@ -96,6 +131,13 @@ def mark_execution_started(*, ticket_id: int, execution_kind: str, run_id: int |
             UPDATE whatsapp_work_lifecycles SET execution_kind=:kind, run_id=:run_id,
               status='executing', updated_at=:now, error=NULL WHERE ticket_id=:ticket_id
         """), {"kind": execution_kind, "run_id": run_id, "now": time.time(), "ticket_id": int(ticket_id)})
+    _audit_ticket_event(
+        ticket_id=ticket_id,
+        run_id=run_id,
+        status="executing",
+        summary="Work started for a WhatsApp-sourced ticket.",
+        details=f"execution_kind={execution_kind or 'workflow'}",
+    )
 
 
 def _client_draft(ticket_title: str, result_summary: str, contact: str) -> str:
@@ -164,6 +206,13 @@ def prepare_completed_reply(
             INSERT INTO whatsapp_reply_reviews(token, lifecycle_id, status, created_at, updated_at)
             VALUES (:token, :lifecycle_id, 'pending', :now, :now)
         """), {"token": token, "lifecycle_id": lifecycle_id, "now": now})
+    _audit_ticket_event(
+        ticket_id=ticket_id,
+        run_id=run_id,
+        status="awaiting_reply_review",
+        summary="Verified work produced a WhatsApp reply draft awaiting Telegram approval.",
+        details=f"contact={contact or phone}; source_jid={jid or 'unknown'}",
+    )
     return {"token": token, "ticket_id": int(ticket_id), "draft": draft, "contact": contact or phone}
 
 
@@ -231,6 +280,12 @@ def handle_telegram_reply(value: str, *, chat_id: int | str | None = None) -> di
             with engine.begin() as conn:
                 conn.execute(text("UPDATE whatsapp_reply_reviews SET status='left_draft', resolved_action='leave', updated_at=:now WHERE token=:token"), {"now": time.time(), "token": token})
                 conn.execute(text("UPDATE whatsapp_work_lifecycles SET status='reply_draft_ready', reply_status='left_draft', updated_at=:now WHERE id=:id"), {"now": time.time(), "id": row["lifecycle_id"]})
+            _audit_ticket_event(
+                ticket_id=row["ticket_id"],
+                run_id=None,
+                status="reply_draft_ready",
+                summary="Telegram approval left the WhatsApp reply as a draft.",
+            )
             return {"handled": True, "text": "I left the reply in the WhatsApp composer as a draft."}
         from distr.core.integrations.whatsapp.relay_client import send_message_via_relay
         try:
@@ -241,12 +296,25 @@ def handle_telegram_reply(value: str, *, chat_id: int | str | None = None) -> di
         if not result.get("success"):
             with engine.begin() as conn:
                 conn.execute(text("UPDATE whatsapp_reply_reviews SET status='pending', error=:error, updated_at=:now WHERE token=:token AND status='resolving'"), {"error": str(result.get("error") or "send failed"), "now": time.time(), "token": token})
+            _audit_ticket_event(
+                ticket_id=row["ticket_id"],
+                run_id=None,
+                status="reply_send_failed",
+                summary="Approved WhatsApp reply could not be sent; the draft remains saved.",
+            )
             return {"handled": True, "text": f"WhatsApp did not accept the message: {result.get('error') or 'send failed'}. The draft is still saved."}
         from distr.core.kanban.whatsapp_compose_drafts import delete_compose_draft
         delete_compose_draft(row["source_phone"] or str(row["source_jid"] or "").split("@", 1)[0])
         with engine.begin() as conn:
             conn.execute(text("UPDATE whatsapp_reply_reviews SET status='sent', resolved_action='send', updated_at=:now WHERE token=:token"), {"now": time.time(), "token": token})
             conn.execute(text("UPDATE whatsapp_work_lifecycles SET status='reply_sent', reply_status='sent', updated_at=:now WHERE id=:id"), {"now": time.time(), "id": row["lifecycle_id"]})
+        _audit_ticket_event(
+            ticket_id=row["ticket_id"],
+            run_id=None,
+            status="reply_sent",
+            summary="Telegram approval sent the reply back to the originating WhatsApp chat.",
+            details=f"source_jid={row['source_jid'] or 'unknown'}",
+        )
         return {"handled": True, "text": "WhatsApp message sent. The ticket remains in QA until you move it to Complete."}
 
     with engine.connect() as conn:

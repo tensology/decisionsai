@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,19 @@ _PROJECTION_MEMORY_FILES = (HANDOFF_FILE, ACTIVE_FILE)
 
 def sync_projection_for_project(project_id: int, *, force: bool = False) -> dict[str, Any]:
     """Copy thin companion subset into project.folder_location/.decisions/."""
+    # Keep Decisions memory in ~/.decisions by default. Writing a projection
+    # into every linked repository creates hidden per-project folders and
+    # modifies otherwise clean working trees. Opt in only when a project
+    # explicitly needs repo-local memory files.
+    if str(os.environ.get("DECISIONS_ENABLE_REPO_PROJECTION") or "").strip().lower() not in {
+        "1", "true", "yes", "on"
+    }:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "repo projection disabled by default; companion memory remains under ~/.decisions",
+            "project_id": project_id,
+        }
     from distr.core.db import get_session
     from distr.core.db.projects import Project
 

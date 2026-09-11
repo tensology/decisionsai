@@ -805,6 +805,34 @@ def _enter_controlled_restart_recovery(run_id: int, step_id: int) -> bool:
     return True
 
 
+def _finalize_development_chat_turn(chat_id: Optional[int], status: str, run_result: Dict[str, Any]) -> None:
+    """Close a linked Development turn and put its result in the transcript."""
+    if not chat_id:
+        return
+    try:
+        from distr.core.chat import ChatService
+        from distr.core.chat_turns import complete_turn, latest_active_turn_id, terminal_turn
+        from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
+
+        turn_id = latest_active_turn_id(int(chat_id))
+        if turn_id is None:
+            return
+        report = WorkflowAgentBridge._generate_report(run_result)
+        terminal_status = (status or "failed").strip().lower()
+        if terminal_status == "completed":
+            complete_turn(int(chat_id), turn_id=turn_id, display_text=report)
+        else:
+            terminal_turn(
+                int(chat_id),
+                "turn_cancelled" if terminal_status == "cancelled" else "turn_failed",
+                turn_id=turn_id,
+                summary=report,
+            )
+        ChatService.append_assistant_notice(int(chat_id), report)
+    except Exception:
+        logger.exception("Could not finalize Development chat %s", chat_id)
+
+
 def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     """Clean up resources and notify the bridge when a run reaches terminal status."""
     _cleanup_run(run_id)
@@ -813,6 +841,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     board_id: Optional[int] = None
     ticket_id: Optional[int] = None
     project_id: Optional[int] = None
+    chat_id: Optional[int] = None
     result_packet: Dict[str, Any] = {}
     validation_records: List[dict] = []
     try:
@@ -821,6 +850,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
             if run_rec:
                 board_id = run_rec.board_id
                 ticket_id = run_rec.ticket_id
+                chat_id = int(run_rec.chat_id) if run_rec.chat_id else None
                 try:
                     run_data = json.loads(run_rec.run_data or "{}") or {}
                 except Exception:
@@ -878,6 +908,8 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 db.commit()
     except Exception:
         logger.debug("Could not persist terminal receipt for run %d", run_id, exc_info=True)
+
+    _finalize_development_chat_turn(chat_id, status, run_result)
 
     # Sync terminal status back to the linked ticket so the board always
     # reflects the actual workflow outcome without waiting for a lane move.
@@ -1131,13 +1163,18 @@ def _maybe_auto_start_next_queued_ticket(run_id: int, workflow_id: int) -> None:
                 }
                 run_metadata = {k: v for k, v in run_metadata.items() if v not in (None, "")}
 
-        result = start_workflow_run(
-            workflow_id,
+        from distr.core.workflow.work_dispatch import dispatch_work_item
+
+        result = dispatch_work_item(
+            workflow_id=int(workflow_id),
             context=group_context,
             board_id=board_id,
-            ticket_id=next_ticket_id,
+            ticket_id=int(next_ticket_id),
+            source_type="workflow_queue",
+            source_ref=f"run:{int(run_id)}:next:{int(next_ticket_id)}",
             run_metadata=run_metadata or None,
             dispatch_async=True,
+            _session_provider=get_session,
         )
         if result.get("error"):
             logger.info(
@@ -1221,13 +1258,18 @@ def start_workflow_ticket_group(
             "ticket_group_items": group_refs if mode == "sequential" else [],
             "ticket_group_common_metadata": dict(run_metadata or {}),
         })
-        result = start_workflow_run(
-            int(workflow_id),
+        from distr.core.workflow.work_dispatch import dispatch_work_item
+
+        result = dispatch_work_item(
+            workflow_id=int(workflow_id),
             context=item["context"] or None,
             board_id=item["board_id"],
             ticket_id=item["ticket_id"],
+            source_type="ticket_group",
+            source_ref=f"group:{group_id}:ticket:{int(item['ticket_id'])}",
             run_metadata=metadata,
             dispatch_async=dispatch_async,
+            _session_provider=get_session,
         )
         if result.get("error"):
             errors.append({"ticket_id": item["ticket_id"], "error": str(result["error"])})
@@ -1441,6 +1483,11 @@ def start_workflow_run(
                     first_step = s
                     start_idx = i
                     break
+        elif getattr(wf, "start_step_position", None) is not None:
+            configured_position = int(wf.start_step_position or 0)
+            if configured_position > 0 and configured_position < len(sorted_steps):
+                first_step = sorted_steps[configured_position]
+                start_idx = configured_position
         if first_step is None:
             first_step = sorted_steps[0]
             start_idx = 0
@@ -1570,6 +1617,11 @@ def start_workflow_run(
 
         run = AutoWorkflowRun(
             workflow_id=workflow_id,
+            chat_id=(
+                int(normalized_metadata["chat_id"])
+                if normalized_metadata.get("chat_id") is not None
+                else None
+            ),
             status="running",
             board_id=board_id,
             ticket_id=ticket_id,
@@ -2055,11 +2107,14 @@ def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
     return dispatcher.run_isolated(step_id)
 
 
-def cancel_run(run_id: int) -> bool:
-    """Cancel an active workflow run."""
+def cancel_run(run_id: int, *, workflow_id: Optional[int] = None) -> bool:
+    """Cancel an active workflow run, optionally bound to its workflow."""
     active_execution_info = None
     with get_session() as db:
-        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+        query = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id)
+        if workflow_id is not None:
+            query = query.filter(AutoWorkflowRun.workflow_id == workflow_id)
+        run = query.first()
         if not run:
             return False
         run.status = "cancelled"
@@ -2071,6 +2126,12 @@ def cancel_run(run_id: int) -> bool:
             if step and step.status in ("running", "waiting"):
                 step.status = "cancelled"
                 step.result = "Cancelled by user."
+        if run.ticket_id:
+            from distr.core.db.kanban import KanbanTicket
+
+            ticket = db.get(KanbanTicket, int(run.ticket_id))
+            if ticket is not None:
+                ticket.workflow_status = "cancelled"
         _run_id, _wf_id = run.id, run.workflow_id
         try:
             from distr.core.db.kanban import ProjectExecutionSession
@@ -2105,6 +2166,8 @@ def cancel_run(run_id: int) -> bool:
                 active_execution_info["project_id"],
                 active_execution_info["backend_id"],
                 board_id=active_execution_info["board_id"],
+                execution_id=int(_run_id),
+                execution_kind="workflow",
             )
         except Exception:
             logger.debug("Could not terminate provider process for cancelled run", exc_info=True)

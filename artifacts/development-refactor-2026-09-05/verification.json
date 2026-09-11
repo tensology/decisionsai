@@ -1,0 +1,75 @@
+{
+  "checked_at": "2026-09-05T11:06:25.844171+00:00",
+  "backend_selected_suite": {
+    "passed": 160,
+    "modules": 20,
+    "warnings": 93,
+    "junit": [
+      {
+        "tests": "160",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "12.955"
+      }
+    ]
+  },
+  "browser_suite": {
+    "passed": 94,
+    "description": "Real templates and modules with fixture APIs; desktop and mobile",
+    "junit": [
+      {
+        "tests": "94",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "84.950"
+      }
+    ]
+  },
+  "syntax": {
+    "javascript_modules": 17,
+    "stylesheets": 12,
+    "unresolved_identifiers": [],
+    "python_modules_parsed": 24
+  },
+  "diff_check": "passed",
+  "visual_inspection": {
+    "app_views": [
+      "automations-1440.png",
+      "automations-390.png",
+      "file-review-1440.png",
+      "file-review-390.png",
+      "incoming-1440.png",
+      "incoming-390.png",
+      "planning-1440.png",
+      "planning-390.png",
+      "reports-1440.png",
+      "reports-390.png",
+      "reports-details-390.png",
+      "reports-populated-1440.png",
+      "reports-populated-390.png",
+      "terminals-1440.png",
+      "terminals-390.png",
+      "threads-1440.png",
+      "threads-390.png",
+      "workflows-1440.png",
+      "workflows-390.png"
+    ],
+    "document_views": [
+      "architecture-1.png",
+      "architecture-2.png",
+      "architecture-3.png",
+      "architecture-4.png"
+    ],
+    "result": "Inspected all 19 desktop/mobile captures and all four final document pages. Fixed low-contrast code in the document table header, then rendered and inspected all pages again. Checked clipping, overflow, overlaps, page breaks, orphan headings, split/repeated table rows, owner/action alignment, headers/footers, readability and branding. Mobile report columns intentionally scroll within the table; inspected both ends. Existing compact UI typography and intentional truncation remain."
+  },
+  "limits": [
+    "No application restart or deployment. Backend changes require normal restart.",
+    "Browser APIs use fixtures; live providers and external connectors are not certified.",
+    "Website preview parity, model-backed Plan generation and reviewed execution handoff remain outstanding.",
+    "Shared context and large backend execution routes need further narrowing; this is not complete state isolation.",
+    "File projections use optimistic external-file hashes; older Plan clients can omit revision checks. Unsupported recurrences are blocked.",
+    "Reports exposes recent recorded runs, not deduplicated task totals."
+  ]
+}

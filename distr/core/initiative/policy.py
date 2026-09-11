@@ -136,6 +136,11 @@ def _evaluate_operate(action, boundaries: dict) -> PolicyDecision:
             return PolicyDecision.EXECUTE
         return PolicyDecision.DRAFT_AND_ASK
 
+    if action_type == "development_thread_control":
+        if boundaries.get("initiative_allow_routine_tasks", False):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
     if action_type == "project_cli_task":
         if (
             boundaries.get("initiative_allow_routine_tasks", False)
@@ -189,6 +194,11 @@ def _evaluate_own(action, boundaries: dict) -> PolicyDecision:
             boundaries.get("initiative_allow_routine_tasks", False)
             and boundaries.get("initiative_allow_workflow_start", False)
         ):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
+    if action_type == "development_thread_control":
+        if boundaries.get("initiative_allow_routine_tasks", False):
             return PolicyDecision.EXECUTE
         return PolicyDecision.DRAFT_AND_ASK
 

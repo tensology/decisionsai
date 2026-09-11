@@ -15,6 +15,7 @@ class _CoreHarness(LLMSharedMixin):
             SimpleNamespace(name="google_workspace"),
             SimpleNamespace(name="tensology_workspace"),
             SimpleNamespace(name="delegated_workflow"),
+            SimpleNamespace(name="window_management"),
         ]
         self._tools_dict = {t.name: t for t in self._tools}
         self._sticky_tool_names = set()
@@ -206,6 +207,26 @@ def test_get_filtered_tools_retains_multistep_tools_for_terse_follow_ups(monkeyp
     assert expected.issubset({tool.name for tool in first})
     assert expected.issubset({tool.name for tool in retried})
     assert expected.issubset({tool.name for tool in insisted})
+
+
+def test_get_filtered_tools_retains_single_window_tool_for_option_follow_up(monkeypatch):
+    class _Retriever:
+        def retrieve(self, _msg, _model):
+            return ["request_tool"]
+
+    monkeypatch.setattr(
+        "distr.core.agent.tool_retriever.get_tool_retriever",
+        lambda: _Retriever(),
+    )
+
+    harness = _CoreHarness()
+    initial = harness._get_filtered_tools(
+        "Move Terminal to the third screen at normal size"
+    )
+    follow_up = harness._get_filtered_tools("First option.")
+
+    assert "window_management" in {tool.name for tool in initial}
+    assert "window_management" in {tool.name for tool in follow_up}
 
 
 def test_intercept_tool_calls_rewrites_gmail_request_tool_to_google_workspace():

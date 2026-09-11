@@ -45,6 +45,15 @@ from distr.core.human_engagement import (
 logger = logging.getLogger("distr.core.initiative.service")
 
 
+def _is_development_chat(chat_id: int) -> bool:
+    from distr.core.db import Chat, get_session
+    from distr.core.workflow.development_threads import development_thread_metadata
+
+    with get_session() as db:
+        chat = db.get(Chat, int(chat_id))
+        return bool(chat is not None and development_thread_metadata(chat))
+
+
 def _hash_initiative_payload(action_type: str, payload: dict | None) -> str:
     raw = json.dumps(payload or {}, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(f"{action_type}:{raw}".encode("utf-8")).hexdigest()
@@ -386,6 +395,7 @@ class InitiativeService:
         # same action is not repeatedly proposed within cooldown_seconds.
         self._recent_proposals: deque = deque()
         self._proposal_cooldown_s: float = 7_200.0  # 2 hours; approvals should not nag.
+        self._last_handoff_resume_fingerprint: Optional[str] = None  # suppress repeat handoff resumes
         self._execution_notice_cache: dict[str, float] = {}
         self._execution_stale_after_s: float = 900.0
         self._execution_stale_repeat_s: float = 1800.0
@@ -513,6 +523,7 @@ class InitiativeService:
         # This method can be called from worker threads (initiative cycle),
         # so marshal the timer mutation onto the Qt thread.
         self._last_chat_stream_finished_at = time.time()
+        self._last_handoff_resume_fingerprint = None  # allow fresh proposal after next idle
         self._qt_bridge.reset_idle_timer_requested.emit()
         logger.debug("InitiativeService: idle timer reset requested (chat_id=%s)", chat_id)
 
@@ -687,8 +698,7 @@ class InitiativeService:
     def _initiative_boundaries(settings: dict) -> dict:
         return build_initiative_boundaries(settings)
 
-    @staticmethod
-    def _proposal_from_handoff_resume(bundle, level: str) -> ProposedAction | None:
+    def _proposal_from_handoff_resume(self, bundle, level: str) -> ProposedAction | None:
         """After long Decisions-chat idle, prefer resuming from handoff over work_scan."""
         if level == "observe":
             return None
@@ -697,10 +707,16 @@ class InitiativeService:
         raw = handoff_resume_proposal(getattr(bundle, "situational", None))
         if not raw:
             return None
+        payload = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        fingerprint = payload.get("state_fingerprint")
+        if fingerprint and fingerprint == self._last_handoff_resume_fingerprint:
+            # ponytail: already proposed for this handoff content; don't nag.
+            return None
+        self._last_handoff_resume_fingerprint = fingerprint
         return ProposedAction(
             action_type=raw.get("action_type") or "suggestion",
             description=raw.get("description") or "Resume from handoff.",
-            payload=raw.get("payload") if isinstance(raw.get("payload"), dict) else {},
+            payload=payload,
             draft=raw.get("draft") or "",
             telegram_message=raw.get("telegram_message") or "",
         )
@@ -1588,9 +1604,11 @@ class InitiativeService:
 
         try:
             from distr.core.initiative.tiers import PermissionTier
-            from distr.core.workflow.dispatcher import start_workflow_run
+            from distr.core.initiative.action_handlers import start_ticket_workflows
 
-            start_workflow_run(int(workflow_id))
+            result = start_ticket_workflows(payload)
+            if not result.get("success"):
+                raise RuntimeError(result.get("message") or "Development workflow did not start")
             logger.info("InitiativeService: triggered workflow %s: %s",
                         workflow_id, action.description)
             if tier != PermissionTier.SILENT:
@@ -1795,6 +1813,8 @@ class InitiativeService:
         try:
             current_chat = self.chat_manager.get_current_chat()
             if current_chat:
+                if _is_development_chat(int(current_chat)):
+                    return
                 self.chat_manager.add_assistant_message(
                     current_chat, _initiative_update_text(message)
                 )

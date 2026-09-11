@@ -47,6 +47,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
     _tool_execution_in_progress = False
     _DIRECT_SPEECH_TOOLS = {"speak_on_desktop"}
     _GENERIC_TOOL_COMPLETIONS = {"done", "done.", "finished", "finished."}
+    _MAX_PROVIDER_TOOLS = 128
     _MUTATING_ORCHESTRATION_TOOLS = {
         "create_action",
         "create_ticket",
@@ -60,7 +61,25 @@ class OpenAICompatibleLLMService(BaseLLMService):
     def _tools_list_for_message(self, user_message: str):
         """Build schemas from the currently exposed tools for an agent round."""
         filtered_tools = self._get_filtered_tools(user_message)
+        filtered_tools = self._cap_provider_tools(filtered_tools, user_message)
         return convert_tools_to_openai_format(filtered_tools) if filtered_tools else None
+
+    @classmethod
+    def _cap_provider_tools(cls, tools, user_message: str):
+        """Keep provider tool payloads bounded while retaining deterministic matches."""
+        candidates = list(tools or [])
+        if len(candidates) <= cls._MAX_PROVIDER_TOOLS:
+            return candidates
+        try:
+            from distr.core.agent.tool_intents import forced_tool_names_for_text
+
+            forced = set(forced_tool_names_for_text(user_message))
+        except Exception:
+            forced = set()
+        prioritized = [tool for tool in candidates if getattr(tool, "name", "") in forced]
+        prioritized_ids = {id(tool) for tool in prioritized}
+        prioritized.extend(tool for tool in candidates if id(tool) not in prioritized_ids)
+        return prioritized[: cls._MAX_PROVIDER_TOOLS]
 
     @staticmethod
     def _tool_intent_block_reason(
@@ -78,6 +97,35 @@ class OpenAICompatibleLLMService(BaseLLMService):
             ticket_scope_required = "create_ticket" in forced_tool_names_for_text(
                 last_user_message
             )
+            explicit_tools = set(forced_tool_names_for_text(last_user_message))
+            if func_name == "computer_use" and "computer_use" not in explicit_tools:
+                return (
+                    "Blocked unrequested computer use: autonomous desktop control requires "
+                    "an explicit multi-step screen or desktop request."
+                )
+            if func_name == "build_tool" and "build_tool" not in explicit_tools:
+                return (
+                    "Blocked unrequested tool creation: building a reusable capability requires "
+                    "an explicit user request to build or save a tool. Use an existing native tool."
+                )
+            if func_name == "system_info" and not re.search(
+                r"\b(model|provider|system\s+info|runtime|version|what\s+are\s+you|who\s+are\s+you)\b",
+                last_user_message,
+                re.IGNORECASE,
+            ):
+                return (
+                    "Blocked unrelated system information lookup: the user did not ask about "
+                    "the model, provider, runtime, or system configuration."
+                )
+            if (
+                func_name == "set_window_bounds"
+                and "window_management" in explicit_tools
+                and re.search(r"\b(screen|monitor|display)\b", last_user_message, re.IGNORECASE)
+            ):
+                return (
+                    "Blocked raw display-index move: use window_management so numbered screens "
+                    "are resolved dynamically from their live physical left-to-right order."
+                )
             if func_name == "create_action" and ticket_scope_required:
                 return (
                     "Blocked wrong-domain mutation: this request is about durable tickets. "
@@ -197,6 +245,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
         follow_up_content = ""
 
         self._cancelled = False
+        self._active_chat_stream_id = None
+        self._chat_stream_terminal_emitted = False
+        self._interruption_cleanup_key = None
         logger.info("%s: _generate_response() started (_speaker_enabled=%s)", self.SERVICE_NAME, self._speaker_enabled)
 
         self._propagate_telegram_flags()
@@ -217,6 +268,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
                 if current_chat_id:
+                    self._mark_chat_stream_started(current_chat_id)
                     self.event_queue.put(('chat_stream_started', {'chat_id': current_chat_id}), block=False)
 
             _t1 = _time.time()
@@ -401,15 +453,26 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.warning("%s: Failed to rebuild system prompt: %s", self.SERVICE_NAME, e)
 
     def _prepare_api_messages(self):
-        """Return a validated, truncated copy of self._messages."""
-        messages = self._messages.copy()
+        """Return a validated, turn-safe request copy without mutating history."""
+        from distr.core.agent.services.llm.context_selection import select_messages_for_context
+        from distr.core.services.context_window import context_window_for_model
+
+        messages = list(self._messages)
         messages = self._apply_response_style_overrides(messages)
-        if len(messages) > 35:
-            logger.warning("Truncating conversation history from %d to 35 messages", len(messages))
-            system = messages[0] if messages and messages[0].get('role') == 'system' else None
-            recent = messages[-34:] if system else messages[-35:]
-            messages = ([system] + recent) if system else recent
-            self._messages = list(messages)
+        context_window = context_window_for_model(self._get_provider_name(), self._model_name)
+        selected = select_messages_for_context(
+            messages,
+            max_tokens=context_window,
+            reserve_tokens=max(4096, min(16384, context_window // 8)),
+        )
+        if len(selected) < len(messages):
+            logger.info(
+                "%s: selected %d of %d messages as complete turns for provider context",
+                self.SERVICE_NAME,
+                len(selected),
+                len(messages),
+            )
+        messages = selected
         return self._validate_messages(messages)
 
     def _apply_response_style_overrides(self, messages: list) -> list:
@@ -1176,6 +1239,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """
         import threading
 
+        content = OpenAICompatibleLLMService._ground_follow_up_content(self, content)
         if not content:
             return
 
@@ -1217,6 +1281,24 @@ class OpenAICompatibleLLMService(BaseLLMService):
     @classmethod
     def _is_generic_tool_completion(cls, text):
         return (text or "").strip().lower() in cls._GENERIC_TOOL_COMPLETIONS
+
+    def _ground_follow_up_content(self, content: str) -> str:
+        """Replace a bare completion claim with the latest concrete tool evidence."""
+        if not OpenAICompatibleLLMService._is_generic_tool_completion(content):
+            return content
+        for message in reversed(getattr(self, "_messages", []) or []):
+            if message.get("role") == "user":
+                break
+            if message.get("role") != "tool":
+                continue
+            result = str(message.get("content") or "").strip()
+            if not result:
+                continue
+            lowered = result.lower()
+            if lowered.startswith(("error", "failed", "blocked", "skipped")):
+                return f"I couldn't complete that. {result}"
+            return result
+        return content
 
     @classmethod
     def _is_direct_speech_tool_ack(cls, tool_name, content):
@@ -1414,10 +1496,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 result_text = clean_model_text_for_chat(
                     follow_up_content or full_content or ""
                 )
-                self.event_queue.put(
-                    ('chat_stream_finished', {'chat_id': chat_id, 'response_text': result_text}),
-                    block=False,
-                )
+                if not getattr(self, "_active_chat_stream_id", None) and not getattr(
+                    self, "_chat_stream_terminal_emitted", False
+                ):
+                    self._mark_chat_stream_started(chat_id)
+                self._emit_chat_stream_finished(result_text)
 
         return not end_frame_sent
 

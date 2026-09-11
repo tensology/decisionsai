@@ -4,6 +4,7 @@ const API_BASE = '/api';
 let currentChatId = null;   // chat currently displayed (view)
 let loadedChatId = null;   // chat that is "loaded" - messages go here, input shown (matches native chat.py)
 let agentCurrentChatId = null;   // chat currently loaded in the voice agent (from desktop); used to show "In agent" in sidebar
+let chatActivationInFlight = false; // Prevent sends while the selected chat is hot-swapping into the agent.
 let currentChatSettings = null;
 let currentActiveTurn = null;
 let turnElapsedTimer = null;
@@ -291,6 +292,7 @@ const chatConfigLlmModel = document.getElementById('chatConfigLlmModel');
 const chatConfigVoiceProvider = document.getElementById('chatConfigVoiceProvider');
 const chatConfigVoiceModel = document.getElementById('chatConfigVoiceModel');
 const chatConfigStatus = document.getElementById('chatConfigStatus');
+let _chatConfigBaseline = null;
 const headerLlmSummary = document.getElementById('headerLlmSummary');
 const headerVoiceSummary = document.getElementById('headerVoiceSummary');
 const voiceUsageMeter = document.getElementById('voiceUsageMeter');
@@ -755,7 +757,7 @@ function handleInputChange() {
     
     // Enable/disable send button
     const canReply = currentChatId == null || loadedChatId === currentChatId;
-    sendButton.disabled = !canReply || !messageInput.value.trim() || (isStreaming && !currentActiveTurn);
+    sendButton.disabled = chatActivationInFlight || !canReply || !messageInput.value.trim() || (isStreaming && !currentActiveTurn);
 }
 
 function getChatWsUrl() {
@@ -992,27 +994,56 @@ function recoverTurnState(chatId) {
 
 /** Track user message content already rendered optimistically by sendMessage()
     so handleChatEventMessageAdded can skip duplicates but render voice/PTT messages. */
-let _optimisticUserMessages = new Map();  // first-100-chars -> timestamp for recently rendered user messages
+let _optimisticUserMessages = new Map();  // normalized first-100-chars -> timestamp
 const OPTIMISTIC_USER_MESSAGE_TTL_MS = 15000;
 
 function _addOptimisticUserMessage(key) {
-    if (!key) return;
-    _optimisticUserMessages.set(String(key), Date.now());
+    const normalized = _normalizeMsgPlain(key).substring(0, 100);
+    if (!normalized) return;
+    _optimisticUserMessages.set(normalized, Date.now());
 }
 
 function _hasRecentOptimisticUserMessage(key) {
-    if (!key) return false;
+    const normalized = _normalizeMsgPlain(key).substring(0, 100);
+    if (!normalized) return false;
     const now = Date.now();
     for (const [storedKey, storedAt] of _optimisticUserMessages.entries()) {
         if (!storedAt || now - Number(storedAt) > OPTIMISTIC_USER_MESSAGE_TTL_MS) {
             _optimisticUserMessages.delete(storedKey);
         }
     }
-    return _optimisticUserMessages.has(String(key));
+    return _optimisticUserMessages.has(normalized);
 }
 
 function _normalizeMsgPlain(s) {
     return (s != null ? String(s) : '').replace(/\s+/g, ' ').trim();
+}
+
+/** Reconcile a persisted row with the exact optimistic bubble that preceded it.
+    The row ID is the durable identity. Normalized text is only the compatibility
+    bridge used until the server returns that identity. Consuming the marker keeps
+    an identical phrase in a later turn from being mistaken for the earlier row. */
+function reconcileOptimisticUserMessage(msg) {
+    if (!msg || !chatMessages) return false;
+    const plain = _normalizeMsgPlain(msg.content);
+    const key = plain.substring(0, 100);
+    if (!plain || !_hasRecentOptimisticUserMessage(key)) return false;
+    const candidate = [...chatMessages.querySelectorAll('.message.user')]
+        .filter(el => el.id !== 'transcriptionStatus')
+        .reverse()
+        .find(el => {
+            if (el.dataset.turnChatId != null && el.dataset.turnChatId !== '') return false;
+            const textEl = el.querySelector('.message-text');
+            return !!(textEl && _normalizeMsgPlain(textEl.textContent) === plain);
+        });
+    _optimisticUserMessages.delete(key);
+    if (!candidate) return false;
+    if (msg.chat_row_id != null) {
+        candidate.dataset.turnChatId = String(msg.chat_row_id);
+    }
+    const persistedTs = messageTimestampMs(msg);
+    if (persistedTs) candidate.dataset.messageTs = String(persistedTs);
+    return true;
 }
 
 /** Drop consecutive assistant messages with identical body (pipeline/WS double-write). */
@@ -1038,6 +1069,15 @@ function _lastRenderedUserBubblePlain() {
     if (!users.length) return '';
     const te = users[users.length - 1].querySelector('.message-text');
     return te ? _normalizeMsgPlain(te.textContent) : '';
+}
+
+function _latestRenderedUserMessagePlain() {
+    const users = [...chatMessages.querySelectorAll('.message.user')].filter(
+        el => el.id !== 'transcriptionStatus'
+    );
+    if (!users.length) return '';
+    const textEl = users[users.length - 1].querySelector('.message-text');
+    return textEl ? _normalizeMsgPlain(textEl.textContent) : '';
 }
 
 function hasOpenUserTurnPlain(plain) {
@@ -1173,7 +1213,7 @@ function promoteTranscriptionPreviewToUserMessage(committedText) {
     if (liveStt) liveStt.remove();
     const div = createMessageElement({ role: 'user', content: plain, timestamp: Date.now() });
     insertMessageElementInOrder(div, { role: 'user', content: plain, timestamp: Date.now() });
-    _addOptimisticUserMessage(plain.substring(0, 100));
+    _addOptimisticUserMessage(plain);
     _setCommittedLiveUserState(plain);
     syncRenderedMessageCountFromDom();
     scheduleRefreshChatHeaderStats();
@@ -1425,13 +1465,19 @@ function handleChatEventMessageAdded(msg) {
     if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const role = msg.role || 'user';
     const content = msg.content || '';
+    if (msg.chat_row_id != null && findRenderedMessageByIdentity(role, msg.chat_row_id)) {
+        if (role === 'user') {
+            _acknowledgePersistedLiveUser(currentChatId, content);
+            _discardLiveTranscriptionUi();
+        }
+        return;
+    }
     if (role === 'user') {
         // Voice/PTT messages come via WS without sendMessage() — render them.
         // Skip only if sendMessage() already rendered this exact text optimistically.
-        const key = content.substring(0, 100);
         const np = _normalizeMsgPlain(content);
         const ts = msg.timestamp || Date.now();
-        if (_hasRecentOptimisticUserMessage(key) && (hasOpenUserTurnPlain(np) || hasRenderedUserMessagePlain(np))) {
+        if (reconcileOptimisticUserMessage(msg)) {
             _acknowledgePersistedLiveUser(currentChatId, content);
             _discardLiveTranscriptionUi();
             return;
@@ -1445,7 +1491,6 @@ function handleChatEventMessageAdded(msg) {
         _discardLiveTranscriptionUi();
         const div = createMessageElement({ role, content, timestamp: ts });
         insertMessageElementInOrder(div, { role, content, timestamp: ts, chat_row_id: msg.chat_row_id });
-        _addOptimisticUserMessage(key);
         _acknowledgePersistedLiveUser(currentChatId, content);
         repairOrphanAssistantBeforeUser();
         scrollToBottom();
@@ -1501,6 +1546,14 @@ function handleChatEventMessageAdded(msg) {
     scheduleRefreshChatHeaderStats({ checkTitle: role === 'assistant' });
 }
 
+function findRenderedMessageByIdentity(role, chatRowId) {
+    if (!chatMessages || chatRowId == null || chatRowId === '') return null;
+    const safeRole = role === 'assistant' ? 'assistant' : role === 'user' ? 'user' : null;
+    if (!safeRole) return null;
+    return [...chatMessages.querySelectorAll(`.message.${safeRole}[data-turn-chat-id]`)]
+        .find(el => String(el.dataset.turnChatId || '') === String(chatRowId)) || null;
+}
+
 function hasRenderedMessagePlain(role, plain) {
     if (!plain || !chatMessages) return false;
     return [...chatMessages.querySelectorAll(`.message.${role}`)]
@@ -1537,6 +1590,7 @@ function mergeChatUpdatedDuringStream(messages) {
         if (!plain) return;
         if (message.chat_row_id != null && findLiveTurnAnchor(message.chat_row_id)) return;
         if (hasOpenUserTurnPlain(plain)) return;
+        if (_hasRecentOptimisticUserMessage(plain) && hasRenderedUserMessagePlain(plain)) return;
         _discardLiveTranscriptionUi();
         const div = createMessageElement(message);
         insertMessageElementInOrder(div, message);
@@ -1563,13 +1617,10 @@ function repairMissingUserMessageForStream(chatId) {
 function handleChatEventStreamStarted(msg) {
     if (Number(msg.chat_id) !== Number(currentChatId)) return;
     const preview = document.getElementById('transcriptionStatus');
-    const previewTextEl = preview ? preview.querySelector('#transcriptionStatusText') : null;
-    const previewPlain = _normalizeMsgPlain(previewTextEl ? previewTextEl.textContent : '');
-    if (!previewPlain || !hasOpenUserTurnPlain(previewPlain)) {
-        promoteTranscriptionPreviewToUserMessage();
-    } else {
-        _discardLiveTranscriptionUi();
-    }
+    // Realtime can create the response before input transcription completes.
+    // Never promote the temporary ellipsis at stream start. The final
+    // transcription_progress or durable message_added event owns promotion.
+    if (preview) _ensureTranscriptionPreviewPlacement();
     streamingChatId = msg.chat_id;
     _streamTextBuffer = '';
     _streamRafPending = false;
@@ -1688,9 +1739,11 @@ function handleChatEventStreamFinished(msg) {
     // Reset input state in case the message came from voice/PTT (not web sendMessage)
     isStreaming = false;
     const isLoadedView = loadedChatId === currentChatId;
-    messageInput.disabled = !isLoadedView;
-    messageInput.placeholder = isLoadedView ? 'Send message...' : 'Load this chat to reply...';
-    sendButton.disabled = !isLoadedView || !messageInput.value.trim();
+    messageInput.disabled = !isLoadedView || chatActivationInFlight;
+    messageInput.placeholder = chatActivationInFlight
+        ? 'Loading chat into agent...'
+        : (isLoadedView ? 'Send message...' : 'Load this chat to reply...');
+    sendButton.disabled = !isLoadedView || chatActivationInFlight || !messageInput.value.trim();
     setViewOnlyChrome(!isLoadedView);
     setSendButtonStreaming(false);
     refreshTurnStateAfterResponse(msg.chat_id);
@@ -1753,6 +1806,7 @@ function isProactivePlannerToolEvent(msg) {
 
 function isHiddenLiveToolEvent(msg) {
     if (!msg) return true;
+    if (msg.tool_name === 'chat_settings') return true;
     if (msg.chat_suppressed === true) return true;
     if (msg.chat_visible === false) return true;
     return isProactivePlannerToolEvent(msg);
@@ -1823,7 +1877,7 @@ function toolEventName(message) {
 
 function isStandaloneSystemActivity(message) {
     const name = toolEventName(message);
-    return name === 'chat_settings' || name === 'read_aloud';
+    return name === 'read_aloud';
 }
 
 function shouldEmbedToolInAssistantTurn(toolMessage) {
@@ -1998,6 +2052,11 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
         _discardLiveTranscriptionUi();
         return;
     }
+    if (done && trimmed && _latestRenderedUserMessagePlain() === _normalizeMsgPlain(trimmed)) {
+        _acknowledgePersistedLiveUser(currentChatId, trimmed);
+        _discardLiveTranscriptionUi();
+        return;
+    }
     if (done && trimmed) {
         _clearLiveChatState(currentChatId);
         let wrap = document.getElementById('transcriptionStatus');
@@ -2030,7 +2089,7 @@ function showTranscriptionStatus(text, done, clearLivePreview, discardLivePrevie
     }
 
     // Live speech-to-text (updates while you talk)
-    if (trimmed && hasRenderedUserMessagePlain(_normalizeMsgPlain(trimmed))) {
+    if (trimmed && hasOpenUserTurnPlain(_normalizeMsgPlain(trimmed))) {
         _acknowledgePersistedLiveUser(currentChatId, trimmed);
         _discardLiveTranscriptionUi();
         return;
@@ -2127,7 +2186,9 @@ async function loadChats() {
         const response = await fetch(`${API_BASE}/chats`);
         if (!response.ok) throw new Error('Failed to load chats');
         const data = await response.json();
-        const chats = data.chats !== undefined ? data.chats : (Array.isArray(data) ? data : []);
+        const rows = data.chats !== undefined ? data.chats : (Array.isArray(data) ? data : []);
+        const chats = rows.filter((chat) => chat.development !== true);
+        data.chats = chats;
         renderChatList(chats);
         applyChatsData(data);
         return data;
@@ -2279,6 +2340,11 @@ function createChatItem(chat) {
     let clickTimer = null;
     div.addEventListener('click', (e) => {
         if (e.target.closest('.chat-item-rename-btn, .chat-item-delete-btn')) return;
+        // Lock immediately, before the single-vs-double-click delay, so a typed
+        // message cannot submit against the previously selected chat.
+        currentChatId = chat.id;
+        showChatView(false);
+        updateLoadButtonVisibility();
         clearTimeout(clickTimer);
         clickTimer = setTimeout(() => {
             clickTimer = null;
@@ -2399,6 +2465,10 @@ async function createNewChat() {
 async function selectChat(chatId) {
     const seq = ++_selectSeq;
     currentChatId = chatId;
+    // Lock the composer during the async chat fetch. Until the selected chat's
+    // messages arrive, it is not safe to submit against the previous chat.
+    showChatView(false);
+    updateLoadButtonVisibility();
     removeTypingIndicator();
     const staleStream = document.getElementById('streamingAssistantMessage');
     if (staleStream) staleStream.remove();
@@ -2441,6 +2511,7 @@ async function loadChat(chatId, options = {}) {
     _streamToken++;       // invalidate any pending poll/stream resolve from old chat
     _selectSeq++;         // invalidate any pending selectChat render
     const seq = _selectSeq;
+    chatActivationInFlight = !options.skipLoadInAgent;
     currentChatId = chatId;
     loadedChatId = chatId;
     streamingChatId = null;
@@ -2494,6 +2565,7 @@ async function loadChat(chatId, options = {}) {
                 updateActiveChat();
             } catch (e) {
                 console.warn('Load-in-agent failed:', e);
+                loadedChatId = null;
                 showChatSnackbar('Agent not loaded', 'error');
             }
         }
@@ -2501,8 +2573,11 @@ async function loadChat(chatId, options = {}) {
     } catch (error) {
         console.error('Error loading chat:', error);
     } finally {
+        chatActivationInFlight = false;
         syncKanbanSourceChatContext();
         chatList.classList.remove('chat-list--locked');
+        updateTurnComposerState();
+        updateLoadButtonVisibility();
     }
 }
 
@@ -2591,9 +2666,11 @@ function showChatView(isLoaded) {
     setViewOnlyChrome(!isLoaded);
     // Keep the composer visible for viewed chats, but only the loaded chat can receive replies.
     if (!isStreaming) {
-        messageInput.disabled = !isLoaded;
-        messageInput.placeholder = isLoaded ? 'Send message...' : 'Load this chat to reply...';
-        sendButton.disabled = !isLoaded || !messageInput.value.trim();
+        messageInput.disabled = !isLoaded || chatActivationInFlight;
+        messageInput.placeholder = chatActivationInFlight
+            ? 'Loading chat into agent...'
+            : (isLoaded ? 'Send message...' : 'Load this chat to reply...');
+        sendButton.disabled = !isLoaded || chatActivationInFlight || !messageInput.value.trim();
     }
 }
 
@@ -2713,6 +2790,7 @@ async function loadEmptyStateDropdowns() {
             else if (voiceModelEl.options[0] && voiceModelEl.options[0].value) voiceModelEl.selectedIndex = 0;
         } else if (voiceModelEl.options[0] && voiceModelEl.options[0].value) voiceModelEl.selectedIndex = 0;
         updateChatVoiceButtons('emptyState');
+        await applyChatS2sLocksForModelSelect(llmModelEl);
     } catch (e) {
         console.error('Error loading empty-state dropdowns:', e);
     }
@@ -3103,6 +3181,9 @@ function normalizeTraceMessages(messages) {
         if (!message || (message.role !== 'tool' && message.role !== 'tool_group')) return;
         const tools = toolMessagesFromTrace(message);
         tools.forEach(tool => {
+            // Chat settings belong to the durable audit ledger, not the transcript.
+            // Suppress historical records too, including ones once marked visible.
+            if (toolEventName(tool) === 'chat_settings') return;
             if (!shouldEmbedToolInAssistantTurn(tool)) {
                 standaloneTools.push(tool);
                 return;
@@ -3270,7 +3351,11 @@ function renderMessages(messages, preserveOnEmpty) {
         chatMessages.appendChild(preservedTranscriptionEl);
         _ensureTranscriptionPreviewPlacement();
     }
-    _renderedMessageCount = toRender.length;
+    // Keep the cursor aligned with the source array, not the deduplicated DOM
+    // array.  If a duplicate was removed before the end of the list, using
+    // toRender.length makes the next incremental refresh revisit a message
+    // that is already on screen and append it a second time.
+    _renderedMessageCount = messages.length;
     scrollToBottomImmediate();
 }
 
@@ -3428,14 +3513,17 @@ function updateTurnComposerState() {
     const active = turnHasActiveWork(currentActiveTurn);
     const stop = document.getElementById('turnStopButton');
     if (stop) stop.hidden = !active;
-    if (messageInput && loadedChatId === currentChatId) {
+    if (messageInput && loadedChatId === currentChatId && !chatActivationInFlight) {
         messageInput.disabled = false;
         messageInput.placeholder = active ? 'Steer the active work…' : 'Send message…';
+    } else if (messageInput && chatActivationInFlight) {
+        messageInput.disabled = true;
+        messageInput.placeholder = 'Loading chat into agent…';
     }
     if (sendButton) {
         sendButton.title = active ? 'Steer active work' : 'Send';
         sendButton.setAttribute('aria-label', active ? 'Steer active work' : 'Send message');
-        sendButton.disabled = loadedChatId !== currentChatId || !messageInput.value.trim();
+        sendButton.disabled = chatActivationInFlight || loadedChatId !== currentChatId || !messageInput.value.trim();
     }
 }
 
@@ -4648,7 +4736,9 @@ function setSendButtonStreaming(streaming) {
     if (modalCreate) modalCreate.disabled = streaming;
     const stop = document.getElementById('turnStopButton');
     if (stop) stop.hidden = !turnHasActiveWork(currentActiveTurn);
-    if (messageInput && loadedChatId === currentChatId) messageInput.disabled = false;
+    if (messageInput && loadedChatId === currentChatId) {
+        messageInput.disabled = chatActivationInFlight;
+    }
     handleInputChange();
 }
 
@@ -4880,7 +4970,8 @@ async function applyChatS2sLocksForModelSelect(modelSelectEl) {
                 ? voiceModel.value
                 : defaultVoice;
             voiceModel.innerHTML = voices.map(function (v) {
-                return '<option value="' + v + '">' + v + '</option>';
+                var label = v ? v.charAt(0).toUpperCase() + v.slice(1) : v;
+                return '<option value="' + v + '">' + label + '</option>';
             }).join('');
             voiceModel.value = preferred;
         },
@@ -5146,6 +5237,9 @@ async function loadDefaultSettings() {
             }
             updateChatVoiceButtons('modal');
         }
+        // Ordinary TTS voice loading above may overwrite the Realtime list.
+        // Apply the model-dependent voice set last.
+        await applyChatS2sLocksForModelSelect(llmModelSelect);
     } catch (error) {
         console.error('Error loading default settings:', error);
     }
@@ -5325,6 +5419,25 @@ function providerIdFromDisplay(value) {
     return map[lower] || lower;
 }
 
+function selectedChatConfigValues() {
+    return {
+        provider: chatConfigLlmProvider ? chatConfigLlmProvider.value.trim() : '',
+        model_name: chatConfigLlmModel ? chatConfigLlmModel.value.trim() : '',
+        voice_provider: chatConfigVoiceProvider ? chatConfigVoiceProvider.value.trim() : '',
+        voice_model: chatConfigVoiceModel ? chatConfigVoiceModel.value.trim() : ''
+    };
+}
+
+function changedChatConfigFields(previous, current) {
+    const patch = {};
+    Object.keys(current || {}).forEach(key => {
+        if (String((previous || {})[key] || '') !== String(current[key] || '')) {
+            patch[key] = current[key];
+        }
+    });
+    return patch;
+}
+
 async function openChatConfigModal(chatId) {
     const targetId = chatId || currentChatId;
     if (!targetId || !chatConfigModal) return;
@@ -5367,9 +5480,15 @@ async function openChatConfigModal(chatId) {
         if (rawVoice && chatConfigVoiceModel && Array.from(chatConfigVoiceModel.options).some(o => o.value === rawVoice)) {
             chatConfigVoiceModel.value = rawVoice;
         }
+        await applyChatS2sLocksForModelSelect(chatConfigLlmModel);
+        if (rawVoice && chatConfigVoiceModel && Array.from(chatConfigVoiceModel.options).some(o => o.value === rawVoice)) {
+            chatConfigVoiceModel.value = rawVoice;
+        }
         updateChatVoiceButtons('chatConfig');
+        _chatConfigBaseline = selectedChatConfigValues();
     } catch (e) {
         console.error('Open chat config failed:', e);
+        _chatConfigBaseline = null;
         if (chatConfigStatus) chatConfigStatus.textContent = 'Could not load chat configuration.';
     } finally {
         if (chatConfigSave) chatConfigSave.disabled = false;
@@ -5609,18 +5728,6 @@ async function renderHeaderSettingsSummary(settings) {
 
 async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
     if (!currentChatId) return null;
-    if (!body.provider || !body.model_name) {
-        const msg = 'Choose an LLM provider and model.';
-        if (fromModal && chatConfigStatus) chatConfigStatus.textContent = msg;
-        else showChatSnackbar(msg, 'error');
-        return null;
-    }
-    if (fromModal && (!body.voice_provider || !body.voice_model)) {
-        const msg = 'Choose a voice provider and voice.';
-        if (chatConfigStatus) chatConfigStatus.textContent = msg;
-        else showChatSnackbar(msg, 'error');
-        return null;
-    }
     if (fromModal && chatConfigSave) chatConfigSave.disabled = true;
     if (fromModal && chatConfigStatus) chatConfigStatus.textContent = 'Saving...';
     try {
@@ -5667,12 +5774,21 @@ async function persistChatSettingsPatch(body, { fromModal = true } = {}) {
 
 async function saveChatConfig() {
     if (!currentChatId || !chatConfigSave) return;
-    await persistChatSettingsPatch({
-        provider: chatConfigLlmProvider ? chatConfigLlmProvider.value : '',
-        model_name: chatConfigLlmModel ? chatConfigLlmModel.value : '',
-        voice_provider: chatConfigVoiceProvider ? chatConfigVoiceProvider.value : '',
-        voice_model: chatConfigVoiceModel ? chatConfigVoiceModel.value : ''
-    }, { fromModal: true });
+    const selected = selectedChatConfigValues();
+    if (!selected.provider || !selected.model_name) {
+        if (chatConfigStatus) chatConfigStatus.textContent = 'Choose an LLM provider and model.';
+        return;
+    }
+    if (!selected.voice_provider || !selected.voice_model) {
+        if (chatConfigStatus) chatConfigStatus.textContent = 'Choose a voice provider and voice.';
+        return;
+    }
+    const patch = changedChatConfigFields(_chatConfigBaseline, selected);
+    if (Object.keys(patch).length === 0) {
+        hideChatConfigModal();
+        return;
+    }
+    await persistChatSettingsPatch(patch, { fromModal: true });
 }
 
 async function maybeAutoCompactChat(settings) {

@@ -78,6 +78,9 @@ def test_sidebar_click_views_chat_without_loading_agent():
 
     assert "selectChat(chat.id)" in click_block
     assert "loadChat(chat.id)" not in click_block
+    assert "currentChatId = chat.id;" in click_block
+    assert "showChatView(false);" in click_block
+    assert "updateLoadButtonVisibility();" in click_block
 
 
 def test_keyboard_selection_views_chat_without_loading_agent():
@@ -107,7 +110,7 @@ def test_view_only_chat_keeps_composer_visible_with_load_affordance():
     )[0]
 
     assert "inputContainer.style.display = 'block';" in show_block
-    assert "messageInput.disabled = !isLoaded;" in show_block
+    assert "messageInput.disabled = !isLoaded || chatActivationInFlight;" in show_block
     assert "Load this chat to reply" in show_block
     assert "setViewOnlyChrome(!isLoaded);" in show_block
 
@@ -144,6 +147,41 @@ def test_send_guard_refuses_viewed_unloaded_chat():
     assert "if (!loadedChatId || loadedChatId !== currentChatId)" in send_block
     assert "Please load a chat to reply." in send_block
     assert "setViewOnlyChrome(true);" in send_block
+
+
+def test_chat_activation_locks_composer_until_agent_handoff_finishes():
+    src = _chat_js_source()
+    load_block = src.split("async function loadChat(chatId, options = {})", 1)[1].split(
+        "function applyChatsData", 1
+    )[0]
+    composer_block = src.split("function updateTurnComposerState()", 1)[1].split(
+        "function scheduleTurnElapsedUpdates", 1
+    )[0]
+    input_block = src.split("function handleInputChange()", 1)[1].split(
+        "function getChatWsUrl", 1
+    )[0]
+    streaming_block = src.split("function setSendButtonStreaming(streaming)", 1)[1].split(
+        "function createTypingIndicator", 1
+    )[0]
+
+    assert "chatActivationInFlight = !options.skipLoadInAgent;" in load_block
+    assert "chatActivationInFlight = false;" in load_block
+    assert "loadedChatId = null;" in load_block
+    assert "sendButton.disabled = chatActivationInFlight" in composer_block
+    assert "Loading chat into agent" in composer_block
+    assert "sendButton.disabled = chatActivationInFlight ||" in input_block
+    assert "messageInput.disabled = chatActivationInFlight;" in streaming_block
+
+
+def test_chat_selection_locks_composer_before_async_fetch_returns():
+    src = _chat_js_source()
+    select_block = src.split("async function selectChat(chatId)", 1)[1].split(
+        "// Load Chat:", 1
+    )[0]
+
+    assert "currentChatId = chatId;" in select_block
+    assert "showChatView(false);" in select_block
+    assert "updateLoadButtonVisibility();" in select_block
 
 
 def test_view_only_visual_state_is_on_header_and_input_band():
@@ -298,7 +336,7 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
         1,
     )[0]
     status_block = src.split("function showTranscriptionStatus", 1)[1].split(
-        "// Live speech-to-text",
+        "function queueTranscriptionStatusUpdate",
         1,
     )[0]
 
@@ -307,7 +345,7 @@ def test_committed_voice_transcription_promotes_preview_without_waiting_for_data
     assert "hasRenderedMessagePlain('user', plain)" not in promote_block
     assert "createMessageElement({ role: 'user', content: plain" in promote_block
     assert "insertMessageElementInOrder(div, { role: 'user', content: plain" in promote_block
-    assert "_addOptimisticUserMessage(plain.substring(0, 100));" in promote_block
+    assert "_addOptimisticUserMessage(plain);" in promote_block
     assert "if (clearLivePreview)" in status_block
     assert "promoteTranscriptionPreviewToUserMessage();" in status_block
     assert "if (done && trimmed && canPromoteVoiceTranscriptInChat() && hasLiveUserTranscriptionPreview())" in status_block
@@ -340,14 +378,21 @@ def test_repeated_voice_transcript_text_is_not_deduped_against_older_turns():
         "function repairMissingUserMessageForStream",
         1,
     )[0]
+    status_block = src.split("function showTranscriptionStatus", 1)[1].split(
+        "function queueTranscriptionStatusUpdate",
+        1,
+    )[0]
 
     assert "const last = nodes[nodes.length - 1];" in open_turn_block
     assert "last.classList.contains('user')" in open_turn_block
-    assert "hasOpenUserTurnPlain(previewPlain)" in stream_start_block
+    assert "Never promote the temporary ellipsis at stream start" in stream_start_block
+    assert "promoteTranscriptionPreviewToUserMessage" not in stream_start_block
     assert "hasRenderedMessagePlain('user', previewPlain)" not in stream_start_block
     assert "message.chat_row_id != null && findLiveTurnAnchor(message.chat_row_id)" in merge_block
     assert "hasOpenUserTurnPlain(plain)" in merge_block
-    assert "hasRenderedMessagePlain('user', plain)" not in merge_block
+    assert "_hasRecentOptimisticUserMessage(plain) && hasRenderedUserMessagePlain(plain)" in merge_block
+    assert "hasOpenUserTurnPlain(_normalizeMsgPlain(trimmed))" in status_block
+    assert "hasRenderedUserMessagePlain(_normalizeMsgPlain(trimmed))" not in status_block
 
 
 def test_recent_optimistic_user_message_is_not_rendered_again_after_assistant_reply():
@@ -361,10 +406,101 @@ def test_recent_optimistic_user_message_is_not_rendered_again_after_assistant_re
         1,
     )[0]
 
-    assert "hasRenderedUserMessagePlain(np)" in message_added_block
-    assert "hasRenderedUserMessagePlain(userPlain)" in render_incremental_block
-    assert "_hasRecentOptimisticUserMessage(key)" in message_added_block
-    assert "_hasRecentOptimisticUserMessage(msg.content.substring(0, 100))" in render_incremental_block
+    assert "reconcileOptimisticUserMessage(msg)" in message_added_block
+    assert "findLiveTurnAnchor(msg.chat_row_id)" in render_incremental_block
+
+
+def test_delayed_message_added_event_is_idempotent_by_durable_row_identity():
+    """A delayed WS event must not duplicate a turn after its assistant rendered."""
+    src = _chat_js_source()
+    message_added_block = src.split("function handleChatEventMessageAdded", 1)[1].split(
+        "function hasRenderedMessagePlain",
+        1,
+    )[0]
+
+    assert "findRenderedMessageByIdentity(role, msg.chat_row_id)" in message_added_block
+    assert "function findRenderedMessageByIdentity(role, chatRowId)" in src
+
+
+def test_web_message_added_event_includes_persisted_chat_row_identity():
+    """Text matching is only a fallback. The web event needs the database row id."""
+    signals_src = (
+        Path(__file__).resolve().parents[2] / "distr" / "app" / "signals.py"
+    ).read_text(encoding="utf-8")
+    bridge_block = signals_src.split("def on_chat_message_added_web", 1)[1].split(
+        "signal_manager.chat_message_added.connect",
+        1,
+    )[0]
+
+    assert "def on_chat_message_added_web(chat_id, role, content, chat_row_id)" in signals_src
+    assert "resolve_active_chat_turn_row_id" not in bridge_block
+    assert '"chat_row_id": chat_row_id' in bridge_block
+
+
+def test_voice_message_reconciliation_normalizes_whitespace_and_binds_the_persisted_row():
+    src = _chat_js_source()
+    optimistic_block = src.split("function _addOptimisticUserMessage", 1)[1].split(
+        "function _normalizeMsgPlain",
+        1,
+    )[0]
+    reconcile_block = src.split("function reconcileOptimisticUserMessage", 1)[1].split(
+        "function dedupeConsecutiveDuplicateAssistants",
+        1,
+    )[0]
+
+    assert "_normalizeMsgPlain(key)" in optimistic_block
+    assert "_normalizeMsgPlain(msg.content)" in reconcile_block
+    assert "candidate.dataset.turnChatId = String(msg.chat_row_id);" in reconcile_block
+    assert "_optimisticUserMessages.delete(key);" in reconcile_block
+
+
+def test_persisted_voice_message_does_not_register_as_a_future_optimistic_message():
+    src = _chat_js_source()
+    message_added_block = src.split("function handleChatEventMessageAdded", 1)[1].split(
+        "if (role === 'assistant'",
+        1,
+    )[0]
+
+    assert "if (reconcileOptimisticUserMessage(msg))" in message_added_block
+    assert "_addOptimisticUserMessage(key)" not in message_added_block
+
+
+def test_chat_config_saves_only_changed_fields_and_skips_noop_patch():
+    src = _chat_js_source()
+    open_block = src.split("async function openChatConfigModal", 1)[1].split(
+        "function hideChatConfigModal",
+        1,
+    )[0]
+    save_block = src.split("async function saveChatConfig", 1)[1].split(
+        "async function maybeAutoCompactChat",
+        1,
+    )[0]
+
+    assert "_chatConfigBaseline = selectedChatConfigValues();" in open_block
+    assert "const selected = selectedChatConfigValues();" in save_block
+    assert "changedChatConfigFields(_chatConfigBaseline, selected)" in save_block
+    assert "if (Object.keys(patch).length === 0)" in save_block
+    assert "await persistChatSettingsPatch(patch" in save_block
+
+
+def test_chat_settings_events_are_never_rendered_in_transcript():
+    src = _chat_js_source()
+    normalize_block = src.split("function normalizeTraceMessages(messages)", 1)[1].split(
+        "function messagesAreChronological",
+        1,
+    )[0]
+    live_filter = src.split("function isHiddenLiveToolEvent(msg)", 1)[1].split(
+        "function handleChatEventToolExecuted",
+        1,
+    )[0]
+    standalone_block = src.split("function isStandaloneSystemActivity(message)", 1)[1].split(
+        "function shouldEmbedToolInAssistantTurn",
+        1,
+    )[0]
+
+    assert "toolEventName(tool) === 'chat_settings'" in normalize_block
+    assert "msg.tool_name === 'chat_settings'" in live_filter
+    assert "name === 'chat_settings'" not in standalone_block
 
 
 def test_voice_stream_start_repairs_missing_user_transcript_from_chat_state():

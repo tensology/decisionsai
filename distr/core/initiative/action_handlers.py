@@ -31,6 +31,9 @@ def execute_initiative_action(
         _require(settings, "initiative_allow_routine_tasks", "routine task execution is disabled")
         _require(settings, "initiative_allow_workflow_start", "workflow starts are disabled")
         return start_ticket_workflows(payload)
+    if action_type == "development_thread_control":
+        _require(settings, "initiative_allow_routine_tasks", "development thread control is disabled")
+        return control_development_thread(payload)
     if action_type == "project_cli_task":
         _require(settings, "initiative_allow_routine_tasks", "routine task execution is disabled")
         _require(settings, "initiative_allow_project_cli", "project CLI execution is disabled")
@@ -193,16 +196,30 @@ def move_tickets(payload: dict[str, Any]) -> dict[str, Any]:
 def start_ticket_workflows(payload: dict[str, Any]) -> dict[str, Any]:
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanTicket
-    from distr.core.workflow.service import start_workflow_run
+    from distr.core.workflow.work_dispatch import dispatch_work_item
 
     ticket_ids = _ticket_ids(payload)
     workflow_id = payload.get("workflow_id")
     started: list[dict[str, Any]] = []
-    with get_session() as session:
-        if not ticket_ids and workflow_id:
-            result = start_workflow_run(int(workflow_id), context="Started by Initiative")
-            return {"success": "error" not in result, "message": "Started workflow", "result": result}
+    if not ticket_ids and workflow_id:
+        result = dispatch_work_item(
+            workflow_id=int(workflow_id),
+            context="Started by Initiative",
+            source_type="initiative",
+            source_ref=str(payload.get("action_id") or payload.get("request_uid") or "").strip() or None,
+            dispatch_async=True,
+            _session_provider=get_session,
+        )
+        return {
+            "success": "error" not in result,
+            "message": "Started workflow in Development",
+            "result": result,
+            "chat_id": result.get("chat_id"),
+            "development_url": result.get("development_url"),
+        }
 
+    pending: list[dict[str, Any]] = []
+    with get_session() as session:
         for ticket_id in ticket_ids:
             ticket = session.query(KanbanTicket).filter(KanbanTicket.id == ticket_id).first()
             if not ticket:
@@ -212,21 +229,118 @@ def start_ticket_workflows(payload: dict[str, Any]) -> dict[str, Any]:
             if not wid:
                 continue
             context = _ticket_workflow_context(session, ticket_id, board)
-            result = start_workflow_run(
-                wid,
-                context=context,
-                board_id=board.id if board else None,
-                ticket_id=ticket_id,
-                run_metadata={
+            pending.append({
+                "ticket_id": int(ticket_id),
+                "workflow_id": wid,
+                "context": context,
+                "board_id": int(board.id) if board else None,
+                "ticket_title": ticket.title or "",
+            })
+
+    errors: list[dict[str, Any]] = []
+    for item in pending:
+        result = dispatch_work_item(
+            workflow_id=item["workflow_id"],
+            context=item["context"],
+            board_id=item["board_id"],
+            ticket_id=item["ticket_id"],
+            title=item["ticket_title"],
+            source_type="initiative",
+            source_ref=str(payload.get("action_id") or payload.get("request_uid") or "").strip() or None,
+            run_metadata={
                     "source_type": "initiative",
-                    "board_id": board.id if board else None,
-                    "ticket_id": ticket_id,
-                    "ticket_title": ticket.title or "",
+                    "board_id": item["board_id"],
+                    "ticket_id": item["ticket_id"],
+                    "ticket_title": item["ticket_title"],
                     "phase": "planning",
-                },
-            )
-            started.append({"ticket_id": ticket_id, "workflow_id": wid, "result": result})
-    return {"success": bool(started), "message": f"Started {len(started)} workflow run(s)", "started": started}
+            },
+            dispatch_async=True,
+            _session_provider=get_session,
+        )
+        record = {"ticket_id": item["ticket_id"], "workflow_id": item["workflow_id"], "result": result}
+        if result.get("error"):
+            errors.append(record)
+        else:
+            started.append(record)
+    return {
+        "success": bool(started),
+        "message": f"Started {len(started)} workflow run(s) in Development",
+        "started": started,
+        "errors": errors,
+    }
+
+
+def control_development_thread(payload: dict[str, Any]) -> dict[str, Any]:
+    """Apply an approved Initiative action to one durable Development thread."""
+    from distr.core.db import Chat, get_session
+    from distr.core.workflow.development_control import (
+        archive_thread,
+        dispatch_command,
+        enqueue_command,
+        update_thread_controls,
+    )
+    from distr.core.workflow.development_threads import (
+        development_thread_metadata,
+        ensure_development_thread,
+        rebind_development_thread,
+    )
+
+    operation = str(payload.get("operation") or "steer").strip().lower()
+    chat_id = int(payload.get("chat_id") or 0)
+    if operation == "create":
+        workflow_id = int(payload.get("workflow_id") or 0)
+        if not workflow_id:
+            raise ValueError("workflow_id is required to create a Development thread")
+        chat_id = ensure_development_thread(
+            workflow_id=workflow_id,
+            title=str(payload.get("title") or "Initiative development work").strip(),
+            project_id=int(payload["project_id"]) if payload.get("project_id") is not None else None,
+            ticket_id=int(payload["ticket_id"]) if payload.get("ticket_id") is not None else None,
+            starting_question=str(payload.get("instruction") or "").strip() or None,
+            source_type="initiative",
+            source_ref=str(payload.get("action_id") or payload.get("request_uid") or "").strip() or None,
+        )
+        return {"success": True, "message": f"Created Development thread #{chat_id}", "chat_id": chat_id, "development_url": f"/development/threads/{chat_id}/"}
+    if not chat_id:
+        raise ValueError("chat_id is required for Development thread control")
+    if operation == "steer":
+        command = enqueue_command(
+            chat_id,
+            str(payload.get("instruction") or payload.get("message") or ""),
+            source="initiative",
+            source_ref=str(payload.get("action_id") or payload.get("request_uid") or ""),
+        )
+        delivery = dispatch_command(int(command["id"]))
+        return {"success": True, "message": f"Development thread #{chat_id} accepted the instruction", "chat_id": chat_id, "delivery": delivery}
+    if operation in {"archive", "remove", "unarchive"}:
+        result = archive_thread(chat_id, archived=operation != "unarchive")
+        return {"success": True, "message": f"Development thread #{chat_id} {'archived' if result['archived'] else 'restored'}", **result}
+    if operation in {"pin", "unpin"}:
+        controls = update_thread_controls(chat_id, pinned=operation == "pin")
+        return {"success": True, "message": f"Development thread #{chat_id} updated", "chat_id": chat_id, "controls": controls}
+    if operation == "edit":
+        with get_session() as db:
+            chat = db.get(Chat, chat_id)
+            if chat is None or chat.parent_id is not None:
+                raise ValueError("Development thread not found")
+            metadata = development_thread_metadata(chat)
+            current_title = chat.title or "Development"
+            current_project_id = chat.project_id
+        result = rebind_development_thread(
+            chat_id,
+            title=str(payload.get("title") or current_title).strip(),
+            project_id=int(payload["project_id"]) if payload.get("project_id") is not None else current_project_id,
+            board_key=payload.get("board_key", metadata.get("board_key")),
+            board_provider=payload.get("board_provider", metadata.get("board_provider")),
+            ticket_id=int(payload["ticket_id"]) if payload.get("ticket_id") is not None else metadata.get("ticket_id"),
+            board_ticket_key=payload.get("board_ticket_key", metadata.get("board_ticket_key")),
+            board_ticket_title=payload.get("board_ticket_title", metadata.get("board_ticket_title")),
+            board_ticket_lane=payload.get("board_ticket_lane", metadata.get("board_ticket_lane")),
+            permission_profile=payload.get("permission_profile"),
+            remote_continuation=payload.get("remote_continuation"),
+        )
+        return {"success": True, "message": f"Development thread #{chat_id} updated", **result}
+    raise ValueError(f"Unsupported Development thread operation: {operation}")
 
 
 def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:

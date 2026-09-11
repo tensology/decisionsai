@@ -387,6 +387,7 @@ def test_run_resolves_named_project_before_ambient_board_and_preserves_media(int
     factory, ids = intake_db
     session_provider = lambda: _session_ctx(factory)
     start = Mock(return_value={"run_id": 84, "status": "started", "phase": "initializing"})
+    ensure_thread = Mock(return_value=77)
     intake = WorkIntake(
         source="telegram",
         user_text="Run this through the workflow: build the pizza menu",
@@ -402,6 +403,7 @@ def test_run_resolves_named_project_before_ambient_board_and_preserves_media(int
 
     with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
          patch("distr.core.workflow.ticket_dispatch.get_session", side_effect=session_provider), \
+         patch("distr.core.workflow.development_threads.ensure_development_thread", ensure_thread), \
          patch("distr.core.workflow.service.start_workflow_run", start), \
          patch("distr.core.orchestrator.emit_channel_intake_event"):
         decision = OrchestratorIntakeService().ingest(intake)
@@ -423,7 +425,16 @@ def test_run_resolves_named_project_before_ambient_board_and_preserves_media(int
     assert kwargs["run_metadata"]["intake_action"] == "run_workflow"
     assert kwargs["run_metadata"]["intake_reason"]
     assert kwargs["run_metadata"]["intake_confidence"] == 1.0
+    assert kwargs["run_metadata"]["chat_id"] == 77
+    assert kwargs["run_metadata"]["studio"] is True
     assert "untrusted_extra" not in kwargs["run_metadata"]
+    ensure_thread.assert_called_once()
+    thread_kwargs = ensure_thread.call_args.kwargs
+    assert thread_kwargs["workflow_id"] == ids["workflow"]
+    assert thread_kwargs["title"] == "build the pizza menu"
+    assert thread_kwargs["project_id"] == ids["pizza_project"]
+    assert thread_kwargs["ticket_id"] == decision.ticket_id
+    assert "Run this through the workflow: build the pizza menu" in thread_kwargs["starting_question"]
     session = factory()
     ticket = session.query(KanbanTicket).filter(KanbanTicket.id == decision.ticket_id).one()
     assert "/tmp/menu.png" in ticket.description
@@ -609,6 +620,7 @@ def test_retried_channel_message_is_idempotent_and_keeps_original_board(intake_d
 
     with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
          patch("distr.core.workflow.ticket_dispatch.get_session", side_effect=session_provider), \
+         patch("distr.core.workflow.development_threads.ensure_development_thread", return_value=78) as ensure_thread, \
          patch("distr.core.workflow.service.start_workflow_run", start), \
          patch("distr.core.orchestrator.emit_channel_intake_event"):
         first = OrchestratorIntakeService().ingest(intake)
@@ -618,11 +630,40 @@ def test_retried_channel_message_is_idempotent_and_keeps_original_board(intake_d
     assert duplicate.status == "duplicate"
     assert duplicate.board_id == ids["pizza_board"]
     assert start.call_count == 1
+    assert ensure_thread.call_count == 1
     session = factory()
     assert session.query(KanbanTicket).filter(
         KanbanTicket.source_external_id == "tg-retry-1",
     ).count() == 1
     session.close()
+
+
+def test_workflow_intake_does_not_start_an_invisible_run_when_development_thread_fails(intake_db):
+    factory, ids = intake_db
+    session_provider = lambda: _session_ctx(factory)
+    start = Mock(return_value={"run_id": 86, "status": "started"})
+    intake = WorkIntake(
+        source="telegram",
+        user_text="Run this through the workflow: fix checkout",
+        source_message_id="tg-thread-failure-1",
+        metadata={"active_project_id": ids["pizza_project"]},
+    )
+
+    with patch("distr.core.work_intake.service.get_session", side_effect=session_provider), \
+         patch("distr.core.workflow.ticket_dispatch.get_session", side_effect=session_provider), \
+         patch(
+             "distr.core.workflow.development_threads.ensure_development_thread",
+             side_effect=RuntimeError("thread database unavailable"),
+         ), \
+         patch("distr.core.workflow.service.start_workflow_run", start), \
+         patch("distr.core.orchestrator.emit_channel_intake_event"):
+        decision = OrchestratorIntakeService().ingest(intake)
+
+    assert decision.status == "failed"
+    assert decision.handled is True
+    assert decision.workflow_run_id is None
+    assert "Development thread could not be prepared" in decision.response_text
+    start.assert_not_called()
 
 
 def test_explicit_multi_ticket_workflow_request_creates_and_runs_each_item(intake_db):
@@ -787,3 +828,46 @@ def test_shared_channel_request_creates_one_project_ticket_with_source_trace(int
     assert tickets[0].lane.board_id == ids["pizza_board"]
     assert tickets[0].linked_project_id == ids["pizza_project"]
     session.close()
+
+
+def test_telegram_can_target_a_development_thread_without_creating_a_ticket(monkeypatch):
+    queued = {}
+
+    def fake_enqueue(chat_id, content, **kwargs):
+        queued.update({"chat_id": chat_id, "content": content, **kwargs})
+        return {"id": 71, "chat_id": chat_id, "workflow_id": 44}
+
+    monkeypatch.setattr("distr.core.workflow.development_control.enqueue_command", fake_enqueue)
+    monkeypatch.setattr(
+        "distr.core.workflow.development_control.dispatch_command",
+        lambda command_id: {"dispatched": False, "command": {"id": command_id, "run_id": None}},
+    )
+
+    decision = OrchestratorIntakeService().ingest(WorkIntake(
+        source="telegram",
+        user_text="Thread #17: keep the existing navigation and rerun mobile QA",
+        source_thread_id="telegram-chat-9",
+        source_message_id="message-3",
+    ))
+
+    assert decision.action == WorkIntakeAction.WORKFLOW_INTERACTION
+    assert decision.status == "workflow_interaction"
+    assert "queued" in decision.response_text
+    assert queued["chat_id"] == 17
+    assert queued["content"] == "keep the existing navigation and rerun mobile QA"
+    assert queued["source"] == "telegram"
+    assert queued["source_ref"] == "telegram-chat-9"
+
+
+def test_linked_remote_surface_can_supply_development_chat_id_in_metadata(service):
+    decision = service.classify(WorkIntake(
+        source="telegram",
+        user_text="Use the blue focus state in the final pass",
+        metadata={"development_chat_id": 17},
+    ))
+
+    assert decision.action == WorkIntakeAction.WORKFLOW_INTERACTION
+    assert decision.diagnostics == {
+        "development_chat_id": 17,
+        "message": "Use the blue focus state in the final pass",
+    }

@@ -1,0 +1,13 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: sans-serif; }
+.app-shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+.sidebar { padding: 20px; border-right: 1px solid #ccc; }
+.sidebar nav, .project-list { display: grid; gap: 8px; margin-top: 24px; }
+main { padding: 24px; }
+.topbar, .toolbar, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; margin-top: 24px; }
+#run-grid { display: grid; gap: 12px; }
+.run-card { border: 1px solid #ccc; padding: 16px; }
+.run-card button { width: 100%; text-align: left; }
+.inspector { border-left: 1px solid #ccc; padding-left: 24px; }
+@media (max-width: 720px) { .app-shell { grid-template-columns: 1fr; } .sidebar { display: none; } .workspace { grid-template-columns: 1fr; } }

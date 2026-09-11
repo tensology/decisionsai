@@ -13,6 +13,7 @@ SIDECAR_WIRE_VERSION = 1
 
 import logging
 import os
+import platform
 from typing import Any
 
 import requests
@@ -53,9 +54,22 @@ def call_sidecar_tool(tool: str, params: dict, *, timeout: float = 120) -> dict:
     """
     ``POST /tool/{tool}`` with JSON body.
 
-    If the sidecar is down or refuses the call, window/screenshot tools run in the
-    Decisions process so TCC grants attach to the app instead of decisionsai-sidecar.
+    On macOS, supported window/screenshot/accessibility tools run in the Decisions
+    process first so TCC grants attach to the app. Other tools use the Sidecar.
     """
+    # On macOS, TCC grants belong to the signed Decisions app. Prefer the
+    # equivalent in-process implementation whenever it exists so rebuilding an
+    # optional helper cannot silently invalidate Accessibility or Screen
+    # Recording. Private Space operations still go to the Sidecar.
+    if platform.system() == "Darwin":
+        try:
+            local_first = _run_in_decisions_process(tool, params)
+            if local_first is not None:
+                logger.debug("desktop tool %s ran in Decisions", tool)
+                return local_first
+        except Exception as local_exc:
+            logger.info("in-process desktop tool %s unavailable, trying Sidecar: %s", tool, local_exc)
+
     url = f"{sidecar_base_url()}/tool/{tool}"
     try:
         resp = requests.post(url, json=params, timeout=timeout)

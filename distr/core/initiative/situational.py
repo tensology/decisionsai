@@ -164,7 +164,6 @@ def handoff_resume_proposal(situational: dict[str, Any] | None) -> dict[str, Any
         "telegram_message": description,
         "payload": {
             "kind": "handoff_resume",
-            "idle_gap": idle,
             "project_folder": project_folder,
             "state_fingerprint": f"handoff:{handoff_fingerprint}",
         },

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 from distr.core.agent.command_handler import _cmd_interrupt_tts
@@ -57,6 +58,42 @@ def test_stale_interrupt_after_response_start_is_ignored():
 
     assert transport._force_silence is False
     assert transport._state is AudioPlaybackState.PLAYING
+
+
+def test_marked_bargein_interrupt_bypasses_stale_window():
+    transport = _transport(_state=AudioPlaybackState.PLAYING)
+    transport._begin_tts_response()
+    transport._accept_bargein_interrupt = True
+
+    assert transport._is_stale_tts_interrupt() is True
+    assert not (
+        transport._is_stale_tts_interrupt()
+        and not transport._accept_bargein_interrupt
+    )
+
+
+def test_output_abort_is_completed_before_interrupt_returns():
+    events = []
+
+    class _Stream:
+        def is_active(self):
+            return True
+
+        def stop_stream(self):
+            events.append("stop")
+
+        def start_stream(self):
+            events.append("restart")
+
+    transport = _transport(_out_stream=_Stream())
+    executor = ThreadPoolExecutor(max_workers=1)
+    transport._executor = executor
+    try:
+        asyncio.run(transport._abort_output_stream_async())
+    finally:
+        executor.shutdown(wait=True)
+
+    assert events == ["stop", "restart"]
 
 
 def _interrupt_session(state_name: str, force_silence: bool = False):

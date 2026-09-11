@@ -278,6 +278,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
     async def process_chat_input(self, text: str, is_telegram: bool = False,
                                   uploaded_image_path: str = None, speaker_enabled=None,
                                   telegram_input_type: str = None,
+                                  external_surface: str | None = None,
+                                  external_request_id: str | None = None,
                                   skip_user_persist: bool = False,
                                   requested_chat_id: int | None = None):
         """Override to handle Ollama's special image format in messages."""
@@ -296,9 +298,16 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         self._is_telegram_request = is_telegram
         self._uploaded_image_path = uploaded_image_path
         self._telegram_input_type = telegram_input_type if telegram_input_type in ("text", "voice") else None
-        if is_telegram and self._telegram_input_type:
+        self._external_surface = str(external_surface or '').strip().lower() or None
+        self._external_request_id = str(external_request_id or '').strip() or None
+        if is_telegram:
             import threading
-            threading.current_thread().telegram_input_type = self._telegram_input_type
+            if self._telegram_input_type:
+                threading.current_thread().telegram_input_type = self._telegram_input_type
+            if self._external_surface:
+                threading.current_thread().external_surface = self._external_surface
+            if self._external_request_id:
+                threading.current_thread().external_request_id = self._external_request_id
 
         self._ensure_user_message_persisted(text, skip=skip_user_persist)
         from distr.core.agent.services.llm.bulk_instruction import augment_bulk_instruction

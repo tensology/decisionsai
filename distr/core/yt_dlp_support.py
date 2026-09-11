@@ -119,7 +119,7 @@ def fetch_subtitles(url: str, *, lang: str = "en") -> dict[str, Any]:
 def search_youtube(query: str, *, limit: int = 5) -> dict[str, Any]:
     cmd = [
         *ytdlp_command(),
-        "--dump-single-json",
+        "--dump-json",
         "--flat-playlist",
         f"ytsearch{max(1, min(limit, 20))}:{query}",
     ]

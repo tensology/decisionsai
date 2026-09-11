@@ -112,3 +112,23 @@ def test_run_workflow_can_append_missing_tickets_to_live_group():
     assert "added 1 tickets" in message
     assert "14 tickets waiting" in message
     assert append.call_args.args == (104, built)
+
+
+def test_run_workflow_tool_keeps_orchestrator_inside_current_thread():
+    class ChatManager:
+        @staticmethod
+        def get_current_chat():
+            return 73
+
+    with patch("distr.core.workflow.workflow_resolve.resolve_workflow_id", return_value=(369, None)), \
+         patch("distr.core.workflow.work_dispatch.dispatch_work_item", return_value={
+             "run_id": 900, "chat_id": 73,
+         }) as dispatch:
+        message = RunWorkflowTool(chat_manager=ChatManager())._run(
+            workflow_id=369,
+            context="Run the full implementation workflow",
+        )
+
+    assert "thread 73" in message
+    assert dispatch.call_args.kwargs["chat_id"] == 73
+    assert dispatch.call_args.kwargs["source_type"] == "agent_tool"

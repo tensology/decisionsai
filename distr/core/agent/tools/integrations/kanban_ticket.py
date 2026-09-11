@@ -14,7 +14,6 @@ import re
 import shutil
 import unicodedata
 import webbrowser
-from urllib.parse import urlencode
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -185,7 +184,7 @@ class TicketDraftInput(BaseModel):
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, open_board, create_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, open_board, create_board, update_board, delete_board, create_ticket, create_ticket_batch, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message, whatsapp_set_draft, whatsapp_get_draft, whatsapp_list_drafts")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
@@ -237,6 +236,7 @@ class KanbanTicketTool(BaseTool):
       get_active_board   — show which board is currently active/in use
       open_board         — open the Ticket Board UI in the browser (optional board_name, board_id, source_provider)
       create_board       — create a new board (requires board_name)
+      update_board       — edit a board name, description, or default project (board id/name; title is the new name)
       delete_board       — delete a board (requires board_id or board_name)
       list_lanes         — list lanes for a board (requires board_id or board_name)
       create_ticket      — create a ticket (requires board_name or board_id, plus title)
@@ -1358,6 +1358,14 @@ class KanbanTicketTool(BaseTool):
                 return self._action_get_active_board()
             elif action == "create_board":
                 return self._action_create_board(board_name or text)
+            elif action in ("update_board", "edit_board"):
+                return self._action_update_board(
+                    board_id or None,
+                    board_name or None,
+                    name=title or None,
+                    description=description if "description" in kwargs or description else None,
+                    default_project_id=linked_project_id or None,
+                )
             elif action == "delete_board":
                 return self._action_delete_board(board_id or None, board_name or None)
             elif action == "list_lanes":
@@ -1563,7 +1571,7 @@ class KanbanTicketTool(BaseTool):
                 return self._action_whatsapp_list_drafts()
             else:
                 ref = (
-                    f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, open_board, create_board, delete_board, "
+                    f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, open_board, create_board, update_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
                     "move_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
                     "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
@@ -2482,6 +2490,41 @@ class KanbanTicketTool(BaseTool):
             s.delete(b)
         return voice_then_reference(f"I removed the board {name} and everything on it.", f"Deleted board '{name}' and all its tickets")
 
+    def _action_update_board(
+        self,
+        board_id=None,
+        board_name=None,
+        *,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        default_project_id: Optional[int] = None,
+    ) -> str:
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return voice_then_reference("I could not find that board.", "Board not found.")
+        from distr.core.db.kanban import KanbanBoard
+
+        with self._get_session() as session:
+            row = orm_get_by_id(session, KanbanBoard, board["id"])
+            if not row:
+                return voice_then_reference("I could not find that board.", "Board not found.")
+            if name is not None and str(name).strip():
+                row.name = str(name).strip()
+            if description is not None:
+                row.description = str(description).strip()
+            if default_project_id is not None:
+                row.default_project_id = int(default_project_id)
+            updated = {
+                "id": int(row.id),
+                "name": row.name,
+                "description": row.description or "",
+                "default_project_id": row.default_project_id,
+            }
+        return voice_then_reference(
+            f"I updated the board {updated['name']}.",
+            f"Updated board: {json.dumps(updated, ensure_ascii=False)}",
+        )
+
     # ── Ticket delete & move ──────────────────────────────────────────────
 
     def _action_delete_ticket(self, ticket_id) -> str:
@@ -2918,19 +2961,10 @@ class KanbanTicketTool(BaseTool):
 
     @staticmethod
     def _ticket_board_path(source: str, board_id, board_url: str = "") -> str:
-        """Build a /tickets/ deep-link path understood by kanban.js loadBoards()."""
+        """Build a Development Kanban deep link for a local or connected board."""
         src = (source or "database").lower()
-        params: Dict[str, str] = {}
-        if src == "database":
-            params["board_id"] = str(board_id)
-        elif src in ("jira", "trello"):
-            params["source"] = src
-            params["board_id"] = str(board_id)
-            if board_url:
-                params["board_url"] = board_url
-        else:
-            params["board_id"] = str(board_id)
-        return "/tickets/?" + urlencode(params)
+        provider = src if src in ("jira", "trello") else "decisions"
+        return f"/development/boards/{provider}/{board_id}/kanban/"
 
     def _resolve_web_base_url(self) -> Optional[str]:
         from distr.core.agent.tools.chat.open_page import OpenPageTool

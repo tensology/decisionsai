@@ -170,9 +170,11 @@ def _transcribe_worker_thread(audio_file_path: str, output_file_path: str, use_a
             if chat_manager and chat_id:
                 try:
                     summary = f"✅ Transcription complete!\n\nSaved to: `{output_file_path}`\n\nTranscript preview ({len(transcript)} chars):\n{transcript[:300]}{'...' if len(transcript) > 300 else ''}"
-                    chat_manager.add_assistant_message(chat_id, summary)
+                    chat_row_id = chat_manager.add_assistant_message(chat_id, summary)
                     from distr.core.signals import signal_manager
-                    signal_manager.chat_message_added.emit(chat_id, "assistant", summary)
+                    signal_manager.chat_message_added.emit(
+                        chat_id, "assistant", summary, chat_row_id
+                    )
                     signal_manager.chat_updated.emit(chat_id)
                     logger.info(f"AudioTranscriber: Added completion message to chat {chat_id}")
                 except Exception as e:

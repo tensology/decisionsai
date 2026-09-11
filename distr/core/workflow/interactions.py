@@ -205,20 +205,31 @@ def reissue_workflow_interaction(
     if not prompt:
         return {"error": "Waiting workflow has no question to reissue", "status_code": 409}
 
-    from distr.core.kanban.ticket_workflow_engagement import notify_ticket_workflow_progress
+    from distr.core.kanban.ticket_workflow_engagement import (
+        build_operator_waiting_message,
+        notify_ticket_workflow_progress,
+    )
+
+    outbound_prompt = build_operator_waiting_message(
+        workflow_name=str(run_data.get("workflow_name") or "Workflow"),
+        ticket_title=str(run_data.get("ticket_title") or ""),
+        step_name=str(run_data.get("step_name") or "the current phase"),
+        waiting_kind=waiting_kind,
+    )
 
     notify_ticket_workflow_progress(
         run_id=int(run_id),
         step_id=int(run["current_step_id"]) if run.get("current_step_id") is not None else None,
-        body=prompt,
-        voice_body=prompt,
+        body=outbound_prompt,
+        voice_body=None,
         state_fingerprint=(
             f"workflow-interaction:{int(run_id)}:{waiting_kind}:"
             f"reissue:{time.time_ns()}"
         ),
         priority="high",
         requires_response=True,
-        audible=True,
+        audible=False,
+        allow_voice=waiting_kind not in {"provider_preflight", "worker_needs_input"},
     )
     return {
         "success": True,

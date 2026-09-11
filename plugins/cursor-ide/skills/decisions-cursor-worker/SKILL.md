@@ -51,7 +51,9 @@ Blockers: ...
     - **decisions-harness-stack** — master index (ECC, Ponytail, Fallow, RTK, browser/content).
     - **Ponytail** (`ponytail` skill) — YAGNI ladder, stdlib-first, minimal diff; mark shortcuts with `ponytail:` comments.
     - **Fallow** (`fallow` skill) — on JS/TS repos, run `npx fallow audit --format json --quiet || true` before reporting complete and attach the verdict in `Tests run:` or `Evidence:`.
+    - **UI quality** — `impeccable` for UI design, refinement, audits, and polish before browser verification.
     - **Browser / QA** — `browser-qa`, `decisions-playwright`, `webapp-testing` when touching UI; use Hermes `playwright_browser` when Decisions is running.
+    - **Native / cross-app control** — `decisions-computer-use` only when the Cursor runtime exposes computer-use/CUA; prefer Playwright for deterministic web checks.
     - **Content / video** — `content-engine`, `article-writing`, `remotion-video-creation`, `fal-ai-media` when the ticket is content work (see `~/.decisions/harness/mcp-recommendations.json` for fal MCP).
     - **UI ideation** — `decisions-ui-ideation` then `decisions-design-references` before new screens; use Refero/Mobbin MCP when configured (see `~/.decisions/harness/mcp-setup-design.sh`).
     - **Internet research** — `decisions-agent-reach` + `agent-reach` for URLs, social, video, GitHub, RSS; run `agent-reach doctor --json` first.
@@ -59,6 +61,8 @@ Blockers: ...
     - **Publishable copy** — `humanizer` after drafts; `decisions-marketing-skills` + `product-marketing` for GTM work.
     - **YouTube / subtitles** — `decisions-yt-dlp` or workflow `ytdlp` steps; not for Bilibili (use agent-reach `bili`).
     - **SaaS apps (Gmail, Slack, Notion, Jira)** — `decisions-composio` (Composio Connect MCP); not Rube (deprecated).
+    - **Independent agent audit** — `agent-watchdog` when asked to watch, compare, or verify another agent's session or completion claim.
+    - **Large context** — `decisions-headroom` is enabled by default for large logs, files, and tool output; never compress instructions, acceptance criteria, or callbacks.
 12. For any normal Cursor IDE/chat prompt inside a DecisionsAI project folder,
     even when it did not originate from a workflow packet, report the turn to
     DecisionsAI as a project IDE session. At the start of the prompt, call:

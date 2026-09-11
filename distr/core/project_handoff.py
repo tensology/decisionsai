@@ -16,11 +16,13 @@ class ProjectHandoffService:
         result = await run_project_task(
             context.project,
             context.instruction,
+            chat_id=context.chat_id,
             run_id=context.run_id,
             workflow_id=context.workflow_id,
             step_id=context.step_id,
             origin=context.origin,
             ticket_id=context.ticket_id,
+            board_id_override=context.board_id,
             ticket_complexity=context.ticket_complexity,
             backend_id_override=context.backend_id,
             model_override=context.model or None,

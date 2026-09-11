@@ -135,6 +135,9 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         """PortAudio callback with health logging around Pipecat enqueue."""
         self._input_callback_count += 1
         self._input_callback_bytes += len(in_data or b"")
+        timing = getattr(self, "_audio_timing", None)
+        if timing is not None and in_data:
+            timing.mark("capture")
         self._input_last_callback_at = time.time()
         if status:
             logger.warning("Audio input callback status: %s", status)
@@ -658,6 +661,30 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             return
         self._ensure_output_stream_for_configured_device(reason=reason)
 
+    async def _abort_output_stream_async(self) -> None:
+        """Flush buffered speaker audio and wait until the abort is complete."""
+        stream = getattr(self, "_out_stream", None)
+        executor = getattr(self, "_executor", None)
+        if stream is None or executor is None:
+            return
+
+        def _safe_abort():
+            try:
+                if stream.is_active():
+                    abort = getattr(stream, "abort_stream", None)
+                    if abort is not None:
+                        abort()
+                    else:
+                        stream.stop_stream()
+                    stream.start_stream()
+            except Exception as e:
+                logger.warning(
+                    "Transport: Stream abort failed: %s (will recover on next write)", e
+                )
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(executor, _safe_abort)
+
     async def _ready_to_emit_confirmed_tts_started(self) -> bool:
         """Confirm the output stream is alive before surfacing playback UI."""
         if self._output_stream_is_active():
@@ -1063,7 +1090,13 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         
         # ── InterruptionFrame ───────────────────────────────────────────
         elif isinstance(frame, InterruptionFrame):
-            if self._is_stale_tts_interrupt():
+            timing = getattr(self, "_audio_timing", None)
+            if timing is not None:
+                timing.mark("interruption_acknowledged")
+            if (
+                self._is_stale_tts_interrupt()
+                and not getattr(self, "_accept_bargein_interrupt", False)
+            ):
                 logger.info(
                     "Transport: Ignoring stale InterruptionFrame (%.0fms since TTS response start)",
                     (time.monotonic() - self._tts_response_started_at) * 1000,
@@ -1103,28 +1136,18 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             await self._transition_to(AudioPlaybackState.IDLE)
 
             # Abort the PyAudio output stream to kill any buffered audio
-            # that's still playing in the OS/driver buffer.
-            # IMPORTANT: Don't call stop_stream()/start_stream() directly from
-            # the event loop — the executor thread may be mid-write, and
-            # PortAudio doesn't handle concurrent stop+write gracefully (causes
-            # Internal PortAudio error -9986 which kills the stream permanently).
-            # Instead, schedule the abort on the executor so it runs AFTER any
-            # pending write completes.
+            # that's still playing in the OS/driver buffer. The await is
+            # intentional: scheduling this in the background closes the UI,
+            # but lets already-buffered TTS continue playing after barge-in.
+            # Running the operation on the same executor as writes avoids a
+            # concurrent PortAudio stop/write and lets the interrupt complete
+            # only after the stream has been flushed.
             self._stream_error_count = 0
             self._stream_error_logged = False
-            if self._out_stream and hasattr(self, '_executor'):
-                def _safe_abort():
-                    try:
-                        if self._out_stream and self._out_stream.is_active():
-                            self._out_stream.stop_stream()
-                            self._out_stream.start_stream()
-                    except Exception as e:
-                        logger.warning("Transport: Stream abort failed: %s (will recover on next write)", e)
-                try:
-                    loop = asyncio.get_event_loop()
-                    loop.run_in_executor(self._executor, _safe_abort)
-                except Exception:
-                    pass
+            try:
+                await self._abort_output_stream_async()
+            except Exception:
+                pass
 
             # CRITICAL: Pass InterruptionFrame to Pipecat's base transport so it
             # clears its internal frame queue (_start_interruption → __reset_process_queue).
@@ -1352,10 +1375,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     self._total_output_bytes += len(output_bytes)
                     self._last_burst_output_bytes += len(output_bytes)
                     
-                    # Feed AEC reference buffer
-                    if self._aec_ref_buf is not None:
-                        self._aec_ref_buf.push(processed_audio)
-
                     has_audible_samples = bool(np.max(np.abs(processed_audio)) > 1e-4)
                     should_emit_tts_started = (
                         not self._tts_started_event_emitted
@@ -1369,6 +1388,13 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     )
                     
                     await super().process_frame(frame, direction)
+
+                    # Stamp the reference after the output transport accepts
+                    # the frame. Pushing before the blocking device write
+                    # makes the reference lead the acoustic signal by the
+                    # driver's queued audio, which prevents NLMS alignment.
+                    if self._aec_ref_buf is not None:
+                        self._aec_ref_buf.push(processed_audio)
 
                     if (
                         ready_to_confirm_tts_started

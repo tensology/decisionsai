@@ -13,7 +13,11 @@ from distr.core.agent.libs import (
     AudioSegment, PYDUB_AVAILABLE
 )
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
-from distr.core.agent.services.tts.elevenlabs_config import resolve_elevenlabs_tts_model
+from distr.core.agent.services.tts.elevenlabs_config import (
+    ELEVENLABS_DIALOGUE_MODELS,
+    is_elevenlabs_v3_compatibility_error,
+    resolve_elevenlabs_tts_model,
+)
 from distr.core.agent.services.tts.sentence_split import (
     extract_complete_sentences,
     tts_chunk_has_enough_weight,
@@ -21,6 +25,25 @@ from distr.core.agent.services.tts.sentence_split import (
 from distr.core.agent.services.tts.tts_pipeline_mixin import TTSPipelineMixin
 
 logger = logging.getLogger(__name__)
+
+_STREAM_EOF = object()
+_ELEVENLABS_PCM_SAMPLE_RATE = 24000
+_ELEVENLABS_PCM_FRAME_BYTES = 960  # 20 ms, mono signed 16-bit PCM at 24 kHz
+_ELEVENLABS_STREAM_FALLBACK_MODEL = "eleven_flash_v2_5"
+_ELEVENLABS_STREAM_TIMEOUT_SECONDS = 15
+
+
+def _next_stream_chunk(stream):
+    """Advance a blocking SDK iterator without leaking StopIteration to asyncio."""
+    try:
+        return next(stream)
+    except StopIteration:
+        return _STREAM_EOF
+
+
+def _v3_stability(value: float) -> float:
+    """Map the continuous UI control to Eleven v3's supported stability modes."""
+    return min((0.0, 0.5, 1.0), key=lambda candidate: abs(candidate - value))
 
 
 def _elevenlabs_clean_error(error):
@@ -182,7 +205,9 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
                 audio_stream = self.client.text_to_speech.convert(
                     text=text,
                     voice_id=self.voice_id,
-                    model_id=self.model_id,
+                    model_id=resolve_elevenlabs_tts_model(
+                        getattr(self, "model_id", None)
+                    ),
                     output_format="mp3_44100_128",
                     voice_settings={
                         "stability": self._stability,
@@ -292,8 +317,87 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
                     logger.error(f"Error generating ElevenLabs audio (attempt {attempt + 1}/{max_retries + 1}): {e}", exc_info=True)
                     raise
 
+    def _open_pcm_stream(self, text: str, model_id: str):
+        """Open the provider's blocking PCM stream for one utterance."""
+        if model_id in ELEVENLABS_DIALOGUE_MODELS:
+            try:
+                from elevenlabs.types import DialogueInput, ModelSettingsResponseModel
+
+                inputs = [DialogueInput(text=text, voice_id=self.voice_id)]
+                settings = ModelSettingsResponseModel(
+                    stability=_v3_stability(self._stability)
+                )
+            except ImportError:
+                # Keeps the optional-dependency test path lightweight. The installed
+                # ElevenLabs SDK uses the typed objects above in production.
+                inputs = [{"text": text, "voice_id": self.voice_id}]
+                settings = {"stability": _v3_stability(self._stability)}
+
+            return self.client.text_to_dialogue.stream(
+                inputs=inputs,
+                model_id=model_id,
+                output_format="pcm_24000",
+                settings=settings,
+                request_options={
+                    "timeout_in_seconds": _ELEVENLABS_STREAM_TIMEOUT_SECONDS,
+                    "max_retries": 0,
+                },
+            )
+
+        return self.client.text_to_speech.stream(
+            text=text,
+            voice_id=self.voice_id,
+            model_id=model_id,
+            output_format="pcm_24000",
+            voice_settings={
+                "stability": self._stability,
+                "similarity_boost": self._similarity_boost,
+                "style": self._style,
+                "use_speaker_boost": self._use_speaker_boost,
+                "speed": 1.0,
+            },
+            request_options={
+                "timeout_in_seconds": _ELEVENLABS_STREAM_TIMEOUT_SECONDS,
+                "max_retries": 0,
+            },
+        )
+
+    def _pcm_frame(self, audio: bytes):
+        """Apply the configured volume once and wrap provider PCM for Pipecat."""
+        if self._speech_volume != 1.0:
+            samples = np.frombuffer(audio, dtype="<i2").astype(np.float32)
+            samples = np.clip(samples * self._speech_volume, -32768, 32767)
+            audio = samples.astype("<i2").tobytes()
+
+        FrameClass = OutputAudioRawFrame if OutputAudioRawFrame else AudioRawFrame
+        frame = FrameClass(
+            audio=audio,
+            sample_rate=_ELEVENLABS_PCM_SAMPLE_RATE,
+            num_channels=1,
+        )
+        if not hasattr(frame, "id") or frame.id is None:
+            frame.id = self._frame_id_counter
+            self._frame_id_counter += 1
+        if not hasattr(frame, "transport_destination"):
+            frame.transport_destination = None
+        if not hasattr(frame, "pts"):
+            frame.pts = None
+        return frame
+
+    def _emit_tts_started_event(self):
+        if not self._tts_session_active or self._tts_started_emitted:
+            return
+        self._tts_started_emitted = True
+        if self.event_queue:
+            try:
+                self.event_queue.put(
+                    ("tts_started", {"source": "direct_desktop"}), block=False
+                )
+            except Exception:
+                pass
+
     async def run_tts(self, text: str):
-        """Process text and yield audio frames"""
+        """Stream provider PCM into the audio pipeline as it arrives."""
         if self._cancelled:
             logger.debug("TTS: run_tts() called but cancelled - returning")
             return
@@ -320,90 +424,110 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
             return
         
         audio_duration_seconds = 0.0
-        
+        stream = None
+        emitted_audio = False
+        received_audio = False
+        generated_audio_bytes = 0
+        loop = None
+
         try:
-            loop = asyncio.get_running_loop()
-            # Run in executor to avoid blocking
-            audio, sample_rate = await loop.run_in_executor(
-                None, 
-                lambda: self._generate_audio(text)
-            )
-            
-            if self._cancelled:
+            text = self._sanitize_for_elevenlabs(text)
+            if not text or len(re.sub(r"[^a-zA-Z0-9]", "", text)) < 3:
+                yield TTSStoppedFrame()
                 return
 
-            if audio is not None and len(audio) > 0:
-                # Verify sample rate matches expected (44100 Hz)
-                if sample_rate != 44100:
-                    logger.warning(f"ElevenLabs returned unexpected sample rate: {sample_rate} Hz (expected 44100 Hz). Resampling may cause glitches.")
-                
-                # Apply volume
-                # This prevents per-chunk inconsistencies and reduces conversion artifacts
-                audio_scaled = audio * self._speech_volume
-                
-                # Convert to int16 with proper clamping to prevent clipping
-                audio_int16 = np.clip(audio_scaled * 32767.0, -32768, 32767).astype(np.int16)
-                
-                # Calculate chunk size aligned to sample boundaries (20ms chunks)
-                # Ensure chunk size is even (2 bytes per sample for int16)
-                samples_per_chunk = int(sample_rate * 0.02)  # 20ms chunks
-                bytes_per_sample = 2  # int16 = 2 bytes
-                chunk_size = samples_per_chunk * bytes_per_sample
-                # Ensure chunk size is even and at least 320 bytes
-                chunk_size = max(320, chunk_size - (chunk_size % 2))
-                
-                FrameClass = OutputAudioRawFrame if OutputAudioRawFrame else AudioRawFrame
-                
-                frames_yielded = 0
-                for i in range(0, len(audio_int16) * bytes_per_sample, chunk_size):
-                    if self._cancelled:
-                        break
-                    
-                    # Calculate sample indices
-                    sample_start = i // bytes_per_sample
-                    sample_end = min(sample_start + samples_per_chunk, len(audio_int16))
-                    
-                    if sample_start >= len(audio_int16):
-                        break
-                    
-                    # Extract chunk directly from numpy array to avoid conversion artifacts
-                    chunk_samples = audio_int16[sample_start:sample_end]
-                    
-                    if len(chunk_samples) > 0:
-                        # Emit tts_started when we yield the FIRST audio frame
-                        if frames_yielded == 0 and self._tts_session_active and not self._tts_started_emitted:
-                            self._tts_started_emitted = True
+            loop = asyncio.get_running_loop()
+            requested_model = resolve_elevenlabs_tts_model(
+                getattr(self, "model_id", None)
+            )
+            active_model = requested_model
+            did_fallback = False
+            pending = b""
+
+            while not self._cancelled:
+                try:
+                    if stream is None:
+                        stream = await loop.run_in_executor(
+                            None, lambda: self._open_pcm_stream(text, active_model)
+                        )
+                    chunk = await loop.run_in_executor(
+                        None, _next_stream_chunk, stream
+                    )
+                except Exception as exc:
+                    error_kind, user_message = _elevenlabs_clean_error(exc)
+                    can_fallback = (
+                        requested_model in ELEVENLABS_DIALOGUE_MODELS
+                        and not emitted_audio
+                        and not received_audio
+                        and not did_fallback
+                        and is_elevenlabs_v3_compatibility_error(exc)
+                    )
+                    if not can_fallback:
+                        if error_kind != "unknown":
                             if self.event_queue:
                                 try:
-                                    self.event_queue.put(('tts_started', {"source": "direct_desktop"}), block=False)
+                                    self.event_queue.put(
+                                        (
+                                            "tts_error",
+                                            {
+                                                "provider": "ElevenLabs",
+                                                "error_type": error_kind,
+                                                "message": user_message,
+                                            },
+                                        ),
+                                        block=False,
+                                    )
                                 except Exception:
                                     pass
-                        
-                        # Convert to bytes only once, at the end
-                        chunk = chunk_samples.tobytes()
-                        
-                        frame = FrameClass(
-                            audio=chunk,
-                            sample_rate=sample_rate,
-                            num_channels=1
-                        )
-                        
-                        # Compatibility attributes
-                        if not hasattr(frame, 'id') or frame.id is None:
-                            frame.id = self._frame_id_counter
-                            self._frame_id_counter += 1
-                        if not hasattr(frame, 'transport_destination'):
-                            frame.transport_destination = None
-                        if not hasattr(frame, 'pts'):
-                            frame.pts = None
-                        
-                        yield frame
-                        frames_yielded += 1
-                
-                # Calculate audio duration from samples
-                audio_duration_seconds = len(audio_int16) / sample_rate if sample_rate > 0 else 0
-            else:
-                audio_duration_seconds = 0
+                            raise ValueError(user_message) from None
+                        raise
+                    logger.warning(
+                        "ElevenLabs %s stream was unavailable before audio; "
+                        "retrying this utterance with %s",
+                        requested_model,
+                        _ELEVENLABS_STREAM_FALLBACK_MODEL,
+                    )
+                    close = getattr(stream, "close", None)
+                    if close:
+                        await loop.run_in_executor(None, close)
+                    stream = None
+                    active_model = _ELEVENLABS_STREAM_FALLBACK_MODEL
+                    did_fallback = True
+                    pending = b""
+                    continue
+
+                if chunk is _STREAM_EOF:
+                    break
+                if self._cancelled:
+                    break
+                if not chunk:
+                    continue
+
+                received_audio = True
+                pending += bytes(chunk)
+                while len(pending) >= _ELEVENLABS_PCM_FRAME_BYTES:
+                    frame_bytes = pending[:_ELEVENLABS_PCM_FRAME_BYTES]
+                    pending = pending[_ELEVENLABS_PCM_FRAME_BYTES:]
+                    self._emit_tts_started_event()
+                    emitted_audio = True
+                    generated_audio_bytes += len(frame_bytes)
+                    yield self._pcm_frame(frame_bytes)
+                    if self._cancelled:
+                        break
+
+            # PCM samples are two bytes. Emit a final partial frame only when it
+            # contains complete samples; retain/drop a provider's odd trailing byte.
+            if not self._cancelled and pending:
+                aligned = pending[: len(pending) - (len(pending) % 2)]
+                if aligned:
+                    self._emit_tts_started_event()
+                    emitted_audio = True
+                    generated_audio_bytes += len(aligned)
+                    yield self._pcm_frame(aligned)
+
+            audio_duration_seconds = (
+                generated_audio_bytes / 2 / _ELEVENLABS_PCM_SAMPLE_RATE
+            )
         except ValueError as e:
             # Handle quota exceeded and other user-friendly errors
             error_str = str(e)
@@ -432,25 +556,23 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
             yield ErrorFrame(error=error_str)
             audio_duration_seconds = 0
         except Exception as e:
-            logger.error(f"TTS Error: {e}", exc_info=True)
-            yield ErrorFrame(error=str(e))
+            _, user_message = _elevenlabs_clean_error(e)
+            logger.error("ElevenLabs streaming failed: %s", user_message)
+            yield ErrorFrame(error=user_message)
             audio_duration_seconds = 0
         finally:
-            # Add delay to ensure TTSStoppedFrame is sent after audio playback completes
-            # This prevents premature player closure and audio glitches when audio is still in buffers
-            # ElevenLabs needs longer buffer delays due to API latency and streaming nature
-            if audio_duration_seconds > 0:
-                # Add delay proportional to audio duration - longer for ElevenLabs to account for API latency
-                # Minimum 200ms, maximum 800ms to handle buffer processing and API streaming delays
-                buffer_delay = max(0.2, min(0.8, audio_duration_seconds * 0.15))
-                logger.debug(f"TTS: Adding {buffer_delay:.3f}s delay before TTSStoppedFrame to ensure playback completion")
+            close = getattr(stream, "close", None)
+            if close:
                 try:
-                    await asyncio.sleep(buffer_delay)
-                except Exception as e:
-                    logger.warning(f"TTS: Could not add delay before TTSStoppedFrame: {e}")
-            
-            yield TTSStoppedFrame()
-            self._total_audio_duration += audio_duration_seconds
+                    if loop is not None:
+                        await loop.run_in_executor(None, close)
+                    else:
+                        close()
+                except Exception:
+                    pass
+
+        yield TTSStoppedFrame()
+        self._total_audio_duration += audio_duration_seconds
 
     async def process_frame(self, frame, direction):
         """Process TextFrame frames and generate audio"""
@@ -681,5 +803,5 @@ class ElevenLabsTTSService(TTSPipelineMixin, TTSService):
                 await self.push_frame(frame, direction)
     
     def get_sample_rate(self) -> int:
-        """Return the output sample rate for ElevenLabs (44.1kHz)"""
-        return 44100
+        """Return the native sample rate used by the ElevenLabs PCM stream."""
+        return _ELEVENLABS_PCM_SAMPLE_RATE

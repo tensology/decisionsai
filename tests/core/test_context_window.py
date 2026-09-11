@@ -15,6 +15,10 @@ def test_gpt5_coder_does_not_shrink_base_gpt5_lookup():
     assert context_window_for_model("openai", "gpt-5-coder") == 400_000
 
 
+def test_muse_glimmer_uses_its_declared_context_window():
+    assert context_window_for_model("ollama", "muse-glimmer:30b-mlx") == 131_072
+
+
 def test_implausibly_small_recommendation_does_not_override_known_static(monkeypatch):
     monkeypatch.setattr(
         "distr.core.services.context_window.load_recommendations",

@@ -1,0 +1,246 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>DecisionsAI Development Audit - 5 September 2026</title><style>
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#e9edf3;color:#202d41;font:15px/1.48 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.page{width:1056px;min-height:800px;margin:24px auto;background:white;padding:36px 48px 28px;box-shadow:0 4px 24px #20304712;position:relative}
+header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #16234c;padding-bottom:14px;color:#16234c}header b{font-size:20px;letter-spacing:-.6px}header b span{color:#d45b0a}header small{font-size:11px;letter-spacing:1px}
+h1{font-size:29px;line-height:1.2;letter-spacing:-.65px;margin:26px 0 20px;color:#13234a}p{margin:12px 0}strong{color:#14234b}a{color:#a4480a}code{font:12px/1.5 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}pre{background:#f2f5fa;border-left:3px solid #e97924;padding:16px 18px;white-space:pre-wrap;break-inside:avoid}pre code{font-size:13px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;margin:18px 0;font-size:13px}td,th{padding:10px 12px;text-align:left;border-bottom:1px solid #d8deea;vertical-align:top;overflow-wrap:anywhere}th{background:#16234c;color:white;font-weight:600}tr:nth-child(even) td{background:#f5f7fa}tr{break-inside:avoid}
+footer{display:flex;justify-content:space-between;margin-top:26px;padding-top:14px;border-top:1px solid #d8deea;font-size:11px;color:#647087}footer b{color:#16234c}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:18px 0}figure{margin:0}figure img{width:100%;display:block;border:1px solid #ccd3e0}figcaption{font-size:12px;line-height:1.45;padding-top:8px;color:#556278}
+@media print{body{background:white}.page{margin:0;box-shadow:none;break-after:page;width:100%;min-height:0}header,footer{break-inside:avoid}}</style><body><section class="page" id="page-1"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>1. Decision and scope</h1><div class="content"><p><strong>The website preview is out of date, and Development needs stronger ownership and lifecycle boundaries before its files are reorganized.</strong> This is more than a folder naming problem. The audit found lost edits, incorrect project selection, altered schedules, and a blocked instruction queue.</p>
+<p>Twenty findings are recorded below. Eleven backend cases and three browser cases were reproduced in isolated fixtures. An additional browser check reproduced the loss of the whole Development catalog when one connector request fails. The application was not restarted, and no production content, schedules, workflows, or application source were changed.</p>
+<p><strong>Recommended order:</strong> protect plan content and execution correctness; isolate section state and failures; extract existing behavior into feature modules; then refresh the website from the real product. Preserve the existing Python/FastAPI/Jinja application and its working execution engine.</p>
+<table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Meaning</th>
+<th>First work</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P1</td>
+<td>Wrong data, lost work, missed execution, or blocked work</td>
+<td>Plan saves and scope; automation import and dispatch; instruction queue; shell failure isolation</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>Misleading state, inaccessible UI, maintenance friction</td>
+<td>Workflow readiness, styling, mobile Plan, timer, website parity, behavioral tests</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>Incomplete product surface</td>
+<td>Reports and later Plan-to-delivery capabilities</td>
+</tr>
+</tbody>
+</table>
+<p>The audit covers the public home and How It Works pages, their React preview, Development navigation, board/project ownership, board Plan, thread plans, workflows, automations, chat threads, and adjacent Incoming/Terminals/Reports integration points. It is not a complete security assessment, an exhaustive test of every integration, or a certification of all runtime behavior.</p>
+<p><strong>Evidence baseline:</strong> application HEAD <code>7a9c4866</code>, website HEAD <code>3e54bd1</code>; both repositories are on <code>main</code> with existing uncommitted work. The app reported v2.8.5 at <code>http://127.0.0.1:8765</code>. The browser loaded <code>studio.js?v=20260903-7</code> and <code>studio.css?v=20260903-30</code>. HEAD alone does not describe the audited code because much of Development is uncommitted.</p>
+<p>Application root (A): <code>/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI</code>.</p>
+<p>Website root (W): <code>/Users/paul/development/TENSOLOGY/DECISIONS/www.decisionsai.net</code>.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>01 / 11</b></footer></section><section class="page" id="page-2"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>2. The website and product no longer describe the same interface</h1><div class="content"><p><strong>F01. P2. Confirmed live and in source.</strong> The public preview puts Projects, Automations, Ticket Boards, and Workflows/Loops in the top navigation. The running product has Chat, Actions, Snippets, and Development, with Plan, Incoming, Automations, Workflows, Terminals, Reports, boards, and threads inside Development. The preview has no Development shell or board Plan workspace.</p>
+<p>The mock workflow shows a ticket queue, 12 sample steps, and an orchestrator ring. The current editor shows a workflow library followed by a seven-step Development workflow. Shared colors and the Oracle logo provide some continuity, but navigation, grouping, editing, and task context differ materially.</p>
+<div class="comparison"><figure><img src="marketing-workflows.png" alt="Public website workflow preview"><figcaption>Public website: separate top-level tools and the older workflow layout.</figcaption></figure><figure><img src="live-workflow-editor.png" alt="Running Development workflow editor"><figcaption>Running app: Development sidebar and current workflow editor.</figcaption></figure></div>
+
+<p>The cause is structural: W <code>frontend/src/components/MockAppPreview.tsx</code> is a separate 4,267-line implementation, with five dedicated mock stylesheets. Its navigation comment still says it matches the real application's base template (lines 53-61). The <code>Automations</code> label even maps to an internal page called <code>Skills</code>.</p>
+<p><strong>Recommendation:</strong> replace this maintenance burden with sanitized screenshots or a constrained demo using the real application templates/styles and fixture responses. Start with screenshots, which are cheaper to keep accurate. Label sample data and simulations. Release website captures with an app version, route, and viewport manifest. Recheck the public claim that Telegram opens the “same web UI”: the project README describes a separate mobile remote surface. Keep marketing edits targeted and preserve production-managed copy if it differs from local source.</p>
+<p>Sources: <a href="https://www.decisionsai.net/how-it-works">live How It Works</a>, W <code>frontend/src/components/MockAppPreview.tsx:14,53,2104</code>; A <code>distr/gui/web/templates/base.html</code>, <code>distr/gui/web/templates/workflows/studio.html:13</code>.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>02 / 11</b></footer></section><section class="page" id="page-3"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>3. Where the coupling is concentrated</h1><div class="content"><p><strong>F02. P2. Strong architectural recommendation.</strong> The Development shell owns routing, selection, fetching, renderers, dialogs, event wiring, execution state, and feature-specific behavior in one closure. Splitting this into arbitrary numbered files would preserve the underlying coupling.</p>
+<table>
+<thead>
+<tr>
+<th>Current file under A</th>
+<th>Size / responsibility</th>
+<th>Consequence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>distr/gui/web/static/workflows/js/studio.js</code></td>
+<td>7,408 lines; 444 named functions</td>
+<td>A feature can overwrite another feature's state or lifecycle</td>
+</tr>
+<tr>
+<td><code>distr/gui/web/routes/settings/workflows.py</code></td>
+<td>4,470 lines; 142 route handlers</td>
+<td>Planning, threads, commands, artifacts and execution live under Settings/Workflows</td>
+</tr>
+<tr>
+<td><code>distr/gui/web/static/workflows/js/workflows.js</code></td>
+<td>14,647 lines</td>
+<td>A second workflow editor remains accessible in blueprint mode</td>
+</tr>
+<tr>
+<td><code>distr/gui/web/templates/workflows/workflows.html</code></td>
+<td>4,449 lines including embedded styling/scripts</td>
+<td>A substantial parallel presentation implementation</td>
+</tr>
+<tr>
+<td><code>distr/gui/web/static/workflows/css/studio.css</code></td>
+<td>1,997 lines</td>
+<td>Shared feature selectors can drift from generated markup</td>
+</tr>
+<tr>
+<td><code>distr/core/workflow/development_harness.py</code></td>
+<td>1,404 lines</td>
+<td>Project resolution, changes, execution and recovery share a module</td>
+</tr>
+</tbody>
+</table>
+<p>The current shape is:</p>
+<pre><code class="language-text">Development shell
+  -&gt; projects, boards, external boards, chats, workflows, runs
+  -&gt; inbox, automations, skills, model routing
+  -&gt; Plan through window.DecisionsPlanHost
+  -&gt; direct execution + workflow execution + command control + time
+
+Settings/workflows route registration
+  -&gt; planning persistence, Development threads, workflow service
+  -&gt; artifacts, integrations, project operations, execution controls
+</code></pre>
+<p><strong>F03. P1. Failure isolation reproduced; stale-response risks found in source.</strong> <code>refreshShell()</code> awaits ten requests together. Simulating a 503 for external boards caused the Workflows page to show zero workflows, zero automations, and “No ticket boards connected”, although the live catalog contained data. One optional connector can prevent the core local interface from loading.</p>
+<p>The shell also refreshes every six seconds, retrieves current-thread detail even in other sections, and has no single-flight guard for <code>refreshShell()</code>. Unlike <code>loadChat()</code>, its writes do not consistently check a selection token. Late responses can therefore overwrite newer state; this particular cross-thread race was not reproduced end to end. Cached workflow detail is spread over fresh summaries, preserving stale fields. Isolate feature requests, retain last-known data with an error marker, and make selection-bound requests cancellable.</p>
+<p>Sources: A <code>distr/gui/web/static/workflows/js/studio.js:4,1077,3969,4700,7389</code>; A <code>distr/gui/web/server.py:851</code> for the second editor.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>03 / 11</b></footer></section><section class="page" id="page-4"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>4. Plan editing can lose work</h1><div class="content"><p><strong>F04. P1. Reproduced in the real Plan JavaScript with a fake API.</strong> Edit item A, return a 409 on save, then select B and return to A. The original text reappears. <code>saveItem()</code> catches the error without rejecting; <code>flushPendingSave()</code> therefore permits navigation. The unsaved editor buffer is discarded. Navigation must wait for an acknowledged save or preserve a recoverable draft when saving fails. The same rule must cover sidebar changes, browser history, reload, and language commands. Source: A <code>distr/gui/web/static/workflows/js/plan.js:175,190,214,221</code>.</p>
+<p><strong>F05. P2. Reproduced with delayed fixture responses.</strong> Opening a board Plan also starts an unawaited Plan-home load. If home finishes after board detail, home repaints over the workspace. A browser reproduction produced exactly that result. Give one route operation ownership of the view and ignore superseded responses. Sources: A <code>distr/gui/web/static/workflows/js/studio.js:1111,3267</code>; <code>plan.js:99,263</code>.</p>
+<p><strong>F06. P1. Reproduced with two board workspaces.</strong> An instruction addressed to workspace A can <code>replace with</code> or <code>rename to</code> an item belonging to workspace B. Only the append branch verifies workspace membership. This is an integrity boundary defect within the local app, not evidence of an unauthenticated exploit. Resolve and validate the item through its workspace before every operation. Source: A <code>distr/core/workflow/planning_workspace.py:234</code>.</p>
+<p><strong>F07. P1. Reproduced with sequential stale-client writes.</strong> Tab A saves new content; tab B saves its older draft; B silently replaces A. The file hash compares disk with the current database, not with the revision the client edited. Add an expected revision/hash to writes and return a conflict with both versions when it does not match. Sources: A <code>distr/core/workflow/planning_workspace.py:167</code>; <code>distr/gui/web/routes/settings/workflows.py:461,1722</code>.</p>
+<p><strong>F08. P1. Reproduced.</strong> Approve an item, then change its content. The changed item still reports <code>approved</code>. Approval is a mutable label rather than approval of a particular revision. A changed revision must be draft/review unless explicitly approved again, with the approved revision retained for traceability. Source: A <code>distr/core/workflow/planning_workspace.py:167</code>.</p>
+<p><strong>Acceptance gate for these repairs:</strong> multi-tab edits, save failures, delayed navigation, item ownership, and post-approval changes must pass through public service methods and real browser interactions. Source-string assertions cannot establish these behaviors.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>04 / 11</b></footer></section><section class="page" id="page-5"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>5. Plan persistence and product promises need a clear boundary</h1><div class="content"><p><strong>F09. P1. Reproduced by failing the database commit.</strong> Plan writes the project file before committing the database and revision record. A commit failure leaves new content on disk and old content in the database. A retry then sees an external-file conflict. Use staged file writes and an explicit recoverable persistence operation; a file rename alone cannot make a filesystem and database transaction atomic. Record enough state to reconcile interruption without replacing user edits. Source: A <code>distr/core/workflow/planning_workspace.py:121,135,167</code>.</p>
+<p>There is also a recovery gap: the conflict message says “Reload it before saving”, but <code>get_workspace()</code> returns database content and the UI exposes no file reconciliation action. A normal reload cannot import an external edit. Treat that as part of F09's repair, including deleted files, moved roots, and relinked projects.</p>
+<p><strong>F10. P1. Reproduced.</strong> Project discovery creates an overview, a user edits it in Plan, and a later scan replaces that content with the generated overview. A revision remains, but the active curated content is silently replaced and the UI has no history restoration control. Generate a candidate revision and show a merge/diff against the maintained item. Source: A <code>distr/core/workflow/planning_workspace.py:203</code>.</p>
+<p><strong>F11. P2. Reproduced and confirmed in source.</strong> “Create a PRD for offline invoices with QR payment” creates a generic template with none of that requested subject matter. Item editing recognizes only append/add/include, replace, and rename prefixes. Discovery reads top-level filenames and a README excerpt. There is no general language planning operation here. Either expose this honestly as template creation and literal commands, or implement scoped proposals, previews, and approved application of changes. Source: A <code>distr/core/workflow/planning_workspace.py:203,234</code>.</p>
+<p><strong>F12. P2. Browser-reproduced at 390 pixels.</strong> The Plan outline is hidden on mobile, removing all item-selection buttons. A workspace with two existing items opens the first, with no replacement selector or drawer for the second. Add an accessible item picker and keep selection in the URL. Source: A <code>distr/gui/web/static/workflows/css/studio.css:334</code>; <code>plan.js:141,162,263</code>.</p>
+<p><strong>Product gap, separate from bugs:</strong> board planning currently has workspace/item/revision records. The earlier product proposal's baselines, delivery slices, requirement relations, ticket previews, and evidence links are not implemented in this module. Thread plan revisions and reusable workflows are separate existing concepts. Keep that distinction: the board plan records intent, the ticket scopes work, the thread carries the conversation, and the run records execution.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>05 / 11</b></footer></section><section class="page" id="page-6"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>6. Automation imports and scheduling can change the work</h1><div class="content"><p><strong>F13. P1. Project-selection defect reproduced; scope symptom observed live.</strong> Given a source working directory matching project A exactly and a registered nested project B, <code>_match_project_id()</code> chooses B because it selects the longest related path, including descendants. An import can therefore target an unrelated nested application. Prefer exact matches, then explicitly permitted containing projects; ambiguous or missing scope must remain unresolved.</p>
+<p>Imported <code>cwds</code> are retained in configuration, but thread setup depends on the resolved project. With no linked project, the native harness creates a folder from the task title. A live imported automation transcript showed an empty generated project, unsuccessful attempts to find the intended work, and a later completed turn that merely wrote a README explaining blockers. That demonstrates a real scope/outcome mismatch; it does not prove every imported automation is misbound. Inspect current import-to-project mappings before rerouting any existing automation.</p>
+<p>Sources: A <code>distr/core/automation/imports.py:171,201</code>; <code>distr/core/automation_orchestrator.py:281</code>; <code>distr/core/workflow/development_harness.py:465,474</code>.</p>
+<p><strong>F14. P1. Reproduced.</strong> <code>FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=9;COUNT=3</code> becomes an ordinary weekly schedule without the two-week interval or run limit. Unsupported RRULE fields are silently dropped. The cron conversion also ignores day-of-month and month for fixed hour/minute expressions. Preserve supported semantics exactly and reject unsupported rules with an import preview. Test timezone, DST, finite schedules, multiple times, and monthly boundaries. Source: A <code>distr/core/automation/imports.py:96,128</code>.</p>
+<p><strong>F15. P1. Reproduced with a one-time schedule and failed dispatch result.</strong> The scheduler disables the one-time schedule and clears its next run before dispatch. If dispatch returns <code>{status: failed}</code> because thread preparation failed, the scheduler still returns success. This can consume the only scheduled opportunity without a recorded successful start. Create a durable execution attempt and inspect the dispatch result before acknowledging delivery. Retry according to an explicit idempotency/misfire policy. Sources: A <code>distr/core/automation/scheduler.py:114</code>; <code>scheduler_advance.py:17</code>; <code>automation_orchestrator.py:770</code>.</p>
+<p>The previous September 2 audit's orphan-run recovery and import route configuration changes exist in current source. They should not be reopened as missing features. The new findings concern scope, schedule fidelity, and dispatch acknowledgement.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>06 / 11</b></footer></section><section class="page" id="page-7"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>7. Thread control and time need execution-owned transitions</h1><div class="content"><p><strong>F16. P1. Reproduced.</strong> Queue two instructions before a worker is available. <code>dispatch_pending()</code> selects the first record from a query containing both queued and delivered commands. After the first is delivered, the next dispatch selects it again; <code>dispatch_command()</code> reports it already delivered, and the second stays queued. The reproduction called dispatch twice and observed one worker delivery and statuses <code>[delivered, queued]</code>.</p>
+<p>Select only queued commands for dispatch. Keep delivered records in history, but remove them from the pending selection. Add an atomic claim and a delivery idempotency key so concurrent requests cannot deliver the same instruction twice. The starvation is reproduced; duplicate delivery under concurrency is a separate source-level risk needing a concurrency test.</p>
+<p>Sources: A <code>distr/core/workflow/development_control.py:62,128,182</code>.</p>
+<p><strong>F17. P2. Reproduced.</strong> An idle thread with a running timer and no response continues accumulating time indefinitely. The auto-pause rule requires a sufficiently recent child response; no response means no pause. An isolated three-day idle thread returned <code>running: true</code> and 72 hours. The live automation thread also displayed about 72 hours, but its exact historical accounting was not reconstructed.</p>
+<p>Execution terminal events, failures before response, cancellation, and restart recovery should close active work intervals. If manual user time is also supported, distinguish it from agent execution time. Reading a time endpoint currently updates ticket time; moving this accounting into lifecycle operations will make it testable without browser polling.</p>
+<p>Sources: A <code>distr/core/workflow/development_control.py:248,275,309</code>; <code>distr/core/workflow/work_dispatch.py:248</code>.</p>
+<p><strong>Existing foundations worth retaining:</strong> <code>DevelopmentWorkItem</code> has unique chat and identity constraints; <code>ensure_development_thread()</code> gives durable source identity; thread plan revisions exist; <code>work_dispatch()</code> prepares the visible thread before starting a workflow; ownership-aware deletion and startup recovery already have focused tests. Improve those seams rather than replacing them with a new generalized orchestration framework.</p>
+<p><strong>Remaining lifecycle investigations:</strong> simultaneous creation for one identity, archive/delete during an active run, workflow-backed command steering, changing a board/project while a run is active, stop acknowledgement across native and CLI execution, and completion evidence returning to the correct ticket. These are required follow-up test cases, not confirmed defects in this audit.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>07 / 11</b></footer></section><section class="page" id="page-8"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>8. Workflow state and styling have visible contradictions</h1><div class="content"><p><strong>F18. P2. Confirmed live and in source.</strong> The live library labels the empty Ideation workflow “0 steps · Ready” and offers Start. The editor's header can show “Needs attention” while the ring center says “Ready”. Readiness is derived from lack of an active run rather than definition validity. Separate definition validity, current execution, last outcome, and unmet input/approval states. Disable Run for invalid definitions with a concrete reason.</p>
+<p>Sources: A <code>distr/gui/web/static/workflows/js/studio.js:1875,1893,2063,2093</code>.</p>
+<p><strong>F19. P2. Confirmed by screenshot, computed style, and source.</strong> The current editor generates <code>.workflow-run-button</code> and <code>.workflow-canvas-meta</code>, but the Development stylesheet has no matching component styles. At 1440 pixels, the Run SVG measured approximately 101 by 101 pixels and its button about 101 by 125 pixels. The metadata appeared as joined “Needs attention7 stepsClick...” text. The oversized Run icon also appeared at 390 pixels. This is a concrete markup/style contract regression.</p>
+<p>Keep a feature's markup and styles together, define icon dimensions, and test the rendered editor at desktop and compact widths. A screenshot from the earlier successful design change is not evidence for the current working tree.</p>
+<p>Sources: A <code>distr/gui/web/static/workflows/js/studio.js:2093</code>; <code>distr/gui/web/static/workflows/css/studio.css:1139,1164</code>; <code>live-workflow-editor.png</code>.</p>
+<p><strong>F20. P2. Reproduced test failure.</strong> Of 133 selected existing tests, 132 passed and one failed. The failure expects <code>studio.js?v=20260903-2</code>, while the template loads <code>20260903-7</code>. That test should assert a behavior or a stable asset-loading contract. Several other tests inspect source strings; the mobile Plan test explicitly checks that the outline is hidden but does not test access to the second item. Passing these tests therefore does not establish usable navigation or safe saves.</p>
+<p>Source: A <code>tests/core/test_board_project_unification.py:36</code>; <code>tests/ui/test_plan_workspace_playwright.py:61</code>.</p>
+<p><strong>Other product inconsistencies:</strong> Reports is currently a static “No reports yet” placeholder with no report loading in this shell. “Plan” also names board documents, thread execution plans, and an autonomy mode. “Automations” opens a page titled “Scheduled tasks”, while a separate automation-rules route covers another type. Resolve terminology in navigation and help text before creating more shared components.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>08 / 11</b></footer></section><section class="page" id="page-9"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>9. Proposed ownership and file organization</h1><div class="content"><p>This is a restructuring proposal, not a finalized new interface design. Preserve the current data identities and external API compatibility while moving responsibilities behind clearer boundaries.</p>
+<pre><code class="language-text">distr/core/
+  development/       # work-item identity, thread control, dispatch, run projection, time
+  planning/          # board items, revisions, approval, discovery, file reconciliation
+  automation/        # definitions, import, scheduling, attempts, retry policy
+  workflow/          # reusable definitions, validation, step orchestration
+  kanban/            # board/ticket persistence and provider adapters
+  turn_runtime/      # native execution primitives, cancellation and steering
+
+distr/gui/web/routes/
+  development/       # threads, commands, executions, artifacts, context
+  planning.py        # board workspaces and item operations
+  automations.py     # retain current feature router
+  workflows.py       # reusable workflow endpoints
+
+distr/gui/web/static/development/
+  shell/             # router, sidebar, catalog, selection, feature lifecycle
+  threads/           # composer, transcript, activity, inspector, command queue
+  planning/          # item picker, editor, preview, save controller
+  workflows/         # library, editor, step dialog, run status
+  automations/       # library, editor, import preview, schedule, run history
+  boards/            # board picker and kanban integration
+  incoming/          # intake views and channel state
+  terminals/         # terminal view lifecycle
+  shared/            # only proven shared UI: dialog, menu, status, API errors
+</code></pre>
+<p>All paths above are proposed beneath application root A. Move templates and styles alongside each feature's ownership; do not introduce a new build framework just to obtain directories.</p>
+<table>
+<thead>
+<tr>
+<th>Boundary</th>
+<th>Owns</th>
+<th>Must not own</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Shell</td>
+<td>URL, selected identities, layout, catalog availability</td>
+<td>Plan draft text, workflow editing, automation dispatch</td>
+</tr>
+<tr>
+<td>Planning</td>
+<td>Source revisions and revision-specific approval</td>
+<td>Starting an execution as a side effect of editing</td>
+</tr>
+<tr>
+<td>Development</td>
+<td>Durable thread/work-item identity, commands and run projection</td>
+<td>Recurrence parsing or board document rendering</td>
+</tr>
+<tr>
+<td>Automation</td>
+<td>When and why an attempt runs, source schedule fidelity</td>
+<td>Inferring project identity from task-title folders</td>
+</tr>
+<tr>
+<td>Workflow</td>
+<td>Validated reusable process and its run</td>
+<td>Being the storage container for every Development feature</td>
+</tr>
+</tbody>
+</table>
+<p>Keep native and workflow execution adapters behind a small shared run projection: owner thread, execution kind, status, timing, result, and stop capability. Let each execution engine retain its internals. Preserve the established board orchestration policy and thread ownership model.</p>
+<p>Avoid blanket renaming, a new event bus, generic repository wrappers for every table, or a wholesale React migration. Extract where it removes a demonstrated responsibility conflict or creates a useful behavioral test seam.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>09 / 11</b></footer></section><section class="page" id="page-10"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>10. Sequenced remediation plan</h1><div class="content"><p><strong>Phase 0. Establish the baseline and contract.</strong> Record the current modified/untracked files and their owners without resetting anything. Agree the vocabulary: board, project, planning item, approved revision, ticket, thread, workflow definition, automation, execution attempt. Capture sanitized desktop/mobile fixtures. Owner role: development lead. Exit: reproducible evidence and stable scope for subsequent changes.</p>
+<p><strong>Phase 1. Protect content and execution.</strong> Fix F04 and F06-F10 in the current modules: save acknowledgement, expected revision, scoped item lookup, approval invalidation, recoverable file persistence, and discovery proposals. Fix F13-F16: exact project resolution, explicit unsupported schedule handling, durable dispatch acknowledgement, and pending-command selection. Owner role: backend/application developer. Exit: every corresponding reproduction becomes a regression test of the desired behavior; no data replacement or duplicate execution in failure cases.</p>
+<p><strong>Phase 2. Give each UI section its own lifecycle.</strong> First extract Plan's save/navigation controller, then the shell catalog and route selection. Fix F03, F05, F12, F18, and F19. Add a feature lifecycle that cancels requests, flushes or retains drafts, and releases timers/sockets on exit. Fetch only the visible section plus the small sidebar summary. Owner role: frontend developer. Exit: changing sections during slow/error responses cannot lose text, overwrite a newer selection, or blank healthy local features.</p>
+<p><strong>Phase 3. Extract backend responsibilities in small moves.</strong> Move planning services first, then Development commands/time/run projection, then split the Settings/workflows route registrar. Retain compatibility imports and existing route aliases during each move. Keep automation scheduling independent and call Development through one dispatch boundary. Owner role: backend developer. Exit: each feature's tests import its public service without web/server or unrelated integration initialization.</p>
+<p><strong>Phase 4. Resolve duplicate editors and missing product flows.</strong> Inventory users and behavior of <code>/workflows/?mode=blueprint</code>; retire it only after its unique operations are accounted for. Integrate Plan approval with ticket-preview and execution context as a separately scoped product increment. Add Reports only when there is a real report source and action. Owner role: product/development lead. Exit: one maintained workflow editor and a demonstrated approved-plan-to-ticket-to-thread path.</p>
+<p><strong>Phase 5. Restore website parity and release discipline.</strong> Capture the approved application routes with synthetic content and publish those captures or a fixture-backed demo. Update the navigation description and remote UI claims. Owner role: website developer. Exit: marketing and application review the same release manifest and interaction map.</p>
+<p><strong>Suggested first implementation slice:</strong> failed-save retention, workspace ownership checks, queued-command starvation, and the missing workflow styles. These are bounded and high-confidence. Follow with revision concurrency and automation schedule/scope repairs. Timing estimates should follow that first slice because the extensive uncommitted changes and live integration boundaries make a reliable calendar estimate premature.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>10 / 11</b></footer></section><section class="page" id="page-11"><header><b>DECISIONS<span>AI</span></b><small>DEVELOPMENT AUDIT / 05 SEP 2026</small></header><h1>11. Verification, acceptance matrix, and limits</h1><div class="content"><p><strong>Executed evidence:</strong> 49 selected existing tests passed in the first group. A broader group returned 83 passed and one failed. Total: <strong>132 passed, one failed</strong>, across 19 selected test files. The failure is the stale asset-version assertion described in F20. This was not a full test-suite run.</p>
+<p><code>reproduce_backend.py</code> reproduces eleven current defects using temporary SQLite databases, temporary project files, and mocked dispatch/worker calls. <code>reproduce_ui.py</code> runs the real Plan script with an in-memory API and reproduces three defects. They assert the observed broken behavior as audit evidence; convert them to desired-behavior regression tests during repair. They are not production tests to keep passing after a fix.</p>
+<p>The fifteenth reproduction used a new browser context with external-board GET responses replaced by 503 and all mutations intercepted. It rendered zero workflow cards despite five being available in the ordinary live view. Website navigation, workflow library/detail, Plan home, automations, a thread, and Reports were inspected live. Desktop and mobile workflow screenshots and a mobile Plan fixture were visually inspected.</p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Required regression cases before restructuring is accepted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Plan edits</td>
+<td>Failed save and navigation; two tabs; approve then edit; cross-workspace IDs; empty content; slow response ordering</td>
+</tr>
+<tr>
+<td>Plan files</td>
+<td>External edit; commit failure; process interruption; missing file; moved project; rediscovery after manual editing</td>
+</tr>
+<tr>
+<td>Plan mobile</td>
+<td>Select second and later items; route restoration; preview/edit/history; keyboard and focus behavior</td>
+</tr>
+<tr>
+<td>Automations</td>
+<td>Exact/nested/missing/multiple cwd; unsupported recurrence; DST; finite run count; one-shot dispatch failure; manual/scheduled collision</td>
+</tr>
+<tr>
+<td>Threads</td>
+<td>Two queued instructions; retry/idempotency; completion/failure with no response; restart; archive/delete while active</td>
+</tr>
+<tr>
+<td>Workflows</td>
+<td>Zero steps; invalid step config; waiting vs failed vs ready; cancel; stale cached detail; legacy-editor parity</td>
+</tr>
+<tr>
+<td>Shell</td>
+<td>One connector down; delayed requests during route changes; browser Back/Forward; deleted/archived deep links; long catalogs</td>
+</tr>
+<tr>
+<td>Website</td>
+<td>Navigation names; desktop and mobile screenshots; current editor; sample data; remote UI description</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Not performed:</strong> real automated publishing, message sending, production imports, destructive workflow runs, deleting active records, injected failures in the live database, end-to-end multi-agent/CLI cancellation, or a complete external-service/security audit. Those should use isolated fixtures and explicitly scoped integration environments.</p>
+<p><strong>Artifact review:</strong> the HTML rendering contains these same eleven sections. Its final rendered views must be inspected for clipping, overflow, overlaps, broken breaks, orphaned headings, table splitting/repetition, owner/action separation, missing headers/footers, readable type, and consistent branding before delivery. Source links use roots A and W defined on page 1, with verified line anchors recorded in the findings.</p></div><footer><span>Audit and proposed remediation. Application source unchanged.</span><b>11 / 11</b></footer></section></body></html>

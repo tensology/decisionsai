@@ -63,6 +63,8 @@ class TTSPipelineMixin:
                     break
 
     def is_stale_interrupt_frame(self) -> bool:
+        if getattr(self, "_accept_bargein_interrupt", False):
+            return False
         started = float(getattr(self, "_llm_response_started_at", 0.0) or 0.0)
         if started <= 0:
             return False
@@ -176,6 +178,9 @@ class TTSPipelineMixin:
                 await self.push_frame(audio_frame, push_direction)  # type: ignore[attr-defined]
                 if first_audio_at is None:
                     first_audio_at = time.monotonic()
+                    timing = getattr(self, "_audio_timing", None)
+                    if timing is not None:
+                        timing.mark("tts_first_audio", at=first_audio_at)
                 audio_frame_count += 1
             except Exception as e:
                 logger.error("TTS: Error pushing frame: %s", e, exc_info=True)

@@ -31,6 +31,32 @@ def test_append_row_messages_use_api_timestamps():
     _append_row_messages(messages, row)
     assert messages[0]["timestamp"] == "2026-06-14T17:22:26Z"
     assert messages[1]["timestamp"] == "2026-06-14T17:22:28Z"
+    assert messages[1]["turn_started_at"] == "2026-06-14T17:22:26Z"
+    assert messages[1]["turn_duration_seconds"] == 2
+
+
+def test_append_row_messages_exposes_structured_turn_skills_without_changing_prompt():
+    row = SimpleNamespace(
+        id=4,
+        input="Use these skills and tell me what to do",
+        response=None,
+        params=json.dumps({"development_turn": {"skill_ids": ["accessibility", "humanizer"]}}),
+        created_date=None,
+        modified_date=None,
+        is_hidden=False,
+        response_marker=None,
+    )
+    messages = []
+
+    _append_row_messages(messages, row)
+
+    assert messages == [{
+        "role": "user",
+        "content": "Use these skills and tell me what to do",
+        "timestamp": None,
+        "chat_row_id": 4,
+        "skills": ["accessibility", "humanizer"],
+    }]
 
 
 def test_tools_follow_assistant_on_same_chat_row():
