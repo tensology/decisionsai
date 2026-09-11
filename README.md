@@ -183,10 +183,6 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 <p align="center">
   <img src="artifacts/development-refactor-2026-09-05/threads-1440.png" alt="DecisionsAI Development workspace" />
 </p>
-<p align="center">
-  <img src="artifacts/development-refactor-2026-09-05/planning-1440.png" alt="DecisionsAI Development plan" />
-  <img src="artifacts/development-refactor-2026-09-05/reports-populated-1440.png" alt="DecisionsAI run reports" />
-</p>
 
 ---
 
