@@ -30,20 +30,29 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ## [2.9.0] - 2026-09-11
 
-### Added
+### The work has somewhere to go
 
-- Development workspace for plans, incoming work, threads, terminals, reports, boards, and execution.
-- Shared project, ticket, workflow, Telegram, WhatsApp, and Gmail routing with durable run history.
-- Continuous-mode audio turn taking with aligned TTS reference audio, AEC metrics, and double-talk detection.
+The new Development workspace gives projects a proper place for plans, incoming work, threads, terminals, reports, boards, and active runs. The pieces are connected now, so a request can move from a conversation to a ticket, through a workflow, and back with its history and evidence still attached.
 
-### Fixed
+### One job, one path
 
-- Continuous interruptions now close the player and flush buffered TTS before returning control to the microphone.
-- TTS-only VAD events, stale callbacks, and stop races no longer cut off speech or leave the player open.
+Chat, the desktop workspace, ticket boards, Workflows, Automations, Telegram, WhatsApp, and Gmail now share more of the same project and execution context. That means the work does not lose its identity just because you started it in one place and checked on it in another.
 
-### Verified
+### Continuous voice listens to the right thing
 
-- Browser, runtime, integration, lifecycle, and physical-audio harness coverage.
+Continuous mode now keeps a time-aligned reference of the TTS sent to the speakers and compares it with what the microphone is hearing. Echo cancellation and double-talk checks can then tell the difference between DecisionsAI speaking and you speaking over it, while push-to-talk stays on its own path.
+
+### Interrupting speech actually stops speech
+
+When you interrupt continuous mode, the player closes and buffered audio is flushed before control returns to the microphone. TTS-only voice activity, stale callbacks, and stop races are also handled, so the agent should not cut itself off or keep talking after the player has gone away.
+
+### The website shows the work that is there
+
+The README now shows the current Development workspace, planning view, and run reports instead of the old chat-only screen. The local web UI is described as the place to check progress, steer work, and inspect the evidence behind a result.
+
+### The important paths have been exercised
+
+This release adds and tightens browser, runtime, integration, lifecycle, and physical-audio coverage around the new workspace and continuous voice path. The audio checks include real input and output devices, delayed TTS, echo-cancellation alignment, VAD transitions, and double-talk.
 
 ## Unreleased
 
