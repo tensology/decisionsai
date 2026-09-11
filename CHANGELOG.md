@@ -10,9 +10,9 @@ Version 2.9.0 is the point where the product becomes much more deliberately deve
 
 The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a compact language for describing plans and UI structure that can compile into the underlying implementation, much like CoffeeScript compiles to JavaScript, alongside Mermaid JS for ERDs and clearer PRD documents. The direction is now clear: better plans mean less doom prompting and better output.
 
-The release also brings in Impeccable Skills, ECC, and a broader, more refined skill set. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
+The release also brings in Impeccable Skills, ECC, and a broader, more refined skill set, along with the dependency updates needed to keep the harnesses and providers current. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
 
-The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice now supports OpenAI Realtime speech-to-speech as well as the separate speech-to-text and text-to-speech path. Telegram, WhatsApp, and the local web interface feed into the same project and Development flow when the work needs more than a single answer.
+The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice now supports OpenAI Realtime speech-to-speech as well as the separate speech-to-text and text-to-speech path, with ElevenLabs streaming and current voice models available in the latter. Telegram, WhatsApp, and the local web interface feed into the same project and Development flow when the work needs more than a single answer.
 
 You can [download or clone the repository](https://github.com/tensology/decisionsai) and use it with your existing projects. DecisionsAI is moving toward handling more work without supervision, while still showing what happened and asking when your decision matters.
 
@@ -38,11 +38,11 @@ Terminals, CLI sessions, model selection, Impeccable, ECC, and the expanded and 
 
 ### Voice gained a speech-to-speech path
 
-OpenAI Realtime speech-to-speech is now supported alongside the existing broken-out speech-to-text, model, and text-to-speech path. Native turn adapters, model options, streaming providers, continuous-mode turn-taking, echo handling, interruption cleanup, and playback reliability all received improvements. Push-to-talk remains independent.
+OpenAI Realtime speech-to-speech is now supported alongside the existing broken-out speech-to-text, model, and text-to-speech path. ElevenLabs moved to its current v3 and conversational models with SDK 2.65.0, direct PCM streaming, and a safe compatibility fallback. Native turn adapters, model options, continuous-mode turn-taking, echo handling, interruption cleanup, and playback reliability all received improvements. Push-to-talk remains independent.
 
 ### More of the system follows the same work
 
-Initiative, Telegram, WhatsApp, Automations, model policy, project routing, and workflow execution now share more durable context. Storage and background activity are quieter, and the new Development surfaces are covered by backend, browser, lifecycle, integration, and audio regression checks.
+Initiative, Telegram, WhatsApp, Automations, model policy, project routing, and workflow execution now share more durable context. Discord replaces the old community-room path, dependency and harness updates keep the supported integrations current, and storage and background activity are quieter. The new Development and voice surfaces are covered by backend, browser, lifecycle, integration, and audio regression checks.
 
 ---
 
