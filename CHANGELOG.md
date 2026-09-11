@@ -32,7 +32,7 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ### Development is now the home for project work
 
-The old ticket-board-centered experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion.
+The old ticket board / workflows experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion.
 
 ### One job can follow one path
 
