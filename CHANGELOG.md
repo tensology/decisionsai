@@ -4,21 +4,15 @@
 
 ## Welcome to DecisionsAI
 
-DecisionsAI is a development agent and workspace that lives on your computer. Talk to it, type in Chat, or send it something from your phone. It can use your files, apps, AI models, coding tools, and connected services to carry out work instead of only giving you an answer.
+DecisionsAI is a development agent and workspace that lives on your computer. Talk to it, type in Chat, or send it something from your phone. It can use your files, apps, models, coding tools, and connected services to carry out work instead of only giving you an answer.
 
-The quickest way in is the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent. Hold `Control + Command` when you only want your speech typed into the app in front of you. Both shortcuts can be changed in Preferences.
+Version 2.9.0 is the point where the product becomes much more deliberately development-led. The old ticket board / workflows experience has been reworked into a project-scoped Development area that brings planning, incoming work, boards, terminals, workflows, reports, and durable threads into one place. The system tray and surrounding web surfaces have been reworked around that same flow.
 
-Connect a project folder and DecisionsAI has somewhere to keep the work. A request such as "make the green order button black" can become a ticket, go to a coding tool, and return with the result attached. The ticket records what you asked for, the time spent, the files changed, and whether the checks passed.
+The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a future Decisions DSL, MOMA-JS for EODs, and clearer PRD, ERD, and other planning documents, but the direction is now clear: better plans mean less doom prompting and better output.
 
-Larger jobs benefit from a workflow. Asking one model to understand a project, plan the change, write the code, and approve its own result in one prompt is unreliable. A workflow separates those jobs. DecisionsAI can gather the project context, make a focused plan, carry out the work, check it in another pass, return failures for correction, and finish with a report. A different model or coding tool can handle each step when that is useful. You can see the current step, steer the run, or stop it.
+The release also brings in Impeccable, ECC, and a broader, more refined skill set. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
 
-The web interface is the control deck for projects, tickets, workflows, snippets, and completed runs. Telegram gives you the same agent on your phone. Send a message, voice note, screenshot, document, approval, or correction. Its secure remote control can show your computer screen, accept clicks and typing, paste saved snippets, and move files between your phone and computer.
-
-WhatsApp is a source of work rather than the remote control. Link a contact or group to a ticket board and DecisionsAI can collect the relevant messages and media as ticket context. You decide which feeds are connected and what the agent may do with them, so ordinary conversation does not become an accidental project instruction.
-
-DecisionsAI does not tie the project to one AI company. You can use models on your computer, connect an API, or send coding work to Codex, Cursor, Claude Code, Pi, and other supported tools. DecisionsAI keeps the project history while those workers change. It checks what is available, shows what it chose, and should not call failed or unchecked work complete.
-
-Codex is excellent for a focused coding task inside an open repository. DecisionsAI adds the work around that coding session. It can receive the request through voice, Telegram, WhatsApp, Chat, or a ticket board, attach it to the right project, ask Codex to implement it, use another worker to check it, keep the time and evidence, and send the outcome back to your phone. For ongoing development, that shared history and repeatable process are the reason to use DecisionsAI rather than relying on isolated Codex prompts.
+The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice, Telegram, WhatsApp, and the local web interface now feed into the same project and Development flow when the work needs more than a single answer.
 
 You can [download or clone the repository](https://github.com/tensology/decisionsai) and use it with your existing projects. DecisionsAI is moving toward handling more work without supervision, while still showing what happened and asking when your decision matters.
 
@@ -32,15 +26,19 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ### Development is now the home for project work
 
-The old ticket board / workflows experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion.
+The old ticket board / workflows experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion. This is the main reason for the 2.9 bump.
+
+### Planning is becoming the centre of the system
+
+Development can route work to different CLIs and harnesses in the background, so the user can focus on the outcome rather than the tool underneath. Planning is still being built out toward a Decisions DSL, clearer PRD, ERD, and related planning documents, and MOMA-JS for EODs. The goal is to break work down well enough that complexity-based routing replaces doom prompting.
+
+### The surrounding tools caught up
+
+Terminals, the system tray, Impeccable, ECC, and the expanded and refined skills now fit into the same flow. The UI work is moving toward a shared DSL standard that can reduce drift across SaaS and Tailwind interfaces.
 
 ### Voice improvements
 
-Voice turn-taking, echo handling, interruption cleanup, and playback reliability have been improved, with the main browser, runtime, integration, lifecycle, and physical-audio paths covered by regression checks. Push-to-talk remains independent.
-
-### The rest got quieter and more reliable
-
-WhatsApp messages can stay attached to the project and ticket that started them, with replies returned to Telegram for approval. Background maintenance keeps useful evidence while pruning noise and safely rotating storage. Workflows also avoid unnecessary loading, so the important screens open with less hidden work.
+Voice turn-taking, echo handling, interruption cleanup, and playback reliability have been improved. Push-to-talk remains independent.
 
 ---
 
