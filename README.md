@@ -77,9 +77,7 @@ You can begin here and never touch a workflow. Voice, dictation, shortcuts, snip
 
 ### Continuous conversation and audio routing
 
-Continuous mode keeps listening while DecisionsAI speaks. It treats the microphone input and the TTS output as separate tracks: the output reference is aligned with the microphone signal, acoustic echo cancellation removes the measurable speaker component, and turn taking compares the remaining mic energy with the TTS reference before deciding whether to interrupt.
-
-For the cleanest result, choose the physical microphone as **Input** and headphones or a separate output device as **Output** in **Preferences → Audio**. A virtual audio route such as BlackHole or Loopback can keep a TTS bus out of the microphone input. A separate software channel cannot prevent a room microphone from hearing physical speakers, so headphones remain the most reliable setup. Push-to-talk does not depend on continuous-mode echo gating.
+Continuous mode keeps listening while DecisionsAI speaks, using the microphone and TTS output as separate tracks for echo-aware turn taking. Use the physical microphone as **Input** and headphones or a separate output device as **Output** in **Preferences → Audio**. Push-to-talk remains independent.
 
 ## Use it from your phone
 
@@ -183,7 +181,11 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **Skills** | Browse local and vendored skills, including [ECC-backed capabilities](plugins/ecc/README.md), without duplicate setup |
 
 <p align="center">
-  <img src="assets/readme/chat.webp" alt="DecisionsAI Web Interface" />
+  <img src="artifacts/development-refactor-2026-09-05/threads-1440.png" alt="DecisionsAI Development workspace" />
+</p>
+<p align="center">
+  <img src="artifacts/development-refactor-2026-09-05/planning-1440.png" alt="DecisionsAI Development plan" />
+  <img src="artifacts/development-refactor-2026-09-05/reports-populated-1440.png" alt="DecisionsAI run reports" />
 </p>
 
 ---
