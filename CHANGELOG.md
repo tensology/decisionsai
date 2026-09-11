@@ -8,7 +8,7 @@ DecisionsAI is a development agent and workspace that lives on your computer. Ta
 
 Version 2.9.0 is the point where the product becomes much more deliberately development-led. The old ticket board / workflows experience has been reworked into a project-scoped Development area that brings planning, incoming work, boards, terminals, workflows, reports, and durable threads into one place. The system tray and surrounding web surfaces have been reworked around that same flow.
 
-The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a future Decisions DSL, Mermaid JS for ERDs, and clearer PRD and other planning documents, but the direction is now clear: better plans mean less doom prompting and better output.
+The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a compact language for describing plans and UI structure that can compile into the underlying implementation, much like CoffeeScript compiles to JavaScript, alongside Mermaid JS for ERDs and clearer PRD documents. The direction is now clear: better plans mean less doom prompting and better output.
 
 The release also brings in Impeccable, ECC, and a broader, more refined skill set. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
 
@@ -30,7 +30,7 @@ The old ticket board / workflows experience has been reworked into a dedicated, 
 
 ### Planning is becoming the centre of the system
 
-Development can route work to different CLIs and harnesses in the background, so the user can focus on the outcome rather than the tool underneath. Planning is still being built out toward a Decisions DSL, clearer PRD and ERD documents, and Mermaid JS for ERDs. The goal is to break work down well enough that complexity-based routing replaces doom prompting.
+Development can route work to different CLIs and harnesses in the background, so the user can focus on the outcome rather than the tool underneath. Planning is still being built out toward a compact plan and UI-template language that turns a structured definition into the implementation, with clearer PRD and ERD documents and Mermaid JS for ERDs. The goal is to break work down well enough that complexity-based routing replaces doom prompting.
 
 ### The surrounding tools caught up
 
