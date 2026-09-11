@@ -30,6 +30,54 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ## Unreleased
 
+### A two-week workspace and runtime checkpoint
+
+This checkpoint brings the accumulated application, workflow, integration, and
+developer-surface work into one coherent release line. It includes the new
+Development workspace surfaces for plans, incoming work, threads, terminals,
+reports, boards, and active execution; shared project and ticket identity;
+durable turn and workflow runtime state; and the controls needed to inspect,
+steer, stop, retry, and audit long-running work.
+
+The web and desktop surfaces now share more of the same lifecycle. Chat, the
+Development workspace, Kanban, Workflows, Automations, Telegram, WhatsApp, and
+Gmail use the same routing and evidence contracts where their paths overlap.
+The checkpoint also adds project and board recovery safeguards, cleaner model
+and provider selection, execution-mode controls, workflow studio support,
+headroom diagnostics, watchdog coverage, and additional local and browser
+verification assets.
+
+### Continuous voice turn taking uses the microphone and TTS tracks together
+
+Continuous mode now keeps a time-aligned reference of the audio sent to the
+speaker and compares it with the microphone input before allowing a VAD event
+to interrupt the agent. The acoustic echo canceller calibrates speaker delay,
+adapts to the measured room path, removes the directly measured reference
+component, and records input, residual, reference, correlation, and ERLE
+metrics. The turn-taking gate uses those measurements and a short temporal
+history to suppress TTS-only speech starts while allowing measured double-talk.
+
+The interruption path now closes the desktop player and synchronously aborts
+and flushes buffered PyAudio output before the interruption completes. This
+prevents the player window from disappearing while already-buffered TTS keeps
+playing. Late provider callbacks, zero-duration stop events, stale transport
+interruptions, and response-generation races are covered by lifecycle
+regressions. Push-to-talk remains separate from continuous-mode echo gating.
+
+Physical audio diagnostics now exercise real CoreAudio input and output
+devices, delayed TTS, AEC alignment, Silero VAD transitions, and independent
+double-talk. The documented device guidance remains important: acoustic
+speaker leakage cannot be eliminated by software channel selection alone, so
+headphones or a virtual output route provide the strongest isolation.
+
+### Broader verification and maintenance coverage
+
+The checkpoint expands deterministic unit, runtime, browser, integration, and
+audio coverage around the new surfaces. It also makes the synthetic AEC tests
+independent of a process-global asyncio event loop, adds physical test-harness
+options for input-track double-talk, and retains the generated audit,
+benchmark, and visual evidence used during development.
+
 ### A client message can stay connected to the work it started
 
 WhatsApp work no longer has to become a loose ticket with no reliable way home. A board can listen to several contacts or groups, and a request made through Telegram can collect the relevant messages, media, and voice transcriptions before you decide whether it should become work. The ticket keeps the source chat and message evidence, inherits the project and workflow route, and follows the normal Backlog, In Progress, and QA lifecycle.

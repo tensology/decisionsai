@@ -75,6 +75,12 @@ The default macOS shortcuts are **Option + Command** for push-to-talk and **Cont
 
 You can begin here and never touch a workflow. Voice, dictation, shortcuts, snippets, Chat, and actions are useful on their own.
 
+### Continuous conversation and audio routing
+
+Continuous mode keeps listening while DecisionsAI speaks. It treats the microphone input and the TTS output as separate tracks: the output reference is aligned with the microphone signal, acoustic echo cancellation removes the measurable speaker component, and turn taking compares the remaining mic energy with the TTS reference before deciding whether to interrupt.
+
+For the cleanest result, choose the physical microphone as **Input** and headphones or a separate output device as **Output** in **Preferences → Audio**. A virtual audio route such as BlackHole or Loopback can keep a TTS bus out of the microphone input. A separate software channel cannot prevent a room microphone from hearing physical speakers, so headphones remain the most reliable setup. Push-to-talk does not depend on continuous-mode echo gating.
+
 ## Use it from your phone
 
 Telegram gives you the quickest way to reach the same agent away from your desk. Send a text, voice note, screenshot, or document and receive the answer in the same conversation.
