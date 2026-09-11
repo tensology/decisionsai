@@ -10,9 +10,9 @@ Version 2.9.0 is the point where the product becomes much more deliberately deve
 
 The reason for the change is simple: planning is the focal point. If the outcome is shaped properly first, the work can be broken into sensible tasks and each task can be routed by complexity to the right model, CLI, or harness without the user needing to care which one is running underneath. The planning system is still being built out, including a compact language for describing plans and UI structure that can compile into the underlying implementation, much like CoffeeScript compiles to JavaScript, alongside Mermaid JS for ERDs and clearer PRD documents. The direction is now clear: better plans mean less doom prompting and better output.
 
-The release also brings in Impeccable, ECC, and a broader, more refined skill set. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
+The release also brings in Impeccable Skills, ECC, and a broader, more refined skill set. The aim is to keep the work consistent even when the implementation moves between different stacks, including SaaS-style applications and Tailwind-based interfaces. A shared UI DSL layer can give those frameworks a common standard and reduce drift while the agent works.
 
-The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice, Telegram, WhatsApp, and the local web interface now feed into the same project and Development flow when the work needs more than a single answer.
+The quickest way in is still the Oracle, a small avatar that stays above your other windows. On macOS, hold `Option + Command` to talk to the agent, or `Control + Command` to dictate into the app in front of you. Both shortcuts can be changed in Preferences. Voice now supports OpenAI Realtime speech-to-speech as well as the separate speech-to-text and text-to-speech path. Telegram, WhatsApp, and the local web interface feed into the same project and Development flow when the work needs more than a single answer.
 
 You can [download or clone the repository](https://github.com/tensology/decisionsai) and use it with your existing projects. DecisionsAI is moving toward handling more work without supervision, while still showing what happened and asking when your decision matters.
 
@@ -26,19 +26,23 @@ You can [download or clone the repository](https://github.com/tensology/decision
 
 ### Development is now the home for project work
 
-The old ticket board / workflows experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion. This is the main reason for the 2.9 bump.
+The old ticket board / workflows experience has been reworked into a dedicated, project-scoped Development area. Planning, incoming work, boards, workflows, terminals, reports, and durable threads now live together because a request should keep its project, ticket, run, changes, and evidence from the first instruction through verified completion. The system tray and context-menu actions were reworked around the same idea. This is the main reason for the 2.9 bump.
 
 ### Planning is becoming the centre of the system
 
 Development can route work to different CLIs and harnesses in the background, so the user can focus on the outcome rather than the tool underneath. Planning is still being built out toward a compact plan and UI-template language that turns a structured definition into the implementation, with clearer PRD and ERD documents and Mermaid JS for ERDs. The goal is to break work down well enough that complexity-based routing replaces doom prompting.
 
-### The surrounding tools caught up
+### The coding tools became interchangeable
 
-Terminals, the system tray, Impeccable, ECC, and the expanded and refined skills now fit into the same flow. The UI work is moving toward a shared DSL standard that can reduce drift across SaaS and Tailwind interfaces.
+Terminals, CLI sessions, model selection, Impeccable, ECC, and the expanded and refined skills now fit into the same flow. The harness can choose the right worker for the task and keep the details in the background. The UI work is moving toward a shared DSL standard that can reduce drift across SaaS and Tailwind interfaces.
 
-### Voice improvements
+### Voice gained a speech-to-speech path
 
-Voice turn-taking, echo handling, interruption cleanup, and playback reliability have been improved. Push-to-talk remains independent.
+OpenAI Realtime speech-to-speech is now supported alongside the existing broken-out speech-to-text, model, and text-to-speech path. Native turn adapters, model options, streaming providers, continuous-mode turn-taking, echo handling, interruption cleanup, and playback reliability all received improvements. Push-to-talk remains independent.
+
+### More of the system follows the same work
+
+Initiative, Telegram, WhatsApp, Automations, model policy, project routing, and workflow execution now share more durable context. Storage and background activity are quieter, and the new Development surfaces are covered by backend, browser, lifecycle, integration, and audio regression checks.
 
 ---
 
